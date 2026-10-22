@@ -21,7 +21,7 @@ use crate::node_graph::viewport_overlay::{WorldLine, clip_to_near};
 
 const SHADER: &str = include_str!("gizmo_pass.wgsl");
 /// Line width on screen, in pixels.
-const LINE_WIDTH_PX: f32 = 1.5;
+const LINE_WIDTH_PX: f32 = 2.5;
 /// How much of a hidden line's colour a Ghost line keeps.
 const GHOST_ALPHA: f32 = 0.22;
 /// Buffers in flight, so the CPU never rewrites one the GPU still reads.

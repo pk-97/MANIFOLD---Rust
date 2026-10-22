@@ -4,12 +4,14 @@
 
 use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 
-/// The scene camera kinds a view can be copied into. Look-at and loop
-/// cameras aim at their own targets, so they have no equivalent pose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The scene camera kinds a view can be copied into.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewCopyCamera {
     Orbit,
     Free,
+    /// A Look At camera; `tracked` is the world origin of the item it aims
+    /// at (zero without one), which its Target X/Y/Z offset from.
+    LookAt { tracked: [f32; 3] },
 }
 
 /// `node.orbit_camera`'s pose params (`camera_orbit.rs`).
@@ -81,6 +83,19 @@ pub fn camera_writes_from_view(
                 ("yaw", wrap_angle(view.yaw)),
                 ("pitch", view.pitch),
                 ("roll", 0.0),
+                ("fov_y", view.fov_y),
+            ]
+        }
+        ViewCopyCamera::LookAt { tracked } => {
+            let [x, y, z] = view.position();
+            let aim = view.target;
+            vec![
+                ("pos_x", x),
+                ("pos_y", y),
+                ("pos_z", z),
+                ("target_x", aim[0] - tracked[0]),
+                ("target_y", aim[1] - tracked[1]),
+                ("target_z", aim[2] - tracked[2]),
                 ("fov_y", view.fov_y),
             ]
         }

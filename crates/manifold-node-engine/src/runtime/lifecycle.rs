@@ -110,7 +110,7 @@ impl PresetRuntime {
                 if old_node.node.type_id() != new_node.node.type_id() {
                     continue;
                 }
-                std::mem::swap(&mut old_node.node, &mut new_node.node);
+                new_node.adopt_node(old_node);
                 prior
                     .state_store
                     .migrate_node(*old_inst, *new_inst, &mut self.state_store);

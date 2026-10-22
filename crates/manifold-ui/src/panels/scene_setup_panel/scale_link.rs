@@ -1,10 +1,12 @@
 //! The Scale link toggle of a Transform section (SCENE_DOCUMENT_DESIGN.md
-//! section 7.17): linked, a drag on one Scale axis scales all three
+//! section 7.17): linked, an edit of one Scale axis scales all three
 //! proportionally as one undo step; unlinked, each axis is free. It is a card
 //! editing helper over the existing three params — no param, so modulation,
 //! MIDI and OSC still reach each axis — and the link state is view state:
 //! never saved and never mapped. Its row is a `RowAffordance::ScaleLink` row
-//! of the shared param surface.
+//! of the shared param surface. The app applies the link where every card
+//! edit of a param lands (`ui_bridge::scrub::dispatch_scrub`), so a drag, a
+//! typed value and a reset all keep the three axes in proportion.
 
 use super::*;
 use crate::param_surface::{RowAffordance, RowValue};
@@ -54,64 +56,15 @@ impl ScenePanel {
         true
     }
 
-    /// The three Scale ids a drag of `param_id` moves together, with the axis
-    /// it drags — when it is a Scale axis of a linked item with all three
-    /// rows on the card.
-    fn scale_triple(&self, param_id: &ParamId) -> Option<([ParamId; 3], usize)> {
-        let (item, property) = param_id.as_ref().split_once('.')?;
-        let axis = SCALE_AXES.iter().position(|name| *name == property)?;
-        if !self.scale_linked(&ItemId::new(item)) {
+    /// When `param_id` on `layer` is a Scale axis of an item whose link is
+    /// on: the item's three Scale ids, and which of them `param_id` is. Only
+    /// for the layer this panel shows, whose card holds the link.
+    pub fn linked_scale_axes(&self, layer: &LayerId, param_id: &str) -> Option<([ParamId; 3], usize)> {
+        if self.live_layer_id() != Some(layer) {
             return None;
         }
-        let ids = SCALE_AXES.map(|name| ParamId::from(format!("{item}.{name}")));
-        ids.iter().all(|id| self.properties_card.row_id_index.contains_key(id.as_ref())).then_some((ids, axis))
-    }
-
-    /// A drag on one Scale axis of a linked item, rewritten as the three
-    /// axes' one gesture.
-    pub(super) fn rewrite_scale_link_actions(&mut self, actions: Vec<PanelAction>) -> Vec<PanelAction> {
-        actions
-            .into_iter()
-            .map(|action| {
-                let PanelAction::Scrub(crate::ValueRef::Param(target, param_id), phase) = &action else {
-                    return action;
-                };
-                let Some((ids, axis)) = self.scale_triple(param_id) else {
-                    return action;
-                };
-                let row_of = |id: &ParamId| self.properties_card.row_id_index.get(id.as_ref()).copied();
-                match phase {
-                    crate::ScrubPhase::Begin => {
-                        let start = ids.each_ref().map(|id| row_of(id).and_then(|row| self.properties_card.current_values.get(row)).copied().unwrap_or(1.0));
-                        self.scale_drag = Some((ids.clone(), start));
-                        PanelAction::Scrub(crate::ValueRef::ParamLinked(target.clone(), ids), crate::ScrubPhase::Begin)
-                    }
-                    crate::ScrubPhase::Move(crate::ScrubValue::Scalar(value)) => {
-                        let Some((drag_ids, start)) = self.scale_drag.clone().filter(|(drag_ids, _)| *drag_ids == ids) else {
-                            return action;
-                        };
-                        let factor = (start[axis].abs() > 1e-6).then(|| value / start[axis]);
-                        let mut values = start.map(|s| factor.map_or(*value, |k| s * k));
-                        for (index, id) in drag_ids.iter().enumerate() {
-                            if let Some(row) = row_of(id) {
-                                let spec = &self.properties_card.rows[row].spec;
-                                values[index] = values[index].clamp(spec.min.min(spec.max), spec.max.max(spec.min));
-                            }
-                        }
-                        for (id, value) in drag_ids.iter().zip(values) {
-                            if let Some(row) = row_of(id) {
-                                self.properties_card.current_values[row] = value;
-                            }
-                        }
-                        PanelAction::Scrub(crate::ValueRef::ParamLinked(target.clone(), ids), crate::ScrubPhase::Move(crate::ScrubValue::Rgb(values)))
-                    }
-                    crate::ScrubPhase::Commit => {
-                        self.scale_drag = None;
-                        PanelAction::Scrub(crate::ValueRef::ParamLinked(target.clone(), ids), crate::ScrubPhase::Commit)
-                    }
-                    _ => action,
-                }
-            })
-            .collect()
+        let (item, property) = param_id.split_once('.')?;
+        let axis = SCALE_AXES.iter().position(|name| *name == property)?;
+        self.scale_linked(&ItemId::new(item)).then(|| (SCALE_AXES.map(|name| ParamId::from(format!("{item}.{name}"))), axis))
     }
 }

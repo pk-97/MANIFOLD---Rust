@@ -253,6 +253,6 @@ pub fn light_item(group: &ItemId, light: &ImportedLight) -> Item {
 
 /// The Camera item for the file's camera `camera` under import `group`.
 pub fn camera_item(group: &ItemId, camera: &ImportedCamera) -> Item {
-    let fields = ItemFields::Camera(CameraFields { rig: CameraRig::Free });
+    let fields = ItemFields::Camera(CameraFields { rig: CameraRig::Free, ..CameraFields::default() });
     Item::new(import_child_id(group, &camera.key), camera.name.clone(), fields)
 }

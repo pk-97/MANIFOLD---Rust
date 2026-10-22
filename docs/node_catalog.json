@@ -19972,6 +19972,11 @@
           "name": "parent",
           "required": false,
           "type": "Transform"
+        },
+        {
+          "name": "target",
+          "required": false,
+          "type": "Transform"
         }
       ],
       "label": "Look-At Camera",
@@ -20085,7 +20090,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Look-at perspective camera source. Emits one Camera on `out` from a world-space position (pos_x/pos_y/pos_z) and a world-space target point (target_x/target_y/target_z) — fwd = normalize(target - pos), right/up orthonormalized against fixed world up (0,1,0). The third standard camera authoring mode alongside node.orbit_camera's target-orbit style and node.free_camera's Euler pos+angles. fov_y is radians (Angle param; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input. An optional parent Transform places it inside a group: it moves and turns with the group.",
+      "purpose": "Look-at perspective camera source. Emits one Camera on `out` from a world-space position (pos_x/pos_y/pos_z) and a world-space target point (target_x/target_y/target_z) — fwd = normalize(target - pos), right/up orthonormalized against fixed world up (0,1,0). The third standard camera authoring mode alongside node.orbit_camera's target-orbit style and node.free_camera's Euler pos+angles. fov_y is radians (Angle param; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input. An optional parent Transform places it inside a group: it moves and turns with the group. An optional target Transform aims it at that frame's world origin, as a Track To constraint aims at an object; target_x/target_y/target_z then offset from that origin in world space.",
       "role": "Source",
       "stratum": "driver",
       "summary": "A camera positioned directly and aimed at a target point, instead of orbiting or using Euler angles.",

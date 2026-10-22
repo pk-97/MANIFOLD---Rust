@@ -7,10 +7,12 @@
 //! target_z/fov_y) let the outer-card sliders — or a `beat_ramp` — drive the
 //! camera live, same convention as `node.orbit_camera` / `node.free_camera`.
 //! World up `(0,1,0)` is fixed in v1 — no up param. CPU-only — no GPU
-//! dispatch.
+//! dispatch. A wired `target` Transform aims it at that frame's world
+//! origin, with target_x/y/z as a world offset from it.
 
 use std::borrow::Cow;
 use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::scene::transform::transform_point;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -18,7 +20,7 @@ use manifold_node_engine::primitive::Primitive;
 manifold_node_engine::primitive! {
     name: LookAtCamera,
     type_id: "node.look_at_camera",
-    purpose: "Look-at perspective camera source. Emits one Camera on `out` from a world-space position (pos_x/pos_y/pos_z) and a world-space target point (target_x/target_y/target_z) — fwd = normalize(target - pos), right/up orthonormalized against fixed world up (0,1,0). The third standard camera authoring mode alongside node.orbit_camera's target-orbit style and node.free_camera's Euler pos+angles. fov_y is radians (Angle param; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input. An optional parent Transform places it inside a group: it moves and turns with the group.",
+    purpose: "Look-at perspective camera source. Emits one Camera on `out` from a world-space position (pos_x/pos_y/pos_z) and a world-space target point (target_x/target_y/target_z) — fwd = normalize(target - pos), right/up orthonormalized against fixed world up (0,1,0). The third standard camera authoring mode alongside node.orbit_camera's target-orbit style and node.free_camera's Euler pos+angles. fov_y is radians (Angle param; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input. An optional parent Transform places it inside a group: it moves and turns with the group. An optional target Transform aims it at that frame's world origin, as a Track To constraint aims at an object; target_x/target_y/target_z then offset from that origin in world space.",
     inputs: {
         pos_x: ScalarF32 optional,
         pos_y: ScalarF32 optional,
@@ -28,6 +30,7 @@ manifold_node_engine::primitive! {
         target_z: ScalarF32 optional,
         fov_y: ScalarF32 optional,
         parent: Transform optional,
+        target: Transform optional,
     },
     outputs: {
         out: Camera,
@@ -110,7 +113,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "All seven spatial params (pos_x/pos_y/pos_z/target_x/target_y/target_z/fov_y) are port-shadowed, so wiring a beat_ramp into any of them makes that axis of the camera move beat-addressable. World up is fixed at (0,1,0) in v1 — no up param; a near-vertical pos-target line will degenerate the basis the same way any look-at camera does. fov_y is an Angle param, so the editor and outer-card sliders display and edit it in degrees while storage stays in radians. `near`/`far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)`. `pos_x`/`pos_y`/`pos_z` outputs mirror `node.orbit_camera`'s surface for PBR material atoms that need the camera world position per pixel.",
+    composition_notes: "All seven spatial params (pos_x/pos_y/pos_z/target_x/target_y/target_z/fov_y) are port-shadowed, so wiring a beat_ramp into any of them makes that axis of the camera move beat-addressable. World up is fixed at (0,1,0) in v1 — no up param; a near-vertical pos-target line will degenerate the basis the same way any look-at camera does. fov_y is an Angle param, so the editor and outer-card sliders display and edit it in degrees while storage stays in radians. `near`/`far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)`. `pos_x`/`pos_y`/`pos_z` outputs mirror `node.orbit_camera`'s surface for PBR material atoms that need the camera world position per pixel. Wire an object's frame into `target` to track it: the camera aims at that frame's world origin plus the target_x/target_y/target_z offset, and `parent` then moves only the position.",
     examples: [],
     picker: { label: "Look-At Camera", category: Driver },
     summary: "A camera positioned directly and aimed at a target point, instead of orbiting or using Euler angles.",
@@ -133,18 +136,27 @@ impl Primitive for LookAtCamera {
 
         let far = ctx.param_f32("far", 200.0);
 
-        let cam = Camera::look_at(
-            [pos_x, pos_y, pos_z],
-            [target_x, target_y, target_z],
-            [0.0, 1.0, 0.0],
-            fov_y,
-            near,
-            far,
-        );
-        // Inside a group, the camera moves and turns with it.
-        let cam = match ctx.inputs.transform("parent") {
-            Some(parent) => cam.placed_in(&parent.world()),
-            None => cam,
+        let pos = [pos_x, pos_y, pos_z];
+        let offset = [target_x, target_y, target_z];
+        let up = [0.0, 1.0, 0.0];
+        let parent = ctx.inputs.transform("parent").map(|parent| parent.world());
+        let cam = match ctx.inputs.transform("target") {
+            // A target item is already in world space: only the position
+            // moves with the camera's group.
+            Some(target) => {
+                let origin = target.world()[3];
+                let pos = parent.as_ref().map_or(pos, |parent| transform_point(parent, pos));
+                let aim = [origin[0] + offset[0], origin[1] + offset[1], origin[2] + offset[2]];
+                Camera::look_at(pos, aim, up, fov_y, near, far)
+            }
+            // Inside a group, the camera moves and turns with it.
+            None => {
+                let cam = Camera::look_at(pos, offset, up, fov_y, near, far);
+                match parent {
+                    Some(parent) => cam.placed_in(&parent),
+                    None => cam,
+                }
+            }
         };
         let pos = cam.pos;
         ctx.outputs.set_camera("out", cam);

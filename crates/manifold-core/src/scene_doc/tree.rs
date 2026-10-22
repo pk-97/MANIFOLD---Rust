@@ -240,6 +240,7 @@ impl SceneDoc {
                 }
             }
             ItemFields::World(w) if w.active_camera.as_ref().is_some_and(gone) => w.active_camera = None,
+            ItemFields::Camera(c) if c.target.as_ref().is_some_and(gone) => c.target = None,
             _ => {}
         });
     }
@@ -263,6 +264,7 @@ impl SceneDoc {
             match &mut fields {
                 ItemFields::Group(g) => g.material = g.material.as_ref().map(swap),
                 ItemFields::Object(o) => o.material = o.material.as_ref().map(swap),
+                ItemFields::Camera(c) => c.target = c.target.as_ref().map(swap),
                 ItemFields::Swarm(s) => {
                     if let DrawAs::Item(id) = &mut s.draw_as {
                         *id = swap(id);

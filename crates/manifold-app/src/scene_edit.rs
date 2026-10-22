@@ -5,7 +5,7 @@
 
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{CameraRig, FeatureSetting, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, SceneDoc, Shape, TextureSource, param_id};
+use manifold_core::scene_doc::{CameraFields, CameraRig, FeatureSetting, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, SceneDoc, Shape, TextureSource, param_id};
 use manifold_core::scene_schema::{self, FieldControl, FieldValue, add_entry, field_for, unique_name};
 use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::command::{Command, CompositeCommand};
@@ -352,7 +352,7 @@ pub(crate) fn aim_sun_at_hdri(project: &Project, layer: &LayerId, file: &str) ->
 }
 
 /// The scene's camera: the World's active camera, else the first Camera.
-fn camera_of(doc: &SceneDoc) -> Option<(ItemId, CameraRig)> {
+fn camera_of(doc: &SceneDoc) -> Option<(ItemId, CameraFields)> {
     let active = doc.world().and_then(|world| match &world.fields {
         ItemFields::World(fields) => fields.active_camera.clone(),
         _ => None,
@@ -362,10 +362,17 @@ fn camera_of(doc: &SceneDoc) -> Option<(ItemId, CameraRig)> {
         if let ItemFields::Camera(camera) = &item.fields
             && (found.is_none() || active.as_ref() == Some(&item.id))
         {
-            found = Some((item.id.clone(), camera.rig));
+            found = Some((item.id.clone(), camera.clone()));
         }
     });
     found
+}
+
+/// Each item's world origin, as the viewport gizmos place it.
+fn item_origins(doc: &SceneDoc, inst: &PresetInstance) -> impl Fn(&ItemId) -> Option<[f32; 3]> {
+    let values = |id: &str| inst.params.contains(id).then(|| inst.get_base_param(id));
+    let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_doc(doc, &values);
+    move |id| manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_targets(&vm).find(|target| target.row.as_ref() == Some(id)).map(|target| target.origin)
 }
 
 /// Pull the camera back to show `item`: an Orbit camera lifts its pivot to
@@ -373,13 +380,11 @@ fn camera_of(doc: &SceneDoc) -> Option<(ItemId, CameraRig)> {
 pub(crate) fn frame(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
     let doc = doc(project, layer)?;
     let inst = instance(project, layer).ok_or("There is no scene to frame")?;
-    let (camera, rig) = camera_of(doc).ok_or("This scene has no camera")?;
-    let values = |id: &str| inst.params.contains(id).then(|| inst.get_base_param(id));
-    let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_doc(doc, &values);
-    let target = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_targets(&vm)
-        .find(|target| target.row.as_ref() == Some(item))
-        .ok_or("This item has no position to frame")?;
-    let at = target.origin;
+    let (camera, fields) = camera_of(doc).ok_or("This scene has no camera")?;
+    let origin_of = item_origins(doc, inst);
+    let at = origin_of(item).ok_or("This item has no position to frame")?;
+    // A Look At camera tracking an item aims at its origin plus Target X/Y/Z.
+    let tracked = fields.target.as_ref().and_then(origin_of).unwrap_or([0.0; 3]);
     let radius = 1.0f32;
     let read = |property: &str| base(inst, &camera, property).unwrap_or(0.0);
     let mut writes = Vec::new();
@@ -389,7 +394,7 @@ pub(crate) fn frame(project: &Project, layer: &LayerId, item: &ItemId) -> Result
             writes.push(write(layer, &camera, property, old, new));
         }
     };
-    match rig {
+    match fields.rig {
         CameraRig::Orbit => {
             let offset = (at[0] * at[0] + at[2] * at[2]).sqrt();
             set("look_y", at[1]);
@@ -397,12 +402,13 @@ pub(crate) fn frame(project: &Project, layer: &LayerId, item: &ItemId) -> Result
         }
         CameraRig::LookAt => {
             let pos = ["pos_x", "pos_y", "pos_z"].map(read);
-            let target = ["target_x", "target_y", "target_z"].map(read);
-            let mut dir = [target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]];
+            let offset = ["target_x", "target_y", "target_z"].map(read);
+            let aim: [f32; 3] = std::array::from_fn(|k| tracked[k] + offset[k]);
+            let mut dir = [aim[0] - pos[0], aim[1] - pos[1], aim[2] - pos[2]];
             let len = dir.iter().map(|d| d * d).sum::<f32>().sqrt();
             dir = if len > 1e-6 { dir.map(|d| d / len) } else { [0.0, 0.0, -1.0] };
             for (k, property) in ["target_x", "target_y", "target_z"].into_iter().enumerate() {
-                set(property, at[k]);
+                set(property, at[k] - tracked[k]);
             }
             for (k, property) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
                 set(property, at[k] - dir[k] * 2.2 * radius);
@@ -431,7 +437,10 @@ pub(crate) fn copy_view(
         ItemFields::Camera(fields) => match fields.rig {
             CameraRig::Orbit => ViewCopyCamera::Orbit,
             CameraRig::Free => ViewCopyCamera::Free,
-            CameraRig::LookAt => return Err("Use this view is not supported for this camera type".to_owned()),
+            CameraRig::LookAt => {
+                let tracked = fields.target.as_ref().and_then(item_origins(doc, inst)).unwrap_or([0.0; 3]);
+                ViewCopyCamera::LookAt { tracked }
+            }
         },
         _ => return Err("That item is not a camera".to_owned()),
     };

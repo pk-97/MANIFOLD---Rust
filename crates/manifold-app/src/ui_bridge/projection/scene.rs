@@ -7,7 +7,7 @@ use crate::ui_root::UIRoot;
 use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{CameraRig, EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, SceneDoc, Shape, param_id, split_param_id};
+use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, SceneDoc, Shape, param_id, split_param_id};
 use manifold_core::scene_schema::{
     ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, bodies_past_capacity, impulse_unavailable, modifier_label,
 };
@@ -108,7 +108,7 @@ fn item_vm(
         material,
         removable: item.kind() != ItemKind::World,
         plane: matches!(&item.fields, ItemFields::Object(object) if object.shape == Shape::Plane),
-        copy_view: matches!(&item.fields, ItemFields::Camera(camera) if matches!(camera.rig, CameraRig::Orbit | CameraRig::Free)),
+        copy_view: matches!(&item.fields, ItemFields::Camera(_)),
         environment,
         aim_sun_file,
         row_reasons: row_reasons(doc, item),
