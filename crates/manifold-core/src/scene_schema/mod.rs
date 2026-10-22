@@ -16,6 +16,7 @@
 
 mod add_menu;
 mod camera;
+mod deformers;
 mod fields;
 mod copies;
 mod force;

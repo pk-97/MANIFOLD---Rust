@@ -13,6 +13,7 @@
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
+use super::deformers::DEFORMER_TYPES;
 use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, is_on, on_off, parse_on, wrong_value,
 };
@@ -26,30 +27,30 @@ const MASK: ControlGroup = ControlGroup::Mask;
 const BAND: CardBand = CardBand::Modifiers;
 
 /// A performance row of a modifier, at `order` on its card.
-const fn live(property: &'static str, order: u8) -> PropertyRow {
+pub(super) const fn live(property: &'static str, order: u8) -> PropertyRow {
     row(property, Reach::Modifier, M, perform(BAND, order))
 }
 
 /// A recipe param the card never shows.
-const fn held(property: &'static str, why: &'static str) -> PropertyRow {
+pub(super) const fn held(property: &'static str, why: &'static str) -> PropertyRow {
     row(property, Reach::Modifier, M, Exposure::Internal(why))
 }
 
-const ON_IS_THE_TOGGLE: &str = "The card's On toggle turns the modifier on and off";
+pub(super) const ON_IS_THE_TOGGLE: &str = "The card's On toggle turns the modifier on and off";
 const NO_HITS: &str = "Modifiers have no clip trigger or hit rows (ruling 22)";
 
 /// A mask row, in the Mask section.
-const fn mask(property: &'static str, order: u8) -> PropertyRow {
+pub(super) const fn mask(property: &'static str, order: u8) -> PropertyRow {
     row(property, Reach::Modifier, MASK, perform(BAND, order))
 }
 
 /// A mask row measured in the target's radius: 1 is the target's radius.
-const fn mask_radius(property: &'static str, name: &'static str, order: u8) -> PropertyRow {
+pub(super) const fn mask_radius(property: &'static str, name: &'static str, order: u8) -> PropertyRow {
     mask(property, order).name(name).unit(Unit::Radius)
 }
 
 /// A mask centre: where the region sits, from the target's centre.
-const fn mask_centre(property: &'static str, name: &'static str, order: u8) -> PropertyRow {
+pub(super) const fn mask_centre(property: &'static str, name: &'static str, order: u8) -> PropertyRow {
     mask_radius(property, name, order).range(-2.0, 2.0).limit(HardLimit::Unlimited)
 }
 
@@ -71,8 +72,9 @@ macro_rules! mask_rows {
         ]
     };
 }
+pub(super) use mask_rows;
 
-const fn join<const A: usize, const B: usize, const N: usize>(a: [PropertyRow; A], b: [PropertyRow; B]) -> [PropertyRow; N] {
+pub(super) const fn join<const A: usize, const B: usize, const N: usize>(a: [PropertyRow; A], b: [PropertyRow; B]) -> [PropertyRow; N] {
     assert!(A + B == N);
     let mut out = [a[0]; N];
     let mut i = 0;
@@ -197,7 +199,7 @@ pub struct ModifierTypeEntry {
     pub rows: &'static [PropertyRow],
 }
 
-const fn entry(
+pub(super) const fn entry(
     modifier: ModifierType,
     key: &'static str,
     label: &'static str,
@@ -208,8 +210,8 @@ const fn entry(
     ModifierTypeEntry { modifier, key, label, recipe, deforms, rows }
 }
 
-/// Every modifier type, in menu order.
-pub static MODIFIER_TYPES: [ModifierTypeEntry; 7] = [
+/// The mesh and scene modifiers of lane L15.
+const CORE_TYPES: [ModifierTypeEntry; 7] = [
     entry(ModifierType::SurfacePeel, "surface_peel", "Surface Peel", "SurfacePeel", true, &SURFACE_PEEL_ROWS),
     entry(ModifierType::OrderedRecon, "ordered_recon", "Ordered Recon", "OrderedRecon", true, &ORDERED_RECON_ROWS),
     entry(ModifierType::SurfaceWaves, "surface_waves", "Surface Waves", "SurfaceWaves", true, &SURFACE_WAVES_ROWS),
@@ -232,6 +234,27 @@ pub static MODIFIER_TYPES: [ModifierTypeEntry; 7] = [
     ),
     entry(ModifierType::Shatter, "shatter", "Shatter", "Shatter", false, &SHATTER_ROWS),
 ];
+
+const fn concat<const A: usize, const B: usize, const N: usize>(
+    a: [ModifierTypeEntry; A],
+    b: [ModifierTypeEntry; B],
+) -> [ModifierTypeEntry; N] {
+    assert!(A + B == N);
+    let mut out = [a[0]; N];
+    let mut i = 0;
+    while i < A {
+        out[i] = a[i];
+        i += 1;
+    }
+    while i < N {
+        out[i] = b[i - A];
+        i += 1;
+    }
+    out
+}
+
+/// Every modifier type, in menu order.
+pub static MODIFIER_TYPES: [ModifierTypeEntry; 26] = concat(CORE_TYPES, DEFORMER_TYPES);
 
 /// The entry of a modifier type.
 pub fn modifier_type(modifier: ModifierType) -> &'static ModifierTypeEntry {
