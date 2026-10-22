@@ -215,7 +215,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 - **The shape comes from the mesh automatically**, from one `CollisionShape` service in `manifold-physics` that takes an item's mesh and world scale and returns what each solver asks for:
   - Static collider in Box3D: the exact triangle mesh (`manifold-physics/native/box3d/bridge.c`, `b3CreateMesh`).
   - Body in Box3D: a spatial split into hulls with automatic detail chosen from size and triangle count, with a 0.1% shell for open scans and the 64-hull cap (`MAX_BODY_HULLS`, `manifold-physics/src/lib.rs`).
-  - Water (GPU FLIP, MPM): a signed distance lattice for a closed mesh, unsigned with a shell for an open one (`manifold-physics/src/sdf.rs`). Shell thickness is automatic: one water cell, or 0.1% of the mesh, whichever is larger. The built code uses at least two cells; L7 settles which is right and makes this line match.
+  - Water (GPU FLIP, MPM): a signed distance lattice for a closed mesh, unsigned with a shell for an open one (`manifold-physics/src/sdf.rs`). Shell thickness is automatic: one water cell on each side of the surface (two cells through), or 0.1% of the mesh, whichever is larger.
   - Swarms: none in this cut (section 14).
 - **Cache key** includes the mesh content, the item's scale and the water cell size. A late-arriving mesh (an async load) must flip the key: the key hashes a content-ready signal, not size and transform alone.
 - **Water reads it directly.** Every Collider and every Body in the water's World whose bounds touch the water domain is a solid in the water; Bodies couple two ways as rigid bodies do. No fluid role on an object, no per-solver shape path.
