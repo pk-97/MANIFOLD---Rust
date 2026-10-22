@@ -28,7 +28,7 @@
     "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs": 2973,
     "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": 3295,
     "crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/fusion_proof.rs": 2637,
-    "crates/manifold-physics/src/lib.rs": 3150,
+    "crates/manifold-physics/src/lib.rs": 3216,
     "crates/manifold-playback/src/ableton_bridge.rs": 3530,
     "crates/manifold-playback/src/engine.rs": 4720,
     "crates/manifold-playback/src/modulation.rs": 4667,
