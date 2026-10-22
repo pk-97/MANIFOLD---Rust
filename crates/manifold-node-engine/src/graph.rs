@@ -81,7 +81,7 @@ impl NodeInstance {
     /// Take `prior`'s node, running state and all, into this instance; this
     /// instance's node moves to `prior`. The taken node is reconfigured with
     /// this instance's params, so a count that changed between the two graphs
-    /// (a physics world's body ports) sizes its ports for this graph.
+    /// (a node whose port count follows a param) sizes its ports for this graph.
     pub fn adopt_node(&mut self, prior: &mut NodeInstance) {
         std::mem::swap(&mut self.node, &mut prior.node);
         self.node.reconfigure(&self.params);

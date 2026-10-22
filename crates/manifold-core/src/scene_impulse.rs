@@ -1,5 +1,7 @@
 //! Scene-space recipient selections for authored physics impulses.
 
+use std::sync::Arc;
+
 /// Live tick-start diagnostics. These counters are not a recorded physics take.
 /// Counts only grow; the stage shows each increase once.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -34,109 +36,103 @@ pub enum ImpulseFire {
     NotReady,
 }
 
-const BODY_WORDS: usize = 4;
-
 /// The bodies and copy groups of one Physics World that a hit or a coupled
-/// liquid reaches: one bit per body slot and one per copy group. It is
-/// derived at graph expansion and never saved.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// liquid reaches: one bit per body slot and one per copy group, as many as
+/// the world has. It is derived at graph expansion and never saved; cloning
+/// it shares the bits, so a hit carries it without allocating.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RigidImpulseTargets {
-    bodies: [u64; BODY_WORDS],
-    groups: u32,
+    /// Bit `k` of word `k / 64`; no trailing zero word, so equal selections
+    /// compare equal.
+    bodies: Arc<[u64]>,
+    groups: Arc<[u64]>,
 }
 
-const _: () = assert!(
-    RigidImpulseTargets::BODY_CAPACITY == crate::scene_surface::PHYSICS_WORLD_MAX_BODIES as usize,
-    "the authored Physics World and the runtime body mask hold the same body count",
-);
-const _: () = assert!(
-    RigidImpulseTargets::GROUP_CAPACITY == crate::scene_surface::PHYSICS_WORLD_MAX_COPY_GROUPS as usize,
-    "the authored Physics World and the runtime group mask hold the same group count",
-);
+fn with_bit(words: &[u64], index: usize) -> Arc<[u64]> {
+    let mut words = words.to_vec();
+    if words.len() <= index / 64 {
+        words.resize(index / 64 + 1, 0);
+    }
+    words[index / 64] |= 1u64 << (index % 64);
+    words.into()
+}
+
+fn has_bit(words: &[u64], index: usize) -> bool {
+    words.get(index / 64).is_some_and(|word| word & (1u64 << (index % 64)) != 0)
+}
+
+fn union_words(left: &[u64], right: &[u64]) -> Arc<[u64]> {
+    let (long, short) = if left.len() >= right.len() { (left, right) } else { (right, left) };
+    let mut words = long.to_vec();
+    for (word, other) in words.iter_mut().zip(short) {
+        *word |= other;
+    }
+    words.into()
+}
+
+fn set_bits(words: &[u64]) -> impl Iterator<Item = usize> + '_ {
+    words.iter().enumerate().flat_map(|(at, &word)| {
+        (0..64).filter(move |bit| word & (1u64 << bit) != 0).map(move |bit| at * 64 + bit)
+    })
+}
 
 impl RigidImpulseTargets {
-    /// Body slots the mask holds.
-    pub const BODY_CAPACITY: usize = BODY_WORDS * u64::BITS as usize;
-    /// Copy groups the mask holds.
-    pub const GROUP_CAPACITY: usize = u32::BITS as usize;
-
-    /// Body slot `index` alone; `None` past the mask.
-    pub const fn body(index: usize) -> Option<Self> {
-        let mut targets = Self { bodies: [0; BODY_WORDS], groups: 0 };
-        if targets.insert_body(index) { Some(targets) } else { None }
+    /// Body slot `index` alone. Always `Some`: the mask holds any slot.
+    pub fn body(index: usize) -> Option<Self> {
+        Some(Self { bodies: with_bit(&[], index), groups: Arc::default() })
     }
 
-    /// Copy group `index` alone; `None` past the mask.
-    pub const fn group(index: usize) -> Option<Self> {
-        let mut targets = Self { bodies: [0; BODY_WORDS], groups: 0 };
-        if targets.insert_group(index) { Some(targets) } else { None }
+    /// Copy group `index` alone. Always `Some`: the mask holds any group.
+    pub fn group(index: usize) -> Option<Self> {
+        Some(Self { bodies: Arc::default(), groups: with_bit(&[], index) })
     }
 
-    /// Select body slot `index`; false past the mask, which selects nothing.
-    pub const fn insert_body(&mut self, index: usize) -> bool {
-        if index >= Self::BODY_CAPACITY {
-            return false;
-        }
-        self.bodies[index / 64] |= 1u64 << (index % 64);
+    /// Select body slot `index`. Graph expansion only: it reallocates.
+    pub fn insert_body(&mut self, index: usize) -> bool {
+        self.bodies = with_bit(&self.bodies, index);
         true
     }
 
-    /// Select copy group `index`; false past the mask, which selects nothing.
-    pub const fn insert_group(&mut self, index: usize) -> bool {
-        if index >= Self::GROUP_CAPACITY {
-            return false;
-        }
-        self.groups |= 1u32 << index;
+    /// Select copy group `index`. Graph expansion only: it reallocates.
+    pub fn insert_group(&mut self, index: usize) -> bool {
+        self.groups = with_bit(&self.groups, index);
         true
     }
 
-    pub const fn is_empty(self) -> bool {
-        let mut word = 0;
-        while word < BODY_WORDS {
-            if self.bodies[word] != 0 {
-                return false;
-            }
-            word += 1;
-        }
-        self.groups == 0
+    pub fn is_empty(&self) -> bool {
+        self.bodies.is_empty() && self.groups.is_empty()
     }
 
-    pub const fn contains_body(self, index: usize) -> bool {
-        index < Self::BODY_CAPACITY && (self.bodies[index / 64] & (1u64 << (index % 64))) != 0
+    pub fn contains_body(&self, index: usize) -> bool {
+        has_bit(&self.bodies, index)
     }
 
-    pub const fn contains_group(self, index: usize) -> bool {
-        index < Self::GROUP_CAPACITY && (self.groups & (1u32 << index)) != 0
+    pub fn contains_group(&self, index: usize) -> bool {
+        has_bit(&self.groups, index)
     }
 
     /// Whether any copy group is selected.
-    pub const fn has_groups(self) -> bool {
-        self.groups != 0
+    pub fn has_groups(&self) -> bool {
+        !self.groups.is_empty()
     }
 
-    pub const fn union(self, other: Self) -> Self {
-        let mut bodies = [0; BODY_WORDS];
-        let mut word = 0;
-        while word < BODY_WORDS {
-            bodies[word] = self.bodies[word] | other.bodies[word];
-            word += 1;
-        }
-        Self { bodies, groups: self.groups | other.groups }
+    pub fn union(self, other: Self) -> Self {
+        Self { bodies: union_words(&self.bodies, &other.bodies), groups: union_words(&self.groups, &other.groups) }
     }
 
     /// The selected body slots, lowest first.
-    pub fn bodies(self) -> impl Iterator<Item = usize> {
-        (0..Self::BODY_CAPACITY).filter(move |&index| self.contains_body(index))
+    pub fn bodies(&self) -> impl Iterator<Item = usize> + '_ {
+        set_bits(&self.bodies)
     }
 
     /// The selected copy groups, lowest first.
-    pub fn groups(self) -> impl Iterator<Item = usize> {
-        (0..Self::GROUP_CAPACITY).filter(move |&index| self.contains_group(index))
+    pub fn groups(&self) -> impl Iterator<Item = usize> + '_ {
+        set_bits(&self.groups)
     }
 }
 
 /// Which native simulation should receive a resolved graph impulse.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImpulseTarget {
     Rigid(RigidImpulseTargets),
     Fluid,
@@ -149,13 +145,13 @@ pub enum ImpulseTarget {
 }
 
 impl ImpulseTarget {
-    pub fn affects_fluid(self) -> bool {
+    pub fn affects_fluid(&self) -> bool {
         matches!(self, Self::Fluid | Self::FluidAndRigid(_))
     }
 
-    pub fn rigid_targets(self) -> Option<RigidImpulseTargets> {
+    pub fn rigid_targets(&self) -> Option<RigidImpulseTargets> {
         match self {
-            Self::Rigid(targets) | Self::FluidAndRigid(targets) => Some(targets),
+            Self::Rigid(targets) | Self::FluidAndRigid(targets) => Some(targets.clone()),
             Self::Fluid | Self::Swarm => None,
         }
     }
@@ -190,36 +186,36 @@ mod tests {
     use super::{ImpulseTarget, RigidImpulseTargets};
 
     #[test]
-    fn the_mask_holds_256_bodies_and_32_copy_groups() {
-        assert_eq!(RigidImpulseTargets::BODY_CAPACITY, 256);
-        assert_eq!(RigidImpulseTargets::GROUP_CAPACITY, 32);
+    fn the_mask_holds_any_body_and_copy_group() {
         let mut targets = RigidImpulseTargets::default();
         assert!(targets.is_empty());
-        for body in [0, 63, 64, 200, 255] {
+        for body in [0, 63, 64, 200, 255, 256, 5_000] {
             assert!(targets.insert_body(body));
         }
-        assert!(!targets.insert_body(256), "past the mask selects nothing");
         assert!(targets.insert_group(31));
-        assert!(!targets.insert_group(32));
-        assert_eq!(targets.bodies().collect::<Vec<_>>(), [0, 63, 64, 200, 255]);
-        assert_eq!(targets.groups().collect::<Vec<_>>(), [31]);
+        assert!(targets.insert_group(32));
+        assert_eq!(targets.bodies().collect::<Vec<_>>(), [0, 63, 64, 200, 255, 256, 5_000]);
+        assert_eq!(targets.groups().collect::<Vec<_>>(), [31, 32]);
         assert!(!targets.contains_body(65) && !targets.contains_body(usize::MAX));
         assert!(!targets.contains_group(30) && !targets.contains_group(usize::MAX));
-        assert_eq!(RigidImpulseTargets::body(256), None);
-        assert_eq!(RigidImpulseTargets::group(32), None);
         let group = RigidImpulseTargets::group(2).unwrap();
         assert!(group.has_groups() && !group.contains_body(2));
+        assert_eq!(
+            RigidImpulseTargets::body(3).unwrap().union(RigidImpulseTargets::body(300).unwrap()),
+            RigidImpulseTargets::body(300).unwrap().union(RigidImpulseTargets::body(3).unwrap()),
+            "a selection compares by what it selects"
+        );
     }
 
     #[test]
     fn union_preserves_each_recipient_class() {
         let rigid = RigidImpulseTargets::body(0).unwrap();
-        let combined = ImpulseTarget::Rigid(rigid)
+        let combined = ImpulseTarget::Rigid(rigid.clone())
             .union(ImpulseTarget::FluidAndRigid(
                 RigidImpulseTargets::body(200).unwrap().union(RigidImpulseTargets::group(5).unwrap()),
             ))
             .unwrap();
-        let ImpulseTarget::FluidAndRigid(targets) = combined else {
+        let ImpulseTarget::FluidAndRigid(targets) = &combined else {
             panic!("water and bodies stay one shared owner: {combined:?}");
         };
         assert_eq!(targets.bodies().collect::<Vec<_>>(), [0, 200]);
@@ -229,8 +225,8 @@ mod tests {
             Ok(ImpulseTarget::Fluid)
         );
         assert_eq!(
-            ImpulseTarget::Rigid(rigid).union(ImpulseTarget::Rigid(rigid)),
-            Ok(ImpulseTarget::Rigid(rigid))
+            ImpulseTarget::Rigid(rigid.clone()).union(ImpulseTarget::Rigid(rigid.clone())),
+            Ok(ImpulseTarget::Rigid(rigid.clone()))
         );
         assert_eq!(ImpulseTarget::Swarm.union(ImpulseTarget::Swarm), Ok(ImpulseTarget::Swarm));
         assert!(ImpulseTarget::Swarm.union(ImpulseTarget::Fluid).is_err());

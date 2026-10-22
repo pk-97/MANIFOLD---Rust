@@ -47,6 +47,18 @@ impl TargetedFieldHistory {
         self.samples.configure(0, HISTORY_CAPACITY);
     }
 
+    /// Follow the targets a recompile moved: new target `t` takes old target
+    /// `from[t]`'s column. A column whose target went keeps its history and
+    /// no target.
+    pub fn move_targets(&mut self, from: &[Option<usize>]) {
+        let column_of: Vec<Option<usize>> =
+            from.iter().map(|at| at.and_then(|at| self.column_of.get(at).copied().flatten())).collect();
+        for (column, target) in self.columns.iter_mut().enumerate() {
+            *target = column_of.iter().position(|of| *of == Some(column)).unwrap_or(usize::MAX);
+        }
+        self.column_of = column_of;
+    }
+
     #[cfg(test)]
     pub fn columns(&self) -> usize {
         self.columns.len()
@@ -105,7 +117,9 @@ impl TargetedFieldHistory {
                     self.samples.widen(self.columns.len());
                 }
                 let columns = &self.columns;
-                self.samples.record(write, columns.iter().map(|&target| &fields[target]))
+                // A column whose target a recompile removed records no field.
+                const NO_FIELD: &Option<FieldValue> = &None;
+                self.samples.record(write, columns.iter().map(|&target| fields.get(target).unwrap_or(NO_FIELD)))
             }
             TargetedFields::Cleared => self.samples.record_filler(write),
         };

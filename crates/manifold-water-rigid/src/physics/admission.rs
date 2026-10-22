@@ -96,6 +96,28 @@ impl Admission {
         }
     }
 
+    /// Follow the bodies a recompile moved to other ports: new port `p` takes
+    /// what old port `from[p]` held. A refusal for a port that went is
+    /// dropped; the rest are logged again under their new ports.
+    pub(crate) fn move_ports(&mut self, body_from: &[Option<usize>], group_from: &[Option<usize>]) {
+        fn moved(old: &mut [Option<RigidBody>], from: &[Option<usize>]) -> Vec<Option<RigidBody>> {
+            from.iter().map(|at| at.and_then(|at| old.get_mut(at).and_then(Option::take))).collect()
+        }
+        self.bodies = moved(&mut self.bodies, body_from);
+        self.groups = moved(&mut self.groups, group_from);
+        self.passed_bodies = moved(&mut self.passed_bodies, body_from);
+        self.passed_groups = moved(&mut self.passed_groups, group_from);
+        let new_port = |member: Member| match member {
+            Member::Body(at) => body_from.iter().position(|from| *from == Some(at)).map(Member::Body),
+            Member::Copies(at) => group_from.iter().position(|from| *from == Some(at)).map(Member::Copies),
+        };
+        self.refusals = std::mem::take(&mut self.refusals)
+            .into_iter()
+            .filter_map(|refusal| new_port(refusal.member).map(|member| BodyRefusal { member, ..refusal }))
+            .collect();
+        self.logged.clear();
+    }
+
     /// Admit `bodies` and `groups`: what passes, the stand-ins of what was
     /// refused, and nothing for what never passed.
     pub(crate) fn admit(&mut self, bodies: &[Option<RigidBody>], groups: &[Option<RigidBody>]) {

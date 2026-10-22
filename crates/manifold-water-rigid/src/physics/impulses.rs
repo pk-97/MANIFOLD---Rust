@@ -6,7 +6,7 @@ use manifold_physics::{
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
 
-use super::{RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY, MAX_TARGETS};
+use super::{apply_by_target, RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY, STACK_TARGETS};
 
 /// A resolved scene-space delta velocity retained by value until its fixed
 /// tick begins. The field is sampled at each recipient's current center of
@@ -25,7 +25,7 @@ pub(crate) enum ImpulseRecipient {
 }
 
 impl ImpulseRecipient {
-    fn selected_by(self, targets: RigidImpulseTargets) -> bool {
+    fn selected_by(self, targets: &RigidImpulseTargets) -> bool {
         match self {
             Self::Body(body) => targets.contains_body(body),
             Self::Group(group) => targets.contains_group(group),
@@ -52,7 +52,7 @@ impl<'a> ImpulseSumField<'a> {
     pub(crate) fn has_events(&self) -> bool {
         self.events
             .iter()
-            .any(|event| self.recipient.selected_by(event.value.targets))
+            .any(|event| self.recipient.selected_by(&event.value.targets))
     }
 }
 
@@ -62,7 +62,7 @@ impl VectorField for ImpulseSumField<'_> {
         for event in self
             .events
             .iter()
-            .filter(|event| self.recipient.selected_by(event.value.targets))
+            .filter(|event| self.recipient.selected_by(&event.value.targets))
         {
             let sample = event.value.field.sample(position);
             for component in 0..3 {
@@ -131,7 +131,7 @@ impl RigidSimulation {
         if let Some(error) = self.impulse_failure.as_ref() {
             return Err(error.clone());
         }
-        self.validate_impulse_targets(payload.targets)?;
+        self.validate_impulse_targets(&payload.targets)?;
         // Pause and Simulation Speed 0 discard incoming events, so resume never
         // fires a saved-up pile (WATER_SIMULATION_DESIGN.md "Transport pause /
         // water speed zero"). Admission succeeds so the producer rearms; the
@@ -148,24 +148,17 @@ impl RigidSimulation {
                 .expect("initialized world has an impulse queue")
                 .next_tick());
         }
-        let outstanding = self
-            .impulse_queue
-            .as_ref()
-            .expect("initialized world has an impulse queue")
-            .len()
-            + self.impulse_receipts.len()
-            + self.impulse_tick_events.len();
-        // A full history refuses this hit only: receipts drain every frame,
-        // so the next hit is tried again. The check keeps the queue below its
-        // own capacity, so its overflow latch is never reached.
-        if outstanding >= IMPULSE_CAPACITY {
-            return Err(format!(
-                "Physics: {IMPULSE_CAPACITY} hits are already in flight; this hit is refused"
-            ));
+        let queue = self.impulse_queue.as_mut().expect("initialized world has an impulse queue");
+        let outstanding = queue.len() + self.impulse_receipts.len() + self.impulse_tick_events.len();
+        // A burst past the history grows it here, on the hit, so a tick
+        // never allocates and the queue's overflow latch is never reached.
+        if outstanding >= queue.capacity() {
+            let capacity = outstanding * 2;
+            queue.grow(capacity);
+            self.impulse_receipts.reserve(capacity - self.impulse_receipts.len());
+            self.impulse_tick_events.reserve(capacity - self.impulse_tick_events.len());
         }
-        self.impulse_queue
-            .as_mut()
-            .expect("initialized world has an impulse queue")
+        queue
             .enqueue(stamp, payload)
             .map_err(|error| format!("Physics: failed to enqueue impulse: {error}"))
     }
@@ -199,26 +192,16 @@ impl RigidSimulation {
         }
     }
 
+    /// A hit lands on the targets that are in the world at its tick. A body
+    /// still getting its collision shape, one the gate refused, or a group
+    /// with no copies takes nothing, as a body outside a Blender force field
+    /// does; it never refuses the hit for the targets that are there.
     pub(super) fn validate_impulse_targets(
         &self,
-        targets: RigidImpulseTargets,
+        targets: &RigidImpulseTargets,
     ) -> Result<(), String> {
         if targets.is_empty() {
             return Err("Physics: impulse targets must select a body or a copy group".into());
-        }
-        for index in targets.bodies() {
-            if self.handles.get(index).is_none_or(Option::is_none) {
-                return Err(format!(
-                    "Physics: impulse target body slot {index} is absent"
-                ));
-            }
-        }
-        for group in targets.groups() {
-            if self.groups.get(group).is_none_or(|state| state.active == 0) {
-                return Err(format!(
-                    "Physics: impulse target copy group {group} has no active copies"
-                ));
-            }
         }
         Ok(())
     }
@@ -267,45 +250,23 @@ impl RigidSimulation {
         }
         let events = &self.impulse_tick_events;
         let bodies = self.handles.len();
-        let sum_fields: [_; MAX_TARGETS] = std::array::from_fn(|index| {
+        let targets = bodies + self.groups.len();
+        let sum_field = |index: usize| {
             ImpulseSumField::new(
                 events,
-                if index < bodies {
-                    ImpulseRecipient::Body(index)
-                } else {
-                    ImpulseRecipient::Group(index - bodies)
-                },
+                if index < bodies { ImpulseRecipient::Body(index) } else { ImpulseRecipient::Group(index - bodies) },
             )
-        });
-        let inputs: [FieldInput<'_>; MAX_TARGETS] = std::array::from_fn(|index| FieldInput {
-            field: &sum_fields[index],
-            acceleration: 0.0,
-            delta_velocity: 1.0,
-        });
-        let handles = &self.handles;
-        let groups = &self.groups;
-        let result = {
-            let world = self.world.as_mut().expect("world constructed above");
-            let recipients = handles
-                .iter()
-                .enumerate()
-                .filter_map(|(index, handle)| {
-                    handle
-                        .filter(|_| sum_fields[index].has_events())
-                        .map(|handle| (handle, std::slice::from_ref(&inputs[index])))
-                })
-                .chain(groups.iter().enumerate().flat_map(|(group, state)| {
-                    let target = bodies + group;
-                    let hit = sum_fields[target].has_events();
-                    let input = std::slice::from_ref(&inputs[target]);
-                    state.handles[..if hit { state.active } else { 0 }]
-                        .iter()
-                        .flatten()
-                        .map(move |&handle| (handle, input))
-                }));
-            world
-                .apply_fields_by_target(recipients, FIXED_TICK)
-                .map_err(|error| error.to_string())
+        };
+        let input = |field| FieldInput { field, acceleration: 0.0, delta_velocity: 1.0 };
+        let world = self.world.as_mut().expect("world constructed above");
+        let result = if targets <= STACK_TARGETS {
+            let sums: [_; STACK_TARGETS] = std::array::from_fn(sum_field);
+            let inputs: [[FieldInput<'_>; 1]; STACK_TARGETS] = std::array::from_fn(|index| [input(&sums[index])]);
+            apply_by_target(world, &self.handles, &self.groups, bodies, &inputs[..targets], |index| sums[index].has_events(), FIXED_TICK)
+        } else {
+            let sums: Vec<_> = (0..targets).map(sum_field).collect();
+            let inputs: Vec<[FieldInput<'_>; 1]> = sums.iter().map(|sum| [input(sum)]).collect();
+            apply_by_target(world, &self.handles, &self.groups, bodies, &inputs, |index| sums[index].has_events(), FIXED_TICK)
         };
         if let Err(error) = result {
             self.impulse_failure = Some(error.clone());

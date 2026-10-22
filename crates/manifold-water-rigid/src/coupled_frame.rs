@@ -13,7 +13,7 @@ use crate::physics::{RigidSceneInputs, RigidSimulation};
 #[derive(Clone, Copy)]
 pub struct CoupledRigidInputs<'a> {
     pub scene: &'a RigidSceneInputs,
-    pub colliders: RigidImpulseTargets,
+    pub colliders: &'a RigidImpulseTargets,
     pub density: f64,
 }
 

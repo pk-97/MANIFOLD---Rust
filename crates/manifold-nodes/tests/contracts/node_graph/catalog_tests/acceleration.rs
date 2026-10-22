@@ -354,7 +354,7 @@ fn all_objects_force_picks_up_body_added_after_attachment() {
         "physics_demo_40",
         "body_6",
     );
-    wire(&mut later, "future_body", "shape", "future_mesh", "shape");
+    wire(&mut later, "future_mesh", "source", "future_body", "source");
     wire(
         &mut later,
         "future_mesh",

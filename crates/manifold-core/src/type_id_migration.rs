@@ -245,15 +245,14 @@ pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     ("node.bake_environment", "sun_x"),
     ("node.bake_environment", "sun_y"),
     ("node.bake_environment", "sun_z"),
-    // The box spawner lives on the copies body; graph-shape migration moves
-    // saved values there first (`copies_body::migrate_world_copies`).
+    // The box spawner lives on the copies body; an old world's spawner
+    // values are dropped, not moved.
     ("node.physics_world", "copy_count"),
     ("node.physics_world", "copy_spacing"),
     ("node.physics_world", "copy_columns"),
     ("node.physics_world", "copy_layout"),
-    // Copy spacing counts box sizes now (`copy_size_spacing`); the copies
-    // migration converts it where it can reach the body, and this strips any
-    // metres value it could not reach so the load does not fail.
+    // Copy spacing counts box sizes (`copy_size_spacing`); an old metres
+    // value is dropped so the load does not fail.
     ("node.rigid_body", "copy_spacing"),
 ];
 

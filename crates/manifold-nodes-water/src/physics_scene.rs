@@ -27,7 +27,7 @@ impl NodePairBehavior for PhysicsPair {
     ) {
         let Some(ctx) = inputs else {
             if let Some(native) = node::get_mut(fluid) {
-                native.set_coupled_rigid_inputs(None, self.colliders, None, step.authored_sample_only);
+                native.set_coupled_rigid_inputs(None, self.colliders.clone(), None, step.authored_sample_only);
             }
             if let Some(native) = node::get_mut(rigid) {
                 native.accept_coupled_rigid_frame(None);
@@ -41,7 +41,7 @@ impl NodePairBehavior for PhysicsPair {
         if let Some(native) = node::get_mut(fluid) {
             native.set_coupled_rigid_inputs(
                 node::get(rigid).and_then(|rigid| rigid.rigid_scene_observation()),
-                self.colliders,
+                self.colliders.clone(),
                 result.as_ref().err().map(String::as_str),
                 step.authored_sample_only,
             );
@@ -70,7 +70,7 @@ pub(crate) fn add_coupled_scene(
             .ok_or_else(|| GraphError::CycleDetected {
                 involves: vec![fluid, rigid],
             })?;
-        pair.colliders = pair.colliders.union(colliders);
+        pair.colliders = std::mem::take(&mut pair.colliders).union(colliders);
         for id in [fluid, rigid] {
             let instance = graph.get_node_mut(id).expect("validated coupled node");
             if let Some(native) = node::get_mut(instance.node.as_mut()) {

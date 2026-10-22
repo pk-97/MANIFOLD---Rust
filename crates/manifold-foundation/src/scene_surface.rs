@@ -326,23 +326,13 @@ pub enum FieldPick {
     File(String),
 }
 
-/// The most individually wired bodies one Physics World takes. Its `bodies`
-/// count sizes its body and pose ports up to this. Core asserts at compile
-/// time that the runtime hit mask (`RigidImpulseTargets::BODY_CAPACITY`)
-/// holds exactly this many.
-pub const PHYSICS_WORLD_MAX_BODIES: u32 = 256;
-
 /// The most material parts one compound rigid body takes, one per `part_k`
 /// port. The rigid body's port table is declared at this length, so the two
 /// cannot drift.
 pub const RIGID_BODY_MAX_PARTS: u32 = 64;
 
-/// The most copy groups one Physics World takes; its `copy_groups` count
-/// sizes its copy-group ports up to this.
-pub const PHYSICS_WORLD_MAX_COPY_GROUPS: u32 = 32;
-
-/// A Physics World's `bodies` when none is saved, which is every world
-/// saved before the count existed.
+/// A Physics World's `bodies` when none is saved. The count grows with
+/// the bodies wired in; it is no limit.
 pub const PHYSICS_WORLD_DEFAULT_BODIES: u32 = 64;
 
 /// A Physics World's `copy_groups` when none is saved.

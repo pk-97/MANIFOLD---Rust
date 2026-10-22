@@ -63,8 +63,8 @@ impl SetupProblemKind {
             Self::ColumnOutside => "Column is outside the domain; no water".to_owned(),
             Self::SourceClipped(role) => format!("{} leaves the domain; the rest is unused", role.title()),
             Self::SourceOutside(role) => format!("{} is outside the domain; it does nothing", role.title()),
-            Self::BodiesNotCoupled(1) => "1 body not coupled; the water passes through it".to_owned(),
-            Self::BodiesNotCoupled(count) => format!("{count} bodies not coupled; the water passes through them"),
+            Self::BodiesNotCoupled(1) => "1 body not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest".to_owned(),
+            Self::BodiesNotCoupled(count) => format!("{count} bodies not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest"),
             Self::CopiesNotMade(1) => "1 copy not made; the world's copy pool is full".to_owned(),
             Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
             Self::PoolFull => "Water pool is full; the inflow is held back. Add a Drain or lower Resolution".to_owned(),
@@ -817,9 +817,9 @@ mod tests {
         let problems = runtime(&anchors, &[], report(12));
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].kind, SetupProblemKind::BodiesNotCoupled(12));
-        assert_eq!(problems[0].kind.message(), "12 bodies not coupled; the water passes through them");
+        assert_eq!(problems[0].kind.message(), "12 bodies not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest");
         assert_eq!(problems[0].params, vec![anchors[0].fill.clone()], "on the water's own rows");
-        assert_eq!(SetupProblemKind::BodiesNotCoupled(1).message(), "1 body not coupled; the water passes through it");
+        assert_eq!(SetupProblemKind::BodiesNotCoupled(1).message(), "1 body not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest");
         let mut out = Vec::new();
         problems_with_runtime(&anchors, &[], [report(12), report(3)], &mut out);
         assert_eq!(out.iter().map(|p| p.kind.clone()).collect::<Vec<_>>(), [SetupProblemKind::BodiesNotCoupled(3)], "one line");

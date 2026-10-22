@@ -361,7 +361,6 @@ pub struct BodyImpulse {
     pub angular: [f32; 3],
 }
 
-pub(crate) const MAX_BODY_HULLS: usize = 64;
 const COOKED_HULL_MAX_VERTICES: i32 = 42;
 
 /// An opaque body reference tied to the world that created it.
@@ -494,7 +493,7 @@ impl PhysicsWorld {
     /// Each input hull is cooked by Box3D's standard convex hull builder. The
     /// batch form accepts large point clouds; the native builder retains at
     /// most 128 output vertices per hull while preserving the original point
-    /// positions used for cooking. A body may contain at most 64 hull shapes.
+    /// positions used for cooking. A body takes any number of hulls.
     pub fn add_hulls(
         &mut self,
         hulls: &[Vec<[f32; 3]>],
@@ -503,9 +502,6 @@ impl PhysicsWorld {
         let config = validate_config(config)?;
         if hulls.is_empty() {
             return Err(PhysicsError::InvalidInput("body needs at least one hull"));
-        }
-        if hulls.len() > MAX_BODY_HULLS {
-            return Err(PhysicsError::InvalidInput("body supports at most 64 hulls"));
         }
         for hull in hulls {
             validate_hull(hull)?;
@@ -940,7 +936,6 @@ impl PhysicsWorld {
         };
         match result {
             0 => native_set_wall(native, config.wall),
-            4 => Err(PhysicsError::InvalidInput("body supports at most 64 shapes")),
             _ => Err(PhysicsError::NativeFailure),
         }
     }
@@ -958,8 +953,8 @@ impl PhysicsWorld {
         if config.kind != BodyKind::Fixed {
             return Err(PhysicsError::InvalidInput("only a fixed body's hulls can be replaced"));
         }
-        if hulls.is_empty() || hulls.len() > MAX_BODY_HULLS {
-            return Err(PhysicsError::InvalidInput("body needs between 1 and 64 hulls"));
+        if hulls.is_empty() {
+            return Err(PhysicsError::InvalidInput("body needs at least one hull"));
         }
         for hull in hulls {
             validate_hull(hull)?;
@@ -1822,10 +1817,8 @@ mod tests {
             )
             .unwrap();
         assert!(world.add_hulls(&[vec![[0.0; 3]; 3]], BodyConfig::default()).is_err());
-        assert_eq!(
-            world.add_hulls(&vec![cube(0.1); MAX_BODY_HULLS + 1], BodyConfig::default()),
-            Err(PhysicsError::InvalidInput("body supports at most 64 hulls"))
-        );
+        let past_the_stack = BodyConfig { kind: BodyKind::Fixed, mass: 0.0, position: [50.0, 0.0, 0.0], ..BodyConfig::default() };
+        assert!(world.add_hulls(&vec![cube(0.1); 65], past_the_stack).is_ok(), "a body takes any number of hulls");
 
         let left = cube(0.5)
             .into_iter()

@@ -346,7 +346,7 @@ fn a_radial_force_hit_kicks_the_swarm_once() {
     run.runtime.water().drain_scene_impulses(|id, event| receipts.push((id.clone(), event)));
     assert_eq!(receipts.len(), 1, "one fire, one landing");
     let (id, event) = &receipts[0];
-    assert_eq!((id.as_str(), event.value.target), (swarm_node("node.swarm_forces").1.as_str(), ImpulseTarget::Swarm));
+    assert_eq!((id.as_str(), &event.value.target), (swarm_node("node.swarm_forces").1.as_str(), &ImpulseTarget::Swarm));
     // The template's bounds: a 6 m cube about the origin, 17 nodes a side.
     let lattice = ForceLattice::over_box([-3.0; 3], [6.0; 3], 17);
     let mut values = vec![[0.0f32; 4]; lattice.node_count()];

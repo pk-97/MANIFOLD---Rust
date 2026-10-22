@@ -2,7 +2,7 @@
 //! reference cleanup a removal does. Pure document edits; the commands in
 //! `manifold-editing` wrap them in undo steps.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::{
     DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, SceneDoc,
@@ -291,6 +291,41 @@ impl SceneDoc {
             }
         }
         Ok((remap(source, &map), map))
+    }
+
+    /// [`Self::effective_material`] of every item that has one, in one walk.
+    pub fn effective_materials(&self) -> HashMap<ItemId, ItemId> {
+        let mut materials = HashSet::new();
+        self.walk(|item, _| {
+            if item.kind() == ItemKind::Material {
+                materials.insert(item.id.clone());
+            }
+        });
+        let mut effective = HashMap::new();
+        self.walk(|item, ancestors| {
+            let found = std::iter::once(item)
+                .chain(ancestors.iter().rev().copied())
+                .filter_map(|holder| holder.fields.material())
+                .find(|material| materials.contains(*material));
+            if let Some(material) = found {
+                effective.insert(item.id.clone(), material.clone());
+            }
+        });
+        effective
+    }
+
+    /// How many Objects and Groups draw with each Material.
+    pub fn material_users(&self) -> HashMap<ItemId, usize> {
+        let effective = self.effective_materials();
+        let mut users = HashMap::new();
+        self.walk(|item, _| {
+            if matches!(item.kind(), ItemKind::Object | ItemKind::Group)
+                && let Some(material) = effective.get(&item.id)
+            {
+                *users.entry(material.clone()).or_insert(0) += 1;
+            }
+        });
+        users
     }
 
     /// The material `id` draws with: its own binding, else the nearest

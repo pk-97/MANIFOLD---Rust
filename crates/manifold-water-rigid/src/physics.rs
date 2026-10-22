@@ -13,7 +13,6 @@ use manifold_physics::{
 use std::sync::Arc;
 
 use manifold_node_engine::scene::transform::Transform;
-use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::platonic::platonic_points;
 pub use manifold_physics::collision_shape::Solid;
 
@@ -104,22 +103,14 @@ impl HeldClock {
 
 }
 
-/// The most individually wired bodies one world takes, one per body port.
-pub const MAX_BODIES: usize = RigidImpulseTargets::BODY_CAPACITY;
-/// The fixed slabs a coupled liquid's own copy of the world adds past a
-/// full world's bodies: one per face of its domain box. They are never
-/// authored, wired or hit.
-pub const MAX_WALL_BODIES: usize = 6;
-/// The body slots a world's simulation holds: the authored bodies, then a
-/// coupled liquid's walls.
-pub(crate) const MAX_BODY_ROWS: usize = MAX_BODIES + MAX_WALL_BODIES;
-/// The most copy groups one world takes, one per copy-group port.
-pub const MAX_COPY_GROUPS: usize = RigidImpulseTargets::GROUP_CAPACITY;
-/// A field or hit target is a body slot, then a copy group.
-pub(crate) const MAX_TARGETS: usize = MAX_BODY_ROWS + MAX_COPY_GROUPS;
+/// Field and hit targets (body slots, then copy groups) a world gathers on
+/// the stack each tick. A bigger world gathers them on the heap: this is no
+/// limit, only where a tick stops being allocation-free.
+const STACK_TARGETS: usize = 64;
 /// The most copies one world makes across all its groups: the measured budget.
 pub const MAX_COPIES: usize = 4_000;
 pub const AUTHORED_HISTORY_CAPACITY: usize = 256;
+/// The hits in flight a world holds before a burst grows its history.
 const IMPULSE_CAPACITY: usize = 256;
 const FIXED_TICK: Seconds = Seconds(1.0 / 60.0);
 
@@ -188,6 +179,12 @@ pub struct RigidBody {
     /// unchanged.
     #[serde(skip)]
     pub wall: bool,
+    /// Which body node made this description, unique for that node's life;
+    /// 0 for a body no node made (a wall, a test body). A recompile can move
+    /// a body to another world port, and the world follows it by this so a
+    /// moved body keeps moving. Runtime-only.
+    #[serde(skip)]
+    pub identity: u64,
     /// How many copies a Physics World makes of this body when it is wired
     /// into one of the world's copy-group inputs, and how it lays them out.
     /// Any other body ignores it.
@@ -254,6 +251,7 @@ impl Default for RigidBody {
             collider: Some(default_solid()),
             refused: None,
             wall: false,
+            identity: 0,
             spawn: CopySpawn::default(),
         }
     }
@@ -427,22 +425,88 @@ fn mesh_volume(mesh: &manifold_physics::TriangleMesh, scale: [f32; 3]) -> f32 {
 }
 
 /// How many copies each group makes from the world's pool of `MAX_COPIES`,
-/// in port order, and how many the pool left unmade. A group whose physics
-/// is off makes no bodies and takes nothing from the pool.
+/// in port order, written into `made` (one entry per group; its storage is
+/// reused, so a steady frame never allocates), and how many the pool left
+/// unmade. A group whose physics is off makes no bodies and takes nothing
+/// from the pool.
 pub(crate) fn copy_pool<'a>(
     groups: impl Iterator<Item = Option<&'a RigidBody>>,
-) -> ([usize; MAX_COPY_GROUPS], usize) {
-    let mut made = [0; MAX_COPY_GROUPS];
+    made: &mut Vec<usize>,
+) -> usize {
+    made.clear();
     let mut pool = MAX_COPIES;
     let mut not_made = 0;
-    for (index, prototype) in groups.enumerate() {
-        let Some(prototype) = prototype.filter(|body| body.enabled) else { continue };
+    for prototype in groups {
+        let Some(prototype) = prototype.filter(|body| body.enabled) else {
+            made.push(0);
+            continue;
+        };
         let requested = requested_count(prototype.spawn);
-        made[index] = requested.min(pool);
-        not_made += requested - made[index];
-        pool -= made[index];
+        let take = requested.min(pool);
+        made.push(take);
+        not_made += requested - take;
+        pool -= take;
     }
-    (made, not_made)
+    not_made
+}
+
+/// A port's body identity: 0 for an empty port or a body no node made.
+fn identity_of(body: &Option<RigidBody>) -> u64 {
+    body.as_ref().map_or(0, |body| body.identity)
+}
+
+/// Which old port each new port's body was on: a body a node made matches
+/// its own identity, and the anonymous ports (walls, empty ports, test
+/// bodies) match each other in order. `None` when a port `held` names is
+/// left with no new port, or an identity repeats.
+fn port_map(old: &[u64], new: &[u64], held: impl Fn(usize) -> bool) -> Option<Vec<Option<usize>>> {
+    let mut by_identity = ahash::AHashMap::with_capacity(old.len());
+    for (at, &identity) in old.iter().enumerate() {
+        if identity != 0 && by_identity.insert(identity, at).is_some() {
+            return None;
+        }
+    }
+    let mut anonymous = old.iter().enumerate().filter(|(_, identity)| **identity == 0).map(|(at, _)| at);
+    let mut used = vec![false; old.len()];
+    let mut from = Vec::with_capacity(new.len());
+    for &identity in new {
+        let at = if identity == 0 { anonymous.next() } else { by_identity.get(&identity).copied() };
+        if let Some(at) = at
+            && std::mem::replace(&mut used[at], true)
+        {
+            return None;
+        }
+        from.push(at);
+    }
+    (0..old.len()).all(|at| used[at] || !held(at)).then_some(from)
+}
+
+/// Give every installed body and every active copy its target's inputs
+/// (`inputs[target]`, a body slot then a copy group) in one batch the world
+/// validates whole before any body feels a force. Copies of a group share one
+/// input slice. A target `hit` leaves out takes nothing.
+fn apply_by_target<'f, T: AsRef<[FieldInput<'f>]>>(
+    world: &mut PhysicsWorld,
+    handles: &[Option<BodyHandle>],
+    groups: &[CopyGroup],
+    body_count: usize,
+    inputs: &[T],
+    hit: impl Fn(usize) -> bool,
+    dt: Seconds,
+) -> Result<(), String> {
+    let hit = &hit;
+    let recipients = handles
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| hit(*index))
+        .filter_map(|(index, handle)| handle.map(|handle| (handle, inputs[index].as_ref())))
+        .chain(groups.iter().enumerate().filter(move |(group, _)| hit(body_count + group)).flat_map(
+            move |(group, state)| {
+                let input = inputs[body_count + group].as_ref();
+                state.handles[..state.active].iter().flatten().map(move |&handle| (handle, input))
+            },
+        ));
+    world.apply_fields_by_target(recipients, dt).map_err(|error| error.to_string())
 }
 
 /// The signed volume of a body's installed hulls, m³: the sum over each
@@ -560,6 +624,13 @@ pub struct RigidSimulation {
     owed_origin: Option<PlayedTime>,
     /// The gate each frame's bodies pass, and what it refused.
     admission: admission::Admission,
+    /// Each body port's and copy-group port's body identity last frame
+    /// (`RigidBody::identity`), so a recompile that moves a body to
+    /// another port moves its state with it ([`Self::follow_ports`]).
+    identities: Vec<u64>,
+    group_identities: Vec<u64>,
+    /// Each group's share of the copy pool ([`copy_pool`]), reused.
+    pool_made: Vec<usize>,
 }
 
 impl Default for RigidSimulation {
@@ -609,6 +680,9 @@ impl Default for RigidSimulation {
             replay_driven: false,
             owed_origin: None,
             admission: Default::default(),
+            identities: Vec::new(),
+            group_identities: Vec::new(),
+            pool_made: Vec::new(),
         }
     }
 }
@@ -746,11 +820,7 @@ impl RigidSimulation {
         coupling: &mut C,
     ) -> Result<(), String> {
         self.accepted_observation = None;
-        if scene.bodies.len() > MAX_BODY_ROWS || scene.groups.len() > MAX_COPY_GROUPS {
-            return Err(format!(
-                "Physics: a world takes at most {MAX_BODIES} bodies, {MAX_WALL_BODIES} domain walls and {MAX_COPY_GROUPS} copy groups"
-            ));
-        }
+        self.follow_ports(scene.bodies, scene.groups);
         self.admission.admit(scene.bodies, scene.groups);
         let (bodies, groups) = self.admission.take_admitted();
         let result = self.advance_admitted(
@@ -837,11 +907,13 @@ impl RigidSimulation {
             && self.owed_origin.is_some_and(|origin| now.0 >= origin.seconds() - 1e-9);
         let reset = self.reset_count.is_some_and(|old| old != reset_count)
             || (self.last_time.is_some_and(|last| now.0 < last.0) && !opening);
+        // A group the world has never laid out joins live
+        // (`install_added_groups`); any other geometry change rebuilds.
         let copy_topology_changed = groups.len() != self.groups.len()
-            || groups
-                .iter()
-                .zip(&self.groups)
-                .any(|(current, state)| !same_topology_body(current.as_ref(), state.description.as_ref()));
+            || groups.iter().zip(&self.groups).any(|(current, state)| {
+                let joins_live = self.world.is_some() && state.is_new() && current.is_some();
+                !joins_live && !same_topology_body(current.as_ref(), state.description.as_ref())
+            });
         let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset
             || (accepted_interval.is_none() && self.clock.rate_changed(self.step.interval.0));
         if !rebuild && let Some(error) = &self.impulse_failure {
@@ -1236,7 +1308,8 @@ impl RigidSimulation {
         now: Seconds,
     ) -> Result<(), String> {
         let SceneRef { bodies, groups, gravity, acceleration_field, .. } = scene;
-        let (made, not_made) = copy_pool(groups.iter().map(Option::as_ref));
+        let mut made = std::mem::take(&mut self.pool_made);
+        let not_made = copy_pool(groups.iter().map(Option::as_ref), &mut made);
         let mut world = PhysicsWorld::new(gravity).map_err(|e| e.to_string())?;
         self.admission.clear_lost();
         self.resize_for(bodies.len(), groups.len());
@@ -1277,6 +1350,7 @@ impl RigidSimulation {
             state.description.clone_from(prototype);
         }
         self.copies_not_made = not_made;
+        self.pool_made = made;
         self.reset_impulse_runtime(epoch)?;
         self.world = Some(world);
         self.bullet_enabled.fill(false);
@@ -1367,6 +1441,118 @@ impl RigidSimulation {
         Ok(())
     }
 
+    /// Lay out every copy group the world has never laid out, at rest, at the
+    /// tick start that first sees it: Copies switched on mid-show joins the
+    /// live world and what already moves keeps moving. A new group takes what
+    /// the copy pool has left after the groups before it.
+    fn install_added_groups(&mut self, groups: &[Option<RigidBody>]) -> Result<(), String> {
+        if !groups.iter().zip(&self.groups).any(|(current, state)| state.is_new() && current.is_some()) {
+            return Ok(());
+        }
+        let mut made = std::mem::take(&mut self.pool_made);
+        let not_made = copy_pool(
+            groups
+                .iter()
+                .zip(&self.groups)
+                .map(|(current, state)| current.as_ref().filter(|_| state.arrangement.is_some() || state.is_new())),
+            &mut made,
+        );
+        let mut result = Ok(());
+        for (group, current) in groups.iter().enumerate() {
+            let Some(prototype) = current.as_ref().filter(|_| self.groups[group].is_new()) else {
+                continue;
+            };
+            let prototype = prototype.clone();
+            self.groups[group].reset_for(Some(&prototype));
+            if prototype.enabled {
+                result = self.lay_out(group, &prototype, Arrangement::of(&prototype, made[group]));
+                if result.is_err() {
+                    break;
+                }
+            } else {
+                let rest = Arrangement::of(&prototype, requested_count(prototype.spawn));
+                self.groups[group].show_rest(&rest, prototype.transform.scale);
+            }
+            self.groups[group].description = Some(prototype);
+        }
+        self.pool_made = made;
+        result?;
+        self.copies_not_made = not_made;
+        self.refresh_field_handles();
+        Ok(())
+    }
+
+    /// Every installed body and active copy, for fields that reach them all.
+    fn refresh_field_handles(&mut self) {
+        self.field_handles.clear();
+        self.field_handles.extend(self.handles.iter().flatten().copied());
+        for state in &self.groups {
+            self.field_handles.extend(state.handles[..state.active].iter().flatten().copied());
+        }
+    }
+
+    /// Follow each body and copy group to the port a recompile moved it to
+    /// (a body added before it in tree order shifts it), by its
+    /// [`RigidBody::identity`]: its native body, history and fields move
+    /// with it, so the world keeps running and a new body or group simply
+    /// joins. A world that lost a body or group, or holds a Shatter piece
+    /// (its parent is named by port), is left as it was, and the topology
+    /// check rebuilds it as any removal does.
+    fn follow_ports(&mut self, bodies: &[Option<RigidBody>], groups: &[Option<RigidBody>]) {
+        let unchanged = |known: &[u64], slots: &[Option<RigidBody>]| {
+            known.len() == slots.len() && known.iter().zip(slots).all(|(id, body)| *id == identity_of(body))
+        };
+        if unchanged(&self.identities, bodies) && unchanged(&self.group_identities, groups) {
+            return;
+        }
+        let new_ids = |slots: &[Option<RigidBody>]| slots.iter().map(identity_of).collect::<Vec<_>>();
+        let (body_ids, group_ids) = (new_ids(bodies), new_ids(groups));
+        let installed = self.world.is_some()
+            && self.handles.len() == self.identities.len()
+            && self.groups.len() == self.group_identities.len();
+        let fragments = self.descriptions.iter().chain(bodies).flatten().any(|body| body.fragment_parent.is_some());
+        if installed && !fragments {
+            let held_body = |slot: usize| self.handles[slot].is_some() || self.descriptions[slot].is_some();
+            let held_group = |group: usize| !self.groups[group].is_new();
+            if let (Some(body_from), Some(group_from)) =
+                (port_map(&self.identities, &body_ids, held_body), port_map(&self.group_identities, &group_ids, held_group))
+            {
+                self.move_ports(&body_from, &group_from);
+            }
+        }
+        self.identities = body_ids;
+        self.group_identities = group_ids;
+    }
+
+    /// Rearrange every per-port state so new body port `p` holds what old
+    /// port `body_from[p]` held (nothing for a new port), and the same for
+    /// copy groups.
+    fn move_ports(&mut self, body_from: &[Option<usize>], group_from: &[Option<usize>]) {
+        let old_bodies = self.handles.len();
+        fn moved<T: Default>(old: &mut [T], from: &[Option<usize>]) -> Vec<T> {
+            from.iter().map(|at| at.map_or_else(T::default, |at| std::mem::take(&mut old[at]))).collect()
+        }
+        self.handles = moved(&mut self.handles, body_from);
+        self.descriptions = moved(&mut self.descriptions, body_from);
+        self.volumes = moved(&mut self.volumes, body_from);
+        self.bullet_enabled = moved(&mut self.bullet_enabled, body_from);
+        self.deferred_animated_edit = moved(&mut self.deferred_animated_edit, body_from);
+        self.fragment_active = moved(&mut self.fragment_active, body_from);
+        self.fragment_release_latched = moved(&mut self.fragment_release_latched, body_from);
+        self.fragment_parent_released = moved(&mut self.fragment_parent_released, body_from);
+        self.poses = moved(&mut self.poses, body_from);
+        self.groups = moved(&mut self.groups, group_from);
+        let target_from: Vec<Option<usize>> = body_from
+            .iter()
+            .copied()
+            .chain(group_from.iter().map(|at| at.map(|at| old_bodies + at)))
+            .collect();
+        self.authored_bodies.move_columns(&target_from);
+        self.targeted_fields.move_targets(&target_from);
+        self.admission.move_ports(body_from, group_from);
+        self.refresh_field_handles();
+    }
+
     /// Bring every installed body and copy in line with this frame's
     /// authored description: contact properties, kind and teleports.
     fn apply_authored_edits(
@@ -1377,6 +1563,7 @@ impl RigidSimulation {
         due_steps: usize,
     ) -> Result<(), String> {
         self.install_added_bodies(bodies)?;
+        self.install_added_groups(groups)?;
         let world = self.world.as_mut().expect("world constructed above");
         for (i, body) in bodies.iter().enumerate() {
             let (Some(body), Some(handle)) = (body, self.handles[i]) else {
@@ -1475,12 +1662,17 @@ impl RigidSimulation {
         }
         let Some(sample) = in_effect else { return Ok(()) };
         let groups = self.groups.len();
-        let (made, not_made) = copy_pool((0..groups).map(|group| {
-            self.authored_cell(sample, body_count + group)
-                .filter(|_| self.groups[group].arrangement.is_some())
-        }));
+        let mut made = std::mem::take(&mut self.pool_made);
+        let not_made = copy_pool(
+            (0..groups).map(|group| {
+                self.authored_cell(sample, body_count + group)
+                    .filter(|_| self.groups[group].arrangement.is_some())
+            }),
+            &mut made,
+        );
         let mut changed = false;
-        for (group, &made) in made.iter().enumerate().take(groups) {
+        let mut result = Ok(());
+        for (group, &made) in made.iter().enumerate() {
             let Some(installed) = self.groups[group].arrangement else { continue };
             let Some(prototype) = self.authored_cell(sample, body_count + group).filter(|body| body.enabled) else {
                 continue;
@@ -1491,9 +1683,14 @@ impl RigidSimulation {
                 continue;
             }
             let prototype = prototype.clone();
-            self.lay_out(group, &prototype, target)?;
+            result = self.lay_out(group, &prototype, target);
+            if result.is_err() {
+                break;
+            }
             changed = true;
         }
+        self.pool_made = made;
+        result?;
         if changed {
             self.copies_not_made = not_made;
             self.field_handles.clear();
@@ -1609,7 +1806,8 @@ impl RigidSimulation {
                 ..Default::default()
             };
         }
-        let (made, _) = copy_pool(groups.iter().map(Option::as_ref));
+        let mut made = std::mem::take(&mut self.pool_made);
+        copy_pool(groups.iter().map(Option::as_ref), &mut made);
         for (group, (authored_body, state)) in groups.iter().zip(self.groups.iter_mut()).enumerate() {
             let Some(prototype) = authored_body.as_ref() else {
                 state.shown = 0;
@@ -1656,6 +1854,7 @@ impl RigidSimulation {
             }
             state.description.clone_from(authored_body);
         }
+        self.pool_made = made;
         Ok(())
     }
 
@@ -1754,7 +1953,8 @@ impl RigidSimulation {
             let angular = world
                 .angular_velocity(parent_handle)
                 .map_err(|e| e.to_string())?;
-            let mut velocities = [[0.0; 3]; MAX_BODY_ROWS];
+            // A Shatter break, once per release: allocating here is off the tick.
+            let mut velocities = vec![[0.0; 3]; self.descriptions.len()];
             for (index, body) in self.descriptions.iter().enumerate() {
                 if body
                     .as_ref()
@@ -2258,46 +2458,22 @@ impl RigidSimulation {
         };
         let span = self.targeted_fields.span(before, after, alpha)?;
         let targets = body_count + self.groups.len();
-        let fields: [_; MAX_TARGETS] = std::array::from_fn(|index| {
-            if index < targets {
-                span.field(index)
-            } else {
-                crate::vector_field::ContinuousField { before: None, after: None, alpha: 0.0, origin: [0.0; 3] }
-            }
-        });
-        let inputs: [[FieldInput<'_>; 2]; MAX_TARGETS] = std::array::from_fn(|index| {
-            [
-                FieldInput {
-                    field: global,
-                    acceleration: 1.0,
-                    delta_velocity: 0.0,
-                },
-                FieldInput {
-                    field: &fields[index],
-                    acceleration: 1.0,
-                    delta_velocity: 0.0,
-                },
-            ]
-        });
-        let recipients = self
-            .handles
-            .iter()
-            .enumerate()
-            .filter_map(|(index, handle)| handle.map(|handle| (handle, inputs[index].as_slice())))
-            .chain(self.groups.iter().enumerate().flat_map(|(group, state)| {
-                let input = inputs[body_count + group].as_slice();
-                state.handles[..state.active]
-                    .iter()
-                    .flatten()
-                    .map(move |&handle| (handle, input))
-            }));
-        // Validate the complete batch before any body receives a force. Copies
-        // share one input slice and one linear validation pass.
-        self.world
-            .as_mut()
-            .expect("world constructed above")
-            .apply_fields_by_target(recipients, dt)
-            .map_err(|error| error.to_string())
+        let global = FieldInput { field: global, acceleration: 1.0, delta_velocity: 0.0 };
+        let world = self.world.as_mut().expect("world constructed above");
+        if targets <= STACK_TARGETS {
+            let fields: [_; STACK_TARGETS] = std::array::from_fn(|index| span.field(index));
+            let inputs: [[FieldInput<'_>; 2]; STACK_TARGETS] = std::array::from_fn(|index| {
+                [global, FieldInput { field: &fields[index], acceleration: 1.0, delta_velocity: 0.0 }]
+            });
+            apply_by_target(world, &self.handles, &self.groups, body_count, &inputs[..targets], |_| true, dt)
+        } else {
+            let fields: Vec<_> = (0..targets).map(|index| span.field(index)).collect();
+            let inputs: Vec<[FieldInput<'_>; 2]> = fields
+                .iter()
+                .map(|field| [global, FieldInput { field, acceleration: 1.0, delta_velocity: 0.0 }])
+                .collect();
+            apply_by_target(world, &self.handles, &self.groups, body_count, &inputs, |_| true, dt)
+        }
     }
 
     fn animated_microsteps(

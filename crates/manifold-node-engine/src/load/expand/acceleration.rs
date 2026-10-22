@@ -328,9 +328,9 @@ pub fn impulse_recipients_with_index(
             .ok_or_else(|| unsupported(&recipient.port, "invalid rigid impulse recipient"))?;
             let previous = worlds
                 .entry(world.node_id.as_str().to_owned())
-                .or_insert(ImpulseTarget::Rigid(targets));
+                .or_insert_with(|| ImpulseTarget::Rigid(RigidImpulseTargets::default()));
             if let ImpulseTarget::Rigid(previous) = previous {
-                *previous = previous.union(targets);
+                *previous = std::mem::take(previous).union(targets);
             }
             continue;
         }

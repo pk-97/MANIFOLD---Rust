@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use manifold_core::PlayedTime;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_water_rigid::physics::{CopySpawn, MAX_BODIES, RigidBody, RigidSceneInputs, RigidSimulation, SimStep};
+use manifold_water_rigid::physics::{CopySpawn, RigidBody, RigidSceneInputs, RigidSimulation, SimStep};
 use manifold_node_engine::scene::transform::Transform;
 
 const JSON: &str = include_str!("../assets/generator-presets/PhysicsBoxes.json");
@@ -46,6 +46,7 @@ fn physics_boxes(count: usize) -> RigidSceneInputs {
         release_count: 0.0,
         wall: false,
         spawn: Default::default(),
+        identity: 0,
     };
     let mut scene = RigidSceneInputs { gravity: [0.0, -9.81, 0.0], ..RigidSceneInputs::default() };
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
@@ -67,12 +68,13 @@ fn physics_boxes(count: usize) -> RigidSceneInputs {
 /// 500 bodies in one world: a floor, 255 individually wired boxes in a
 /// loose stack, and two copy groups of 122 boxes piled on top.
 fn wide_world() -> RigidSceneInputs {
+    const BODIES: usize = 256;
     let boxed = |pos: [f32; 3], scale: f32, kind: u32| RigidBody {
         transform: Transform { pos, rot_euler: [0.1, 0.2, 0.05], scale: [scale; 3], billboard: false, ..Default::default() },
         kind,
         ..RigidBody::default()
     };
-    let mut bodies = vec![None; MAX_BODIES];
+    let mut bodies = vec![None; BODIES];
     bodies[0] = Some(RigidBody {
         transform: Transform { pos: [0.0, -0.5, 0.0], scale: [60.0, 1.0, 60.0], ..Transform::default() },
         kind: 0,
@@ -90,7 +92,7 @@ fn wide_world() -> RigidSceneInputs {
     RigidSceneInputs {
         groups: vec![Some(pile(-3.0)), Some(pile(3.0))],
         gravity: [0.0, -9.81, 0.0],
-        targeted_fields: vec![None; MAX_BODIES + 2],
+        targeted_fields: vec![None; BODIES + 2],
         bodies,
         acceleration_field: None,
     }

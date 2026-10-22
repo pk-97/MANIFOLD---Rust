@@ -1,7 +1,7 @@
 //! Bounded measurement of imported objects through the production RigidSimulation.
 //! Usage: physics_mesh_benchmark model.glb [pieces=1]
 use manifold_core::PlayedTime;
-use {manifold_water_rigid::physics::MAX_BODIES, manifold_water_rigid::physics::RigidBody, manifold_water_rigid::physics::RigidSimulation, manifold_node_engine::scene::mesh_selection::MeshSelection, manifold_node_engine::scene::mesh_selection::select_fragment, manifold_node_engine::scene::transform::Transform};
+use {manifold_water_rigid::physics::RigidBody, manifold_water_rigid::physics::RigidSimulation, manifold_node_engine::scene::mesh_selection::MeshSelection, manifold_node_engine::scene::mesh_selection::select_fragment, manifold_node_engine::scene::transform::Transform};
 use std::{path::Path, sync::Arc, time::Instant};
 use manifold_physics::collision_shape::{CollisionShape, Solid};
 
@@ -11,8 +11,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .first()
         .ok_or("Usage: physics_mesh_benchmark model.glb [pieces]")?;
     let count: usize = args.get(1).map(|v| v.parse()).transpose()?.unwrap_or(1);
-    if count == 0 || count >= MAX_BODIES {
-        return Err(format!("Use 1–{} pieces", MAX_BODIES - 1).into());
+    if count == 0 {
+        return Err("Use at least 1 piece".into());
     }
     let start = Instant::now();
     let selection = MeshSelection {

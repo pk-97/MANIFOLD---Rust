@@ -103,7 +103,7 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
 /// `node.scene_object` port it feeds: its effective material's, else the
 /// scene's plain material (made on first use).
 pub(crate) fn surface_for(b: &mut Builder<'_>, item: &ItemId) -> (u32, Vec<(u32, &'static str)>) {
-    if let Some(material) = b.doc.effective_material(item)
+    if let Some(material) = b.effective_materials.get(item).cloned()
         && let Some(surface) = b.id(material.as_str(), MATERIAL_FAMILY.node)
     {
         return (surface, b.material_maps.get(material.as_str()).cloned().unwrap_or_default());
