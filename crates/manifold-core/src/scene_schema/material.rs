@@ -1,4 +1,4 @@
-//! Material: one `node.pbr_material` that every item bound to it shares, and
+//! Material: one material node (PBR, Unlit or Cel by its Type) that every item bound to it shares, and
 //! its texture source (`node.layer_source` for a layer, `node.gltf_texture_source`
 //! for a file) feeding the base colour of each object drawing with it. A
 //! material of a model file reads its factors, every map and every extension
@@ -14,7 +14,7 @@ use manifold_foundation::scene_surface::ControlGroup;
 
 use super::fields::{Choice, FieldControl, FieldRow, FieldValue, enabled, wrong_value};
 use super::{Exposure, PropertyRow, Reach, row};
-use crate::scene_doc::{ItemFields, TextureSource};
+use crate::scene_doc::{ItemFields, MaterialFields, MaterialType, TextureFeeds, TextureSource};
 
 /// The family rule for the material node's own params.
 #[derive(Debug, Clone, Copy)]
@@ -167,9 +167,79 @@ fn write_texture(fields: &mut ItemFields, value: &FieldValue) -> Result<(), Stri
     Ok(())
 }
 
+const TYPES: &[Choice] =
+    &[Choice { key: "pbr", label: "PBR" }, Choice { key: "unlit", label: "Unlit" }, Choice { key: "cel", label: "Cel" }];
+
+const FEEDS: &[Choice] = &[Choice { key: "base_colour", label: "Base Colour" }, Choice { key: "emission", label: "Emission" }];
+
+fn material_type_key(fields: &ItemFields) -> &'static str {
+    match fields {
+        ItemFields::Material(m) => match m.material_type {
+            MaterialType::Pbr => "pbr",
+            MaterialType::Unlit => "unlit",
+            MaterialType::Cel => "cel",
+        },
+        _ => "pbr",
+    }
+}
+
+/// The material node type a Material's fields compile to. A model file's
+/// material keeps its own PBR factors and extensions, so its Type is not
+/// offered and it stays PBR.
+pub fn node_type(fields: &MaterialFields) -> &'static str {
+    match fields.texture {
+        TextureSource::Model { .. } => MaterialType::Pbr.node_type(),
+        _ => fields.material_type.node_type(),
+    }
+}
+
 /// The texture source is a field; the features are set by the feature menu
 /// (one `Set` with the feature's defaults, so one undo removes it).
-pub static MATERIAL_FIELDS: [FieldRow; 3] = [
+pub static MATERIAL_FIELDS: [FieldRow; 5] = [
+    FieldRow {
+        id: "material_type",
+        label: "Type",
+        section: Material,
+        control: FieldControl::Closed(TYPES),
+        applies: not_model,
+        disabled: enabled,
+        read: |fields| FieldValue::Choice(material_type_key(fields).to_owned()),
+        write: |fields, value| match (fields, value) {
+            (ItemFields::Material(m), FieldValue::Choice(key)) => {
+                m.material_type = match key.as_str() {
+                    "pbr" => MaterialType::Pbr,
+                    "unlit" => MaterialType::Unlit,
+                    "cel" => MaterialType::Cel,
+                    _ => return Err(wrong_value("material_type", value)),
+                };
+                Ok(())
+            }
+            _ => Err(wrong_value("material_type", value)),
+        },
+    },
+    FieldRow {
+        id: "texture_feeds",
+        label: "Layer Feeds",
+        section: Material,
+        control: FieldControl::Closed(FEEDS),
+        applies: layer,
+        disabled: enabled,
+        read: |fields| match fields {
+            ItemFields::Material(MaterialFields { texture_feeds: TextureFeeds::Emission, .. }) => FieldValue::Choice("emission".to_owned()),
+            _ => FieldValue::Choice("base_colour".to_owned()),
+        },
+        write: |fields, value| match (fields, value) {
+            (ItemFields::Material(m), FieldValue::Choice(key)) => {
+                m.texture_feeds = match key.as_str() {
+                    "base_colour" => TextureFeeds::BaseColour,
+                    "emission" => TextureFeeds::Emission,
+                    _ => return Err(wrong_value("texture_feeds", value)),
+                };
+                Ok(())
+            }
+            _ => Err(wrong_value("texture_feeds", value)),
+        },
+    },
     FieldRow {
         id: "texture",
         label: "Texture",

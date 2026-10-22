@@ -7,7 +7,7 @@
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::material_inspector::{MATERIAL_FEATURE_MODE_PARAMS, MATERIAL_FEATURES};
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, TextureSource};
+use manifold_core::scene_doc::{Item, ItemFields, ItemId, MaterialType, TextureFeeds, TextureSource};
 use manifold_core::scene_schema::{CardFacts, MATERIAL_FAMILY};
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardLabel, SurfaceRole, Unit};
@@ -48,7 +48,14 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         return;
     };
     let owner = item.id.as_str();
-    let surface = b.add(owner, MATERIAL_FAMILY.node, MATERIAL_FAMILY.type_id);
+    let node_type = manifold_core::scene_schema::material_node_type(fields);
+    let surface = b.add(owner, MATERIAL_FAMILY.node, node_type);
+    // A layer feeds the surface the Material says; a file always feeds the
+    // base colour.
+    let feeds = match fields.texture_feeds {
+        TextureFeeds::BaseColour => "base_color_map",
+        TextureFeeds::Emission => "emissive_map",
+    };
     // A model material's surface starts at the file's values, so its card
     // rows do too.
     let maps = match &fields.texture {
@@ -56,7 +63,7 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         TextureSource::Layer { layer } => {
             let texture = b.add(owner, "texture", "node.layer_source");
             b.set(texture, "layer", SerializedParamValue::String { value: layer.to_string() });
-            vec![(texture, "base_color_map")]
+            vec![(texture, feeds)]
         }
         TextureSource::File { path } => {
             let texture = b.add(owner, "texture", "node.gltf_texture_source");
@@ -69,7 +76,7 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         },
     };
     b.material_maps.insert(owner.to_owned(), maps);
-    for meta in b.type_params(MATERIAL_FAMILY.type_id) {
+    for meta in b.type_params(node_type) {
         if MATERIAL_FAMILY.automatic.contains(&meta.name.as_str()) {
             continue;
         }
@@ -83,8 +90,9 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         spec.material_role = meta.material_role;
         b.declare(spec, &meta, &[surface], &meta.name);
     }
+    let features = if node_type == MaterialType::Pbr.node_type() { fields.features.as_slice() } else { &[] };
     for (feature, param) in MATERIAL_FEATURES.iter().zip(MATERIAL_FEATURE_MODE_PARAMS) {
-        if let Some(setting) = fields.features.iter().find(|setting| setting.feature == *feature) {
+        if let Some(setting) = features.iter().find(|setting| setting.feature == *feature) {
             b.set_number(surface, param, setting.mode as f32);
         }
     }

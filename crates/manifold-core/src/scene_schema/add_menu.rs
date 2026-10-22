@@ -58,10 +58,11 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 22] = [
+pub static ADD_ENTRIES: [AddEntry; 23] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
+    entry("object.layer_plane", "Object", "Layer Plane", ItemKind::Object, "Layer Plane", || object(Shape::Plane)),
     entry("object.tetrahedron", "Object", "Tetrahedron", ItemKind::Object, "Tetrahedron", || object(Shape::Tetrahedron)),
     entry("object.octahedron", "Object", "Octahedron", ItemKind::Object, "Octahedron", || object(Shape::Octahedron)),
     entry("object.icosahedron", "Object", "Icosahedron", ItemKind::Object, "Icosahedron", || object(Shape::Icosahedron)),

@@ -5,7 +5,7 @@
 
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{CameraFields, CameraRig, FeatureSetting, ForceFields, ForceType, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, SceneDoc, Shape, TextureSource, param_id};
+use manifold_core::scene_doc::{CameraFields, CameraRig, FeatureSetting, ForceFields, ForceType, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, MaterialType, SceneDoc, Shape, TextureSource, param_id};
 use manifold_core::scene_schema::{self, FieldControl, FieldValue, add_entry, field_for, unique_name};
 use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::command::{Command, CompositeCommand};
@@ -66,8 +66,23 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
     // An Object comes with its own Material, so its colour is on its card
     // at once.
     let mut commands: Vec<Box<dyn Command>> = if entry.kind == ItemKind::Object {
-        let material = new_material(new_id(), unique_name(MATERIAL_NAME, &names));
-        add_object_commands(layer, parent.clone(), index, Item::new(id.clone(), name, fields()), material)
+        let mut material = new_material(new_id(), unique_name(MATERIAL_NAME, &names));
+        if key == LAYER_PLANE {
+            // The first other layer in the stack; the Texture row re-picks it.
+            let layer_source = project.timeline.layers.iter().find(|other| other.layer_id != *layer);
+            material.fields = ItemFields::Material(MaterialFields {
+                material_type: MaterialType::Unlit,
+                texture: layer_source.map_or(TextureSource::None, |other| TextureSource::Layer { layer: other.layer_id.clone() }),
+                ..MaterialFields::default()
+            });
+        }
+        let material_id = material.id.clone();
+        let mut commands = add_object_commands(layer, parent.clone(), index, Item::new(id.clone(), name, fields()), material);
+        if key == LAYER_PLANE {
+            // Alpha cutout, so a layer's transparent pixels leave the plane clear.
+            commands.push(write(layer, &material_id, "alpha_mode", 0.0, ALPHA_MASK));
+        }
+        commands
     } else {
         vec![
             Box::new(AddSceneItemCommand::new(layer.clone(), entry.kind, parent.clone(), index, None, id.clone())),
@@ -97,6 +112,12 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
 
 /// What a new Material is called, numbered when taken.
 const MATERIAL_NAME: &str = "Material";
+
+/// The Add entry that makes a plane showing a layer: Unlit, alpha cutout.
+const LAYER_PLANE: &str = "object.layer_plane";
+
+/// Alpha Mode "Mask" on the unlit and PBR material nodes.
+const ALPHA_MASK: f32 = 1.0;
 
 fn names(doc: &SceneDoc) -> Vec<&str> {
     let mut names = Vec::new();
