@@ -125,13 +125,14 @@ pub static LIGHT_ROWS: [PropertyRow; 43] = [
         .when(environment),
     row("hdri_file", HDRI, Environment, Exposure::Automatic("the HDRI file field")).param("path").when(hdri),
     // Turns the HDRI about the up axis: its lighting, reflections and the
-    // background behind the scene together.
-    row("hdri_rotation", ENV, Environment, perform(CardBand::Lighting, 3))
-        .param("rotation")
+    // background behind the scene together. Each lookup turns, so the baked
+    // map and its lighting convolution never rebuild for it.
+    row("hdri_rotation", Reach::OwnAndScene("bg_sky", "render"), Environment, perform(CardBand::Lighting, 3))
+        .param("env_rotation")
         .limit(HardLimit::Unlimited)
         .when(hdri),
-    row("hdri_width", HDRI, Environment, Exposure::Internal("the file's own size")).param("width").when(hdri),
-    row("hdri_height", HDRI, Environment, Exposure::Internal("the file's own size")).param("height").when(hdri),
+    row("hdri_width", HDRI, Environment, Exposure::Internal("the HDRI is read at 2048 by 1024")).param("width").when(hdri),
+    row("hdri_height", HDRI, Environment, Exposure::Internal("the HDRI is read at 2048 by 1024")).param("height").when(hdri),
     row("bg_enabled", BG_SELECT, Environment, setup()).param("selector").switch(Feature::Background).toggle().default(0.0).when(hdri),
     row("bg_blur", BG_BLUR, Environment, setup()).param("radius").range(0.0, 64.0).limit(AT_LEAST_ZERO).gate(BACKGROUND_ON).default(0.0).when(hdri),
     row("bg_brightness", BG_GAIN, Environment, setup()).param("gain").range(0.0, 4.0).limit(AT_LEAST_ZERO).gate(BACKGROUND_ON).default(1.0).when(hdri),

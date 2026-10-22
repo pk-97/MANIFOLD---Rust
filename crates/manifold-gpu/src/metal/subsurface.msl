@@ -14,7 +14,7 @@ struct SubsurfaceParams {
     uint light_count;
     uint material_count;
     uint query_units_per_pixel;
-    uint _pad;
+    float env_rotation;
 };
 constant float SSS_PI = 3.14159265358979323846f;
 constant uint SSS_MAX_EVENTS = 256u;
@@ -139,7 +139,7 @@ static float3 sss_boundary_light(
     } else {
         constexpr sampler env_sampler(coord::normalized, s_address::repeat,
             t_address::clamp_to_edge, filter::linear, mip_filter::linear);
-        float2 uv = float2(atan2(r.direction.z, r.direction.x)/(2.0f*SSS_PI)+0.5f,
+        float2 uv = float2((atan2(r.direction.z, r.direction.x)+p.env_rotation)/(2.0f*SSS_PI)+0.5f,
             asin(clamp(r.direction.y,-1.0f,1.0f))/SSS_PI+0.5f);
         result += environment.sample(env_sampler, uv, level(0.0f)).rgb;
     }

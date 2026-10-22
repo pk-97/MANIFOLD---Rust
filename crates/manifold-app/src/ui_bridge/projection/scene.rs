@@ -7,7 +7,7 @@ use crate::ui_root::UIRoot;
 use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, SceneDoc, Shape, param_id, split_param_id};
+use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, SceneDoc, Shape, param_id, split_param_id};
 use manifold_core::scene_schema::{
     ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, bodies_past_capacity, choice_disabled, impulse_unavailable, modifier_label,
 };
@@ -165,13 +165,16 @@ fn material_block(
             used_by += 1;
         }
     });
+    // Looks and features are PBR: an Unlit or Cel Material compiles neither.
+    let pbr = matches!(&material.fields, ItemFields::Material(fields)
+        if manifold_core::scene_schema::material_node_type(fields) == MaterialType::Pbr.node_type());
     let features = match &material.fields {
-        ItemFields::Material(fields) => fields.features.iter().map(|setting| super::material::feature(setting.feature)).collect(),
+        ItemFields::Material(fields) if pbr => fields.features.iter().map(|setting| super::material::feature(setting.feature)).collect(),
         _ => Vec::new(),
     };
     let parameter_ids = owned.get(material.id.as_str()).cloned().unwrap_or_default();
     let look = match &material.fields {
-        ItemFields::Material(fields) => crate::scene_material_look::matching(inst, &material.id, &parameter_ids, fields),
+        ItemFields::Material(fields) if pbr => crate::scene_material_look::matching(inst, &material.id, &parameter_ids, fields),
         _ => None,
     };
     MaterialBlockVm {
@@ -182,6 +185,7 @@ fn material_block(
         parameter_ids,
         fields: field_rows(doc, material, layers),
         look,
+        pbr,
     }
 }
 

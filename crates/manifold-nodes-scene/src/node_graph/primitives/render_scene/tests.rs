@@ -477,7 +477,7 @@
         assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
-        assert_eq!(node.parameters().len(), 11, "object count never grows the fixed scene-level toggle set");
+        assert_eq!(node.parameters().len(), 12, "object count never grows the fixed scene-level toggle set");
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
@@ -830,7 +830,7 @@
         let mut light = [[0.0; 4]; LIGHT_VEC4_STRIDE];
         light[0] = [0.0, 1.0, 0.0, 0.0];
         light[1][3] = -1.0; // no shadow slot
-        let key = |data: &[[f32; 4]]| compute_rt_lighting_key(&[], &[1.0; 3], None, data);
+        let key = |data: &[[f32; 4]]| compute_rt_lighting_key(&[], &[1.0; 3], None, 0.0, data);
         let dark = key(&light);
         light[0][0] = 0.6;
         assert_eq!(dark, key(&light), "dark light motion must preserve history");

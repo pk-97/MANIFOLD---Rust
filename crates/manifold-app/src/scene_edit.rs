@@ -7,7 +7,7 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
     CameraFields, CameraRig, FeatureSetting, ForceFields, ForceType, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields,
-    MaterialType, SceneDoc, Shape, SourceRole, TextureSource, WaterSourceFields, param_id,
+    MaterialType, SceneDoc, Shape, SourceRole, TextureFeeds, TextureSource, WaterSourceFields, param_id,
 };
 use manifold_core::scene_schema::{self, FieldControl, FieldValue, add_entry, field_for, unique_name};
 use manifold_core::{GraphTarget, LayerId};
@@ -239,6 +239,16 @@ pub(crate) fn set_field(project: &Project, layer: &LayerId, item: &ItemId, field
     {
         return Ok(Some(batch(shape_change(layer, doc, found, &old.shape, fields.clone()), "Set Shape", None)));
     }
+    // A layer fed into Emission shows at once: an emission the performer has
+    // not touched starts as the Emission feature does, white at full strength.
+    if let (ItemFields::Material(old), ItemFields::Material(new)) = (&found.fields, &fields)
+        && old.texture_feeds != TextureFeeds::Emission
+        && new.texture_feeds == TextureFeeds::Emission
+    {
+        let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), item.clone(), fields))];
+        commands.extend(seed_writes(project, layer, item, feature_seeds(UiFeature::Emission)));
+        return Ok(Some(batch(commands, "Set Layer Feeds", None)));
+    }
     Ok(Some(SceneEdit { command: Box::new(SetSceneItemFieldsCommand::new(layer.clone(), item.clone(), fields)), select: None }))
 }
 
@@ -331,17 +341,27 @@ pub(crate) fn material_feature(project: &Project, layer: &LayerId, material: &It
     }
     let edited = ItemFields::Material(MaterialFields { features, ..fields.clone() });
     let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), material.clone(), edited))];
-    if add && let Some(inst) = instance(project, layer) {
-        for &(property, seed) in feature_seeds(feature) {
-            let id = param_id(material, property);
-            let Some(param) = inst.params.get(&id) else { continue };
-            let held = param.base;
-            if (held - param.spec.default_value).abs() <= f32::EPSILON && (held - seed).abs() > f32::EPSILON {
-                commands.push(write(layer, material, property, held, seed));
-            }
-        }
+    if add {
+        commands.extend(seed_writes(project, layer, material, feature_seeds(feature)));
     }
     Ok(Some(batch(commands, if add { "Add Material Feature" } else { "Remove Material Feature" }, None)))
+}
+
+/// Writes moving each of `material`'s `seeds` params to its seed value, only
+/// where the performer has left it at its default.
+fn seed_writes(project: &Project, layer: &LayerId, material: &ItemId, seeds: &[(&str, f32)]) -> Vec<Box<dyn Command>> {
+    let Some(inst) = instance(project, layer) else {
+        return Vec::new();
+    };
+    let mut commands = Vec::new();
+    for &(property, seed) in seeds {
+        let Some(param) = inst.params.get(&param_id(material, property)) else { continue };
+        let held = param.base;
+        if (held - param.spec.default_value).abs() <= f32::EPSILON && (held - seed).abs() > f32::EPSILON {
+            commands.push(write(layer, material, property, held, seed));
+        }
+    }
+    commands
 }
 
 /// Give `owner` a Material for it alone: a copy of the one it shares with

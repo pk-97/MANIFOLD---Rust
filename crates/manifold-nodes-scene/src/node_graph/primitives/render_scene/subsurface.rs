@@ -278,7 +278,7 @@ impl RenderScene {
                 })
                 .max()
                 .unwrap_or(1),
-            _pad: 0,
+            env_rotation: pre.env_rotation,
         };
         let environment = ctx
             .inputs

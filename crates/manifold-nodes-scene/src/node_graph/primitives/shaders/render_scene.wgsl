@@ -142,7 +142,9 @@ struct Uniforms {
     // x: fog_density (0 = no fog), y: height_falloff (0 = uniform),
     // z/w: reserved.
     fog_params: vec4<f32>,
-    // x: appearance gain, y: 1 when per-vertex weights are wired.
+    // x: appearance gain, y: 1 when per-vertex weights are wired, z: the
+    // single-object legacy map bits, w: the envmap's turn in radians
+    // (`env_lookup_uv`).
     appearance: vec4<f32>,
     // rgb: ambient/sky tint multiplier on the ambient term (1,1,1 = neutral).
     ambient_tint: vec4<f32>,
@@ -235,6 +237,17 @@ struct Uniforms {
 // the scene.
 @group(0) @binding(2) var envmap: texture_2d<f32>;
 @group(0) @binding(3) var envmap_sampler: sampler;
+
+// The equirect uv the envmap family (prefiltered specular and sheen,
+// irradiance) is read at for a world direction, turned by the Environment's
+// rotation (`u.appearance.w`, radians, counter-clockwise seen from above).
+// The maps stay baked unturned, so a live turn costs nothing. u may leave
+// [0, 1]; the envmap sampler repeats in u. `camera_sky_body.wgsl` and the
+// ray-traced lookups (`refl_env_sample`) turn the same way.
+fn env_lookup_uv(dir: vec3<f32>) -> vec2<f32> {
+    return vec2<f32>((atan2(dir.z, dir.x) + u.appearance.w) / (2.0 * PI) + 0.5,
+        asin(clamp(dir.y, -1.0, 1.0)) / PI + 0.5);
+}
 // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family samplers, each built
 // Rust-side from that glTF texture's OWN wrapS/wrapT/filter (default
 // REPEAT+linear when the texture has no explicit `sampler`) — no longer one
@@ -1401,8 +1414,7 @@ fn sample_transmission(
     // Same NDC->UV convention as `shadow_factor`'s `project_to_shadow_uv`
     // above: y flipped (Metal texture origin is top-left).
     let refraction_uv = vec2<f32>(ndc_xy.x * 0.5 + 0.5, ndc_xy.y * -0.5 + 0.5);
-    let env_uv = vec2<f32>(atan2(refraction_dir.z, refraction_dir.x) / (2.0 * PI) + 0.5,
-        asin(clamp(refraction_dir.y, -1.0, 1.0)) / PI + 0.5);
+    let env_uv = env_lookup_uv(refraction_dir);
     let env = textureSampleLevel(prefiltered_specular, envmap_sampler, env_uv, mip_level).rgb;
     let edge = min(min(refraction_uv.x, refraction_uv.y), min(1.0 - refraction_uv.x, 1.0 - refraction_uv.y));
     let screen_weight = smoothstep(0.0, 0.025, edge) * select(0.0, 1.0, ndc.w > 0.0);
@@ -1949,9 +1961,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // replaces the old single lod-0 envmap sample + roughness-fade
     // heuristic entirely.
     let R = reflect(-V, N);
-    let r_azimuth = atan2(R.z, R.x);
-    let r_elevation = asin(clamp(R.y, -1.0, 1.0));
-    let r_uv = vec2<f32>(r_azimuth / (2.0 * PI) + 0.5, r_elevation / PI + 0.5);
+    let r_uv = env_lookup_uv(R);
     var prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, roughness * PREFILTER_MAX_MIP).rgb;
     // RAYTRACING_DESIGN.md section 9 RD1: traced reflection radiance SUBSTITUTES
     // for the prefiltered env sample (never adds — same physical
@@ -1977,9 +1987,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    let n_azimuth = atan2(N.z, N.x);
-    let n_elevation = asin(clamp(N.y, -1.0, 1.0));
-    let n_uv = vec2<f32>(n_azimuth / (2.0 * PI) + 0.5, n_elevation / PI + 0.5);
+    let n_uv = env_lookup_uv(N);
     var irradiance = textureSampleLevel(irradiance_map, envmap_sampler, n_uv, 0.0).rgb;
     // RAYTRACING_DESIGN.md section 14 ED2/ED6: traced env+GI diffuse
     // SUBSTITUTES for the irradiance-map fetch when the GI gather ran this
@@ -2035,9 +2043,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let bend_normal = select(N, bend / max(length(bend), 1e-6), dot(bend, bend) > 1e-12);
         let aniso_bent_normal = normalize(mix(N, bend_normal, anisotropy_strength));
         let r_aniso = reflect(-V, aniso_bent_normal);
-        let r_aniso_azimuth = atan2(r_aniso.z, r_aniso.x);
-        let r_aniso_elevation = asin(clamp(r_aniso.y, -1.0, 1.0));
-        let r_aniso_uv = vec2<f32>(r_aniso_azimuth / (2.0 * PI) + 0.5, r_aniso_elevation / PI + 0.5);
+        let r_aniso_uv = env_lookup_uv(r_aniso);
         let prefiltered_aniso = textureSampleLevel(prefiltered_specular, envmap_sampler, r_aniso_uv, roughness * PREFILTER_MAX_MIP).rgb;
         // RAYTRACING_DESIGN.md section 9 RD5: this branch OVERWRITES specular_ibl,
         // so the traced substitution must apply here too — when
@@ -2057,9 +2063,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // identical to the pre-E6 `N`-based resample when `Nc == N` (no
     // clearcoatNormalTexture).
     let r_coat = reflect(-V, Nc);
-    let r_coat_azimuth = atan2(r_coat.z, r_coat.x);
-    let r_coat_elevation = asin(clamp(r_coat.y, -1.0, 1.0));
-    let r_coat_uv = vec2<f32>(r_coat_azimuth / (2.0 * PI) + 0.5, r_coat_elevation / PI + 0.5);
+    let r_coat_uv = env_lookup_uv(r_coat);
     let coat_prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_coat_uv, clearcoat_roughness * PREFILTER_MAX_MIP).rgb;
     let coat_env_brdf = textureSampleLevel(brdf_lut, opaque_scene_color_sampler, vec2<f32>(cc_n_dot_v, clearcoat_roughness), 0.0).rg;
     let coat_ibl = coat_prefiltered * (CLEARCOAT_F0 * coat_env_brdf.x + coat_env_brdf.y);
@@ -2086,8 +2090,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let occlusion = resolve_occlusion(in.uv);
     let diffuse_ibl = kd_ibl * albedo.rgb * irradiance * occlusion;
 
-    let back_uv = vec2<f32>(atan2(-N.z, -N.x) / (2.0 * PI) + 0.5,
-        asin(clamp(-N.y, -1.0, 1.0)) / PI + 0.5);
+    let back_uv = env_lookup_uv(-N);
     let back_irradiance = textureSampleLevel(irradiance_map, envmap_sampler, back_uv, 0.0).rgb;
     let diffuse_transmission = translucency.a;
     let translucent_ibl = kd_ibl * translucency.rgb * back_irradiance

@@ -253,6 +253,9 @@ struct ShadowRayParams {
     // sun caster whose rgb tint goes to out_svt; SVT_SLOT_NONE = no designated
     // sun (u32::MAX on the Rust side — every slot index is below that).
     uint   svt_slot;
+    // Radians every environment lookup turns by (`refl_env_sample`), the
+    // render's `env_rotation`. The float4x4 below still aligns to 336.
+    float  env_rotation;
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
@@ -1651,16 +1654,16 @@ static float3 anisotropic_env_dir(float3 n, float3 v, float3 aniso_b, float stre
 
 // RT-R1 (section 9.3 RD4): the SAME equirect mapping + roughness mip selection
 // `render_scene.wgsl`'s split-sum IBL applies to `prefiltered_specular`
-// (lines 1506-1510) — miss radiance and the RD7 cutoff/band env value
+// (`env_lookup_uv`, turned by the same `env_rotation`) — miss radiance and the RD7 cutoff/band env value
 // MUST equal what the raster would have fetched, or the substitution
 // changes pixels the ray never wanted to (I-R1's empty-scene equality
 // gate). RT_REFL_PREFILTER_MAX_MIP mirrors WGSL's `PREFILTER_MAX_MIP`
 // (= PREFILTER_MIP_COUNT - 1) — keep in sync (same cross-mirror
 // discipline as the WGSL constant's own comment).
 constant float RT_REFL_PREFILTER_MAX_MIP = 5.0;
-static float3 refl_env_sample(texture2d<float> env, float3 dir, float roughness) {
+static float3 refl_env_sample(float turn, texture2d<float> env, float3 dir, float roughness) {
     constexpr sampler env_sampler(coord::normalized, s_address::repeat, t_address::clamp_to_edge, filter::linear, mip_filter::linear);
-    float azimuth = atan2(dir.z, dir.x);
+    float azimuth = atan2(dir.z, dir.x) + turn;
     float elevation = asin(clamp(dir.y, -1.0, 1.0));
     float2 uv = float2(azimuth / 6.2831853 + 0.5, elevation / 3.14159265 + 0.5);
     return env.sample(env_sampler, uv, level(roughness * RT_REFL_PREFILTER_MAX_MIP)).rgb;
@@ -1890,26 +1893,26 @@ static float rt_sheen_scale(thread const RtSurface& m,float3 v,texture2d<float> 
     return 1.0f-max(m.sheen.r,max(m.sheen.g,m.sheen.b))*energy;
 }
 static float3 rt_environment_surface(thread const RtSurface& m,float3 v,texture2d<float> env,
-    texture2d<float> irradiance,texture2d<float> lut,texture2d<float> sheen_env,bool complete) {
+    texture2d<float> irradiance,texture2d<float> lut,texture2d<float> sheen_env,bool complete,float turn) {
     float nv=max(dot(m.n,v),0.001f);
     float3 f=rt_surface_fresnel(m,nv);
     float kd=(1.0f-max(f.x,max(f.y,f.z)))*(1.0f-m.metallic);
     float3 dir=reflect(-v,m.n);
     if(m.anisotropy>0.0f)dir=anisotropic_env_dir(m.n,v,m.b,m.anisotropy);
-    float3 reflection=refl_env_sample(env,dir,m.roughness);
-    if(!complete)return kd*m.albedo*refl_env_sample(env,m.n,1.0f)+f*reflection;
+    float3 reflection=refl_env_sample(turn,env,dir,m.roughness);
+    if(!complete)return kd*m.albedo*refl_env_sample(turn,env,m.n,1.0f)+f*reflection;
     constexpr sampler s(coord::normalized,address::clamp_to_edge,filter::linear);
     float2 brdf=lut.sample(s,float2(nv,m.roughness),level(0)).rg;
     float weight=pow(1.0f-nv,5.0f);
     float3 f0=clamp((f-m.f90*weight)/max(1.0f-weight,0.0001f),0.0f,1.0f);
     float3 spec=reflection*(f0*brdf.x+m.f90*brdf.y);
-    float3 diffuse=kd*m.occlusion*(m.albedo*(1.0f-m.translucency.x)*refl_env_sample(irradiance,m.n,0.0f)
-        +m.translucency.yzw*m.translucency.x*refl_env_sample(irradiance,-m.n,0.0f));
+    float3 diffuse=kd*m.occlusion*(m.albedo*(1.0f-m.translucency.x)*refl_env_sample(turn,irradiance,m.n,0.0f)
+        +m.translucency.yzw*m.translucency.x*refl_env_sample(turn,irradiance,-m.n,0.0f));
     float cnv=max(dot(m.nc,v),0.001f);
     float2 cb=lut.sample(s,float2(cnv,m.coat.y),level(0)).rg;
-    float3 coat=refl_env_sample(env,reflect(-v,m.nc),m.coat.y)*(0.04f*cb.x+cb.y);
+    float3 coat=refl_env_sample(turn,env,reflect(-v,m.nc),m.coat.y)*(0.04f*cb.x+cb.y);
     float energy=clamp(lut.sample(s,float2(nv,m.sheen.a),level(0)).b,0.0f,1.0f);
-    float3 sheen=m.sheen.rgb*refl_env_sample(sheen_env,reflect(-v,m.n),m.sheen.a)*energy;
+    float3 sheen=m.sheen.rgb*refl_env_sample(turn,sheen_env,reflect(-v,m.n),m.sheen.a)*energy;
     float coat_f=0.04f+0.96f*pow(1.0f-cnv,5.0f);
     return ((diffuse*(1.0f-m.transmission.x)+spec)*rt_sheen_scale(m,v,lut)+sheen)*(1.0f-m.coat.x*coat_f)+m.coat.x*coat;
 }
@@ -2444,7 +2447,7 @@ kernel void trace_shadow_rays(
         // ED5: one anchor per pixel. Inert for a scene with no env chain
         // (the dummy/zeroed chain gives anchor 0 and cap ~0, so the
         // clamp never fires — env samples there are 0 too).
-        float3 env_anchor = refl_env_sample(prefiltered_env, shading_n, 1.0);
+        float3 env_anchor = refl_env_sample(p.env_rotation, prefiltered_env, shading_n, 1.0);
         float env_cap = RT_GI_ENV_FIREFLY_GAIN * max(luma(env_anchor), 1e-6);
         for (uint s = 0; s < p.gi_spp; s++) {
             ray gr;
@@ -2462,7 +2465,7 @@ kernel void trace_shadow_rays(
                 if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_GI + s * 4u + bounce, gi_brightness)) {
                     // ED1: env radiance in the ray's own direction, mip 0,
                     // scaled by the path's throughput at extension depths.
-                    float3 env_miss = refl_env_sample(prefiltered_env, gr.direction, 0.0);
+                    float3 env_miss = refl_env_sample(p.env_rotation, prefiltered_env, gr.direction, 0.0);
                     float env_l = luma(env_miss);
                     gi += throughput * ((env_l > env_cap && env_l > 1e-6)
                         ? env_miss * (env_cap / env_l) : env_miss);
@@ -2749,7 +2752,7 @@ kernel void trace_shadow_rays(
         }
         // RD7's env value: direction R at this pixel's roughness mip —
         // byte-equal to what fs_pbr would have fetched (I-R1).
-        float3 env = refl_env_sample(prefiltered_env, env_dir, roughness);
+        float3 env = refl_env_sample(p.env_rotation, prefiltered_env, env_dir, roughness);
         if (roughness > p.refl_max_roughness + p.refl_rough_band) {
             // RD7: above the cutoff+band the prefiltered env IS the
             // approximation — no ray cast.
@@ -2807,14 +2810,14 @@ kernel void trace_shadow_rays(
                     bool complete = p.light_data_addr != 0ul;
                     float sheen_scale = complete ? rt_sheen_scale(surface,view,secondary_brdf) : 1.0f;
                     traced = (surface.emission + rt_environment_surface(surface,view,prefiltered_env,
-                        secondary_irradiance,secondary_brdf,secondary_sheen,complete)
+                        secondary_irradiance,secondary_brdf,secondary_sheen,complete,p.env_rotation)
                         + rt_direct_lights(accel,slot_sources,slot_materials,material_textures,p,
                             surface,position,view,bias_eps,tid,500u,sheen_scale,diagnostics))*refl_hit_brightness;
                 }
             } else {
                 // RD4: miss returns the env at the ray's actual (possibly
                 // GGX-perturbed) direction, roughness mip.
-                traced = refl_env_sample(prefiltered_env, rdir, roughness);
+                traced = refl_env_sample(p.env_rotation, prefiltered_env, rdir, roughness);
             }
             rsamples[rs] = traced;
             if (hit_dist > RT_REFL_MISS_HIT_DIST) { hit_dist_sum += hit_dist; hit_count += 1u; }

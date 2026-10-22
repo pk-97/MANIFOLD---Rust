@@ -294,6 +294,17 @@ impl RenderScene {
                 range: Some((0.0, LIGHT_SLIDER_MAX as f32)),
                 enum_values: &[],
             },
+            // Turns the `envmap` about the up axis, counter-clockwise seen
+            // from above, at every lookup (raster and ray traced), so a live
+            // turn never re-bakes the map or its IBL convolution.
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("env_rotation"),
+                label: "Environment Rotation",
+                ty: ParamType::Angle,
+                default: ParamValue::Float(0.0),
+                range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
+                enum_values: &[],
+            },
             // Scene-wide shading mode (SCENE_RENDER_MODE_DESIGN.md): Rendered,
             // Solid, Wireframe, Points. A wired `render_mode_in` input overrides it.
             ParamDef {

@@ -130,7 +130,7 @@ impl ScenePanel {
             self.material_block.unique = Some((id, owner.id.clone()));
         }
         cy += ROW_H + ROW_GAP;
-        if let Some(block) = block {
+        if let Some(block) = block.filter(|block| block.pbr) {
             cy = self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w));
         }
         cy
@@ -177,7 +177,7 @@ impl ScenePanel {
     /// "+ Add feature": one button; its menu lists the features the Material
     /// lacks.
     pub(super) fn build_add_feature(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, block: &MaterialBlockVm) -> f32 {
-        if MATERIAL_FEATURES.iter().all(|feature| block.features.contains(feature)) {
+        if !block.pbr || MATERIAL_FEATURES.iter().all(|feature| block.features.contains(feature)) {
             return cy;
         }
         let id = tree.add_button_keyed(
