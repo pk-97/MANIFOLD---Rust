@@ -33,6 +33,8 @@ impl SceneDoc {
                 item(BASE_CUBE, "Cube", ItemFields::Object(cube)),
                 item(BASE_CUBE_MATERIAL, "Material", ItemFields::Material(MaterialFields::default())),
             ],
+            // The camera holds cut 0.
+            next_cut: 1,
         }
     }
 }

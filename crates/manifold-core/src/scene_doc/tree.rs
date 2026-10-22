@@ -239,12 +239,50 @@ impl SceneDoc {
             .then_some(reason)
     }
 
-    /// Put `item` under `parent` at `index` (clamped to the end).
-    pub fn insert(&mut self, parent: Option<&ItemId>, index: usize, item: Item) -> Result<(), SceneEditError> {
+    /// Put `item`, new to the scene, under `parent` at `index` (clamped to the
+    /// end). Every Camera in it gets a fresh cut number, so a duplicate, a
+    /// paste or an import never takes another camera's cuts.
+    pub fn insert(&mut self, parent: Option<&ItemId>, index: usize, mut item: Item) -> Result<(), SceneEditError> {
         self.check_place(parent, &item)?;
+        self.number_cameras(&mut item);
+        self.place(parent, index, item)
+    }
+
+    /// Put `item` under `parent` at `index` as it is, once checked.
+    fn place(&mut self, parent: Option<&ItemId>, index: usize, item: Item) -> Result<(), SceneEditError> {
         let children = self.children_mut(parent)?;
         let index = index.min(children.len());
         children.insert(index, item);
+        Ok(())
+    }
+
+    /// Give every Camera in `item` the next cut number. Counts on from past
+    /// every number the scene holds, so a document built by hand never
+    /// hands one out twice.
+    pub(super) fn number_cameras(&mut self, item: &mut Item) {
+        let mut next = self.next_cut.max(self.cut_count());
+        fn visit(item: &mut Item, next: &mut u32) {
+            if let ItemFields::Camera(camera) = &mut item.fields {
+                camera.cut = *next;
+                *next += 1;
+            }
+            item.children.iter_mut().for_each(|child| visit(child, next));
+        }
+        visit(item, &mut next);
+        self.next_cut = next;
+    }
+
+    /// Replace `id`'s structural fields, keeping its kind and, for a Camera,
+    /// its cut number.
+    pub fn set_fields(&mut self, id: &ItemId, mut fields: ItemFields) -> Result<(), SceneEditError> {
+        let item = self.find_mut(id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
+        if item.kind() != fields.kind() {
+            return Err(SceneEditError::KindChange { from: item.kind(), to: fields.kind() });
+        }
+        if let (ItemFields::Camera(old), ItemFields::Camera(new)) = (&item.fields, &mut fields) {
+            new.cut = old.cut;
+        }
+        item.fields = fields;
         Ok(())
     }
 
@@ -268,7 +306,7 @@ impl SceneDoc {
             }
         }
         let (item, old_parent, old_index) = self.take(id)?;
-        if let Err(error) = self.insert(parent, index, item.clone()) {
+        if let Err(error) = self.check_place(parent, &item).and_then(|()| self.place(parent, index, item.clone())) {
             self.children_mut(old_parent.as_ref())?.insert(old_index, item);
             return Err(error);
         }
@@ -413,8 +451,7 @@ impl SceneDoc {
         self.items.iter().find(|item| item.kind() == ItemKind::World)
     }
 
-    /// Every Camera, in tree order: the World's Camera row picks by index
-    /// into this list.
+    /// Every Camera, in tree order.
     pub fn cameras(&self) -> Vec<&ItemId> {
         let mut cameras = Vec::new();
         self.walk(|item, _| {
@@ -425,18 +462,50 @@ impl SceneDoc {
         cameras
     }
 
+    /// Every Camera with its cut number, lowest number first; the first is
+    /// the camera a number no camera holds shows.
+    pub fn cuts(&self) -> Vec<(u32, &ItemId)> {
+        let mut cuts = Vec::new();
+        self.walk(|item, _| {
+            if let ItemFields::Camera(camera) = &item.fields {
+                cuts.push((camera.cut, &item.id));
+            }
+        });
+        cuts.sort();
+        cuts
+    }
+
+    /// One past the highest cut number the Camera row can name: every
+    /// number handed out, a deleted camera's included.
+    pub fn cut_count(&self) -> u32 {
+        self.cuts().last().map_or(0, |&(cut, _)| cut + 1).max(self.next_cut)
+    }
+
+    /// The Camera row's label for each number up to [`Self::cut_count`]: the
+    /// camera's name, or empty for a number no camera holds.
+    pub fn cut_labels(&self) -> Vec<String> {
+        let mut labels = vec![String::new(); self.cut_count() as usize];
+        for (cut, id) in self.cuts() {
+            if let (Some(label), Some(item)) = (labels.get_mut(cut as usize), self.find(id))
+                && label.is_empty()
+            {
+                label.clone_from(&item.name);
+            }
+        }
+        labels
+    }
+
     /// The param id of the World's Camera row.
     pub fn camera_pick_param(&self) -> Option<String> {
         self.world().map(|world| super::param_id(&world.id, super::CAMERA_PICK))
     }
 
-    /// The camera a Camera row value picks: rounded, held to the cameras
-    /// there are.
+    /// The camera a Camera row value picks: the camera holding that cut
+    /// number, else the first camera.
     pub fn picked_camera(&self, pick: f32) -> Option<&ItemId> {
-        let cameras = self.cameras();
-        let last = cameras.len().checked_sub(1)?;
-        let index = if pick.is_finite() { pick.round().clamp(0.0, last as f32) as usize } else { 0 };
-        cameras.get(index).copied()
+        let cuts = self.cuts();
+        let wanted = pick.is_finite().then(|| pick.round().max(0.0) as u32);
+        cuts.iter().find(|&&(cut, _)| Some(cut) == wanted).or(cuts.first()).map(|&(_, id)| id)
     }
 
     /// Whether physics moves `id`, an item at or under it: it, something

@@ -1769,9 +1769,12 @@ impl UIRoot {
                 cell_node_id,
             }) => {
                 let cell_trigger = self.tree.get_bounds(*cell_node_id);
+                // An empty label is a value with nothing to pick (a deleted
+                // camera's cut number), so it is not offered.
                 let items: Vec<DropdownItem> = labels
                     .iter()
                     .enumerate()
+                    .filter(|(_, label)| !label.is_empty())
                     .map(|(i, label)| {
                         DropdownItem::new(label)
                             .with_check(i as u32 == *current_index)

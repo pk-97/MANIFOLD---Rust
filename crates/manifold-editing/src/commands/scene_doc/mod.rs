@@ -33,14 +33,12 @@ use manifold_core::LayerId;
 use crate::commands::graph::{prune_by_param_id, prune_instance_params};
 
 /// What a document edit changed, so undo puts back exactly that: the
-/// document, every param (with its modulators) the edit removed or reset,
-/// and the Camera row's pick where the edit moved it. A value written since,
-/// outside undo, stays as it is.
+/// document and every param (with its modulators) the edit removed or reset.
+/// A value written since, outside undo, stays as it is.
 #[derive(Debug)]
 pub(crate) struct Before {
     doc: SceneDoc,
     removed: ParamSlice,
-    pick: Option<(String, f32)>,
     /// Params the edit wrote once installed (a moved item kept in place),
     /// with their value and base before, in write order.
     written: Vec<(String, f32, f32)>,
@@ -127,7 +125,6 @@ pub(crate) fn apply(
 ) -> Result<Before, String> {
     let instance = scene_instance(project, layer)?;
     let doc = instance.scene.clone().expect("scene layer");
-    let shown = shown_camera(&doc, instance);
     let mut edited = doc.clone();
     let values = |id: &str| instance.params.contains(id).then(|| instance.get_base_param(id));
     edit(&mut edited, &values).map_err(|error| error.to_string())?;
@@ -150,8 +147,7 @@ pub(crate) fn apply(
     }
     let changed: Vec<String> = gone.into_iter().chain(reset).collect();
     held = ParamSlice::capture_kept(held, &changed);
-    let pick = keep_showing(instance, shown);
-    Ok(Before { doc, removed: held, pick, written: Vec::new() })
+    Ok(Before { doc, removed: held, written: Vec::new() })
 }
 
 impl ParamSlice {
@@ -184,27 +180,8 @@ fn swapped_cards(before: &SceneDoc, after: &SceneDoc) -> Vec<ItemId> {
         .collect()
 }
 
-/// The camera the World's Camera row shows.
-fn shown_camera(doc: &SceneDoc, instance: &PresetInstance) -> Option<ItemId> {
-    let id = doc.camera_pick_param()?;
-    let pick = instance.params.contains(&id).then(|| instance.get_base_param(&id))?;
-    doc.picked_camera(pick).cloned()
-}
-
-/// The Camera row picks by position among the cameras, so an edit that adds,
-/// removes or moves one would cut to another camera. Point the row back at
-/// the camera it showed, or at the first camera when that one is gone, in
-/// the same undo step. Returns the row's id and its value before, when moved.
-fn keep_showing(instance: &mut PresetInstance, shown: Option<ItemId>) -> Option<(String, f32)> {
-    let doc = instance.scene.as_ref()?;
-    let id = doc.camera_pick_param().filter(|id| instance.params.contains(id))?;
-    let index = shown.and_then(|camera| doc.cameras().iter().position(|&c| *c == camera)).unwrap_or(0) as f32;
-    let was = instance.get_base_param(&id);
-    (was != index && instance.set_base_param(&id, index)).then_some((id, was))
-}
-
-/// Put back what [`apply`] changed: the document, the params it removed or
-/// reset with their modulators, and the Camera row. Params the edit added
+/// Put back what [`apply`] changed: the document and the params it removed
+/// or reset with their modulators. Params the edit added
 /// leave with their modulators; every other value stays as it is now.
 pub(crate) fn restore(project: &mut Project, layer: &LayerId, before: Before) {
     let Ok(instance) = scene_instance(project, layer) else {
@@ -221,9 +198,6 @@ pub(crate) fn restore(project: &mut Project, layer: &LayerId, before: Before) {
     let added: Vec<String> = ids.into_iter().filter(|id| instance.params.get(id).is_none()).collect();
     prune_instance_params(instance, &added);
     before.removed.restore(instance);
-    if let Some((id, was)) = before.pick {
-        instance.set_base_param(&id, was);
-    }
     for (id, value, base) in before.written.into_iter().rev() {
         if let Some(param) = instance.params.get_mut(&id) {
             param.value = value;

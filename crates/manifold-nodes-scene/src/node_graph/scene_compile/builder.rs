@@ -252,17 +252,17 @@ impl<'d> Builder<'d> {
         self.bindings.extend(followed);
     }
 
-    /// Make the card param `id` a pick among `labels`, by index.
-    pub(crate) fn choices(&mut self, id: &str, labels: Vec<String>) {
+    /// Make the card param `id` a whole number from 0 to `last` with no
+    /// labels of its own: the panel names its values from the document.
+    pub(crate) fn pick_range(&mut self, id: &str, last: f32) {
         let Some(spec) = self.params.iter_mut().find(|spec| spec.id == id) else {
             return;
         };
-        let last = labels.len().saturating_sub(1) as f32;
         spec.min = 0.0;
         spec.max = last;
         spec.whole_numbers = true;
         spec.default_value = spec.default_value.clamp(0.0, last);
-        spec.value_labels = labels;
+        spec.value_labels.clear();
     }
 
     pub(crate) fn id(&self, owner: &str, role: &'static str) -> Option<u32> {

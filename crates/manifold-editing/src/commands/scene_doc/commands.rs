@@ -382,12 +382,7 @@ impl SceneEdit for SetSceneItemFieldsCommand {
     }
 
     fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
-        let item = doc.find_mut(&self.id).ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?;
-        if item.kind() != self.fields.kind() {
-            return Err(SceneEditError::KindChange { from: item.kind(), to: self.fields.kind() });
-        }
-        item.fields = self.fields.clone();
-        Ok(())
+        doc.set_fields(&self.id, self.fields.clone())
     }
 }
 

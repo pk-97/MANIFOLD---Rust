@@ -1,9 +1,13 @@
 //! Camera: a rig, its shake and its lens per Camera item, and the live cut
 //! between them (ruling 11). Every camera compiles; a camera switch feeds the
-//! render the one the World's Camera row picks. Each camera has its own depth
-//! of field and motion blur after the render, and an image switch on the same
-//! pick shows that camera's, so only the picked camera's run. A cut is a
-//! param write: it lands on its frame and never recompiles.
+//! render the one the World's Camera row picks. The row's value is the
+//! camera's cut number (`CameraFields::cut`), and switch input k carries the
+//! camera holding number k, so a recorded cut keeps its camera whatever the
+//! tree does. Each camera has its own depth of field and motion blur after
+//! the render, and an image switch on the same pick shows that camera's, so
+//! only the picked camera's run. A cut is a param write: it lands on its
+//! frame and never recompiles. Camera names never reach the graph: the panel
+//! labels the row from the document, so a rename recompiles nothing.
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphNode, SerializedParamValue};
@@ -16,37 +20,36 @@ use crate::node_graph::primitives::camera_switch::camera_switch_input;
 /// A Loop camera's loop length in beats until a Scene Loop sets it.
 pub(crate) const LOOP_BEATS: f32 = 8.0;
 
-/// Emit every camera in tree order, the cut between them, then each
+/// Emit every camera in cut-number order, the cut between them, then each
 /// camera's rows.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
     let doc = b.doc;
-    let cameras: Vec<Item> = doc.cameras().into_iter().filter_map(|id| doc.find(id).cloned()).collect();
+    let cameras: Vec<Item> = doc.cuts().into_iter().filter_map(|(_, id)| doc.find(id).cloned()).collect();
     if cameras.is_empty() {
         return;
     }
+    let slots = cut_slots(doc.cut_count(), &cameras);
     let lenses: Vec<u32> = cameras.iter().map(|item| emit(b, item)).collect();
-    // The cut picks among every camera: the switch grows an input per lens.
-    let cut = &lenses[..];
     let owner = cut_owner(b);
     let switch = b.add(&owner, "camera_switch", "node.camera_switch");
-    b.set(switch, "num_inputs", SerializedParamValue::Int { value: cut.len() as i32 });
+    b.set(switch, "num_inputs", SerializedParamValue::Int { value: slots.len() as i32 });
     b.set(switch, "select", SerializedParamValue::Enum { value: 0 });
-    for (k, &lens) in cut.iter().enumerate() {
-        b.wire(lens, "out", switch, &camera_switch_input(k));
+    for (k, &camera) in slots.iter().enumerate() {
+        b.wire(lenses[camera], "out", switch, &camera_switch_input(k));
     }
     let render = b.scene("render");
     b.wire(switch, "out", render, "camera");
     b.active_lens = Some(switch);
 
-    let tails: Vec<u32> = cameras.iter().zip(&lenses).take(cut.len()).map(|(item, &lens)| tail(b, &item.id, lens)).collect();
+    let tails: Vec<u32> = cameras.iter().zip(&lenses).map(|(item, &lens)| tail(b, &item.id, lens)).collect();
     b.tail = Some(match tails.as_slice() {
         [only] => *only,
         _ => {
             let image = b.add(&owner, "camera_cut", "node.switch_texture");
-            b.set(image, "num_inputs", SerializedParamValue::Int { value: tails.len() as i32 });
+            b.set(image, "num_inputs", SerializedParamValue::Int { value: slots.len() as i32 });
             b.set(image, "selector", SerializedParamValue::Float { value: 0.0 });
-            for (k, &tail) in tails.iter().enumerate() {
-                b.wire(tail, "out", image, &format!("in_{k}"));
+            for (k, &camera) in slots.iter().enumerate() {
+                b.wire(tails[camera], "out", image, &format!("in_{k}"));
             }
             image
         }
@@ -56,8 +59,26 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
     }
 }
 
+/// Which camera (an index into `cameras`, lowest cut first) each switch
+/// input carries: input k carries the camera holding cut number k, and a
+/// number no camera holds carries the first camera. One input past the last
+/// number carries the first camera too, since both switches hold a pick past
+/// their inputs at the last one.
+fn cut_slots(count: u32, cameras: &[Item]) -> Vec<usize> {
+    let mut slots = vec![0; count as usize + 1];
+    // Backwards, so of two cameras holding one number the first wins.
+    for (k, item) in cameras.iter().enumerate().rev() {
+        if let ItemFields::Camera(camera) = &item.fields
+            && let Some(slot) = slots.get_mut(camera.cut as usize)
+        {
+            *slot = k;
+        }
+    }
+    slots
+}
+
 /// After the World's rows: the image switch follows the Camera row, and the
-/// row's choices are the cameras by name.
+/// row spans every cut number.
 pub(crate) fn finish_cut(b: &mut Builder<'_>) {
     let owner = cut_owner(b);
     let Some(switch) = b.id(&owner, "camera_switch") else {
@@ -70,12 +91,8 @@ pub(crate) fn finish_cut(b: &mut Builder<'_>) {
     let Some(world) = doc.world() else {
         return;
     };
-    let names: Vec<String> = doc
-        .cameras()
-        .into_iter()
-        .filter_map(|id| doc.find(id).map(|item| item.name.clone()))
-        .collect();
-    b.choices(&param_id(&world.id, CAMERA_PICK), names);
+    let last = doc.cut_count().saturating_sub(1);
+    b.pick_range(&param_id(&world.id, CAMERA_PICK), last as f32);
 }
 
 /// The cut belongs to the World, whose card has the Camera row.
