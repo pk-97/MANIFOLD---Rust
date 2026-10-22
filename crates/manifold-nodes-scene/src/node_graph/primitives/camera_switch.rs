@@ -18,25 +18,32 @@
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues, intern_name};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use manifold_node_engine::scene::camera::Camera;
 
 pub const CAMERA_SWITCH_TYPE_ID: &str = "node.camera_switch";
 
-/// Port names, in pick order. The table is static because a port name must
-/// outlive the node; it matches `node.switch_texture`'s 32, the most images a
-/// cut can pick between.
-pub const CAMERA_SWITCH_INPUTS: [&str; 32] = [
-    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v",
-    "w", "x", "y", "z", "aa", "ab", "ac", "ad", "ae", "af",
-];
+/// Input `index`'s port name, in pick order: `a` to `z`, then `aa`, `ab`
+/// and on, as spreadsheet columns are named. There is no last one.
+pub fn camera_switch_input(index: usize) -> String {
+    let mut name = Vec::new();
+    let mut k = index + 1;
+    while k > 0 {
+        k -= 1;
+        name.push(b'a' + (k % 26) as u8);
+        k /= 26;
+    }
+    name.reverse();
+    String::from_utf8(name).expect("ascii letters")
+}
 
-/// The `select` labels, one per input.
-const SELECT_LABELS: [&str; 32] = [
+/// The `select` labels the graph editor shows for the first inputs; a pick
+/// past them is still a valid index.
+const SELECT_LABELS: [&str; 26] = [
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
-    "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF",
+    "W", "X", "Y", "Z",
 ];
 
 const DEFAULT_INPUTS: usize = 2;
@@ -58,25 +65,29 @@ const PARAMS: [ParamDef; 2] = [
         label: "Input Count",
         ty: ParamType::Int,
         default: ParamValue::Float(DEFAULT_INPUTS as f32),
-        range: Some((1.0, CAMERA_SWITCH_INPUTS.len() as f32)),
+        range: None,
         enum_values: &[],
     },
 ];
 
 pub struct CameraSwitch {
     inputs: Vec<NodeInput>,
+    /// The input names, interned when the ports are built, so the per-frame
+    /// pick never formats or locks.
+    names: Vec<&'static str>,
 }
 
 impl CameraSwitch {
     pub fn new() -> Self {
-        let mut node = Self { inputs: Vec::new() };
+        let mut node = Self { inputs: Vec::new(), names: Vec::new() };
         node.rebuild_ports(DEFAULT_INPUTS);
         node
     }
 
     fn rebuild_ports(&mut self, n: usize) {
-        let n = n.clamp(1, CAMERA_SWITCH_INPUTS.len());
-        self.inputs = CAMERA_SWITCH_INPUTS[..n]
+        self.names = (0..n.max(1)).map(|k| intern_name(&Cow::Owned(camera_switch_input(k)))).collect();
+        self.inputs = self
+            .names
             .iter()
             .map(|&name| NodePort { name: Cow::Borrowed(name), ty: PortType::Camera, kind: PortKind::Input, required: false })
             .collect();
@@ -87,7 +98,7 @@ impl CameraSwitch {
             Some(ParamValue::Enum(n)) => *n as usize,
             _ => 0,
         };
-        CAMERA_SWITCH_INPUTS[index.min(self.inputs.len().saturating_sub(1))]
+        self.names[index.min(self.names.len().saturating_sub(1))]
     }
 }
 
@@ -160,5 +171,22 @@ inventory::submit! {
             label: "Camera Switch",
             category: manifold_node_engine::palette::PaletteCategory::Driver,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inputs_have_no_cap_and_keep_their_names() {
+        assert_eq!([0, 25, 26, 31, 701, 702].map(camera_switch_input), ["a", "z", "aa", "af", "zz", "aaa"]);
+        let mut node = CameraSwitch::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("num_inputs"), ParamValue::Float(40.0));
+        params.insert(Cow::Borrowed("select"), ParamValue::Enum(39));
+        node.reconfigure(&params);
+        assert_eq!(node.inputs().len(), 40);
+        assert_eq!(node.selected_input_branch(&params, &["an"]), Some("an"));
     }
 }

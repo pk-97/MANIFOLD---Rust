@@ -42,11 +42,9 @@ pub use expose::*;
 mod groups;
 pub use groups::*;
 mod instance_snapshot;
-pub(crate) use instance_snapshot::{InstanceLayerSnapshot, prune_instance_params};
+pub(crate) use instance_snapshot::{prune_by_param_id, prune_instance_params};
 mod paste;
 pub use paste::*;
-mod view_copy;
-pub use view_copy::*;
 
 #[cfg(test)]
 mod test_support;

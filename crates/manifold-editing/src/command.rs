@@ -52,6 +52,11 @@ pub trait Command: Debug + Send {
     fn was_applied(&self) -> bool {
         true
     }
+    /// A scene document command's document edit, so a composite of them
+    /// compiles once. `None` for every other command.
+    fn scene_edit(&mut self) -> Option<&mut dyn crate::commands::scene_doc::SceneEdit> {
+        None
+    }
     /// The project parts this command writes, on execute and on undo
     /// (docs/UI_INVALIDATION_DESIGN.md D2, INV-1). Declare from what execute
     /// and undo write, never from the name. Over-declaring only costs work;
@@ -143,6 +148,18 @@ pub struct CompositeCommand {
     commands: Vec<Box<dyn Command>>,
     desc: String,
     rejection: Option<String>,
+    /// Runs of scene document commands on one layer that edited the
+    /// document in turn and compiled once, with what undo restores.
+    scene_runs: Vec<SceneRun>,
+}
+
+/// Commands `range` edited `layer`'s document together; `before` is what
+/// their one install replaced, until undone.
+#[derive(Debug)]
+struct SceneRun {
+    range: std::ops::Range<usize>,
+    layer: manifold_core::LayerId,
+    before: Option<crate::commands::scene_doc::Before>,
 }
 
 impl CompositeCommand {
@@ -151,6 +168,53 @@ impl CompositeCommand {
             commands,
             desc: description,
             rejection: None,
+            scene_runs: Vec::new(),
+        }
+    }
+
+    /// The end of the run of scene document commands on one layer that
+    /// starts at `start`; `start + 1` when none starts there.
+    fn scene_run_end(&mut self, start: usize) -> usize {
+        let Some(layer) = self.commands[start].scene_edit().map(|edit| edit.layer().clone()) else {
+            return start + 1;
+        };
+        let mut end = start + 1;
+        while end < self.commands.len() && self.commands[end].scene_edit().is_some_and(|edit| *edit.layer() == layer) {
+            end += 1;
+        }
+        end
+    }
+
+    /// Edit the document with each command of `range` in turn, compile and
+    /// install once, then let each write what needs the new params.
+    fn run_scene_edits(&mut self, project: &mut Project, range: std::ops::Range<usize>) -> Result<(), String> {
+        let run = &mut self.commands[range.clone()];
+        let layer = run[0].scene_edit().expect("a scene run").layer().clone();
+        let before = crate::commands::scene_doc::apply(project, &layer, |doc| {
+            run.iter_mut().try_for_each(|command| command.scene_edit().expect("a scene run").edit_doc(doc))
+        })?;
+        for command in run.iter_mut() {
+            command.scene_edit().expect("a scene run").after_install(project);
+        }
+        self.scene_runs.push(SceneRun { range, layer, before: Some(before) });
+        Ok(())
+    }
+
+    /// Undo what ran before command `upto`, last first.
+    fn undo_before(&mut self, project: &mut Project, upto: usize) {
+        let mut index = upto;
+        while index > 0 {
+            if let Some(run) = self.scene_runs.iter_mut().find(|run| run.range.end == index) {
+                if let Some(before) = run.before.take() {
+                    crate::commands::scene_doc::restore(project, &run.layer, before);
+                }
+                index = run.range.start;
+                continue;
+            }
+            index -= 1;
+            if self.commands[index].was_applied() {
+                self.commands[index].undo(project);
+            }
         }
     }
 }
@@ -158,19 +222,26 @@ impl CompositeCommand {
 impl Command for CompositeCommand {
     fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
-        for index in 0..self.commands.len() {
+        self.scene_runs.clear();
+        let mut index = 0;
+        while index < self.commands.len() {
+            let end = self.scene_run_end(index);
+            if end - index >= 2 {
+                if let Err(reason) = self.run_scene_edits(project, index..end) {
+                    self.rejection = Some(reason);
+                    self.undo_before(project, index);
+                    return;
+                }
+                index = end;
+                continue;
+            }
             self.commands[index].execute(project);
             if let Some(reason) = self.commands[index].rejection_reason() {
                 self.rejection = Some(reason.to_string());
-                for previous in self.commands[..index]
-                    .iter_mut()
-                    .rev()
-                    .filter(|command| command.was_applied())
-                {
-                    previous.undo(project);
-                }
+                self.undo_before(project, index);
                 return;
             }
+            index += 1;
         }
     }
 
@@ -178,14 +249,8 @@ impl Command for CompositeCommand {
         if self.rejection.is_some() {
             return;
         }
-        for cmd in self
-            .commands
-            .iter_mut()
-            .rev()
-            .filter(|cmd| cmd.was_applied())
-        {
-            cmd.undo(project);
-        }
+        let len = self.commands.len();
+        self.undo_before(project, len);
     }
 
     fn description(&self) -> &str {
@@ -215,7 +280,9 @@ impl Command for CompositeCommand {
     }
 
     fn was_applied(&self) -> bool {
-        self.rejection.is_none() && self.commands.iter().any(|command| command.was_applied())
+        self.rejection.is_none()
+            && (self.commands.iter().any(|command| command.was_applied())
+                || self.scene_runs.iter().any(|run| run.before.is_some()))
     }
 
     fn touches(&self) -> ChangeSet {

@@ -45,9 +45,38 @@ impl Step {
     }
 }
 
+/// One scene command's edit of the document, apart from the compile. Alone,
+/// a command edits, compiles and installs; a composite of commands on one
+/// layer edits the document with each in turn, then compiles and installs
+/// once (`CompositeCommand`), so grouping N items or swapping a 300-part
+/// file is one compile.
+pub trait SceneEdit {
+    /// The scene layer the edit writes.
+    fn layer(&self) -> &LayerId;
+    /// Edit the document only.
+    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError>;
+    /// Once the edited document is installed: write what needs its params.
+    fn after_install(&mut self, _project: &mut Project) {}
+}
+
 /// The trait items every scene document command shares.
 macro_rules! scene_command_common {
     () => {
+        fn do_execute(&mut self, project: &mut Project) {
+            let layer = self.layer.clone();
+            let mut step = std::mem::take(&mut self.step);
+            let applied = step.run(project, &layer, |doc| SceneEdit::edit_doc(self, doc));
+            self.step = step;
+            if applied {
+                SceneEdit::after_install(self, project);
+            }
+        }
+        fn do_undo(&mut self, project: &mut Project) {
+            self.step.undo(project, &self.layer);
+        }
+        fn scene_edit(&mut self) -> Option<&mut dyn SceneEdit> {
+            Some(self)
+        }
         fn touches(&self) -> ChangeSet {
             crate::commands::WHOLE_INSTANCES
         }
@@ -130,32 +159,28 @@ impl AddSceneItemCommand {
     }
 }
 
-impl Command for AddSceneItemCommand {
-    fn do_execute(&mut self, project: &mut Project) {
+impl SceneEdit for AddSceneItemCommand {
+    fn layer(&self) -> &LayerId {
+        &self.layer
+    }
+
+    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
         if self.prepared.is_none() {
-            let prepared = scene_instance(project, &self.layer)
-                .map_err(|error| error.to_string())
-                .and_then(|instance| self.prepare(instance.scene.as_ref().expect("scene")).map_err(|e| e.to_string()));
-            match prepared {
-                Ok(prepared) => self.prepared = Some(prepared),
-                Err(reason) => {
-                    self.step.rejection = Some(reason);
-                    return;
-                }
-            }
+            self.prepared = Some(self.prepare(doc)?);
         }
-        let (item, map) = self.prepared.clone().expect("prepared");
-        let (parent, index) = (self.parent.clone(), self.index);
-        if self.step.run(project, &self.layer, |doc| doc.insert(parent.as_ref(), index, item)) {
-            copy_values(project, &self.layer, &map);
-            write_values(project, &self.layer, &self.values);
-        }
+        let (item, _) = self.prepared.clone().expect("prepared");
+        doc.insert(self.parent.as_ref(), self.index, item)
     }
 
-    fn do_undo(&mut self, project: &mut Project) {
-        self.step.undo(project, &self.layer);
+    fn after_install(&mut self, project: &mut Project) {
+        if let Some((_, map)) = &self.prepared {
+            copy_values(project, &self.layer, map);
+        }
+        write_values(project, &self.layer, &self.values);
     }
+}
 
+impl Command for AddSceneItemCommand {
     fn description(&self) -> &str {
         if self.source.is_some() { "Duplicate Item" } else { "Add Item" }
     }
@@ -213,15 +238,17 @@ impl RemoveSceneItemCommand {
     }
 }
 
-impl Command for RemoveSceneItemCommand {
-    fn do_execute(&mut self, project: &mut Project) {
-        let id = self.id.clone();
-        self.step.run(project, &self.layer, |doc| doc.remove(&id).map(|_| ()));
+impl SceneEdit for RemoveSceneItemCommand {
+    fn layer(&self) -> &LayerId {
+        &self.layer
     }
 
-    fn do_undo(&mut self, project: &mut Project) {
-        self.step.undo(project, &self.layer);
+    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
+        doc.remove(&self.id).map(|_| ())
     }
+}
+
+impl Command for RemoveSceneItemCommand {
 
     fn description(&self) -> &str {
         "Remove Item"
@@ -246,15 +273,17 @@ impl ReparentSceneItemCommand {
     }
 }
 
-impl Command for ReparentSceneItemCommand {
-    fn do_execute(&mut self, project: &mut Project) {
-        let (id, parent, index) = (self.id.clone(), self.parent.clone(), self.index);
-        self.step.run(project, &self.layer, |doc| doc.reparent(&id, parent.as_ref(), index));
+impl SceneEdit for ReparentSceneItemCommand {
+    fn layer(&self) -> &LayerId {
+        &self.layer
     }
 
-    fn do_undo(&mut self, project: &mut Project) {
-        self.step.undo(project, &self.layer);
+    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
+        doc.reparent(&self.id, self.parent.as_ref(), self.index)
     }
+}
+
+impl Command for ReparentSceneItemCommand {
 
     fn description(&self) -> &str {
         "Move Item"
@@ -277,18 +306,18 @@ impl RenameSceneItemCommand {
     }
 }
 
-impl Command for RenameSceneItemCommand {
-    fn do_execute(&mut self, project: &mut Project) {
-        let (id, name) = (self.id.clone(), self.name.clone());
-        self.step.run(project, &self.layer, |doc| {
-            doc.find_mut(&id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?.name = name;
-            Ok(())
-        });
+impl SceneEdit for RenameSceneItemCommand {
+    fn layer(&self) -> &LayerId {
+        &self.layer
     }
 
-    fn do_undo(&mut self, project: &mut Project) {
-        self.step.undo(project, &self.layer);
+    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
+        doc.find_mut(&self.id).ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?.name = self.name.clone();
+        Ok(())
     }
+}
+
+impl Command for RenameSceneItemCommand {
 
     fn description(&self) -> &str {
         "Rename Item"
@@ -313,22 +342,22 @@ impl SetSceneItemFieldsCommand {
     }
 }
 
-impl Command for SetSceneItemFieldsCommand {
-    fn do_execute(&mut self, project: &mut Project) {
-        let (id, fields) = (self.id.clone(), self.fields.clone());
-        self.step.run(project, &self.layer, |doc| {
-            let item = doc.find_mut(&id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
-            if item.kind() != fields.kind() {
-                return Err(SceneEditError::KindChange { from: item.kind(), to: fields.kind() });
-            }
-            item.fields = fields;
-            Ok(())
-        });
+impl SceneEdit for SetSceneItemFieldsCommand {
+    fn layer(&self) -> &LayerId {
+        &self.layer
     }
 
-    fn do_undo(&mut self, project: &mut Project) {
-        self.step.undo(project, &self.layer);
+    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
+        let item = doc.find_mut(&self.id).ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?;
+        if item.kind() != self.fields.kind() {
+            return Err(SceneEditError::KindChange { from: item.kind(), to: self.fields.kind() });
+        }
+        item.fields = self.fields.clone();
+        Ok(())
     }
+}
+
+impl Command for SetSceneItemFieldsCommand {
 
     fn description(&self) -> &str {
         "Set Item"

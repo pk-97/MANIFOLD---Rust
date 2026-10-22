@@ -204,12 +204,23 @@ const SWARM_FORCES: [SwarmForce; 3] = [
     ("Gusts", ForceType::Wind, &[("speed", 0.5), ("turbulence", 5.0), ("turbulence_size", 0.8), ("air_resistance", 3.0)]),
 ];
 
-pub(crate) fn remove(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
-    let found = doc(project, layer)?.find(item).ok_or("That item is no longer in the scene")?;
-    if found.kind() == ItemKind::World {
+/// Remove each of `items` and everything under it, in one undo step. An item
+/// inside another removed item goes with it.
+pub(crate) fn remove(project: &Project, layer: &LayerId, items: &[ItemId]) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    if items.iter().any(|item| doc.find(item).is_some_and(|found| found.kind() == ItemKind::World)) {
         return Err("The World cannot be removed".to_owned());
     }
-    Ok(SceneEdit { command: Box::new(RemoveSceneItemCommand::new(layer.clone(), item.clone())), select: None })
+    let mut commands: Vec<Box<dyn Command>> = Vec::new();
+    doc.walk(|item, ancestors| {
+        if items.contains(&item.id) && !ancestors.iter().any(|above| items.contains(&above.id)) {
+            commands.push(Box::new(RemoveSceneItemCommand::new(layer.clone(), item.id.clone())));
+        }
+    });
+    if commands.is_empty() {
+        return Err("That item is no longer in the scene".to_owned());
+    }
+    Ok(batch(commands, "Remove", None))
 }
 
 /// Duplicate each of `items` and everything under it, right after its
@@ -562,10 +573,13 @@ fn camera_of(doc: &SceneDoc, inst: &PresetInstance) -> Option<(ItemId, CameraFie
 }
 
 /// Each item's world origin, as the viewport gizmos place it.
-fn item_origins(doc: &SceneDoc, inst: &PresetInstance) -> impl Fn(&ItemId) -> Option<[f32; 3]> {
-    let values = |id: &str| inst.params.contains(id).then(|| inst.get_base_param(id));
-    let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_doc(doc, &values);
-    move |id| manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_targets(&vm).find(|target| target.row.as_ref() == Some(id)).map(|target| target.origin)
+fn item_origins(project: &Project, layer: &LayerId) -> impl Fn(&ItemId) -> Option<[f32; 3]> {
+    let vm = crate::scene_gizmo::scene_vm(project, layer);
+    move |id| {
+        manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_targets(vm.as_ref()?)
+            .find(|target| target.row.as_ref() == Some(id))
+            .map(|target| target.origin)
+    }
 }
 
 /// Pull the camera back to show `item`: an Orbit camera lifts its pivot to
@@ -574,7 +588,7 @@ pub(crate) fn frame(project: &Project, layer: &LayerId, item: &ItemId) -> Result
     let doc = doc(project, layer)?;
     let inst = instance(project, layer).ok_or("There is no scene to frame")?;
     let (camera, fields) = camera_of(doc, inst).ok_or("This scene has no camera")?;
-    let origin_of = item_origins(doc, inst);
+    let origin_of = item_origins(project, layer);
     let at = origin_of(item).ok_or("This item has no position to frame")?;
     // A Look At camera tracking an item aims at its origin plus Target X/Y/Z.
     let tracked = fields.target.as_ref().and_then(origin_of).unwrap_or([0.0; 3]);
@@ -633,7 +647,7 @@ pub(crate) fn copy_view(
             CameraRig::Free => ViewCopyCamera::Free,
             CameraRig::Loop => return Err("A Loop camera flies the Scene Loop, so it cannot take this view".to_owned()),
             CameraRig::LookAt => {
-                let tracked = fields.target.as_ref().and_then(item_origins(doc, inst)).unwrap_or([0.0; 3]);
+                let tracked = fields.target.as_ref().and_then(item_origins(project, layer)).unwrap_or([0.0; 3]);
                 ViewCopyCamera::LookAt { tracked }
             }
         },

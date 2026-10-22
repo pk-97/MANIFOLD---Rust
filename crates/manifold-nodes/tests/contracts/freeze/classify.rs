@@ -181,12 +181,9 @@ use manifold_node_engine::freeze::classify::FusionKind;
         //
         // node.switch_texture (mux_texture.rs) — hand-`impl EffectNode`,
         // `param_contract` override:
-        //   - selector: mux_texture.rs:197-200 `resolve_selector_index`
-        //     rounds+clamps to [0, num_inputs); absolute index space is
-        //     [0, MAX_INPUTS-1] (mux_texture.rs:45).
-        //   - num_inputs: mux_texture.rs:148-149 `rebuild_ports` clamps
-        //     n to [1, MAX_INPUTS] before slicing the static
-        //     IN_PORT_NAMES table.
+        //   - selector: `resolve_selector_index` rounds+clamps to
+        //     [0, num_inputs); no upper bound, the ports grow.
+        //   - num_inputs: `rebuild_ports` builds at least one input.
         // node.multi_blend (multi_blend.rs) — hand-`impl EffectNode`,
         // `param_contract` override:
         //   - num_inputs: multi_blend.rs:191 `reconfigure` clamps to

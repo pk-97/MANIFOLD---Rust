@@ -184,7 +184,7 @@ pub struct ObjectFields {
 /// An Object's Shape: the built-in solids, Ocean, or a mesh from a file.
 /// The built-ins are the solids a mesh node generates.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum Shape {
     #[default]
     Cube,
@@ -283,7 +283,7 @@ pub enum Curve {
 
 /// The primitives of a file node's mesh that one Object draws.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum MeshPrimitives {
     /// Every primitive.
     #[default]
@@ -340,7 +340,7 @@ pub struct LightFields {
 
 /// A light's type. Environment carries where its image comes from.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum LightType {
     #[default]
     Sun,
@@ -355,7 +355,7 @@ pub enum LightType {
 /// may be empty), an HDRI file whose lower half is open sea (Sea Horizon), or
 /// nothing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum EnvironmentSource {
     #[serde(rename_all = "camelCase")]
     Sky { style: SkyStyle },
@@ -426,7 +426,7 @@ pub enum TextureFeeds {
 
 /// A Material's image: none, a file, or another layer's output.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum TextureSource {
     #[default]
     None,
@@ -584,7 +584,7 @@ pub struct ModifierFields {
 
 /// The image a displacing modifier reads, like a Material's texture source.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum ModifierTexture {
     /// The built-in noise.
     #[default]

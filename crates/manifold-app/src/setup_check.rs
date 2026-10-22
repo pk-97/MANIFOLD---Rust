@@ -1,5 +1,7 @@
-//! The setup check on the cards and the gizmos (SCENE_SETUP_PROGRAMME.md
-//! section 3 B3). The check itself is `SceneVm::problems` (declared shapes at
+//! The setup check on the cards and the gizmos (SCENE_DOCUMENT_DESIGN.md
+//! section 7.18 (Fit with the water end game), Setup check). The scene model
+//! comes from the app's one seam, `scene_gizmo::layer_scene_vm`, and only for
+//! a scene that holds a Water. The check itself is `SceneVm::problems` (declared shapes at
 //! the values the knobs show) plus `problems_with_runtime` (what each
 //! solver's fit did to the values it ran). This module carries the solver's
 //! half from the content thread to the cards whatever Show gizmos says
@@ -19,6 +21,7 @@ use manifold_core::fluid_domain::FluidDomainSnapshot;
 use manifold_core::layer::Layer;
 use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
 use manifold_core::project::Project;
+use manifold_core::scene_doc::ItemKind;
 use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_nodes_scene::node_graph::scene_vm::{
     BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupProblem, body_anchors, body_problems, card_param, copies_anchors,
@@ -349,10 +352,15 @@ pub(crate) fn mark_layer_card(card: &mut ParamSurface, layer: &Layer, report: &[
 /// `layer`'s Water problems: each domain and its sources at the card values,
 /// with what the solver reported (clipped water, bodies past what it couples).
 fn water_problems(layer: &Layer, report: &[SetupFitEntry]) -> Vec<SetupProblem> {
-    let Some((doc, inst)) = layer.gen_params().and_then(|inst| inst.scene.as_ref().map(|doc| (doc, inst))) else {
+    // Only a Water has problems here; a scene without one builds nothing,
+    // so a row drag on any other scene costs no scene model per frame.
+    let mut has_water = false;
+    if let Some(doc) = layer.gen_params().and_then(|inst| inst.scene.as_ref()) {
+        doc.walk(|item, _| has_water |= item.kind() == ItemKind::Water);
+    }
+    let Some(vm) = has_water.then(|| crate::scene_gizmo::layer_scene_vm(layer)).flatten() else {
         return Vec::new();
     };
-    let vm = SceneVm::from_doc(doc, &|id| inst.params.contains(id).then(|| inst.get_base_param(id)));
     let mut problems = Vec::new();
     problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime_fits(report, &layer.layer_id), &mut problems);
     problems

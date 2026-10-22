@@ -30,8 +30,15 @@ use crate::ui_bridge::scrub::{ResolvedScrub, begin_param_group, commit_param_gro
 /// The scene VM of `layer`'s scene document at the layer's card values, so
 /// handles sit where the knobs show. `None` when the layer has no scene.
 pub(crate) fn scene_vm(project: &Project, layer: &LayerId) -> Option<SceneVm> {
-    let doc = project.scene_of(layer)?;
-    let inst = project.timeline.find_layer_by_id(layer.as_str())?.1.gen_params()?;
+    layer_scene_vm(project.timeline.find_layer_by_id(layer.as_str())?.1)
+}
+
+/// The one way the app builds a scene VM (SCENE_DOCUMENT_DESIGN.md section
+/// 7.1 (The scene document)): the layer's document at its card values.
+/// Gizmos, Frame and the setup check all read it.
+pub(crate) fn layer_scene_vm(layer: &manifold_core::layer::Layer) -> Option<SceneVm> {
+    let inst = layer.gen_params()?;
+    let doc = inst.scene.as_ref()?;
     Some(SceneVm::from_doc(doc, &|id| inst.params.contains(id).then(|| inst.get_base_param(id))))
 }
 

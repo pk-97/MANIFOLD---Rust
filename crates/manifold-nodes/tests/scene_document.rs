@@ -112,6 +112,24 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
     assert_eq!(fx.drivers.as_ref().unwrap()[0].param_id, "cube.pos_y", "the LFO still points at the cube");
     assert!(fx.params.get(radius).is_some_and(|p| p.exposed), "the blur's control is back on the card");
     assert_eq!(fx.drivers.as_ref().unwrap()[1].param_id, radius, "and its LFO with it");
+
+    // The format is closed inside an enum variant too.
+    fn open_sky(value: &mut serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Object(sky)) = map.get_mut("sky") {
+                    sky.insert("bogus".into(), serde_json::json!(1));
+                    return true;
+                }
+                map.values_mut().any(open_sky)
+            }
+            serde_json::Value::Array(items) => items.iter_mut().any(open_sky),
+            _ => false,
+        }
+    }
+    let mut json = serde_json::to_value(&doc).unwrap();
+    assert!(open_sky(&mut json), "the base scene's environment has a Sky source");
+    assert!(serde_json::from_value::<SceneDoc>(json).is_err(), "an unknown key inside a variant is refused");
 }
 
 thread_local! {

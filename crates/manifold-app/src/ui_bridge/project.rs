@@ -250,8 +250,8 @@ pub(super) fn dispatch_project(
             let built = crate::scene_edit::add(project, layer_id, entry, parent.as_ref(), selected).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
-        ProjectAction::SceneRemove(layer_id, item) => {
-            let built = crate::scene_edit::remove(project, layer_id, item).map(Some);
+        ProjectAction::SceneRemove(layer_id, items) => {
+            let built = crate::scene_edit::remove(project, layer_id, items).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneDuplicate(layer_id, item) => {

@@ -3692,13 +3692,7 @@
             "W",
             "X",
             "Y",
-            "Z",
-            "AA",
-            "AB",
-            "AC",
-            "AD",
-            "AE",
-            "AF"
+            "Z"
           ],
           "label": "Select",
           "name": "select",
@@ -3708,10 +3702,6 @@
           "default": "2",
           "label": "Input Count",
           "name": "num_inputs",
-          "range": [
-            "1",
-            "32"
-          ],
           "type": "int"
         }
       ],
@@ -44102,33 +44092,23 @@
       "params": [
         {
           "contract": {
-            "max": "31",
             "min": "0",
             "reason": "index"
           },
           "default": "0",
           "label": "Selector",
           "name": "selector",
-          "range": [
-            "0",
-            "31"
-          ],
           "tooltip": "Picks which input image to pass through, by number.",
           "type": "float"
         },
         {
           "contract": {
-            "max": "32",
             "min": "1",
             "reason": "count"
           },
           "default": "8",
           "label": "Input Count",
           "name": "num_inputs",
-          "range": [
-            "2",
-            "32"
-          ],
           "tooltip": "How many inputs to expose. The node grows or shrinks to match.",
           "type": "int"
         }
