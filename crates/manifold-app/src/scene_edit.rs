@@ -5,7 +5,7 @@
 
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{CameraFields, CameraRig, FeatureSetting, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, SceneDoc, Shape, TextureSource, param_id};
+use manifold_core::scene_doc::{CameraFields, CameraRig, FeatureSetting, ForceFields, ForceType, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, SceneDoc, Shape, TextureSource, param_id};
 use manifold_core::scene_schema::{self, FieldControl, FieldValue, add_entry, field_for, unique_name};
 use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::command::{Command, CompositeCommand};
@@ -65,16 +65,33 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
     let id = new_id();
     // An Object comes with its own Material, so its colour is on its card
     // at once.
-    let commands: Vec<Box<dyn Command>> = if entry.kind == ItemKind::Object {
+    let mut commands: Vec<Box<dyn Command>> = if entry.kind == ItemKind::Object {
         let material = new_material(new_id(), unique_name(MATERIAL_NAME, &names));
-        add_object_commands(layer, parent, index, Item::new(id.clone(), name, fields()), material)
+        add_object_commands(layer, parent.clone(), index, Item::new(id.clone(), name, fields()), material)
     } else {
         vec![
-            Box::new(AddSceneItemCommand::new(layer.clone(), entry.kind, parent, index, None, id.clone())),
+            Box::new(AddSceneItemCommand::new(layer.clone(), entry.kind, parent.clone(), index, None, id.clone())),
             Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id.clone(), fields())),
             Box::new(RenameSceneItemCommand::new(layer.clone(), id.clone(), name)),
         ]
     };
+    if entry.kind == ItemKind::Swarm {
+        let mut taken = names.iter().map(|taken| (*taken).to_owned()).collect::<Vec<_>>();
+        for (offset, (base, force, values)) in SWARM_FORCES.iter().enumerate() {
+            let force_id = new_id();
+            let name = unique_name(base, &taken.iter().map(String::as_str).collect::<Vec<_>>());
+            taken.push(name.clone());
+            commands.push(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Force, parent.clone(), index + 1 + offset, None, force_id.clone())));
+            commands.push(Box::new(SetSceneItemFieldsCommand::new(
+                layer.clone(),
+                force_id.clone(),
+                ItemFields::Force(ForceFields { force: *force, ..ForceFields::default() }),
+            )));
+            commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), force_id.clone(), name)));
+            // The force's params exist once it is added; they start at the stock recipe's values.
+            commands.extend(values.iter().map(|(property, value)| write(layer, &force_id, property, 0.0, *value)));
+        }
+    }
     Ok(batch(commands, &format!("Add {}", entry.label), Some(id)))
 }
 
@@ -86,6 +103,23 @@ fn names(doc: &SceneDoc) -> Vec<&str> {
     doc.walk(|item, _| names.push(item.name.as_str()));
     names
 }
+
+/// A force a new Swarm brings: its name, type and starting values.
+type SwarmForce = (&'static str, ForceType, &'static [(&'static str, f32)]);
+
+/// What a new Swarm brings (Houdini's POP Attract in spring mode): an
+/// Attractor and a Radial Force at the swarm's centre, and drifting gusts.
+/// Beyond the core's radius the Attractor pulls at full strength; inside it
+/// the push cancels the pull in proportion, so the pull grows with distance
+/// from the centre. The gusts' Air Resistance relaxes every particle toward
+/// the gusts, so the cloud breathes and swirls but never leaves, at stock
+/// World gravity with no still air. Tuned on the CPU twin (`swarm_hold`) for
+/// a 60 s clip. Forces that target everything act in the swarm's own frame.
+const SWARM_FORCES: [SwarmForce; 3] = [
+    ("Attractor", ForceType::Attractor, &[("strength", 20.0), ("radius", 2.5), ("falloff", 1.0), ("curve", 1.0)]),
+    ("Core", ForceType::Radial, &[("strength", 20.0), ("radius", 1.5), ("falloff", 1.0), ("curve", 0.0)]),
+    ("Gusts", ForceType::Wind, &[("speed", 0.5), ("turbulence", 5.0), ("turbulence_size", 0.8), ("air_resistance", 3.0)]),
+];
 
 pub(crate) fn remove(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
     let found = doc(project, layer)?.find(item).ok_or("That item is no longer in the scene")?;

@@ -81,12 +81,17 @@ fn emit(b: &mut Builder<'_>, item: &Item, outer: Option<&Frame>) -> Frame {
     // group's transform, and what is inside sits at each copy's pose. Inside
     // another group's copies, Copies is that group's.
     let enclosing = outer.and_then(|outer| outer.copies);
+    // A Swarm that draws this group as its particles lays it out instead
+    // (its copies node, not a copies body).
+    let swarm = b.swarm_draws.get(&item.id).copied().filter(|_| enclosing.is_none());
     let own = match &item.fields {
+        ItemFields::Group(_) if swarm.is_some() => swarm,
         ItemFields::Group(group) if group.copies && enclosing.is_none() => {
             Some(copies::emit_group(b, item, transform, group.physics))
         }
         _ => None,
     };
+    b.group_visible.insert(item.id.clone(), visible);
     b.rows(item);
     match own {
         Some(body) => Frame { transform: None, visible, copies: Some(body) },

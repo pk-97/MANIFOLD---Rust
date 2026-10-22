@@ -103,6 +103,7 @@ impl ItemFields {
         match self {
             ItemFields::Group(g) => g.material.as_ref(),
             ItemFields::Object(o) => o.material.as_ref(),
+            ItemFields::Swarm(s) => s.material.as_ref(),
             _ => None,
         }
     }
@@ -428,6 +429,8 @@ pub enum SourceShape {
 pub struct SwarmFields {
     pub emit_from: EmitFrom,
     pub draw_as: DrawAs,
+    /// What every particle draws with; none draws the scene's plain material.
+    pub material: Option<ItemId>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

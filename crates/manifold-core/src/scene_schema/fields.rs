@@ -292,7 +292,8 @@ pub(super) const MATERIAL_BINDING: FieldRow = FieldRow {
         match fields {
             ItemFields::Object(o) => o.material = material.clone(),
             ItemFields::Group(g) => g.material = material.clone(),
-            _ => return Err("only an Object or a Group binds a material".to_owned()),
+            ItemFields::Swarm(s) => s.material = material.clone(),
+            _ => return Err("only an Object, a Group or a Swarm binds a material".to_owned()),
         }
         Ok(())
     },

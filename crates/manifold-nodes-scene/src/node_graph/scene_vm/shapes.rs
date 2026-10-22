@@ -112,12 +112,12 @@ fn frame_of(values: &dyn Fn(&str) -> Option<f32>, chain: &[&Item]) -> Option<Mat
     })
 }
 
-/// Each Object's and Group's declared shapes over its transform rows, in the
+/// Each Object's, Group's and Swarm's declared shapes over its transform rows, in the
 /// frame of the groups it sits in.
 pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> Vec<SceneShapeVm> {
     let mut out = Vec::new();
     doc.walk(|item, ancestors| {
-        if !matches!(item.kind(), ItemKind::Object | ItemKind::Group) {
+        if !matches!(item.kind(), ItemKind::Object | ItemKind::Group | ItemKind::Swarm) {
             return;
         }
         let frame = frame_of(values, ancestors);

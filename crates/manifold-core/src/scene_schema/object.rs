@@ -5,7 +5,7 @@
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{ControlGroup, Unit};
 
-use super::fields::{COPIES, Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, PHYSICS, always, enabled, wrong_value};
+use super::fields::{COPIES, Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, PHYSICS, enabled, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, row, setup};
 use crate::scene_doc::{Item, ItemFields, MeshModifierKind, ObjectFields, SceneDoc, Shape};
 

@@ -68,6 +68,10 @@ pub(crate) fn emit_group(b: &mut Builder<'_>, item: &Item, transform: u32, physi
 /// one copy, is one part of the copies body's shape. A body takes at most
 /// [`MAX_GROUP_PARTS`]; the Copies switch says so before that.
 pub(crate) fn add_part(b: &mut Builder<'_>, body: u32, mesh: u32, transform: u32) {
+    // A swarm's copies node has no shape to size.
+    if b.swarm_frames.contains_key(&body) {
+        return;
+    }
     let parts = b.copy_parts.entry(body).or_default();
     if parts.len() < MAX_GROUP_PARTS {
         parts.push((mesh, transform));
@@ -76,8 +80,14 @@ pub(crate) fn add_part(b: &mut Builder<'_>, body: u32, mesh: u32, transform: u32
 
 /// Make `object` draw `body`'s copies.
 pub(crate) fn draw_instances(b: &mut Builder<'_>, body: u32, object: u32, group_space: bool) {
-    b.wire(body, "instances", object, "instances");
-    b.wire(body, "active_count", object, "instance_count");
+    if let Some(&emitter) = b.swarm_frames.get(&body) {
+        // A swarm's particles live in its emitter's frame.
+        b.wire(body, "copies", object, "instances");
+        b.wire(emitter, "transform", object, "parent_transform");
+    } else {
+        b.wire(body, "instances", object, "instances");
+        b.wire(body, "active_count", object, "instance_count");
+    }
     if group_space {
         b.set(object, "instances_space", SerializedParamValue::Enum { value: GROUP_SPACE });
     }

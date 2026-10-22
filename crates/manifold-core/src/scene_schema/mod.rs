@@ -44,6 +44,7 @@ pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily};
 pub use modifier::{modifier_param_id, modifier_property, modifier_rows, modifiers_unavailable};
 pub use object::{OBJECT_ROWS, has_shape_name, modifier_label, shape_name};
 pub use physics::{BODY_ROLE, MAX_GROUP_PARTS, PHYSICS_ROWS, PhysicsPart, bodies_past_capacity, physics_parts, physics_unavailable, world_full};
+pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
 pub use world::{SPEED_RANGE, WORLD_ROWS};
 
@@ -267,8 +268,9 @@ pub fn rows(kind: ItemKind) -> &'static [PropertyRow] {
         ItemKind::Material => &MATERIAL_ROWS,
         ItemKind::World => &WORLD_ROWS,
         ItemKind::Force => &FORCE_ROWS,
-        // Their tables arrive with their emitters (section 11, waves 2 and 3).
-        ItemKind::Water | ItemKind::WaterSource | ItemKind::Swarm => &[],
+        ItemKind::Swarm => &SWARM_ROWS,
+        // Their tables arrive with their emitters (section 11, wave 3).
+        ItemKind::Water | ItemKind::WaterSource => &[],
     }
 }
 

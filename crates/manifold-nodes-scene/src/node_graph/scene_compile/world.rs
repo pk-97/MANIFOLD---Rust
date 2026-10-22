@@ -1,6 +1,7 @@
 //! World: the physics world once an item has physics, with every body joined
 //! to it, the fog pass when fog is on, and the render settings on the scene's
-//! render node.
+//! render node. A Swarm follows the world's gravity, still air and clock, so
+//! a scene with one has the world too.
 
 use manifold_core::scene_doc::{ItemFields, WorldFields};
 
@@ -14,9 +15,11 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
         return;
     };
     let owner = item.id.as_str();
-    if b.doc.any_physics() || b.doc.any_copies() {
-        let world = b.add(owner, "physics", "node.physics_world");
-        super::physics::join_world(b, world);
+    let mut world = None;
+    if b.doc.any_physics() || b.doc.any_copies() || b.doc.any_swarm() {
+        let node = b.add(owner, "physics", "node.physics_world");
+        super::physics::join_world(b, node);
+        world = Some(node);
     }
     if *fog {
         let atmosphere = b.add(owner, "fog", "node.atmosphere");
@@ -24,4 +27,7 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
         b.wire(atmosphere, "atmosphere", render, "atmosphere");
     }
     b.rows(&item);
+    if let Some(world) = world {
+        super::swarm::follow_world(b, world);
+    }
 }
