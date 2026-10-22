@@ -45,6 +45,7 @@ These decide the design. Where a source note disagrees, the ruling wins.
 20. **Modifiers are a kind, and forces are not modifiers.** A Modifier item is one card in the scene's single ordered chain, shown in its own section of the tree, like a layer's effect cards: drag to reorder, an on/off toggle per card, the type swappable. Order in the section is the order of application. Each card names its targets: one or more Objects or Groups, or the whole scene. No Object or Group holds a modifier list. Forces stay their own kind in their own section of the tree; they add up, so they are not a chain. Every mesh modifier works on any Object shape (built-in solids, planes, imported parts, Ocean) and on Groups, in any scene. Each item supplies its own rest-pose bounds, centre and vertex count, and every recipe reads them the same way. A built-in shape gets enough mesh detail automatically while a deforming modifier targets it. A Group target bends all its parts in one shared frame, as main did for scans. No modifier refuses a shape. Every modifier row is a performance row. Every modifier and force main shipped comes back as a Modifier, a Force or a World setting (section 15.2).
 21. **Scene-wide modifiers.** Scene Loop, Math View and Scene Mirror are Modifier types that act on the whole scene. Scene Loop is the corridor loop, and every camera sees it; a camera's Loop rig rides it, and a camera cut keeps the tiling. A scene holds at most one Scene Loop and one Math View. Neither is on the World card. Scene Fog is removed: fog is World Fog, its Density a performance row.
 22. **No hit parts.** Modifiers have no Hit variants, no Clip Trigger toggle and no hit-envelope rows. Shatter's break is a live param, mappable like Reset.
+23. **No arbitrary limits.** No fixed count caps bodies, walls, copy groups, group parts, forces or modifiers. Buffers and ports grow as items are added, and growing never restarts a simulation. A limit stays only where the physics or the machine's memory requires it, with that reason in one line next to it and on the disabled control.
 
 ## 2. Verdict
 
@@ -640,6 +641,7 @@ Files: in `scene_doc.rs`, the Modifier kind and its fields and the per-object li
 14. Any order of cards compiles and draws.
 15. Promise 1's test covers adding, reordering and swapping a card.
 16. Surface Peel works on a Cube, a Sphere, a Plane, an imported part, a Group and the whole scene (one look in the app each).
+17. No fixed count of modifiers per item or per scene (ruling 23): the 16 stage-carrying modifiers per owner cap and the Math View count cap go.
 
 **L7 (Opus; BUG-elwvu.7): Water and Water Source.**
 Files: `manifold-nodes-water/`, `scene_compile/water.rs` and `water_source.rs`, `scene_schema/water.rs` and `water_source.rs`, `manifold-water-rigid/` (water coupling), the Physics View menu entry. Joins: colliders through L4's `CollisionShape`; L9 writes item ids in the water passes.
@@ -702,6 +704,7 @@ Files: `scene_compile/copies.rs`, `scene_schema/copies.rs`, Modifier type entrie
 1. Layout offers every arrangement main had (Grid, Ring, Scatter, Line, and each `generate_instance_transforms` arrangement) plus On Surface of an item (`scatter_on_mesh`).
 2. The copy fields are Modifier types that act on their targets' copies: wave field, copy positions, displace, jitter, per-copy noise, field blend (`wave_field_3d`, `copy_positions`, `displace_copies`, instance jitter, per-copy fbm and simplex, `lerp_instance_fields`).
 3. A Group's copies space by the group's bounds, and a group nested in a copying group places its own transform inside the instance.
+4. Copies of a group take any number of parts (ruling 23): `MAX_GROUP_PARTS` goes.
 
 **L21 (Opus): the scene-wide modifiers: Scene Loop, Math View, Scene Mirror.**
 Files: `scene_compile/scene_loop.rs`, `math_view.rs` and `scene_mirror.rs` (new), `scene_schema/scene_wide.rs` (new; their rows), their Modifier type entries in `scene_doc.rs`, the Loop rig in `scene_schema/camera.rs` and `scene_compile/camera.rs`. Reads docs/SCENE_LOOP_DESIGN, docs/SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN and docs/SCENE_MIRROR_DESIGN first. Joins: after L15 (the Modifier kind and the scene's bounds) and L8 (camera files and the camera pick).
