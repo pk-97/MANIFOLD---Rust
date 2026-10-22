@@ -308,9 +308,9 @@ fn static_slot_for(def: &EffectGraphDef, node_id: &NodeId, inner_param: &str) ->
 
 impl Command for ToggleNodeParamExposeCommand {
     fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
-        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::SceneLayer(
-            "Post-processing controls can't go on a scene layer's card yet.",
-        )));
+        // A node around a scene layer's Scene node puts its controls on the
+        // card like any graph's; the Scene node itself has none to expose.
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.node_u32_id])));
     }
     /// Exposing adds a card param; unexposing drops it with its controls.
     fn touches(&self) -> manifold_core::change::ChangeSet {

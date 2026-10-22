@@ -4,6 +4,7 @@
 //! per-tick stats and the published frames back.
 
 use manifold_core::{Beats, Seconds};
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_core::fluid_domain::{domain_layout};
@@ -32,11 +33,13 @@ pub(crate) struct SceneSettings {
     /// P2G takes D6's block path: the region sorts the points into the
     /// domain's block bins once per tick and P2G reads the order and ranges.
     pub block_p2g: bool,
-    /// Collider roles: built-in unit cubes posed by these transforms (their
-    /// scale is the box size), wired as node.fluid_role_source Collider roles.
+    /// Colliders: built-in unit cubes posed by these transforms (their scale
+    /// is the box size), bodies of a Physics World coupled with the liquid.
     pub colliders: Vec<Transform>,
-    /// Collider roles load this mesh file in Exact Mesh mode instead of the
-    /// built-in cube; the transforms' scale scales it.
+    /// The colliders' Body Type: Fixed (0) or Animated (2).
+    pub collider_motion: u32,
+    /// Colliders load this mesh file instead of the built-in cube; the
+    /// transforms' scale scales it.
     pub collider_mesh: Option<std::path::PathBuf>,
 }
 
@@ -56,6 +59,7 @@ impl Default for SceneSettings {
             closed: [true; 6],
             block_p2g: false,
             colliders: Vec::new(),
+            collider_motion: 0,
             collider_mesh: None,
         }
     }
@@ -288,11 +292,10 @@ impl MatterScene {
         scene
     }
 
-    /// Collider roles as the presets wire them: a transform into a built-in
-    /// unit cube role source into the domain, which the fill seeds around;
-    /// node.matter_move_bodies in the
-    /// region feeding the grid update; node.liquid_solid_distance feeding the
-    /// frame's solid lattice. Returns each collider's transform node.
+    /// Colliders as a scene wires them: a transform and a unit cube into a
+    /// body of a Physics World coupled with the domain, which the fill seeds
+    /// around; node.matter_move_bodies in the region feeding the grid update;
+    /// node.liquid_solid_distance feeding the frame's solid lattice. Returns each collider's transform node.
     fn wire_colliders(
         graph: &mut Graph,
         registry: &PrimitiveRegistry,
@@ -306,22 +309,30 @@ impl MatterScene {
         fn wire(graph: &mut Graph, from: (NodeInstanceId, &'static str), to: (NodeInstanceId, &'static str)) {
             graph.connect(from, to).unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
         }
-        const ROLES: [&str; 4] = ["role_0", "role_1", "role_2", "role_3"];
+        const BODIES: [&str; 4] = ["body_0", "body_1", "body_2", "body_3"];
         let set = |graph: &mut Graph, node: NodeInstanceId, name: &str, value: ParamValue| {
             graph.set_param(node, name, value).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         };
+        let world = add(graph, "node.physics_world");
+        let mut colliders = RigidImpulseTargets::default();
         let mut transforms = Vec::new();
-        for role in ROLES.iter().take(settings.colliders.len()) {
+        for (index, port) in BODIES.iter().take(settings.colliders.len()).enumerate() {
             let transform = add(graph, "node.transform_3d");
-            let source = add(graph, "node.fluid_role_source");
-            set(graph, source, "role", ParamValue::Enum(3));
+            let body = add(graph, "node.rigid_body");
+            set(graph, body, "motion", ParamValue::Enum(settings.collider_motion));
             if let Some(path) = &settings.collider_mesh {
-                set(graph, source, "path", ParamValue::String(std::sync::Arc::new(path.to_str().expect("utf-8 path").to_owned())));
+                set(graph, body, "path", ParamValue::String(std::sync::Arc::new(path.to_str().expect("utf-8 path").to_owned())));
+            } else {
+                let cube = add(graph, "node.cube_mesh");
+                wire(graph, (cube, "source"), (body, "source"));
             }
-            wire(graph, (transform, "transform"), (source, "transform"));
-            wire(graph, (source, "role"), (domain, role));
+            wire(graph, (transform, "transform"), (body, "transform"));
+            wire(graph, (body, "body"), (world, port));
+            graph.add_external_output(body, "pose").expect("body pose output");
+            colliders = colliders.union(RigidImpulseTargets::body(index).expect("a body slot"));
             transforms.push(transform);
         }
+        manifold_nodes_water::testkit::couple(graph, domain, world, colliders).expect("couple the liquid with its bodies");
         // The fill leaves seeds inside a collider's starting pose unused.
         for port in ["bodies", "shapes", "atlas", "body_count", "epoch"] {
             wire(graph, (domain, port), (fill, port));

@@ -23,9 +23,6 @@ use crate::scene_doc::{Item, ItemFields, ItemId, PhysicsSetting, SceneDoc, Shape
 /// The role of the `node.rigid_body` an item with physics compiles to.
 pub const BODY_ROLE: &str = "body";
 
-/// The most objects one group body takes: the body node's mesh ports.
-pub const MAX_GROUP_PARTS: usize = 64;
-
 const BODY: Reach = Reach::Own(BODY_ROLE);
 const FROM_MESH: &str = "the shape comes from the item's mesh";
 const COPIES: &str = "the Copies section sets copies";
@@ -38,7 +35,7 @@ fn body(fields: &ItemFields) -> bool {
     fields.physics() == PhysicsSetting::Body
 }
 
-pub static PHYSICS_ROWS: [PropertyRow; 25] = [
+pub static PHYSICS_ROWS: [PropertyRow; 26] = [
     row("mass", BODY, ControlGroup::Body, setup()).unit(Unit::Kilograms).when(body),
     row("bounce", BODY, ControlGroup::Body, setup()).when(any_physics),
     row("friction", BODY, ControlGroup::Body, setup()).when(any_physics),
@@ -64,6 +61,7 @@ pub static PHYSICS_ROWS: [PropertyRow; 25] = [
     row("copy_turn_x", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
     row("copy_turn_y", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
     row("copy_turn_z", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
+    row("parts", BODY, ControlGroup::Body, Exposure::Automatic("the objects inside a group body")),
 ];
 
 /// What one item is to physics.
@@ -120,9 +118,6 @@ pub fn physics_unavailable(doc: &SceneDoc, item: &ItemId) -> Option<&'static str
         if count == 0 {
             return Some("Nothing in this group can collide");
         }
-        if count > MAX_GROUP_PARTS {
-            return Some("A group body takes at most 64 objects");
-        }
     }
     None
 }
@@ -168,7 +163,7 @@ fn solid_objects(items: &[Item], collider: bool) -> usize {
 /// A group with `setting` that can be one body of everything inside it.
 fn takes_group_body(item: &Item, setting: PhysicsSetting) -> bool {
     let count = solid_objects(&item.children, setting == PhysicsSetting::Collider);
-    (1..=MAX_GROUP_PARTS).contains(&count)
+    count > 0
 }
 
 fn classify(items: &[Item], within: &Within, local: Option<&ItemId>, parts: &mut HashMap<ItemId, PhysicsPart>) {

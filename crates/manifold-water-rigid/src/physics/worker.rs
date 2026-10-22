@@ -7,7 +7,7 @@ use manifold_physics::{BodyHandle, FieldValue, PhysicsWorld};
 use manifold_core::scene_surface::{PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_DEFAULT_COPY_GROUPS};
 
 use super::{
-    same_topology_body, AdvancementPolicy, ResolvedRigidImpulse, RigidBody, RigidSimulation, SceneRef,
+    same_topology_body, AdvancementPolicy, NEEDS_NEW_WORLD, ResolvedRigidImpulse, RigidBody, RigidSimulation, SceneRef,
 };
 
 /// The retained scene inputs of one Physics World: one entry per body port,
@@ -149,7 +149,7 @@ impl RigidSimulation {
             && (!self.native_topology_matches(inputs)
                 || self.last_time.is_some_and(|last| now.0 < last.0))
         {
-            return Err("Physics worker cannot rebuild native topology within an epoch".into());
+            return Err(NEEDS_NEW_WORLD.into());
         }
 
         let previous_policy = self.advancement_policy;
@@ -157,6 +157,24 @@ impl RigidSimulation {
         let result = self.advance_inner(SceneRef::of(inputs), now, 1.0, 0.0, None, None, coupling);
         self.advancement_policy = previous_policy;
         result
+    }
+
+    /// Take a change of bodies into the running world without stepping it:
+    /// a body or copy group that joined is installed where it stands, a
+    /// copies Count lays out at the next tick start, and everything already
+    /// moving keeps its state. False when the change needs a fresh world (a
+    /// body left or changed its shape); the owner then starts a new epoch.
+    pub fn admit_worker_edits(&mut self, inputs: &RigidSceneInputs) -> Result<bool, String> {
+        let now = self.last_time.unwrap_or(Seconds::ZERO);
+        let previous_policy = self.advancement_policy;
+        self.advancement_policy = AdvancementPolicy::Worker { max_ticks: 0 };
+        let result =
+            self.advance_inner(SceneRef::of(inputs), now, 1.0, 0.0, None, None, &mut manifold_physics::stepping::Uncoupled);
+        self.advancement_policy = previous_policy;
+        match result {
+            Err(error) if error == NEEDS_NEW_WORLD => Ok(false),
+            result => result.map(|()| true),
+        }
     }
 
     /// Consume one batch of events already assigned by the shared worker
@@ -175,7 +193,7 @@ impl RigidSimulation {
             && (!self.native_topology_matches(inputs)
                 || self.last_time.is_some_and(|last| now.0 < last.0))
         {
-            return Err("Physics worker cannot rebuild native topology within an epoch".into());
+            return Err(NEEDS_NEW_WORLD.into());
         }
         self.ensure_worker_tick_is_owed(now)?;
 
@@ -211,7 +229,7 @@ impl RigidSimulation {
         if self.world.is_some()
             && !self.native_topology_matches(inputs)
         {
-            return Err("Physics worker cannot rebuild native topology within an epoch".into());
+            return Err(NEEDS_NEW_WORLD.into());
         }
 
         // The retained authored observation may already bracket beyond this

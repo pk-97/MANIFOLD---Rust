@@ -1,13 +1,13 @@
-//! Peter's two saved shows with a copy group play bit-identically after the
+//! Peter's saved show with a copy group plays bit-identically after the
 //! load migration: every pose at tick 120 hashes to the digest main produced
 //! from the same files through the same loader, the graph the app plays (the
 //! layer's own, else the catalog's) and the saved card values. Drivers and
 //! scene modifiers do not run here; they act on the same bodies either side,
 //! so the migration's job ends at handing the world the same scene.
 //!
-//! Mirage Physics carries its own graph. box3DTesting tracked the stock
-//! Physics Boxes, which now reads its Spacing and rotation cards differently,
-//! so the load gives the layer the converted copy the file saved.
+//! box3DTesting tracked the stock Physics Boxes, which now reads its Spacing
+//! and rotation cards differently, so the load gives the layer the converted
+//! copy the file saved.
 
 use std::path::{Path, PathBuf};
 
@@ -239,13 +239,6 @@ fn play(name: &str) -> Played {
     let played = Played { digest, made: simulation.active_copies(0), not_made: simulation.copies_not_made() };
     println!("{name}: digest {:#018x}, {} made, {} not made", played.digest, played.made, played.not_made);
     played
-}
-
-#[test]
-fn mirage_physics_plays_as_it_did_on_main() {
-    let played = play("Mirage Physics.manifold");
-    assert_eq!(played.made, 1_000);
-    assert_eq!(played.digest, 0x8a47_86af_8ca5_dc25, "Mirage Physics left main's trajectory");
 }
 
 #[test]

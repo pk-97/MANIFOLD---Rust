@@ -150,6 +150,8 @@ pub(crate) fn join_world(b: &mut Builder<'_>, world: u32) {
         let Some(body) = b.id(root.as_str(), BODY_ROLE) else {
             continue;
         };
+        // The body grows a mesh and transform input per part.
+        b.set(body, "parts", SerializedParamValue::Int { value: parts.len() as i32 });
         for (k, (mesh, transform)) in parts.into_iter().enumerate() {
             b.wire(mesh, "source", body, &format!("mesh_{k}"));
             b.wire(transform, "transform", body, &format!("part_{k}"));

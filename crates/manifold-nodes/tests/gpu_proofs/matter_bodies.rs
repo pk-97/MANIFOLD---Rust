@@ -783,6 +783,7 @@ fn matter_collider_penetration_bounded() {
     let mut scene = MatterScene::new(&SceneSettings {
         fill_height: 0.3,
         colliders: vec![transform(0.0)],
+        collider_motion: 2,
         ..SceneSettings::default()
     });
     let dx = scene.lattice().cell_size();

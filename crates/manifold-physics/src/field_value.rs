@@ -1,8 +1,10 @@
-//! Owned, bounded vector expressions for graph wires and retained tick inputs.
+//! Owned vector expressions for graph wires and retained tick inputs.
 //!
 //! The native adapters still consume `VectorField`; this value supplies owned
-//! snapshots without borrowing a renderer graph or allocating while sampling.
+//! snapshots without borrowing a renderer graph.
 use std::sync::Arc;
+
+use smallvec::SmallVec;
 
 use crate::interaction::ForceSample;
 use crate::{
@@ -12,11 +14,15 @@ use crate::{
 
 mod serialization;
 
-const MAX_OPERATIONS: usize = 32;
+/// Operations held inline: a field this size or smaller composes, clones and
+/// samples without allocating. A bigger one (a scene with many forces) spills
+/// to the heap and works the same; there is no operation limit.
+const INLINE_OPERATIONS: usize = 32;
+
+type Program = SmallVec<[Operation; INLINE_OPERATIONS]>;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Operation {
-    Unused,
     Uniform(UniformField),
     Radial(RadialField),
     Vortex(VortexField),
@@ -39,24 +45,26 @@ enum Operation {
 /// consuming `FieldInput` or an explicit scale operation. Leaf values own
 /// their parameters; sampled grids share immutable prepared storage.
 ///
-/// Numeric edits, composition, cloning and sampling require no heap allocation.
-/// The 32-operation bound is explicit: overly complex graphs fail preparation
-/// rather than silently omitting forces. Native worlds never retain borrowed
-/// graph nodes through this value.
+/// Numeric edits, composition, cloning and sampling allocate nothing up to
+/// [`INLINE_OPERATIONS`]. Native worlds never retain borrowed graph nodes
+/// through this value.
 ///
 /// Besides its push a field can carry air ([`Self::air`]): a wind velocity and
 /// a drag rate, read through [`VectorField::sample_force`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldValue {
-    operations: [Operation; MAX_OPERATIONS],
-    len: usize,
+    /// A postfix program: leaves push, Add and Multiply pop two and push one,
+    /// the rest change the top entry.
+    operations: Program,
+    /// The most entries the program holds at once: the sampling stack.
+    depth: usize,
 }
 
 impl FieldValue {
     fn leaf(operation: Operation) -> Self {
-        let mut operations = std::array::from_fn(|_| Operation::Unused);
-        operations[0] = operation;
-        Self { operations, len: 1 }
+        let mut operations = Program::new();
+        operations.push(operation);
+        Self { operations, depth: 1 }
     }
 
     pub fn uniform(vector: [f32; 3]) -> Result<Self, PhysicsError> {
@@ -123,28 +131,16 @@ impl FieldValue {
     }
 
     fn combine(&self, other: &Self, operation: Operation) -> Result<Self, PhysicsError> {
-        let len = self.len + other.len + 1;
-        if len > MAX_OPERATIONS {
-            return Err(PhysicsError::InvalidInput(
-                "vector field exceeds 32 operations",
-            ));
-        }
         let mut result = self.clone();
-        result.operations[self.len..len - 1].clone_from_slice(&other.operations[..other.len]);
-        result.operations[len - 1] = operation;
-        result.len = len;
+        result.operations.extend(other.operations.iter().cloned());
+        result.operations.push(operation);
+        result.depth = self.depth.max(1 + other.depth);
         Ok(result)
     }
 
     fn push_unary(&self, operation: Operation) -> Result<Self, PhysicsError> {
-        if self.len == MAX_OPERATIONS {
-            return Err(PhysicsError::InvalidInput(
-                "vector field exceeds 32 operations",
-            ));
-        }
         let mut result = self.clone();
-        result.operations[self.len] = operation;
-        result.len += 1;
+        result.operations.push(operation);
         Ok(result)
     }
 
@@ -228,42 +224,50 @@ impl FieldValue {
     /// zeroes its entry's push, and nothing after it turns drag back into
     /// push, so what is left samples as this field felt at Air Drag 0.
     fn without_air(&self) -> Self {
-        let mut result = Self { operations: std::array::from_fn(|_| Operation::Unused), len: 0 };
-        // Where each stack entry starts in `result`.
-        let mut starts = [0usize; MAX_OPERATIONS];
-        let mut depth = 0;
-        for operation in &self.operations[..self.len] {
+        let mut operations = Program::new();
+        // Where each stack entry starts in `operations`.
+        let mut starts = SmallVec::<[usize; INLINE_OPERATIONS]>::new();
+        for operation in &self.operations {
             match operation {
                 Operation::Air(_) => {
-                    result.len = starts[depth - 1];
-                    result.operations[result.len] = Operation::Zero { air: true };
-                    result.len += 1;
+                    operations.truncate(*starts.last().expect("air follows its entry"));
+                    operations.push(Operation::Zero { air: true });
                     continue;
                 }
-                Operation::Add | Operation::Multiply => depth -= 1,
-                Operation::Scale(_) | Operation::AirDrag(_) => {}
-                Operation::Unused => unreachable!("field program is privately constructed"),
-                _ => {
-                    starts[depth] = result.len;
-                    depth += 1;
+                Operation::Add | Operation::Multiply => {
+                    starts.pop();
                 }
+                Operation::Scale(_) | Operation::AirDrag(_) => {}
+                _ => starts.push(operations.len()),
             }
-            result.operations[result.len] = operation.clone();
-            result.len += 1;
+            operations.push(operation.clone());
         }
-        // Equality reads the whole program array: clear what was cut.
-        for operation in &mut result.operations[result.len..] {
-            *operation = Operation::Unused;
-        }
-        result
+        let depth = stack_depth(&operations);
+        Self { operations, depth }
     }
 
     /// Whether any part of this field is air, switched on or not.
     pub fn carries_air(&self) -> bool {
-        self.operations[..self.len]
+        self.operations
             .iter()
             .any(|operation| matches!(operation, Operation::Air(_) | Operation::Zero { air: true }))
     }
+}
+
+/// The most entries a postfix program holds at once.
+fn stack_depth(operations: &[Operation]) -> usize {
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    for operation in operations {
+        match operation {
+            Operation::Add | Operation::Multiply => depth = depth.saturating_sub(1),
+            Operation::Scale(_) | Operation::Air(_) | Operation::AirDrag(_) => {}
+            _ => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+        }
+    }
+    deepest
 }
 
 /// One leaf of a [`FieldValue`], for editor overlays.
@@ -282,12 +286,11 @@ impl FieldValue {
     /// another field is not folded into either side's scale; air operations
     /// leave the scale as it is.
     pub fn for_each_leaf(&self, mut visit: impl FnMut(FieldLeaf<'_>, f32)) {
-        let operations = &self.operations[..self.len];
+        let operations = &self.operations;
         // Each leaf's operation index and scale, and the first leaf of each
         // stack entry: a postfix program keeps an entry's leaves contiguous.
-        let mut leaves = [(0usize, 1.0f32); MAX_OPERATIONS];
-        let mut starts = [0usize; MAX_OPERATIONS];
-        let (mut count, mut depth) = (0, 0);
+        let mut leaves = SmallVec::<[(usize, f32); INLINE_OPERATIONS]>::new();
+        let mut starts = SmallVec::<[usize; INLINE_OPERATIONS]>::new();
         for (index, operation) in operations.iter().enumerate() {
             match operation {
                 Operation::Uniform(_)
@@ -296,22 +299,22 @@ impl FieldValue {
                 | Operation::Sampled(_)
                 | Operation::Turbulence(_)
                 | Operation::Zero { .. } => {
-                    starts[depth] = count;
-                    depth += 1;
-                    leaves[count] = (index, 1.0);
-                    count += 1;
+                    starts.push(leaves.len());
+                    leaves.push((index, 1.0));
                 }
-                Operation::Add | Operation::Multiply => depth -= 1,
+                Operation::Add | Operation::Multiply => {
+                    starts.pop();
+                }
                 Operation::Scale(strength) => {
-                    for leaf in &mut leaves[starts[depth - 1]..count] {
+                    let start = *starts.last().expect("a scale follows its entry");
+                    for leaf in &mut leaves[start..] {
                         leaf.1 *= strength;
                     }
                 }
                 Operation::Air(_) | Operation::AirDrag(_) => {}
-                Operation::Unused => unreachable!("field program is privately constructed"),
             }
         }
-        for &(index, scale) in &leaves[..count] {
+        for &(index, scale) in &leaves {
             let leaf = match &operations[index] {
                 Operation::Uniform(field) => FieldLeaf::Uniform(field),
                 Operation::Radial(field) => FieldLeaf::Radial(field),
@@ -333,9 +336,10 @@ impl VectorField for FieldValue {
     }
 
     fn sample_force(&self, position: [f32; 3]) -> ForceSample {
-        let mut stack = [ForceSample::default(); MAX_OPERATIONS];
+        let mut stack = SmallVec::<[ForceSample; INLINE_OPERATIONS]>::new();
+        stack.resize(self.depth, ForceSample::default());
         let mut depth = 0;
-        for operation in &self.operations[..self.len] {
+        for operation in &self.operations {
             let leaf = match operation {
                 Operation::Uniform(field) => Some(field.sample(position)),
                 Operation::Radial(field) => Some(field.sample(position)),
@@ -377,7 +381,6 @@ impl VectorField for FieldValue {
                     top.drag_wind = top.drag_wind.map(|c| c * weight);
                     None
                 }
-                Operation::Unused => unreachable!("field program is privately constructed"),
             };
             if let Some(value) = leaf {
                 stack[depth] = ForceSample::push(value);
@@ -440,17 +443,17 @@ mod tests {
     }
 
     #[test]
-    fn owned_field_rejects_invalid_values_and_complexity_without_partial_mutation() {
+    fn owned_field_rejects_invalid_values_and_grows_without_a_limit() {
         assert!(FieldValue::uniform([f32::NAN, 0.0, 0.0]).is_err());
         assert!(FieldValue::radial([0.0; 3], 0.0, 1.0).is_err());
         assert!(FieldValue::vortex([0.0; 3], [0.0; 3], 1.0, 1.0).is_err());
         let mut field = FieldValue::uniform([1.0; 3]).unwrap();
         assert!(field.scaled(f32::INFINITY).is_err());
-        for _ in 1..MAX_OPERATIONS {
-            field = field.scaled(1.0).unwrap();
+        assert_eq!(field.sample([0.0; 3]), [1.0; 3], "a refused edit leaves the field as it was");
+        // Many forces summed (ruling 23: no fixed count caps forces).
+        for _ in 0..40 {
+            field = field.sum(&FieldValue::uniform([1.0; 3]).unwrap().scaled(0.5).unwrap()).unwrap();
         }
-        assert!(field.scaled(1.0).is_err());
-        assert!(field.sum(&FieldValue::uniform([2.0; 3]).unwrap()).is_err());
-        assert_eq!(field.sample([0.0; 3]), [1.0; 3]);
+        assert_eq!(field.sample([0.0; 3]), [21.0; 3]);
     }
 }
