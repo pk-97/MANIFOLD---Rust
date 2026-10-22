@@ -57,7 +57,9 @@ const fn look(property: &'static str, reach: Reach, section: ControlGroup, order
 pub static WORLD_ROWS: [PropertyRow; 55] = [
     // Camera: which camera renders. A cut is a param write, so it lands on
     // its frame and never recompiles; the choices are the cameras by name.
-    row(CAMERA_PICK, CUT, Camera, perform(CardBand::Scene, 0)).param("select").name("Camera"),
+    // No top limit: a recorded cut past the highest live number is a
+    // deleted camera's and shows the first camera, not the last.
+    row(CAMERA_PICK, CUT, Camera, perform(CardBand::Scene, 0)).param("select").name("Camera").limit(AT_LEAST_ZERO),
     row("camera_count", CUT, Camera, Exposure::Automatic("the cameras in the scene")).param("num_inputs"),
     row("camera_cut", CUT_IMAGE, Camera, Exposure::Automatic("follows the Camera row")).param("selector"),
     row("camera_cut_count", CUT_IMAGE, Camera, Exposure::Automatic("the cameras in the scene")).param("num_inputs"),

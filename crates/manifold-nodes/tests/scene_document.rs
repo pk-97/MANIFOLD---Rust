@@ -970,6 +970,23 @@ fn a_recorded_cut_keeps_its_camera_through_duplicate_add_and_reorder() {
     let [x, y, z] = shown_camera.pos;
     let distance = (x * x + (y - look_y) * (y - look_y) + z * z).sqrt();
     assert!((distance - 3.0).abs() < 1e-4, "the cut no longer shows the closeup: {shown_camera:?}");
+
+    // Deleting the cameras on the top numbers shrinks the row to the live
+    // cameras, and a value recorded on a deleted number shows the first
+    // camera, not the last.
+    let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+    let mut doc = fx.scene.clone().unwrap();
+    doc.remove(&ItemId::new("added")).unwrap();
+    doc.remove(&ItemId::new("copy")).unwrap();
+    fx.install_scene_document(doc).unwrap();
+    let row = fx.params.get("world.camera").unwrap();
+    assert_eq!(row.spec.max, 1.0, "the Camera row still spans the deleted cameras' numbers");
+    assert_eq!(row.driven_value(3.0), 3.0, "a recorded deleted number is pulled onto the last camera");
+    assert!(fx.set_base_param("world.camera", 0.0));
+    let first = shown(&mut cut_runtime(fx), 0.0);
+    assert!(fx.set_base_param("world.camera", 3.0));
+    let deleted = shown(&mut cut_runtime(fx), 0.0);
+    assert_eq!(deleted.pos, first.pos, "a deleted camera's number no longer shows the first camera");
 }
 
 /// Scene Loop tiles objects that draw many copies: a cube with Copies and a

@@ -90,7 +90,13 @@ fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Dat
         .enumerate()
         .map(|(i, camera)| ImportedCamera {
             key: format!("camera:{}", at(camera.node_index)),
-            name: camera.name.clone().unwrap_or_else(|| format!("Camera {}", i + 1)),
+            // An empty name would leave the camera unnamed on the Camera row.
+            name: camera
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map_or_else(|| format!("Camera {}", i + 1), str::to_owned),
             values: vec![
                 ("pos_x", camera.pos[0]),
                 ("pos_y", camera.pos[1]),
