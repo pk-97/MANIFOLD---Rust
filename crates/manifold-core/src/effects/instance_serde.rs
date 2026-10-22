@@ -907,22 +907,23 @@ struct GeneratorInstanceRaw {
     folded_sections: Vec<String>,
     #[serde(default)]
     unfolded_sections: Vec<String>,
-    /// A scene layer's document. Its graph is compiled on load, never read
-    /// from the file.
+    /// A scene layer's document. On load it compiles into the saved graph's
+    /// empty Scene node.
     #[serde(default)]
     scene: Option<crate::scene_doc::SceneDoc>,
 }
 
 impl GeneratorInstanceRaw {
     /// A scene layer's file is closed (SCENE_DOCUMENT_DESIGN.md section 7.1
-    /// (The scene document)): it saves no graph and no param description;
-    /// the compiled table describes every param.
+    /// (The scene document)): its graph is only what the user wired around an
+    /// empty Scene node, and it saves no param description; the compiled
+    /// table describes every param.
     fn check_scene(&self) -> Result<(), String> {
         if self.scene.is_none() {
             return Ok(());
         }
-        if self.graph.is_some() {
-            return Err("a scene layer saves its document, never a graph".into());
+        if let Some(graph) = &self.graph {
+            crate::scene_node::check_saved(graph)?;
         }
         if let Some(id) = self.params.iter().flatten().find_map(|(id, entry)| entry.has_spec().then_some(id)) {
             return Err(format!("scene param {id:?} carries a description; a scene layer's params are described by its kind tables"));
@@ -936,8 +937,11 @@ impl GeneratorInstanceRaw {
         // `params` map by id. Stash a copy of the wire map first (D1) — see
         // the effect-kind `Deserialize` impl above for the same pattern.
         let pending_wire = self.params.clone();
+        // A scene layer's saved graph describes no params; its manifest waits
+        // for the compile (`PresetInstance::reconcile_manifest`).
+        let described = if self.scene.is_some() { &None } else { &self.graph };
         let (params, base_tracked) =
-            build_param_manifest(true, self.scene.is_some(), &self.generator_type, &self.graph, self.params, ManifestPass::Deserialize);
+            build_param_manifest(true, self.scene.is_some(), &self.generator_type, described, self.params, ManifestPass::Deserialize);
         normalize_meta_params(&mut self.graph, &params);
         let mut audio_mods = self.audio_mods;
         if let Some(legacy) = self.legacy_audio_trigger {

@@ -545,9 +545,6 @@ pub struct Application {
     /// Set by Cmd+Shift+G — opens the graph editor window in the next
     /// `about_to_wait` (where `ActiveEventLoop` is in scope).
     pub(crate) pending_open_graph_editor: bool,
-    /// Why the last watched target cannot open in the graph editor, shown as
-    /// a toast instead of opening it.
-    pub(crate) graph_editor_refusal: Option<&'static str>,
     /// Performance mode state — see `crate::perform_mode`.
     pub(crate) perform: crate::perform_mode::PerformModeState,
 }
@@ -768,7 +765,6 @@ impl Application {
             pending_export: false,
             pending_close_output: false,
             pending_open_graph_editor: false,
-            graph_editor_refusal: None,
             perform: crate::perform_mode::PerformModeState::new(),
         }
     }
@@ -2190,10 +2186,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Open graph editor window (Cmd+Shift+G).
         if self.pending_open_graph_editor {
             self.pending_open_graph_editor = false;
-            match self.graph_editor_refusal {
-                Some(reason) => self.ws.ui_root.toast.show(reason.to_string()),
-                None => self.open_graph_editor(event_loop),
-            }
+            self.open_graph_editor(event_loop);
         }
 
         // Performance mode entry/exit (see crate::perform_mode::lifecycle).

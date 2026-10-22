@@ -633,7 +633,25 @@ fn snapshot_level(
 
     let mut out_nodes: Vec<NodeSnapshot> = Vec::with_capacity(nodes.len());
     for dn in nodes {
-        let snap = if let Some(group) = dn.group.as_deref() {
+        // The sealed Scene node shows as one node with the render's passes as
+        // outputs and no body: the editor can wire from it, never open it
+        // (SCENE_DOCUMENT_DESIGN.md ruling 18 (One writer per region)).
+        let snap = if manifold_core::scene_node::is_scene_node(dn) {
+            NodeSnapshot {
+                id: dn.id,
+                node_id: dn.node_id.clone(),
+                node_handle: dn.handle.clone(),
+                type_id: dn.type_id.clone(),
+                title: "Scene".to_string(),
+                inputs: Vec::new(),
+                outputs: dn.group.as_deref().map(|group| iface_ports(&group.interface.outputs)).unwrap_or_default(),
+                parameters: Vec::new(),
+                editor_pos: dn.editor_pos,
+                breaks_dependency_cycle: false,
+                group: None,
+                wgsl_source: None,
+            }
+        } else if let Some(group) = dn.group.as_deref() {
             let (body_nodes, body_wires) =
                 snapshot_level(&group.nodes, &group.wires, registry, Some(&group.interface))?;
             NodeSnapshot {

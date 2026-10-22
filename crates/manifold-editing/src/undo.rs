@@ -44,6 +44,13 @@ impl UndoRedoManager {
         F: FnMut(&Project) -> Result<(), String>,
     {
         self.last_rejection = None;
+        let mut sites = Vec::new();
+        command.graph_edit_sites(&mut sites);
+        if let Some(reason) = sites.iter().find_map(|site| crate::commands::graph::sealed_refusal(project, site)) {
+            self.last_written = ChangeSet::NONE;
+            self.last_rejection = Some(reason.to_owned());
+            return false;
+        }
         self.last_written = command.execute(project);
         if !command.was_applied() {
             self.last_rejection = command.rejection_reason().map(str::to_string);

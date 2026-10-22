@@ -33,6 +33,25 @@ fn values(fx: &PresetInstance) -> Vec<(String, f32, f32)> {
     fx.params.iter().map(|p| (p.id().to_owned(), p.value, p.base)).collect()
 }
 
+/// The layer graph as the loader runs it: the Scene node's body inlined.
+fn flat(fx: &PresetInstance) -> EffectGraphDef {
+    manifold_core::flatten::flatten_groups(fx.graph.as_ref().unwrap()).unwrap()
+}
+
+/// A blur the user wired between the Scene node and the layer output.
+fn with_post_blur(fx: &mut PresetInstance) {
+    use manifold_core::scene_node::scene_node;
+    let graph = fx.graph.as_mut().unwrap();
+    let scene = scene_node(graph).unwrap().id;
+    let output = graph.nodes.iter().find(|n| n.type_id == "system.final_output").unwrap().id;
+    let blur = graph.nodes.iter().map(|n| n.id).max().unwrap() + 1;
+    graph.nodes.push(serde_json::from_value(serde_json::json!({"id": blur, "nodeId": "post_blur", "typeId": "node.blur"})).unwrap());
+    graph.wires.retain(|w| w.to_node != output);
+    for (from_node, from_port, to_node, to_port) in [(scene, "color", blur, "source"), (blur, "out", output, "in")] {
+        graph.wires.push(EffectGraphWire { from_node, from_port: from_port.into(), to_node, to_port: to_port.into() });
+    }
+}
+
 #[test]
 fn a_saved_scene_loads_back_as_the_same_scene() {
     let mut doc = SceneDoc::base();
@@ -40,6 +59,14 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
     doc.reparent(&ItemId::new("cube"), Some(&ItemId::new("rig")), 0).unwrap();
     let mut layer = scene_layer(doc.clone());
     let fx = layer.gen_params_mut().unwrap();
+    // Post-processing wired after the Scene node survives a Scene panel edit,
+    // which recompiles only what is inside the Scene node.
+    with_post_blur(fx);
+    let post = fx.graph.as_ref().unwrap().wires.clone();
+    doc.insert(None, 0, Item::new(ItemId::new("lamp"), "Lamp", ItemFields::default_for(ItemKind::Light))).unwrap();
+    fx.install_scene_document(doc.clone()).unwrap();
+    assert_eq!(fx.graph.as_ref().unwrap().wires, post, "a recompile rewired the user's post-processing");
+    assert!(flat(fx).nodes.iter().any(|n| n.node_id.as_str() == "lamp:light"), "the new light is inside the Scene node");
     assert!(fx.set_base_param("cube.pos_y", 2.5), "the cube has a Position Y");
     fx.drivers = Some(vec![ParameterDriver::new("cube.pos_y", BeatDivision::Quarter, DriverWaveform::Sine)]);
     let (before, graph) = (values(fx), fx.graph.clone());
@@ -53,7 +80,9 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
 
     let fx = loaded.timeline.layers[0].gen_params().unwrap();
     assert_eq!(fx.scene.as_ref(), Some(&doc), "the document comes back");
-    assert!(graph.is_some() && fx.graph == graph, "and compiles to the same graph");
+    assert!(graph.is_some() && fx.graph == graph, "and compiles to the same graph, post-processing included");
+    PresetRuntime::from_def_for_render(fx.graph.clone().unwrap(), &PrimitiveRegistry::with_builtin(), Some(&fx.params), false)
+        .expect("the loaded layer graph builds, Scene node and post-processing together");
     assert_eq!(values(fx), before, "every value comes back under its id");
     assert_eq!(fx.drivers.as_ref().unwrap()[0].param_id, "cube.pos_y", "the LFO still points at the cube");
 }
@@ -117,7 +146,7 @@ fn runtime(fx: &PresetInstance) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
     registry.register("test.scene_pose", || Box::new(PoseProbe(EffectNodeType::new("test.scene_pose"))));
-    let def = with_cube_body(fx.graph.clone().unwrap());
+    let def = with_cube_body(flat(fx));
     let mut runtime = PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).unwrap();
     runtime.apply_param_values(&fx.params);
     runtime
@@ -231,7 +260,7 @@ fn a_param_write_reaches_the_next_frame_and_a_cut_lands_on_its_frame() {
     let mut layer = scene_layer(doc);
     let fx = layer.gen_params_mut().unwrap();
     let graph = fx.graph.clone();
-    let mut def = fx.graph.clone().unwrap();
+    let mut def = flat(fx);
     let switch = def.nodes.iter().find(|n| n.node_id.as_str() == "world:camera_switch").expect("the cut").id;
     let probe = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
     def.nodes.push(serde_json::from_value(serde_json::json!({"id": probe, "nodeId": "probe", "typeId": "test.scene_camera"})).unwrap());
