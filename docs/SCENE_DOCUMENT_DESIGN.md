@@ -9,7 +9,7 @@
 **Document type:** Design and plan. A fresh session builds from this doc alone.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) section 5 (Phase briefs); [AGENT_ROUTING.md](AGENT_ROUTING.md) for seats, briefs and gates.
 **Supersedes:** [SCENE_SETUP_PROGRAMME.md](SCENE_SETUP_PROGRAMME.md); [PHYSICS_ENGINE_BOUNDARY_DESIGN.md](PHYSICS_ENGINE_BOUNDARY_DESIGN.md) section 5.2 (One scene-object model) and section 5.5 (Copy groups); [SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md); the card, exposure and starter sections of [SCENE_SURFACES_DESIGN.md](SCENE_SURFACES_DESIGN.md) and [SCENE_SETUP_PANEL_DESIGN.md](SCENE_SETUP_PANEL_DESIGN.md); the fluid-role model of the water family; the open compound-model lanes G2b to G7.
-**Evidence:** `docs/evidence/scene_document_2026-10-22/before/` holds every card of every scene preset as it renders today (`<Preset>__NN_<item>.png`, and `<Preset>.txt` with every row as text, offscreen rows included). The `after/` folder beside it is filled before landing (section 10).
+**Judged by:** Peter in the app. No card render sets are made or kept.
 
 Binding constraints:
 - Persistence: the scene format changes outright. Old scenes and presets may break (D-119, no old-show compatibility). No migrations, no old-show proofs.
@@ -34,7 +34,7 @@ These decide the design. Where a source note disagrees, the ruling wins.
 11. **Cameras are repeatable.** Each output or display picks its own camera. The active camera is a live param (camera cuts on a beat; multi-display rigs).
 12. **Cards by kind:** one table keyed by (kind, property), rows through the param surface recipe ([WIDGET_TREE_DESIGN.md](WIDGET_TREE_DESIGN.md) section 5b (Agent contract and enforcement)). No preset rows, sections, labels or `cardVisible`. The Lighting section stays, with every light and the environment together in one card, as today. The HDRI file picker is always present in Environment mode. Bake size and force detail are automatic. Rows that do not apply never show. A refusal is a disabled control with its reason on hover, never standing text. No layout, styling or naming changes beyond this list: same card, same kind; pixel clicking; no refusal text; the one physics row; rows that do not apply hidden; the real hierarchy tree with nested groups and Cmd+G; Copies section; shared materials with "used by N" and Make Unique; camera per display; generator swaps always work; the Scale link toggle (section 7.17).
 13. **Base scene:** camera, sun, environment (sky by default, HDRI one click away), World, one cube. "Scene" is the first entry in the browser. Starters are scene files saved from the app, in a closed format (`deny_unknown_fields`). Ocean is the Ocean shape. Lantern is dropped unless it rebuilds from normal items.
-14. **Testing:** tests only for breaks a performer would notice, each lane with a stated test budget. No new UI flow suites; flows on removed behaviour are deleted. A GPU proof runs once per finished stage (swarm Draw As a group, water colliders, pixel picking). The starter test is small: load, compile validates, values within limits, base items present. Before landing, every card is rendered from the new build into `docs/evidence/scene_document_2026-10-22/after/`, beside the before-set, for Peter to judge.
+14. **Testing:** tests only for breaks a performer would notice, each lane with a stated test budget. No new UI flow suites; flows on removed behaviour are deleted. A GPU proof runs once per finished stage (swarm Draw As a group, water colliders, pixel picking). The starter test is small: load, compile validates, values within limits, base items present. No card render sets: Peter judges the cards in the app.
 15. **Starting point:** the built branches `lane/g1-instance-space` (fce17d15c, renderer instance space) and `lane/g2a-nested-groups` (4ccea112a, transform parent chain) are merged into the redesign branch first. They conflict by one line in the `frame_setup.rs` closure, where G2a's `parent.world_with_rotation` wins inside G1's composition. G2a's old-path UI half is replaced by the new panel.
 16. **Plan:** four waves on one branch, eleven lanes (section 11). About 8 to 10 hours of agent wall clock, at most four parallel builds (disk). Peter tests a branch build after wave 2.
 
@@ -389,7 +389,7 @@ Tests exist for breaks a performer would notice. Each lane states a budget (sect
 - **GPU proofs, once per finished stage, one run each, through `scripts/gpu_queue.py`:** swarm Draw As a two-part group (L6), water with a collider and a body (L7), pixel picking returns the drawn item (L9). Never nextest for GPU proofs.
 - **No unreachable params (L2):** every param of every node type in the compiler's vocabulary is marked in the (kind, property) table as on the card, automatic (with what sets it), or internal (with why). An unmarked param fails the test. This stops a control existing in the engine with no way to reach it, as the water smoothing controls and the HDRI picker on Scene and Swarm do today.
 - **Starter test (L10), small:** every scene file in `scene-presets/` loads under `deny_unknown_fields`; its compile validates; values are within their limits; the base items (camera, sun, environment, World) are present.
-- **After-renders:** before landing, L10 renders every card of every starter from the new build into `docs/evidence/scene_document_2026-10-22/after/`, using the same names as the before-set, so each before/after pair can be viewed side by side. Peter judges them.
+- **No card render sets.** Peter judges cards in the app, after wave 2 and before landing.
 - **Deletion proof (after L10):** `rg -n 'from_def|stamp_scene_node_exposures|scene_object_models|insert_scene_template|SCENE_VOCABULARY|SceneNodeRef' crates` returns zero outside the doc.
 
 ## 11. Plan: four waves, eleven lanes, one branch
@@ -476,8 +476,8 @@ Peter tests a branch build after wave 2 (base scene, objects, lights, groups, im
 
 ### Wave 4
 
-**L10 (Sonnet; BUG-elwvu.10): starters, the starter test, after-renders, docs.**
-- Does: build the starters in the app (or with the same commands) and save them: Scene, Swarm, Swarm Cloud, Rubble Pile, Physics Boxes, Physics Solids, Water in a Photoscan, the water set, Ocean Cliff, Ocean (as the Ocean shape); Lantern only if it rebuilds from normal items; the small starter test; the after-render of every card into `docs/evidence/scene_document_2026-10-22/after/` with the before-set's names; docs sweep (mark superseded docs, update maps, regenerate the node catalog and docs index); the deletion proof.
+**L10 (Sonnet; BUG-elwvu.10): starters, the starter test, docs.**
+- Does: build the starters in the app (or with the same commands) and save them: Scene, Swarm, Swarm Cloud, Rubble Pile, Physics Boxes, Physics Solids, Water in a Photoscan, the water set, Ocean Cliff, Ocean (as the Ocean shape); Lantern only if it rebuilds from normal items; the small starter test; docs sweep (mark superseded docs, update maps, regenerate the node catalog and docs index); the deletion proof.
 - Deletes: the old preset JSON files, any remaining dead scene code the deletion proof finds, docs text that describes the deleted path.
 - Files: `crates/manifold-nodes/assets/scene-presets/`, `crates/manifold-nodes/tests/`, `docs/`.
 - Test budget: the one small starter test (section 10), nothing else.
