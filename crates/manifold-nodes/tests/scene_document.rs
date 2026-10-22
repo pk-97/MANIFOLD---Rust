@@ -310,6 +310,17 @@ mod every_param_has_a_row {
         let fields = manifold_core::scene_doc::ObjectFields { shape: mesh, ..Default::default() };
         let at = doc.items.len();
         doc.insert(None, at, Item::new(ItemId::new("mesh"), "Mesh", manifold_core::scene_doc::ItemFields::Object(fields))).unwrap();
+        // Every curve shape with every curve.
+        use manifold_core::scene_doc::{Curve, Shape};
+        let curves = [Curve::Circle, Curve::Polygon, Curve::Star, Curve::Spiral, Curve::Helix, Curve::Wave, Curve::Lissajous];
+        for (k, curve) in curves.into_iter().enumerate() {
+            for (s, shape) in [Shape::Extrude { curve }, Shape::Revolve { curve }, Shape::Tube { curve }].into_iter().enumerate() {
+                let fields = manifold_core::scene_doc::ObjectFields { shape, ..Default::default() };
+                let at = doc.items.len();
+                let id = ItemId::new(format!("curve{k}_{s}"));
+                doc.insert(None, at, Item::new(id, "Curve", manifold_core::scene_doc::ItemFields::Object(fields))).unwrap();
+            }
+        }
         doc
     }
 
@@ -329,7 +340,7 @@ mod every_param_has_a_row {
         };
         let mut found = false;
         doc.walk(|item, _| {
-            for row in scene_schema::rows(item.kind()) {
+            for row in scene_schema::rows(item.kind()).iter().chain(scene_schema::curve_rows()) {
                 found |= row.param == param
                     && match row.reach {
                         Reach::Own(r) => item.id.as_str() == owner && r == role,

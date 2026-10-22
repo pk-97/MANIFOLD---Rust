@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 396 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 397 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -166,7 +166,7 @@ _Generated from the node registry. Do not hand-edit. 396 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (96)
+### 3D Geometry (97)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -226,6 +226,7 @@ _Generated from the node registry. Do not hand-edit. 396 nodes registered, group
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Mesh | `node.platonic_solid_mesh` | Source | Builds a reusable closed triangle mesh for any of the five Platonic solids. |
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
+| Polygon Curve | `node.polygon_curve` | Source | Draws the outline of a polygon or a star as a list of points. Sides sets the corners; Pinch pulls every other corner in to make a star. |
 | Projected Grid | `node.projected_grid` | Source | Lays a grid on a water level that fills the camera's view out to the horizon, dense near the camera and thin far away, the base surface for an ocean. |
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
@@ -896,6 +897,7 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 |---|---|---|
 | Generate Range | `node.generate_range` | Pattern-CHOP linspace: `Array<f32>` of N samples over `[start, end]`. `end_inclusive` toggles between closed (Lissajous) and exclusive (regular N-gons) sampling; `active_count` port-shadows the runtime sample count for variable-N curves |
 | Pack Curve XY | `node.pack_curve_xy` | Zip two `Array<f32>` (x, y) into `Array<CurvePoint>`; folds the `PROJ_SCALE = 0.25` screen-fit constant. Curve-pipeline counterpart to `array_unpack_vec2` |
+| Polygon Curve | `node.polygon_curve` | Regular polygon (Pinch 0) or N-pointed star outline as x and y `Array<f32>` channels at a fixed sample count, so Sides moves live without resizing anything downstream |
 | Consecutive Edges | `node.consecutive_edges` | Synthesise polyline edge topology `[(0,1), (1,2), …]` from a vertex count; optional closing `(N-1, 0)` edge. Inactive tail is `EdgePair::SENTINEL` for variable-N polygons |
 | Replicate Polyline Rings | `node.array_replicate_polyline_rings` | Stack K transformed copies of a polyline (outline + edges) — per-ring uniform scale on points, per-ring index shift on edges (sentinel-preserving). The concentric / stacked-curve atom |
 | Connect Nearest | `node.array_connect_nearest` | For each item in a `Channels[X, Y, WIDTH, HEIGHT]` array find its nearest neighbour within `max_distance` and emit an `EdgePair` — sparse nearest-neighbour graph for `render_lines` connection-line viz |

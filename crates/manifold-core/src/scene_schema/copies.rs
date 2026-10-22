@@ -65,10 +65,10 @@ pub static COPIES_ROWS: [PropertyRow; 25] = [
     internal("copies_fragment_parent", "fragment_parent", "copies are whole solids"),
 ];
 
-/// Whether an Object of this shape can be copied: every solid can, an Ocean
-/// surface cannot.
+/// Whether an Object of this shape can be copied: every built-in solid and
+/// imported part can; an Ocean surface and a curve shape cannot.
 pub fn can_copy(shape: &Shape) -> bool {
-    *shape != Shape::Ocean
+    *shape != Shape::Ocean && shape.curve().is_none()
 }
 
 /// Objects below `items` that are one part of a copied group's shape.
@@ -85,6 +85,7 @@ fn copied_parts(items: &[Item]) -> usize {
 /// Why `item` cannot take Copies, for the disabled switch's hover text.
 pub fn copies_unavailable(item: &Item) -> Option<&'static str> {
     match &item.fields {
+        ItemFields::Object(object) if object.shape.curve().is_some() => Some(super::physics::CURVE_HAS_NO_SOLID),
         ItemFields::Object(object) if !can_copy(&object.shape) => Some("An Ocean surface cannot be copied"),
         ItemFields::Group(_) => match copied_parts(&item.children) {
             0 => Some("Nothing in this group has a shape to copy"),

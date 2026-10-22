@@ -314,10 +314,47 @@ fn source_route<'a>(
     Ok((source.clone(), node))
 }
 
-/// A source with nothing wired in and no skin: its rest pose is its own.
+/// The nodes a scene curve shape is built from: a curve swept into a solid.
+/// Its rows move its points live, but nothing in it reads the clock or a
+/// skin, so the rest pose its compiler measured is its frame.
+const CURVE_GEOMETRY: &[&str] = &[
+    "node.make_triangles",
+    "node.extrude_curve",
+    "node.revolve_curve",
+    "node.tube_from_path",
+    "node.combine_xy",
+    "node.range",
+    "node.array_math",
+    "node.frequency_ratio",
+    "node.polygon_curve",
+];
+
+/// A source with nothing wired in and no skin, or curve geometry fed only by
+/// curve geometry: its rest pose is its own.
 fn is_static_source(index: &FlatSceneIndex, node: &EffectGraphNode) -> bool {
-    node.type_id != "node.gltf_skinned_mesh_source"
-        && !index.flat.wires.iter().any(|wire| wire.to_node == node.id)
+    if node.type_id == "node.gltf_skinned_mesh_source" {
+        return false;
+    }
+    let is_curve = |node: &EffectGraphNode| CURVE_GEOMETRY.contains(&node.type_id.as_str());
+    let mut pending = vec![node];
+    let mut seen = BTreeSet::new();
+    while let Some(at) = pending.pop() {
+        for wire in index.flat.wires.iter().filter(|wire| wire.to_node == at.id) {
+            if !is_curve(at) {
+                return false;
+            }
+            let Some(upstream) = index.flat.nodes.iter().find(|upstream| upstream.id == wire.from_node) else {
+                return false;
+            };
+            if !is_curve(upstream) {
+                return false;
+            }
+            if seen.insert(upstream.id) {
+                pending.push(upstream);
+            }
+        }
+    }
+    true
 }
 
 /// The type that only adds detail to a static source: it splits triangles

@@ -18,6 +18,7 @@ mod add_menu;
 mod camera;
 mod fields;
 mod copies;
+mod curves;
 mod force;
 mod group;
 mod light;
@@ -37,6 +38,7 @@ pub use fields::{
     Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, field_rows, is_material,
     is_object_or_group, set_field,
 };
+pub use curves::{curve_rows, CURVE_AXIS, CURVE_MATH, CURVE_POLYGON, CURVE_RATIO, CURVE_T, CURVE_XY, SWEEP, TRIANGLES};
 pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, can_copy, copies_unavailable, copy_groups_full};
 pub use force::{FORCE_ROWS, impulse_unavailable};
 pub use group::GROUP_ROWS;
@@ -312,6 +314,7 @@ pub fn applicable(fields: &ItemFields) -> impl Iterator<Item = &'static Property
         .chain(modifier_rows(fields))
         .chain(physics_rows(kind))
         .chain(copies_rows(kind))
+        .chain(curves::curve_rows())
         .filter(move |row| (row.applies)(fields))
 }
 
