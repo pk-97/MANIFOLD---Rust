@@ -11,7 +11,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::exec::effect_node::SimStep;
 use manifold_physics::clock::{LiveLoad, SimulationClock};
-use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice, TickForces};
+use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice, LatticeFrame, TickForces};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::tick_hits::TickHits;
 use manifold_physics::{FieldValue, PlayedTime, Seconds, TickStamp, VectorField};
@@ -40,6 +40,7 @@ manifold_node_engine::primitive! {
     purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Scene hits (a force's Impulse) land once, on the tick whose simulated interval holds the fire: a frame with hits lays one impulse lattice per tick (zero where none landed) and impulse_tick names the frame's first tick (−1 none). Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
     inputs: {
         bounds: Transform optional,
+        frame: Transform optional,
         acceleration_field: VectorField optional,
         speed: ScalarF32 optional,
         reset: ScalarF32 optional,
@@ -69,7 +70,7 @@ manifold_node_engine::primitive! {
         param("air_drag", "Air Drag", ParamType::Float, 1.0, (0.0, 4.0)),
     ],
     depth_rule: Terminal,
-    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds and impulses are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Inserted from the Add menu, and in the Swarm preset, the Physics World drives gravity_x, gravity, gravity_z, air_resistance, speed and reset: the swarm falls under World gravity (metres per second squared, added to the scene forces it feels) and its Air Drag acts against the World's still air (air_resistance, 1/s), follows World Speed and restarts on World Reset, which clip triggers fire. Unwired, gravity is zero; elsewhere, wire a trigger counter into reset. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over; a particle outside it reads the nearest edge of the lattice. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
+    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds and impulses are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Inserted from the Add menu, and in the Swarm preset, the Physics World drives gravity_x, gravity, gravity_z, air_resistance, speed and reset: the swarm falls under World gravity (metres per second squared, added to the scene forces it feels) and its Air Drag acts against the World's still air (air_resistance, 1/s), follows World Speed and restarts on World Reset, which clip triggers fire. Unwired, gravity is zero; elsewhere, wire a trigger counter into reset. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over, in the swarm's own frame; a particle outside it reads the nearest edge of the lattice. Wire the swarm's frame (its emitter transform, the frame its particles move in) into frame: forces are sampled where each lattice node sits in the world and turned back into the frame, so a wind blows the same way however the emitter turns. Unwired, the frame is the world. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
     examples: ["Swarm"],
     picker: { label: "Swarm Forces", category: Atom },
     summary: "Runs a swarm's simulation clock and lays the scene's forces over its box.",
@@ -164,7 +165,16 @@ impl SwarmForces {
             return Err("Swarm Forces: the bounds box must be finite with every side above zero".into());
         }
         let detail = ctx.scalar_or_param("force_detail", 17.0).round().clamp(2.0, MAX_FORCE_DETAIL) as u32;
-        Ok(ForceLattice::over_box(std::array::from_fn(|i| center[i] - 0.5 * size[i]), size, detail))
+        let lattice = ForceLattice::over_box(std::array::from_fn(|i| center[i] - 0.5 * size[i]), size, detail);
+        let Some(frame) = ctx.inputs.transform("frame") else {
+            return Ok(lattice);
+        };
+        // Column-major: column i is local axis i in the world, column 3 the origin.
+        let world = frame.world();
+        let axes = std::array::from_fn(|axis| [world[axis][0], world[axis][1], world[axis][2]]);
+        LatticeFrame::new(axes, [world[3][0], world[3][1], world[3][2]])
+            .map(|frame| lattice.in_frame(frame))
+            .ok_or_else(|| "Swarm Forces: the swarm's frame must be finite with no zero scale".into())
     }
 
     fn compute(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<[f32; OUTPUTS.len()], String> {

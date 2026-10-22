@@ -1,7 +1,8 @@
 //! Swarm: Emit From, Draw As and Material are fields (section 7.11); its
 //! rows reach the nodes `scene_compile::swarm` emits. A swarm simulates in
 //! its own emitter frame (its Transform), so everything below follows the
-//! emitter. Count, Size and Air Drag are live; Force detail is automatic.
+//! emitter, while its forces act in the world. Count, Size and Air Drag are
+//! live; Force detail is automatic.
 
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
@@ -73,7 +74,7 @@ const fn follows(role: &'static str, why: &'static str) -> PropertyRow {
     row(role, Reach::Own(role), Simulation, Exposure::Automatic(why)).param("value")
 }
 
-pub static SWARM_ROWS: [PropertyRow; 72] = [
+pub static SWARM_ROWS: [PropertyRow; 74] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -98,7 +99,9 @@ pub static SWARM_ROWS: [PropertyRow; 72] = [
     row("instances_space", DRAW, Look, Exposure::Internal("particles are placed in the emitter's frame, as object copies")),
     row("force_detail", FORCES, Simulation, Exposure::Internal("force detail is automatic: the default lattice fits the bounds box")),
     row("forces_speed", FORCES, Simulation, Exposure::Automatic("the World's Speed")).param("speed"),
-    row("seed_mode", SEED, Source, Exposure::Automatic("the emitter: particles are scattered over its surface")).param("mode"),
+    row("seed_mode", SEED, Source, Exposure::Automatic("the Emit From field: a Box fills its volume, a Sphere or an item scatters over its surface")).param("mode"),
+    row("emit_parts", Reach::Own("emit_parts"), Source, Exposure::Automatic("one part for each object in the group the swarm emits from")).param("parts"),
+    row("nest_count", Reach::Own("nest"), Source, Exposure::Automatic("the drawn group's own Copies Count")).param("inner_count"),
     row("seed_capacity", SEED, Source, Exposure::Internal("the most particles a swarm holds; Count's ceiling")).param("max_capacity"),
     row("seed_frame", SEED, Source, Exposure::Internal("a swarm seeds once at its start")).param("frame_seed"),
     row("start_size", START, Source, Exposure::Internal("the seed box is four metres; Scale sizes the emitter")).param("size").default(4.0).when(emits_box),

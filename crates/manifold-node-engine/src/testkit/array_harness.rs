@@ -6,11 +6,10 @@ use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use crate::exec::backend::Backend;
 use crate::bindings::{NodeInputs, NodeOutputs, Slot};
-use crate::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues, SimStep};
+use crate::exec::effect_node::{EffectNode, EffectNodeContext, FrameTime, ParamValues, SimStep};
 use crate::exec::execution_plan::ResourceId;
 use crate::parameters::ParamValue;
 use crate::ports::{ArrayType, KnownItem};
-use crate::primitive::Primitive;
 use crate::{exec::metal_backend::MetalBackend, ports::PortType, ports::ScalarType};
 
 pub struct Harness {
@@ -83,11 +82,11 @@ impl Harness {
         slot
     }
 
-    /// One frame of `prim.run()` at transport 0 under the default step,
+    /// One frame of `node.evaluate()` at transport 0 under the default step,
     /// committed and waited. Returns the scalar writes and the node's errors.
-    pub fn run<P: Primitive>(
+    pub fn run<N: EffectNode + ?Sized>(
         &mut self,
-        prim: &mut P,
+        prim: &mut N,
         inputs: &[(&'static str, Slot)],
         outputs: &[(&'static str, Slot)],
         params: &ParamValues,
@@ -95,10 +94,10 @@ impl Harness {
         self.run_at(prim, inputs, outputs, params, 0.0, SimStep::default())
     }
 
-    /// One frame of `prim.run()` at transport `seconds` under `step`.
-    pub fn run_at<P: Primitive>(
+    /// One frame of `node.evaluate()` at transport `seconds` under `step`.
+    pub fn run_at<N: EffectNode + ?Sized>(
         &mut self,
-        prim: &mut P,
+        prim: &mut N,
         inputs: &[(&'static str, Slot)],
         outputs: &[(&'static str, Slot)],
         params: &ParamValues,
@@ -146,7 +145,7 @@ impl Harness {
                 let mut ctx = EffectNodeContext::new(time, params, node_inputs, node_outputs, Some(&mut gpu))
                     .with_sim_step(step)
                     .with_errors(&mut errors);
-                Primitive::run(prim, &mut ctx);
+                prim.evaluate(&mut ctx);
             }
             native.commit_and_wait_completed();
         }

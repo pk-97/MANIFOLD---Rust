@@ -66,6 +66,9 @@ pub(crate) struct Builder<'d> {
     pub(crate) swarm_draws: BTreeMap<ItemId, u32>,
     /// The emitter transform each swarm copies node is placed in.
     pub(crate) swarm_frames: BTreeMap<u32, u32>,
+    /// Each swarm's `node.nest_copies` (a drawn Group with Copies on), with
+    /// the group's copies body once it is laid out.
+    pub(crate) nests: BTreeMap<u32, Option<u32>>,
     /// The scene modifiers (forces, then modifier cards), in application order.
     modifiers: Vec<SceneModifierInstanceDef>,
     /// Each modifier instance's rest-pose frame, by instance: its targets'
@@ -134,6 +137,7 @@ impl<'d> Builder<'d> {
             swarms: Vec::new(),
             swarm_draws: BTreeMap::new(),
             swarm_frames: BTreeMap::new(),
+            nests: BTreeMap::new(),
             modifiers: Vec::new(),
             frames: BTreeMap::new(),
             drawn: Vec::new(),
@@ -260,6 +264,11 @@ impl<'d> Builder<'d> {
 
     pub(crate) fn wire(&mut self, from: u32, from_port: &str, to: u32, to_port: &str) {
         self.wires.push(wire(from, from_port, to, to_port));
+    }
+
+    /// Whether something already feeds `to`'s `to_port`.
+    pub(crate) fn wired_into(&self, to: u32, to_port: &str) -> bool {
+        self.wires.iter().any(|wire| wire.to_node == to && wire.to_port == to_port)
     }
 
     /// Put a pass after `from`'s `port`: every wire that read that port now
