@@ -46,8 +46,7 @@ const TARGETS_PER_INSTANCE: usize = 256;
 /// A frame's smallest radius, so a flat or empty box still measures.
 const MIN_RADIUS: f64 = 1e-3;
 
-/// Shatter's most pieces per body (the recipe's Pieces range).
-const MAX_PIECES: u32 = 32;
+use manifold_foundation::mesh_partition::MAX_PIECES;
 
 /// Emit every Modifier card, in chain order.
 pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
@@ -218,21 +217,26 @@ fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec
 
 /// The body node a drawn object is posed by, if a rigid body poses it.
 fn body_of(b: &Builder<'_>, drawn: &Drawn) -> Option<u32> {
-    let (from, port) = b.input(drawn.object, "parent_transform").or_else(|| b.input(drawn.object, "transform"))?;
-    (port == "pose" && b.node_type(from) == Some(BODY_TYPE_ID)).then_some(from)
+    // Straight from the pose, or through the transforms it is placed in: the
+    // body's pose frame, the groups inside a group body.
+    let (mut from, mut port) = b.input(drawn.object, "parent_transform").or_else(|| b.input(drawn.object, "transform"))?;
+    loop {
+        match b.node_type(from) {
+            Some(BODY_TYPE_ID) => return (port == "pose").then_some(from),
+            Some("node.transform_3d") => (from, port) = b.input(from, "parent")?,
+            _ => return None,
+        }
+    }
 }
 
 /// The parts of `members` Shatter can break: posed by a Body no earlier
-/// Shatter card breaks, drawing an undeformed mesh from a file.
+/// Shatter card breaks, drawing an undeformed mesh (a file's, a built-in
+/// shape's or a curve solid's; the load pass cuts the pieces).
 fn shatterable(b: &Builder<'_>, members: &[Drawn], shattered: &mut BTreeSet<u32>) -> Vec<Drawn> {
     let kept: Vec<Drawn> = members
         .iter()
-        .filter(|drawn| {
-            let from_file = b
-                .input(drawn.object, "vertices")
-                .is_some_and(|(source, _)| b.node_type(source) == Some("node.gltf_mesh_source"));
-            from_file && body_of(b, drawn).is_some_and(|body| !shattered.contains(&body))
-        })
+        .filter(|drawn| !b.deformed.contains(&drawn.item))
+        .filter(|drawn| body_of(b, drawn).is_some_and(|body| !shattered.contains(&body)))
         .cloned()
         .collect();
     // A body whose parts outnumber the most pieces stays whole.

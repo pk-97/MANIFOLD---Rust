@@ -285,7 +285,11 @@ pub fn modifier_rows(fields: &ItemFields) -> &'static [PropertyRow] {
 /// Why Shatter cannot break `target`: it breaks rigid bodies only. The
 /// Targets menu shows it after the item's name, so it does not name Shatter.
 pub fn shatter_refuses(target: &Item) -> Option<&'static str> {
-    (target.fields.physics() != PhysicsSetting::Body).then_some("Not a Body: set its Physics to Body")
+    if target.fields.physics() != PhysicsSetting::Body {
+        return Some("Not a Body: set its Physics to Body");
+    }
+    // Copies are a group of bodies the world lays out, not one body.
+    target.fields.copies().then_some("Copies on: each copy is a body of the copies, not one body to break")
 }
 
 /// Why a Shatter card's Break does nothing: no target is a Body.
@@ -364,6 +368,8 @@ const PIECES: &[Choice] = &[
     Choice { key: "16", label: "16" },
     Choice { key: "24", label: "24" },
     Choice { key: "32", label: "32" },
+    Choice { key: "48", label: "48" },
+    Choice { key: "64", label: "64" },
 ];
 
 /// Why no card can aim at `target`: an Ocean is an endless sea cast from

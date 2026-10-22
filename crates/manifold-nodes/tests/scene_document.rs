@@ -812,3 +812,37 @@ fn a_swarm_nests_a_copied_group_at_its_live_count() {
         "Count drives how many particles carry the layout"
     );
 }
+
+/// Shatter breaks a built-in shape, not only an imported mesh: the load
+/// pass cuts each piece from the shape the body collided with
+/// (node.mesh_fragment), draws it and gives its body the same piece.
+#[test]
+fn shatter_breaks_a_built_in_cube() {
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
+    let cube = ItemId::new("cube");
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&cube) {
+        object.physics = PhysicsSetting::Body;
+    }
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields { modifier: ModifierType::Shatter, on: true, targets: ModifierTargets::Items(vec![cube.clone()]), pieces: 24, ..fields.clone() };
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("break"), "Break", card)).unwrap();
+    let layer = scene_layer(doc);
+    // The load pass runs on the sealed layer graph, as the runtime loads it.
+    let def = layer.gen_params().unwrap().graph.clone().unwrap();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
+    let prepared = prepare_scene_modifiers(&def, &registry).unwrap();
+    let cuts: Vec<_> = prepared.def.nodes.iter().filter(|n| n.type_id == "node.mesh_fragment").collect();
+    assert_eq!(cuts.len(), 24, "one cut per piece");
+    for cut in &cuts {
+        let feeds = |port: &str| prepared.def.wires.iter().filter(|w| w.from_node == cut.id && w.from_port == port).count();
+        assert_eq!((feeds("vertices"), feeds("source")), (1, 1), "the piece draws it and its body collides with it");
+    }
+    prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
+}

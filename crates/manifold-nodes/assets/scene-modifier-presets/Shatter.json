@@ -12,7 +12,7 @@
         "id": "fragments",
         "name": "Pieces",
         "min": 2.0,
-        "max": 32.0,
+        "max": 64.0,
         "defaultValue": 16.0,
         "wholeNumbers": true
       },

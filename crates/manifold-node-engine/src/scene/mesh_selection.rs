@@ -36,7 +36,7 @@ impl MeshSelection {
             fragment_count: ctx
                 .param_f32("fragment_count", 1.0)
                 .round()
-                .clamp(1.0, 64.0) as u32,
+                .clamp(1.0, manifold_foundation::mesh_partition::MAX_PIECES as f32) as u32,
             fragment_index: ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32,
         }
     }
