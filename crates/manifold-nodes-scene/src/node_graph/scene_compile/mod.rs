@@ -80,10 +80,7 @@ pub fn drawn_items(doc: &SceneDoc) -> Vec<manifold_foundation::ItemId> {
 /// The document as the compiler reads it: siblings in id order, so where an
 /// item sits among its siblings is display only and a reorder recompiles
 /// nothing. Modifier cards keep their chain order, the order they apply in
-/// (ruling 20). What emission order decides follows id order too: which
-/// shadow-casting lights get the capped shadow maps
-/// (`MAX_RASTER_SHADOW_CASTERS`), the Sun that lights the sky's sun disc,
-/// and the Environment that wins when there are two.
+/// (ruling 20).
 fn in_compile_order(doc: &SceneDoc) -> SceneDoc {
     fn sorted(items: &[Item]) -> Vec<Item> {
         let mut items: Vec<Item> = items
