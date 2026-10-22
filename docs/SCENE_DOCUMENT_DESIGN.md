@@ -134,7 +134,7 @@ Where we deliberately differ, and why:
 
 - `SceneDoc` lives on a scene layer's generator instance (`PresetInstance`, `manifold-core/src/effects/instance.rs`), beside `params`. For a scene layer the graph is never saved; it is compiled.
 - `SceneDoc` is a tree of `Item { id, name, kind, fields, children }`. `kind` is the closed enum of eleven (ruling 4). `fields` are the structural properties of that kind, a closed set per kind, listed in section 7.4.
-- References between items (a material binding, Draw As, Emit From, force and modifier targets, a Look At target, a Material's source layer, the World's default camera) are fields, set by `Set`. Material binding inherits down the tree, nearest wins.
+- References between items (a material binding, Draw As, Emit From, force and modifier targets, a Look At target, a Material's source layer) are fields, set by `Set`. Material binding inherits down the tree, nearest wins.
 - The file format is closed: `deny_unknown_fields` everywhere. No preset-declared param, section, label, `cardVisible` or string binding exists in a scene layer. `presetMetadata.params`, `bindings`, `stringParams`, `stringBindings` are not part of a scene layer.
 - Every live property is a param in the layer's manifest, id `<item id>.<property>`, created by the compiler from the kind's table. Structural fields are never params (section 7.4).
 - Ownership: content thread. Mutation: `EditingService` commands only, each one undo step. Serialization: the document plus the manifest, as JSON inside the project. The UI reads the document from its `Arc<Project>` snapshot through one seam, `scene_of(project, layer) -> Arc<SceneVm>`; every host (project bridge, projection, gizmo, edit selection, setup check) uses it. There is no second constructor.
@@ -260,7 +260,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
   - Motion Blur: On, Shutter, Max Blur. It shows whenever the camera or an object moves.
   - Shake: Amount, Speed, Position strength, Rotation strength, every one a performance row. It compiles to `node.transform_shake` on the camera's own transform, after the rig. Amount 0 leaves the camera still.
 - A camera inside a group follows the group's transform.
-- Each output or display picks its own camera; that pick is live and mappable and never recompiles, so cuts land on a beat and multi-display rigs show different views. World's default camera is what an output shows until it picks one (ruling 11).
+- The World card's Camera row picks the camera the layer renders; it is live and mappable and never recompiles, so a mapped cut lands on its frame (ruling 11). Each camera keeps its own depth of field and motion blur; only the picked camera's run. [L8b]
 
 ### 7.14 Pixel clicking and selection
 
@@ -328,7 +328,7 @@ One table keyed by (kind, property), one file per kind under `manifold-core/src/
 | Water Source | Role (header); Shape; Transform; Inflow speed |
 | Force | Its type's rows; Targets; Impulse |
 | Modifier | Header: Type (swappable) and the on/off toggle; Targets (one or more Objects or Groups, or the whole scene; not on a scene-wide type); the type's rows, with a Mask section (Centre, Width, Feather in radius units) on each masked type (section 7.19) |
-| World | Physics (Gravity, Speed, Reset, Air Resistance); Fog (Density a performance row); Render (render mode and its colours (L13), ray tracing, temporal upscale, Ambient Occlusion (L13)); default camera |
+| World | Physics (Gravity, Speed, Reset, Air Resistance); Fog (Density a performance row); Render (render mode and its colours (L13), ray tracing, temporal upscale, Ambient Occlusion (L13)); Camera (the live pick, L8b) |
 
 The tree: Camera and Lighting, World pinned at the top; then the item hierarchy, every item in its place with a kind icon, nested groups shown as a real tree; then the Forces section; then the Modifiers section, its cards in the order they apply.
 
@@ -402,8 +402,9 @@ Short statements a performer can check, one by one. Each names the one lane that
 - Motion blur shows while the camera orbits. [F2]
 - The Camera card has a Shake section (Amount, Speed, Position strength, Rotation strength); every row is a performance row, so a shake mapped to a kick lands on the kick; Amount 0 leaves the camera still. [L8]
 - A camera inside a group follows the group. [L11]
-- Each output picks its own camera; a cut mapped to a beat lands on that beat. [L8]
-- Removing the camera an output shows falls back to the World's default camera, in the same undo step. [L8]
+- The World's Camera row cuts between cameras; a mapped cut lands on its frame, with no rebuild. [L8b]
+- Removing the camera on show falls back to the first camera, in the same undo step; adding or moving cameras keeps the shot. [L8b]
+- Shake wobbles the camera about its own position, like a handheld camera; Amount 0 is still. [L8b]
 
 **Light and Environment**
 - A new light lights the scene at once. [L11]
@@ -843,7 +844,7 @@ Every scene feature a performer could use on main (origin/main), its state on th
 | Water sources: Fill, Inflow, Drain | Add inside a Water | Fields only | Water Source | L7 |
 | Physics View | Water card | Missing | Render menu mode | L7 |
 | Camera rigs: Orbit, Free, Look At | Camera card | Works; Look At target is three numbers | Camera Rig | built; Look At target F2 |
-| Camera switching | Hand-wired; Scene Loop | World default camera is a setup field; no per-output pick | Per-output live pick | L8 |
+| Camera switching | Hand-wired; Scene Loop | World Camera row, live cut | Per-layer live pick; per-display pick is BUG-lz538 (per-display camera pick) | L8b |
 | Depth of field with Aperture Shape | Camera card | Works | Camera | built |
 | Motion blur | Camera card | Rows work; invisible while orbiting in Peter's test | Camera | F2 |
 | Exposure | Lighting card | Works | Environment | built |
