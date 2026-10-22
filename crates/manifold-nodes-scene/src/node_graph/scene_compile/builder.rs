@@ -16,7 +16,7 @@ use manifold_core::scene_schema::{self, CardFacts, Exposure, PropertyRow, Reach}
 use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
 
 use manifold_core::NodeId;
-use manifold_node_engine::load::expand::{capture_mesh_frames, resolve_modifier_mesh_frames};
+use manifold_node_engine::load::expand::{TargetPlacement, capture_mesh_frames, resolve_modifier_mesh_frames};
 
 use crate::node_graph::scene_graph::{plain_node, wire};
 
@@ -102,10 +102,10 @@ pub(crate) struct Drawn {
     pub rest: Rest,
 }
 
-/// One modifier instance's frame: each target's source offset, and the
+/// One modifier instance's frame: where each target sits in it, and the
 /// frame's radius.
 pub(crate) struct FramePlan {
-    pub offsets: Vec<(NodeId, [f64; 3])>,
+    pub placements: Vec<TargetPlacement>,
     pub radius: f64,
 }
 
@@ -161,6 +161,14 @@ impl<'d> Builder<'d> {
         let node_id = format!("{owner}:{role}");
         self.nodes.push(plain_node(id, &node_id, type_id, &node_id));
         self.roles.insert((owner.to_owned(), role), id);
+        id
+    }
+
+    /// Emit a node of `type_id` under the node id `node_id`, for a node one
+    /// owner makes many of (a modifier card's per-part nodes).
+    pub(crate) fn add_named(&mut self, node_id: NodeId, type_id: &str) -> u32 {
+        let id = self.fresh();
+        self.nodes.push(plain_node(id, node_id.as_str(), type_id, node_id.as_str()));
         id
     }
 
@@ -468,7 +476,7 @@ impl<'d> Builder<'d> {
             // the rest pose its targets compiled with.
             for modifier in &mut self.modifiers {
                 let frames = match self.frames.get(&modifier.id) {
-                    Some(plan) => capture_mesh_frames(&def, modifier, &plan.offsets, plan.radius),
+                    Some(plan) => capture_mesh_frames(&def, modifier, &plan.placements, plan.radius),
                     None => resolve_modifier_mesh_frames(&def, modifier),
                 };
                 modifier.mesh_frames = frames.map_err(|error| format!("{}: {error}", modifier.id))?;

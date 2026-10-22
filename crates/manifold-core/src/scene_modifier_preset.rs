@@ -57,6 +57,11 @@ pub struct SceneMeshReferenceFrame {
     pub source_definition_hash: String,
     pub source_offset: [f64; 3],
     pub scene_radius: f64,
+    /// A node whose `pos_x`, `pos_y` and `pos_z` outputs give the target's
+    /// offset live, read in place of `source_offset` (which keeps the rest
+    /// value): a part that moves inside a frame it shares with others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_offset: Option<NodeId>,
 }
 
 /// Return the admission diagnostic for an authored parameter that is part of

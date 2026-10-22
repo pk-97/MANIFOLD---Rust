@@ -9,15 +9,22 @@
 //! the rest-pose box of its parts (`Builder::drawn`): every part's source
 //! offset is its place in that box, from the box's centre, and the radius is
 //! half the box's diagonal, so a recipe reads every shape the same way and a
-//! modifier's scale follows its own target. One instance per frame, all
-//! driven by the card's one set of manifest params, `<card id>.<param>`.
+//! modifier's scale follows its own target. In a Group's or the scene's
+//! frame each part's offset is also measured live (`place`), from the part's
+//! transform to the frame's rest centre, so the group bends as one piece
+//! wherever its parts sit and as they move. A skinned, animated or morphing
+//! part bends its posed result. One instance per frame, all driven by the
+//! card's one set of manifest params, `<card id>.<param>`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use manifold_core::NodeId;
+use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::physics_members::BODY_TYPE_ID;
 use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
 use manifold_core::scene_schema::modifier_type;
+use manifold_node_engine::load::expand::TargetPlacement;
 
 use super::builder::{Builder, Drawn, FramePlan, SCENE, rest_box};
 use super::forces::{bindings, node, recipe_card};
@@ -93,10 +100,10 @@ fn emit(
     let mut frames = if card.on { frames(b, card, lineage) } else { Vec::new() };
     let mut pieces = card.pieces.clamp(2, MAX_PIECES);
     if card.modifier == ModifierType::Shatter {
-        for (_, members) in &mut frames {
-            *members = shatterable(b, members, shattered);
+        for frame in &mut frames {
+            frame.members = shatterable(b, &frame.members, shattered);
             // Every material part of a body becomes at least one piece.
-            for parts in bodies(b, members).values() {
+            for parts in bodies(b, &frame.members).values() {
                 pieces = pieces.max(*parts as u32);
             }
         }
@@ -107,19 +114,20 @@ fn emit(
     // The card keeps its params with nothing to act on, so its values,
     // mappings and modulation survive a toggle or an emptied target list.
     b.push_params(specs.iter().map(|(spec, _)| spec.clone()));
-    for (role, members) in frames {
-        if members.is_empty() {
+    for frame in frames {
+        if frame.members.is_empty() {
             continue;
         }
-        let plan = plan(b, &members, card.modifier == ModifierType::Shatter);
-        for (chunk, part) in members.chunks(TARGETS_PER_INSTANCE).enumerate() {
+        let role = &frame.role;
+        let plan = plan(b, item, &frame, lineage, card.modifier == ModifierType::Shatter);
+        for (chunk, part) in frame.members.chunks(TARGETS_PER_INSTANCE).enumerate() {
             let suffix = if chunk == 0 { role.clone() } else { format!("{role}:{chunk}") };
             let id = node(item.id.as_str(), &format!("mod:{suffix}"));
             let mut objects = Vec::with_capacity(part.len());
             for drawn in part {
                 objects.push(b.node_id_of(drawn.object).ok_or("a modifier target has no node id")?);
             }
-            let offsets = plan.offsets.iter().filter(|(target, _)| objects.contains(target)).cloned().collect();
+            let placements = plan.placements.iter().filter(|placement| objects.contains(&placement.target)).cloned().collect();
             let instance = SceneModifierInstanceDef {
                 id: id.clone(),
                 scene: node(SCENE, "render"),
@@ -128,24 +136,41 @@ fn emit(
                 legacy_math_view_carrier: None,
                 graph: Box::new(graph.clone()),
             };
-            let frame = FramePlan { offsets, radius: plan.radius };
+            let frame = FramePlan { placements, radius: plan.radius };
             b.push_modifier(instance, Vec::new(), bindings(&specs, &id), Some(frame));
         }
     }
     Ok(())
 }
 
-/// The card's frames: (role, parts), one per Object or Group target in the
-/// order they are listed, or one for the whole scene. A part reached by two
-/// targets bends once, in the first one's frame.
-fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Vec<(String, Vec<Drawn>)> {
+/// What a frame belongs to.
+enum Scope {
+    /// One Object target: it bends in its own frame.
+    Own,
+    /// A Group target: its parts bend in its one frame.
+    Group(ItemId),
+    /// The whole scene, as one group of everything.
+    Scene,
+}
+
+/// One frame of a card: its role in node ids, what it belongs to, its parts.
+struct CardFrame {
+    role: String,
+    scope: Scope,
+    members: Vec<Drawn>,
+}
+
+/// The card's frames, one per Object or Group target in the order they are
+/// listed, or one for the whole scene. A part reached by two targets bends
+/// once, in the first one's frame.
+fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Vec<CardFrame> {
     match &card.targets {
-        ModifierTargets::Scene => vec![("scene".to_owned(), b.drawn.clone())],
+        ModifierTargets::Scene => vec![CardFrame { role: "scene".to_owned(), scope: Scope::Scene, members: b.drawn.clone() }],
         ModifierTargets::Items(ids) => {
             let mut claimed = BTreeSet::new();
             ids.iter()
                 .map(|target| {
-                    let parts = b
+                    let members: Vec<Drawn> = b
                         .drawn
                         .iter()
                         .filter(|drawn| {
@@ -154,7 +179,9 @@ fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec
                         .filter(|drawn| claimed.insert(drawn.object))
                         .cloned()
                         .collect();
-                    (target.to_string(), parts)
+                    let own = b.doc.find(target).is_some_and(|item| item.kind() == ItemKind::Object);
+                    let scope = if own { Scope::Own } else { Scope::Group(target.clone()) };
+                    CardFrame { role: target.to_string(), scope, members }
                 })
                 .collect()
         }
@@ -201,10 +228,19 @@ fn bodies(b: &Builder<'_>, members: &[Drawn]) -> BTreeMap<u32, usize> {
     counts
 }
 
-/// The shared frame of `members`: each one's source offset from the frame's
-/// centre, and its radius. Shatter follows the live body pose instead, so
-/// its offset is only its source's own recentring.
-fn plan(b: &mut Builder<'_>, members: &[Drawn], shatter: bool) -> FramePlan {
+/// A frame's placements: each part's source offset from the frame's rest
+/// centre, and the frame's radius. A part that shares a Group's or the
+/// scene's frame also reads its offset live, so it bends wherever it sits
+/// as it moves. Shatter follows the live body pose instead, so its offset is
+/// only its source's own recentring.
+fn plan(
+    b: &mut Builder<'_>,
+    card: &Item,
+    frame: &CardFrame,
+    lineage: &BTreeMap<ItemId, Vec<ItemId>>,
+    shatter: bool,
+) -> FramePlan {
+    let members = &frame.members;
     let (lo, hi) = rest_box(members.iter().map(|drawn| &drawn.rest)).unwrap_or(([0.0; 3], [0.0; 3]));
     let centre: [f64; 3] = std::array::from_fn(|axis| (f64::from(lo[axis]) + f64::from(hi[axis])) * 0.5);
     let radius = (0..3)
@@ -213,11 +249,21 @@ fn plan(b: &mut Builder<'_>, members: &[Drawn], shatter: bool) -> FramePlan {
         .sum::<f64>()
         .sqrt()
         .max(MIN_RADIUS);
-    let mut offsets = Vec::with_capacity(members.len());
+    let centre_node = match &frame.scope {
+        _ if shatter => None,
+        Scope::Own => None,
+        Scope::Group(group) => {
+            let held_in = group_frame(b, group, lineage);
+            Some(frame_centre(b, card, &frame.role, centre, held_in))
+        }
+        Scope::Scene => Some(frame_centre(b, card, &frame.role, centre, None)),
+    };
+    let mut placements = Vec::with_capacity(members.len());
     for drawn in members {
         let Some(target) = b.node_id_of(drawn.object) else {
             continue;
         };
+        let live = centre_node.and_then(|centre| place(b, card, &frame.role, drawn, centre));
         let offset = if shatter {
             let source = b.input(drawn.object, "vertices").map(|(source, _)| source);
             std::array::from_fn(|axis| {
@@ -227,7 +273,48 @@ fn plan(b: &mut Builder<'_>, members: &[Drawn], shatter: bool) -> FramePlan {
         } else {
             std::array::from_fn(|axis| f64::from(drawn.rest.offset[axis]) - centre[axis])
         };
-        offsets.push((target, offset));
+        placements.push(TargetPlacement { target, offset, live });
     }
-    FramePlan { offsets, radius }
+    FramePlan { placements, radius }
+}
+
+/// The transform a Group's parts are placed in: its frame, or `None` at a
+/// copies root, whose parts each sit inside one copy.
+fn group_frame(b: &Builder<'_>, group: &ItemId, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Option<u32> {
+    let copied = |id: &ItemId| b.swarm_draws.contains_key(id) || b.doc.find(id).is_some_and(|item| item.fields.copies());
+    let above = lineage.get(group).map_or(&[][..], Vec::as_slice);
+    if copied(group) && !above.iter().any(copied) {
+        return None;
+    }
+    // Inside a copy a group records no world frame: its own transform is
+    // its place in the copy.
+    b.group_frames.get(group).copied().or_else(|| b.id(group.as_str(), "transform"))
+}
+
+/// The frame's rest centre as a transform, inside `held_in` (the world when
+/// `None`): the place every part's live offset is measured from.
+fn frame_centre(b: &mut Builder<'_>, card: &Item, role: &str, centre: [f64; 3], held_in: Option<u32>) -> u32 {
+    let node = b.add_named(node(card.id.as_str(), &format!("centre:{role}")), "node.transform_3d");
+    for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
+        b.set(node, param, SerializedParamValue::Float { value: centre[axis] as f32 });
+    }
+    if let Some(frame) = held_in {
+        b.wire(frame, "transform", node, "parent");
+    }
+    node
+}
+
+/// The node that measures where `drawn` sits from `centre`, live: its
+/// transform inside the parent it draws in, the same chain the renderer
+/// composes, so it follows rows, modulation and bodies as they move.
+fn place(b: &mut Builder<'_>, card: &Item, role: &str, drawn: &Drawn, centre: u32) -> Option<NodeId> {
+    let node = b.add_named(node(card.id.as_str(), &format!("place:{role}:{}", drawn.item)), "node.transform_components");
+    for port in ["transform", "parent_transform"] {
+        if let Some((from, from_port)) = b.input(drawn.object, port) {
+            let to = if port == "transform" { "transform" } else { "parent" };
+            b.wire(from, &from_port, node, to);
+        }
+    }
+    b.wire(centre, "transform", node, "frame");
+    b.node_id_of(node)
 }

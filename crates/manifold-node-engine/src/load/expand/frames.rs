@@ -1,4 +1,7 @@
-//! Authored coordinate calibration for static imported meshes.
+//! Mesh coordinate frames for scene modifiers: where each target sits in its
+//! modifier's frame, captured from its rest pose. A target's source may be
+//! reworked in place first (split, morphed, skinned); the frame is its root
+//! source's rest pose.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -171,21 +174,34 @@ pub fn resolve_modifier_mesh_frames(
                 source_definition_hash: fingerprint,
                 source_offset,
                 scene_radius: radius,
+                live_offset: None,
             });
         }
     }
     Ok(result)
 }
 
+/// Where one target sits in its modifier's frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetPlacement {
+    pub target: NodeId,
+    /// Its source's offset from the frame's centre at rest.
+    pub offset: [f64; 3],
+    /// The node that measures that offset live
+    /// ([`SceneMeshReferenceFrame::live_offset`]), for a part that moves
+    /// inside a frame it shares.
+    pub live: Option<NodeId>,
+}
+
 /// The frames of `instance` where its owner already knows each target's
-/// rest-pose placement: `offsets` gives every selected target's source
-/// offset, all in one frame of `radius` (the scene compiler measures both from
-/// the items it compiled). Only the source identity is read here, so a
-/// recipe reads every shape's frame the same way.
+/// placement: `placements` gives every selected target's, all in one frame of
+/// `radius` (the scene compiler measures both from the items it compiled).
+/// Only the source identity is read here, so a recipe reads every shape's
+/// frame the same way.
 pub fn capture_mesh_frames(
     owner: &EffectGraphDef,
     instance: &SceneModifierInstanceDef,
-    offsets: &[(NodeId, [f64; 3])],
+    placements: &[TargetPlacement],
     radius: f64,
 ) -> Result<Vec<SceneMeshReferenceFrame>, SceneModifierExpandError> {
     let index = FlatSceneIndex::build(owner)?;
@@ -196,17 +212,20 @@ pub fn capture_mesh_frames(
     let mut frames = Vec::with_capacity(targets.len());
     for target in targets {
         let (source, source_node) = source_route(&index, &target)?;
-        let source_offset = offsets
+        let placement = placements
             .iter()
-            .find(|(placed, _)| *placed == target)
-            .map(|(_, offset)| *offset)
+            .find(|placement| placement.target == target)
             .ok_or_else(|| frame_error(&target, "the target has no rest-pose placement"))?;
+        if let Some(live) = &placement.live {
+            index.node(live)?;
+        }
         let frame = SceneMeshReferenceFrame {
-            target,
             source,
             source_definition_hash: source_fingerprint(owner, &index, source_node)?,
-            source_offset,
+            source_offset: placement.offset,
             scene_radius: radius,
+            live_offset: placement.live.clone(),
+            target,
         };
         validate_numbers(&frame)?;
         frames.push(frame);
@@ -301,47 +320,38 @@ fn source_route<'a>(
         .get(&wire.from_node)
         .ok_or_else(|| frame_error(target, "vertices producer has no stable identity"))?;
     let node = index.node(source)?;
-    let static_source = match detail_input(index, node) {
-        Some(upstream) => upstream.is_some_and(|upstream| is_static_source(index, upstream)),
-        None => is_static_source(index, node),
-    };
-    if !static_source {
+    if source_chain(index, node).is_none() {
         return Err(frame_error(
             target,
-            "animated or transformed mesh-source chains require a separately qualified coordinate frame",
+            "transformed mesh-source chains require a separately qualified coordinate frame",
         ));
     }
     Ok((source.clone(), node))
 }
 
-/// A source with nothing wired in and no skin: its rest pose is its own.
-fn is_static_source(index: &FlatSceneIndex, node: &EffectGraphNode) -> bool {
-    node.type_id != "node.gltf_skinned_mesh_source"
-        && !index.flat.wires.iter().any(|wire| wire.to_node == node.id)
-}
+/// The types that rework a source's vertices in place, reading it through
+/// `in`: a split adds detail, a morph blend and a skin pose it. A modifier
+/// bends what they give, as Blender's stack deforms after skin and shape
+/// keys, and the frame is the root source's rest pose.
+const VERTEX_PASSES: [&str; 3] = ["node.subdivide_mesh", "node.morph_targets_blend", "node.skin_mesh"];
 
-/// The type that only adds detail to a static source: it splits triangles
-/// without moving the surface, so its source's rest pose is still the frame.
-const MESH_DETAIL: &str = "node.subdivide_mesh";
-
-/// For a mesh-detail node, `Some` of the one node feeding it (`None` inside
-/// when it is fed by anything but one wire into `in`); `None` for any other
-/// node.
-fn detail_input<'a>(
-    index: &'a FlatSceneIndex,
-    node: &EffectGraphNode,
-) -> Option<Option<&'a EffectGraphNode>> {
-    if node.type_id != MESH_DETAIL {
-        return None;
+/// `node` and the passes below it down to its root source, which has nothing
+/// wired in. `None` when the chain holds any other node, a pass is not fed
+/// through exactly one `in` wire, or a skinned source is drawn unposed.
+fn source_chain<'a>(index: &'a FlatSceneIndex, node: &'a EffectGraphNode) -> Option<Vec<&'a EffectGraphNode>> {
+    let mut chain = vec![node];
+    let mut current = node;
+    while VERTEX_PASSES.contains(&current.type_id.as_str()) {
+        let mut feeding = index.flat.wires.iter().filter(|wire| wire.to_node == current.id && wire.to_port == "in");
+        let (Some(wire), None) = (feeding.next(), feeding.next()) else {
+            return None;
+        };
+        current = index.flat.nodes.iter().find(|upstream| upstream.id == wire.from_node)?;
+        chain.push(current);
     }
-    let mut incoming = index.flat.wires.iter().filter(|wire| wire.to_node == node.id);
-    let upstream = match (incoming.next(), incoming.next()) {
-        (Some(wire), None) if wire.to_port == "in" => {
-            index.flat.nodes.iter().find(|upstream| upstream.id == wire.from_node)
-        }
-        _ => None,
-    };
-    Some(upstream)
+    let unwired = !index.flat.wires.iter().any(|wire| wire.to_node == current.id);
+    let posed = current.type_id != "node.gltf_skinned_mesh_source" || chain.iter().any(|pass| pass.type_id == "node.skin_mesh");
+    (unwired && posed).then_some(chain)
 }
 
 fn scalar(
@@ -467,17 +477,18 @@ fn scene_radius(
 
 /// Hash source-defining data, excluding labels, document IDs, display
 /// provenance, capacity and downstream object placement. No asset I/O occurs.
-/// A mesh-detail node's fingerprint covers the source it details too.
+/// A vertex pass's fingerprint covers every pass and the source below it.
 fn source_fingerprint(
     owner: &EffectGraphDef,
     index: &FlatSceneIndex,
     node: &EffectGraphNode,
 ) -> Result<String, SceneModifierExpandError> {
-    let own = node_fingerprint(owner, node)?;
-    match detail_input(index, node).flatten() {
-        Some(upstream) => Ok(format!("{own}+{}", node_fingerprint(owner, upstream)?)),
-        None => Ok(own),
+    let chain = source_chain(index, node).unwrap_or_else(|| vec![node]);
+    let mut parts = Vec::with_capacity(chain.len());
+    for link in chain {
+        parts.push(node_fingerprint(owner, link)?);
     }
+    Ok(parts.join("+"))
 }
 
 fn node_fingerprint(

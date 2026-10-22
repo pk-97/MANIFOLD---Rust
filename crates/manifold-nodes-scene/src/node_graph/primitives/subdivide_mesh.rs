@@ -19,8 +19,10 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-/// The deepest split: 4^5 = 1024 triangles per source triangle.
-const MAX_LEVEL: u32 = 5;
+/// The deepest split, 4^8 = 65,536 triangles per source triangle. GPU memory
+/// sets it: at 8 a cube is 2.4 million vertices (189 MB) before any deformer
+/// copies it, and each level more is four times that.
+const MAX_LEVEL: u32 = 8;
 
 /// Generated-codegen uniform layout: `level` (Int→i32), the derived `in_len`
 /// (u32), then the codegen-injected `dispatch_count`, padded to 16 bytes.

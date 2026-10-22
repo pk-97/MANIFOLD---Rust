@@ -672,6 +672,7 @@ fn calibrated_source_param_rejects_atomically_but_ordinary_node_writes_remain_li
             source_definition_hash: "hash".into(),
             source_offset: [0.0; 3],
             scene_radius: 1.0,
+            live_offset: None,
         }],
         legacy_math_view_carrier: None,
         graph: Box::new(mirror_catalog_default()),

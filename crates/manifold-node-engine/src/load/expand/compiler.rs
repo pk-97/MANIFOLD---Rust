@@ -1154,6 +1154,22 @@ impl Builder<'_> {
                 "per-object context is unavailable in a shared Scene stage",
             ));
         }
+        // A part that moves inside a shared frame reads its offset live.
+        let axis = match value {
+            SceneContextValue::SourceOffsetX => Some("pos_x"),
+            SceneContextValue::SourceOffsetY => Some("pos_y"),
+            SceneContextValue::SourceOffsetZ => Some("pos_z"),
+            _ => None,
+        };
+        if let Some(axis) = axis
+            && let Some(live) = instance
+                .mesh_frames
+                .iter()
+                .find(|frame| Some(&frame.target) == target)
+                .and_then(|frame| frame.live_offset.as_ref())
+        {
+            return Ok((self.index.node(live)?.id, axis.into()));
+        }
         let key = serde_json::to_string(&(
             instance.id.as_str(),
             if per_object { target } else { None },

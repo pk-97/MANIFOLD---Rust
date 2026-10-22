@@ -18,7 +18,7 @@ use super::group::Frame;
 use super::material::surface_for;
 use super::object::object_wires;
 use crate::node_graph::gltf_import::model_file::{ClipDurations, Morph, Rig, model_file};
-use crate::node_graph::gltf_load::DEFAULT_MATERIAL_MESH_PARAM;
+use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, FilePart};
 
 /// `node.gltf_mesh_source`'s smallest buffer, in vertices.
 const MIN_CAPACITY: u32 = 36;
@@ -55,7 +55,7 @@ pub(crate) struct Part {
     /// Where the Transform starts: the part's own centre for a static part,
     /// so it turns about itself.
     pub center: Option<[f32; 3]>,
-    /// Its rest pose, for a static part.
+    /// Its rest pose: posed parts rest at their bind pose.
     pub rest: Option<Rest>,
 }
 
@@ -111,17 +111,9 @@ fn emit_part_in(
                 center = Some(part.center);
             }
         }
-        // A static part rests where the file puts it; a morphing one has no
-        // single rest pose for a modifier to measure.
-        let rest = part.filter(|_| morph.is_none()).map(|part| {
-            let half = part.half_extent;
-            let (lo, hi, offset) = if own_centre {
-                (half.map(|h| -h), half, part.center)
-            } else {
-                (std::array::from_fn(|axis| part.center[axis] - half[axis]), std::array::from_fn(|axis| part.center[axis] + half[axis]), [0.0; 3])
-            };
-            Rest { lo, hi, offset, vertices: part.vertex_count.max(vertex_count) }
-        });
+        // A part rests where the file puts it; a morphing one rests at its
+        // base shape.
+        let rest = part.map(|part| rest_of(part, own_centre, vertex_count));
         let vertices = match morph {
             Some(morph) => emit_morph(b, item, file, node_path, known, vertex_count, morph, (source, "vertices"), false),
             None => (source, "vertices"),
@@ -160,7 +152,22 @@ fn emit_part_in(
         None => (source, "vertices"),
     };
     b.wire(deformed.0, deformed.1, skin, "in");
-    Part { source, vertices: (skin, "out"), center: None, rest: None }
+    // The skin poses the vertices in the file's world, so the part rests at
+    // its bind pose there; a modifier bends the posed result.
+    let rest = part.map(|part| rest_of(part, false, vertex_count));
+    Part { source, vertices: (skin, "out"), center: None, rest }
+}
+
+/// A file part's rest pose: about its own centre when its source is
+/// recentred on it (`own_centre`), else where the file puts it.
+fn rest_of(part: &FilePart, own_centre: bool, vertex_count: u32) -> Rest {
+    let half = part.half_extent;
+    let (lo, hi, offset) = if own_centre {
+        (half.map(|h| -h), half, part.center)
+    } else {
+        (std::array::from_fn(|axis| part.center[axis] - half[axis]), std::array::from_fn(|axis| part.center[axis] + half[axis]), [0.0; 3])
+    };
+    Rest { lo, hi, offset, vertices: part.vertex_count.max(vertex_count) }
 }
 
 /// Blend `base` with the part's morph targets; returns the blend's output.

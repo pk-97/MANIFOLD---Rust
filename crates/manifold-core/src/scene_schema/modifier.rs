@@ -247,9 +247,10 @@ pub fn modifier_rows(fields: &ItemFields) -> &'static [PropertyRow] {
     }
 }
 
-/// Why Shatter cannot break `target`: it breaks rigid bodies only.
+/// Why Shatter cannot break `target`: it breaks rigid bodies only. The
+/// Targets menu shows it after the item's name, so it does not name Shatter.
 pub fn shatter_refuses(target: &Item) -> Option<&'static str> {
-    (target.fields.physics() != PhysicsSetting::Body).then_some("Shatter breaks Bodies: set this item's Physics to Body")
+    (target.fields.physics() != PhysicsSetting::Body).then_some("Not a Body: set its Physics to Body")
 }
 
 /// Why a Shatter card's Break does nothing: no target is a Body.

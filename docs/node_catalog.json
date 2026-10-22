@@ -42721,7 +42721,7 @@
           "name": "level",
           "range": [
             "0",
-            "5"
+            "8"
           ],
           "type": "int"
         }
@@ -45167,6 +45167,16 @@
           "name": "transform",
           "required": false,
           "type": "Transform"
+        },
+        {
+          "name": "parent",
+          "required": false,
+          "type": "Transform"
+        },
+        {
+          "name": "frame",
+          "required": false,
+          "type": "Transform"
         }
       ],
       "label": "Transform Components",
@@ -45209,7 +45219,7 @@
         }
       ],
       "params": [],
-      "purpose": "Split a Transform into its nine scalars: position X/Y/Z, rotation X/Y/Z (radians, XYZ Euler) and scale X/Y/Z. The inverse of node.transform_3d, with the same port names. An unwired input publishes the identity transform.",
+      "purpose": "Split a Transform into its nine scalars: position X/Y/Z, rotation X/Y/Z (radians, XYZ Euler) and scale X/Y/Z. The inverse of node.transform_3d, with the same port names. An unwired input publishes the identity transform. With `parent` or `frame` wired, the scalars are the whole placement (the transform's world, inside `parent` when wired) measured in `frame`'s space (the world when unwired).",
       "role": "Map",
       "stratum": "driver",
       "summary": "Breaks a transform into its separate position, rotation and scale numbers so each can drive something else.",
