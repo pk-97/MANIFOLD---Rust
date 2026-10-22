@@ -21,21 +21,21 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`src_cols`,
-/// `src_rows`, both Int → i32) then the codegen-injected `dispatch_count`
-/// (= dst capacity, the guard), padded to 16 bytes.
+/// `src_rows`, both Int → i32, `keep_normals` Bool → u32) then the
+/// codegen-injected `dispatch_count` (= dst capacity, the guard): 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TriangulateUniforms {
     src_cols: i32,
     src_rows: i32,
+    keep_normals: u32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 manifold_node_engine::primitive! {
     name: TriangulateGrid,
     type_id: "node.make_triangles",
-    purpose: "Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. The adapter primitive between node.grid_mesh (positions) and node.render_mesh (triangle list). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
+    purpose: "Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals, or with each grid vertex's own normal when `keep_normals` is on (a sweep that writes exact normals). The adapter primitive between node.grid_mesh (positions) and node.render_mesh (triangle list). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
     inputs: {
         in: Array(MeshVertex) required,
     },
@@ -57,6 +57,14 @@ manifold_node_engine::primitive! {
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
             range: Some((2.0, 4096.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("keep_normals"),
+            label: "Keep Normals",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -104,6 +112,7 @@ impl Primitive for TriangulateGrid {
             Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
+        let keep_normals = u32::from(matches!(ctx.params.get("keep_normals"), Some(ParamValue::Bool(true))));
 
         let Some(src) = ctx.inputs.array("in") else {
             return;
@@ -123,8 +132,8 @@ impl Primitive for TriangulateGrid {
         let uniforms = TriangulateUniforms {
             src_cols: src_cols as i32,
             src_rows: src_rows as i32,
+            keep_normals,
             dispatch_count: dst_capacity,
-            _pad0: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -209,7 +218,7 @@ mod gpu_tests {
         }
         const DST_CAP: u32 = 24; // (3-1)*(3-1)*6, no padding needed.
 
-        let uniforms = TriangulateUniforms { src_cols: COLS as i32, src_rows: ROWS as i32, dispatch_count: DST_CAP, _pad0: 0 };
+        let uniforms = TriangulateUniforms { src_cols: COLS as i32, src_rows: ROWS as i32, keep_normals: 0, dispatch_count: DST_CAP };
         let verts = dispatch_tri(&grid, DST_CAP, &uniforms);
 
         fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {

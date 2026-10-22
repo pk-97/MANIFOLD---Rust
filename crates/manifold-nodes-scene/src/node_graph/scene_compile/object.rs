@@ -118,7 +118,7 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         (part.source, part.vertices)
     } else if let Some(curve) = super::curves::emit(b, item, &fields.shape) {
         rest = curve.rest;
-        (curve.sweep, curve.vertices)
+        (curve.solid, curve.vertices)
     } else {
         let Some((mesh_type, solid)) = mesh_type(&fields.shape) else {
             return;

@@ -15,7 +15,7 @@ use std::f32::consts::TAU;
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
-use super::fields::{Choice, FieldControl, FieldRow, FieldValue, enabled, wrong_value};
+use super::fields::{Choice, FieldControl, FieldRow, FieldValue, enabled, is_on, on_off, parse_on, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row};
 use crate::scene_doc::{Curve, ItemFields, Shape};
 
@@ -35,6 +35,8 @@ pub const CURVE_XY: &str = "curve_xy";
 pub const SWEEP: &str = "sweep";
 /// The triangles the sweep's grid becomes.
 pub const TRIANGLES: &str = "triangles";
+/// The solid physics and copies read: the same sweep, on the CPU.
+pub const SOLID: &str = "solid";
 
 const M0: Reach = Reach::Own(CURVE_MATH[0]);
 const M1: Reach = Reach::Own(CURVE_MATH[1]);
@@ -50,6 +52,7 @@ const AXIS: Reach = Reach::Own(CURVE_AXIS);
 const XY: Reach = Reach::Own(CURVE_XY);
 const SW: Reach = Reach::Own(SWEEP);
 const TRI: Reach = Reach::Own(TRIANGLES);
+const SOLID_OF: Reach = Reach::Own(SOLID);
 
 const SHAPE: ControlGroup = ControlGroup::Shape;
 const BAND: CardBand = CardBand::Scene;
@@ -57,6 +60,9 @@ const BAND: CardBand = CardBand::Scene;
 const BY_CURVE: &str = "the Curve field";
 const DETAIL: &str = "fixed, so a live row never resizes the mesh";
 const NO_EXPONENT: &str = "the curve maths uses no exponent or bias";
+const CENTRED: &str = "an extrusion is centred on its curve's plane, as Blender's is";
+const BY_CAPS: &str = "the Fill Caps field";
+const FOLLOWS: &str = "the sweep node's value and row";
 
 fn shape_of(fields: &ItemFields) -> Option<&Shape> {
     match fields {
@@ -142,7 +148,7 @@ static MATH_ROWS: [[PropertyRow; 5]; 8] = [
     math_rows!(AXIS, "curve_axis_op", "curve_axis_scale", "curve_axis_offset", "curve_axis_exp", "curve_axis_bias"),
 ];
 
-static PLUMBING_ROWS: [PropertyRow; 13] = [
+static PLUMBING_ROWS: [PropertyRow; 27] = [
     row("curve_t_start", T, SHAPE, Exposure::Automatic(BY_CURVE)).param("start").when(is_curve_shape),
     row("curve_t_end", T, SHAPE, Exposure::Automatic(BY_CURVE)).param("end").when(is_curve_shape),
     row("curve_t_samples", T, SHAPE, Exposure::Automatic(DETAIL)).param("max_capacity").when(is_curve_shape),
@@ -162,6 +168,21 @@ static PLUMBING_ROWS: [PropertyRow; 13] = [
     row("triangles_cols", TRI, SHAPE, Exposure::Automatic(DETAIL)).param("src_cols").when(is_curve_shape),
     row("triangles_rows", TRI, SHAPE, Exposure::Automatic(DETAIL)).param("src_rows").when(is_curve_shape),
     row("star_pinch", POLY, SHAPE, Exposure::Internal("a polygon has straight sides")).param("pinch").when(polygon),
+    row("extrude_symmetric", SW, SHAPE, Exposure::Automatic(CENTRED)).param("symmetric").when(extrude),
+    row("extrude_caps", SW, SHAPE, Exposure::Automatic(BY_CAPS)).param("caps").when(extrude),
+    row("tube_caps", SW, SHAPE, Exposure::Automatic(BY_CAPS)).param("caps").when(tube),
+    row("triangles_keep_normals", TRI, SHAPE, Exposure::Automatic("the sweep writes exact normals")).param("keep_normals").when(is_curve_shape),
+    // The solid follows the sweep node's params and rows.
+    row("solid_kind", SOLID_OF, SHAPE, Exposure::Automatic("the Shape field")).param("kind").when(is_curve_shape),
+    row("solid_depth", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("depth").when(is_curve_shape),
+    row("solid_steps", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("steps").when(is_curve_shape),
+    row("solid_close", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("close").when(is_curve_shape),
+    row("solid_symmetric", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("symmetric").when(is_curve_shape),
+    row("solid_caps", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("caps").when(is_curve_shape),
+    row("solid_segments", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("segments").when(is_curve_shape),
+    row("solid_sweep", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("sweep").when(is_curve_shape),
+    row("solid_radius", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("radius").when(is_curve_shape),
+    row("solid_sides", SOLID_OF, SHAPE, Exposure::Automatic(FOLLOWS)).param("sides").when(is_curve_shape),
 ];
 
 static CARD_ROWS: [PropertyRow; 21] = [
@@ -253,7 +274,7 @@ fn write_curve(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String
     };
     match fields {
         ItemFields::Object(o) => match &mut o.shape {
-            Shape::Extrude { curve } | Shape::Revolve { curve } | Shape::Tube { curve } => {
+            Shape::Extrude { curve, .. } | Shape::Revolve { curve } | Shape::Tube { curve, .. } => {
                 *curve = picked;
                 Ok(())
             }
@@ -273,4 +294,33 @@ pub(super) const CURVE_FIELD: FieldRow = FieldRow {
     disabled: enabled,
     read: read_curve,
     write: write_curve,
+};
+
+fn can_cap(fields: &ItemFields) -> bool {
+    shape_of(fields).is_some_and(Shape::can_cap)
+}
+
+/// Fill Caps (Blender's): closes an Extrude's outline or a Tube's open ends.
+/// Structural: caps add rows to the mesh.
+pub(super) const CAPS_FIELD: FieldRow = FieldRow {
+    id: "caps",
+    label: "Fill Caps",
+    section: SHAPE,
+    control: on_off(),
+    applies: can_cap,
+    disabled: enabled,
+    read: |fields| is_on(shape_of(fields).is_some_and(Shape::capped)),
+    write: |fields, value| {
+        let on = parse_on("caps", value)?;
+        match fields {
+            ItemFields::Object(o) => match &mut o.shape {
+                Shape::Extrude { caps, .. } | Shape::Tube { caps, .. } => {
+                    *caps = on;
+                    Ok(())
+                }
+                _ => Err(wrong_value("caps", value)),
+            },
+            _ => Err(wrong_value("caps", value)),
+        }
+    },
 };

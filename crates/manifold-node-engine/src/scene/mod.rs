@@ -1,6 +1,7 @@
 pub mod atmosphere;
 pub mod boundary_nodes;
 pub mod camera;
+pub mod curve_sweep;
 pub mod depth_rule;
 pub mod light;
 pub mod live_extent;

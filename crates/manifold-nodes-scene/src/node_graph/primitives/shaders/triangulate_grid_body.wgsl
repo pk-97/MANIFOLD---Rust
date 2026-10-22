@@ -45,7 +45,7 @@ fn tg_compute_normal(col: i32, row: i32, src_cols: i32, src_rows: i32) -> vec3<f
     return n / len;
 }
 
-fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32) -> Element {
+fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32, keep_normals: u32) -> Element {
     let quads_x = u32(src_cols) - 1u;
     let quads_y = u32(src_rows) - 1u;
     let total_verts = quads_x * quads_y * 6u;
@@ -77,11 +77,15 @@ fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32) -> Element {
     let col = i32(qx + dx);
     let row = i32(qy + dy);
     let pos = tg_sample_pos(col, row, src_cols, src_rows);
-    let normal = tg_compute_normal(col, row, src_cols, src_rows);
-    let uv = tg_sample_uv(col, row, src_cols, src_rows);
-    let uv1 = tg_sample_uv1(col, row, src_cols, src_rows);
     let cc = clamp(col, 0, src_cols - 1);
     let rr = clamp(row, 0, src_rows - 1);
+    // Keep Normals: the grid's producer wrote exact normals (a curve sweep).
+    var normal = buf_in[u32(rr) * u32(src_cols) + u32(cc)].normal;
+    if keep_normals == 0u {
+        normal = tg_compute_normal(col, row, src_cols, src_rows);
+    }
+    let uv = tg_sample_uv(col, row, src_cols, src_rows);
+    let uv1 = tg_sample_uv1(col, row, src_cols, src_rows);
     let color = buf_in[u32(rr) * u32(src_cols) + u32(cc)].color;
 
     return Element(pos, normal, uv, uv1, vec4<f32>(0.0), color);

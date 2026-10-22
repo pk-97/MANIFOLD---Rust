@@ -181,16 +181,26 @@ pub enum Shape {
     Icosahedron,
     Dodecahedron,
     Ocean,
-    /// A built-in curve pushed straight back into a solid (Blender's curve
-    /// Extrude).
+    /// A built-in curve pushed back into a solid, centred on the curve's plane
+    /// (Blender's curve Extrude). `caps` is Fill Caps: a closed outline's
+    /// ends are filled.
     #[serde(rename_all = "camelCase")]
-    Extrude { curve: Curve },
+    Extrude {
+        curve: Curve,
+        #[serde(default = "caps_on")]
+        caps: bool,
+    },
     /// A built-in curve spun around the vertical axis (Blender's Screw).
     #[serde(rename_all = "camelCase")]
     Revolve { curve: Curve },
     /// A tube swept along a built-in curve (Blender's curve Bevel depth).
+    /// `caps` is Fill Caps: an open path's two ends are closed.
     #[serde(rename_all = "camelCase")]
-    Tube { curve: Curve },
+    Tube {
+        curve: Curve,
+        #[serde(default = "caps_on")]
+        caps: bool,
+    },
     #[serde(rename_all = "camelCase")]
     Mesh {
         file: String,
@@ -206,12 +216,38 @@ pub enum Shape {
     },
 }
 
+/// Fill Caps starts on, as a new curve shape is a solid.
+fn caps_on() -> bool {
+    true
+}
+
 impl Shape {
     /// The built-in curve a curve shape is made from.
     pub fn curve(&self) -> Option<Curve> {
         match self {
-            Shape::Extrude { curve } | Shape::Revolve { curve } | Shape::Tube { curve } => Some(*curve),
+            Shape::Extrude { curve, .. } | Shape::Revolve { curve } | Shape::Tube { curve, .. } => Some(*curve),
             _ => None,
+        }
+    }
+
+    /// Whether this curve shape has ends to cap: an Extrude of an outline
+    /// closed round its origin (Circle, Polygon, Star), or a Tube along an
+    /// open path (Spiral, Helix, Wave). A self-crossing Lissajous outline has
+    /// no single inside to fill, and a closed path has no ends.
+    pub fn can_cap(&self) -> bool {
+        match self {
+            Shape::Extrude { curve, .. } => matches!(curve, Curve::Circle | Curve::Polygon | Curve::Star),
+            Shape::Tube { curve, .. } => matches!(curve, Curve::Spiral | Curve::Helix | Curve::Wave),
+            _ => false,
+        }
+    }
+
+    /// Whether this curve shape is drawn with caps: Fill Caps on, where it
+    /// has ends to cap.
+    pub fn capped(&self) -> bool {
+        match self {
+            Shape::Extrude { caps, .. } | Shape::Tube { caps, .. } => *caps && self.can_cap(),
+            _ => false,
         }
     }
 }

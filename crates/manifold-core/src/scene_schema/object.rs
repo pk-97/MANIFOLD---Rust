@@ -247,6 +247,8 @@ fn write_shape(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String
     let (ItemFields::Object(o), FieldValue::Choice(key)) = (fields, value) else {
         return Err(wrong_value("shape", value));
     };
+    let curve = o.shape.curve().unwrap_or_default();
+    let caps = !matches!(o.shape, Shape::Extrude { caps: false, .. } | Shape::Tube { caps: false, .. });
     o.shape = match key.as_str() {
         "cube" => Shape::Cube,
         "sphere" => Shape::Sphere,
@@ -255,9 +257,9 @@ fn write_shape(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String
         "octahedron" => Shape::Octahedron,
         "icosahedron" => Shape::Icosahedron,
         "dodecahedron" => Shape::Dodecahedron,
-        "extrude" => Shape::Extrude { curve: o.shape.curve().unwrap_or_default() },
-        "revolve" => Shape::Revolve { curve: o.shape.curve().unwrap_or_default() },
-        "tube" => Shape::Tube { curve: o.shape.curve().unwrap_or_default() },
+        "extrude" => Shape::Extrude { curve, caps },
+        "revolve" => Shape::Revolve { curve },
+        "tube" => Shape::Tube { curve, caps },
         "mesh" if matches!(o.shape, Shape::Mesh { .. }) => o.shape.clone(),
         _ => return Err(wrong_value("shape", value)),
     };
@@ -275,7 +277,7 @@ fn part_of_import(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     inside.then_some("This part comes from its group's Model File; swap it there")
 }
 
-pub static OBJECT_FIELDS: [FieldRow; 7] = [
+pub static OBJECT_FIELDS: [FieldRow; 8] = [
     FieldRow {
         id: "shape",
         label: "Shape",
@@ -316,6 +318,7 @@ pub static OBJECT_FIELDS: [FieldRow; 7] = [
         },
     },
     super::curves::CURVE_FIELD,
+    super::curves::CAPS_FIELD,
     MATERIAL_BINDING,
     PHYSICS,
     COPIES,

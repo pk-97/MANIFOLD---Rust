@@ -14,8 +14,9 @@ use std::f32::consts::TAU;
 
 use manifold_core::scene_doc::{Curve, Item, Shape};
 use manifold_core::scene_schema::{
-    self, CURVE_AXIS, CURVE_MATH, CURVE_POLYGON, CURVE_RATIO, CURVE_T, CURVE_XY, SWEEP, TRIANGLES,
+    self, CURVE_AXIS, CURVE_MATH, CURVE_POLYGON, CURVE_RATIO, CURVE_T, CURVE_XY, SOLID, SWEEP, TRIANGLES,
 };
+use manifold_core::effect_graph_def::SerializedParamValue;
 
 use super::builder::{Builder, Rest};
 
@@ -38,10 +39,11 @@ const COS: f32 = 12.0;
 
 type Port = (u32, &'static str);
 
-/// What a curve shape draws: the sweep node, the triangles the draw reads,
-/// and the rest pose at the kind's defaults.
+/// What a curve shape draws: the solid physics and copies read (a node with
+/// a `source` output), the triangles the draw reads, and the rest pose at
+/// the kind's defaults.
 pub(crate) struct CurveMesh {
-    pub sweep: u32,
+    pub solid: u32,
     pub vertices: Port,
     pub rest: Option<Rest>,
 }
@@ -161,6 +163,9 @@ impl Emit<'_, '_> {
         let tri = self.b.add(&self.owner, TRIANGLES, "node.make_triangles");
         self.b.set_number(tri, "src_cols", cols as f32);
         self.b.set_number(tri, "src_rows", rows as f32);
+        // The sweep writes exact normals; finite differences flip where a
+        // tube is thicker than its tightest turn.
+        self.b.set_number(tri, "keep_normals", 1.0);
         self.b.wire(grid, "out", tri, "in");
         (tri, "out")
     }
@@ -169,17 +174,20 @@ impl Emit<'_, '_> {
 /// Emit `item`'s curve shape. `None` for any other shape.
 pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, shape: &Shape) -> Option<CurveMesh> {
     let curve = shape.curve()?;
+    let caps = shape.capped();
     let mut e = Emit { b, owner: item.id.as_str().to_owned() };
     let channels = e.curve(curve);
     // Extrude and Revolve take Helix's side view: around and up.
     let profile_y = channels.rise.unwrap_or(channels.y);
-    let (sweep, vertices) = match shape {
+    let (sweep, xy, cols, rows) = match shape {
         Shape::Extrude { .. } => {
             let xy = e.points(channels.x, profile_y);
             let sweep = e.b.add(&e.owner, SWEEP, "node.extrude_curve");
             e.b.set_number(sweep, "steps", EXTRUDE_STEPS as f32);
+            e.b.set_number(sweep, "symmetric", 1.0);
+            e.b.set_number(sweep, "caps", f32::from(u8::from(caps)));
             e.b.wire(xy, "out", sweep, "outline");
-            (sweep, e.triangles(sweep, SAMPLES, EXTRUDE_STEPS + 1))
+            (sweep, xy, SAMPLES, capped_rows(EXTRUDE_STEPS + 1, caps))
         }
         Shape::Revolve { .. } => {
             // Offset (a row) moves the curve off the axis it spins about.
@@ -191,33 +199,64 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, shape: &Shape) -> Option<Cu
             let sweep = e.b.add(&e.owner, SWEEP, "node.revolve_curve");
             e.b.set_number(sweep, "segments", REVOLVE_SEGMENTS as f32);
             e.b.wire(xy, "out", sweep, "profile");
-            (sweep, e.triangles(sweep, REVOLVE_SEGMENTS + 1, SAMPLES))
+            (sweep, xy, REVOLVE_SEGMENTS + 1, SAMPLES)
         }
         Shape::Tube { .. } => {
             let xy = e.points(channels.x, channels.y);
             let sweep = e.b.add(&e.owner, SWEEP, "node.tube_from_path");
             e.b.set_number(sweep, "sides", TUBE_SIDES as f32);
+            e.b.set_number(sweep, "caps", f32::from(u8::from(caps)));
             e.b.wire(xy, "out", sweep, "path");
             if let Some(rise) = channels.rise {
                 e.b.wire(rise.0, rise.1, sweep, "lift");
             }
-            (sweep, e.triangles(sweep, TUBE_SIDES + 1, SAMPLES))
+            (sweep, xy, TUBE_SIDES + 1, capped_rows(SAMPLES, caps))
         }
         _ => return None,
     };
-    let rest = rest(item, shape, curve);
-    Some(CurveMesh { sweep, vertices, rest })
+    let vertices = e.triangles(sweep, cols, rows);
+    // The solid physics and copies read: the same curve, swept on the CPU.
+    let solid = e.b.add(&e.owner, SOLID, "node.curve_solid_source");
+    e.b.wire(xy, "out", solid, "curve");
+    if let (Some(rise), Shape::Tube { .. }) = (channels.rise, shape) {
+        e.b.wire(rise.0, rise.1, solid, "lift");
+    }
+    let rest = rest(item, shape, curve, cols, rows);
+    Some(CurveMesh { solid, vertices, rest })
 }
 
-/// Bind the second axis of a curve's size to the row the first one has, once
-/// the item's rows are applied.
+/// `node.curve_solid_source`'s kind for a curve shape: Extrude 0, Revolve 1,
+/// Tube 2.
+fn solid_kind(shape: &Shape) -> Option<u32> {
+    match shape {
+        Shape::Extrude { .. } => Some(0),
+        Shape::Revolve { .. } => Some(1),
+        Shape::Tube { .. } => Some(2),
+        _ => None,
+    }
+}
+
+/// Grid rows with Fill Caps: a centre and a rim row at each end.
+fn capped_rows(rows: u32, caps: bool) -> u32 {
+    rows + if caps { 4 } else { 0 }
+}
+
+/// Once the item's rows are applied: bind the second axis of a curve's size
+/// to the row the first one has, and give the solid the sweep's params and
+/// rows, so a live row moves the physics shape with the drawn one.
 pub(crate) fn follow_rows(b: &mut Builder<'_>, item: &Item, shape: &Shape) {
+    let owner = item.id.as_str();
+    if let (Some(sweep), Some(solid)) = (b.id(owner, SWEEP), b.id(owner, SOLID)) {
+        b.mirror(sweep, solid);
+        if let Some(kind) = solid_kind(shape) {
+            b.set(solid, "kind", SerializedParamValue::Enum { value: kind });
+        }
+    }
     let pair = match shape.curve() {
         Some(Curve::Circle) => (2, 3),
         Some(Curve::Helix | Curve::Lissajous) => (4, 5),
         _ => return,
     };
-    let owner = item.id.as_str();
     if let (Some(from), Some(to)) = (b.id(owner, CURVE_MATH[pair.0]), b.id(owner, CURVE_MATH[pair.1])) {
         b.follow(from, "scale", to, "scale");
     }
@@ -225,7 +264,7 @@ pub(crate) fn follow_rows(b: &mut Builder<'_>, item: &Item, shape: &Shape) {
 
 /// The rest pose at the kind's defaults: the box the curve fills, swept.
 /// A row moved live changes the solid, not this box.
-fn rest(item: &Item, shape: &Shape, curve: Curve) -> Option<Rest> {
+fn rest(item: &Item, shape: &Shape, curve: Curve, cols: u32, rows: u32) -> Option<Rest> {
     let default = |property: &str| scene_schema::row_for(&item.fields, property).and_then(|row| row.default).unwrap_or(0.0);
     // The curve's half-extent across (x) and along (y), and Helix's rise.
     let (half_x, half_y, rise) = match curve {
@@ -236,21 +275,19 @@ fn rest(item: &Item, shape: &Shape, curve: Curve) -> Option<Rest> {
         Curve::Wave => (default("amplitude"), default("length") * 0.5, None),
     };
     let profile_half_y = rise.unwrap_or(half_y);
-    let (lo, hi, cols, rows) = match shape {
-        Shape::Extrude { .. } => (
-            [-half_x, -profile_half_y, 0.0],
-            [half_x, profile_half_y, default("depth")],
-            SAMPLES,
-            EXTRUDE_STEPS + 1,
-        ),
+    let (lo, hi) = match shape {
+        Shape::Extrude { .. } => {
+            let half_depth = default("depth") * 0.5;
+            ([-half_x, -profile_half_y, -half_depth], [half_x, profile_half_y, half_depth])
+        }
         Shape::Revolve { .. } => {
             let reach = default("offset").abs() + half_x;
-            ([-reach, -profile_half_y, -reach], [reach, profile_half_y, reach], REVOLVE_SEGMENTS + 1, SAMPLES)
+            ([-reach, -profile_half_y, -reach], [reach, profile_half_y, reach])
         }
         Shape::Tube { .. } => {
             let thick = default("thickness");
             let up = rise.unwrap_or(0.0) + thick;
-            ([-half_x - thick, -up, -half_y - thick], [half_x + thick, up, half_y + thick], TUBE_SIDES + 1, SAMPLES)
+            ([-half_x - thick, -up, -half_y - thick], [half_x + thick, up, half_y + thick])
         }
         _ => return None,
     };
