@@ -51,6 +51,7 @@ pub enum CardBand {
     Camera,
     Scene,
     Forces,
+    Modifiers,
     Lighting,
     Look,
 }
@@ -72,6 +73,8 @@ pub enum ControlGroup {
     Material,
     Look,
     Modifier,
+    /// A modifier's mask: the region it acts in, in its target's radius units.
+    Mask,
     /// The physics setting and its rows (titled Physics).
     Body,
     Copies,
@@ -122,6 +125,7 @@ impl ControlGroup {
             Self::Source => "Source",
             Self::Look => "Look",
             Self::Modifier => "Modifier",
+            Self::Mask => "Mask",
             Self::Force => "Force",
             Self::PhysicsWorld => "Physics",
             Self::Environment => "Environment",
@@ -143,6 +147,7 @@ impl CardBand {
             Self::Camera => "Camera",
             Self::Scene => "Scene",
             Self::Forces => "Forces",
+            Self::Modifiers => "Modifiers",
             Self::Lighting => "Lighting",
             Self::Look => "Look",
         }
@@ -238,6 +243,8 @@ pub enum Unit {
     PerSecond,
     /// A multiple of the copy's own size: a copy group's spacing.
     SizeMultiple,
+    /// A multiple of a modifier target's radius: a mask's centre and size.
+    Radius,
 }
 
 impl Unit {
@@ -255,11 +262,12 @@ impl Unit {
             Self::Beats => " beats",
             Self::PerSecond => " /s",
             Self::SizeMultiple => "× size",
+            Self::Radius => " × radius",
         }
     }
 }
 
-/// The ten kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer
+/// The eleven kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer
 /// plane is an Object; Copies is a section; an import is a Group whose Source
 /// is a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -274,11 +282,12 @@ pub enum ItemKind {
     WaterSource,
     Swarm,
     Force,
+    Modifier,
     World,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 10] = [
+    pub const ALL: [ItemKind; 11] = [
         ItemKind::Group,
         ItemKind::Object,
         ItemKind::Camera,
@@ -288,6 +297,7 @@ impl ItemKind {
         ItemKind::WaterSource,
         ItemKind::Swarm,
         ItemKind::Force,
+        ItemKind::Modifier,
         ItemKind::World,
     ];
 
@@ -303,6 +313,7 @@ impl ItemKind {
             ItemKind::WaterSource => "Water Source",
             ItemKind::Swarm => "Swarm",
             ItemKind::Force => "Force",
+            ItemKind::Modifier => "Modifier",
             ItemKind::World => "World",
         }
     }

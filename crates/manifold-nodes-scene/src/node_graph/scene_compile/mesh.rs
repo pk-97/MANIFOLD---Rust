@@ -13,7 +13,7 @@
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, ItemFields, ItemId, MeshPrimitives, SceneDoc, Shape};
 
-use super::builder::Builder;
+use super::builder::{Builder, Drawn, Rest};
 use super::group::Frame;
 use super::material::surface_for;
 use super::object::object_wires;
@@ -55,6 +55,8 @@ pub(crate) struct Part {
     /// Where the Transform starts: the part's own centre for a static part,
     /// so it turns about itself.
     pub center: Option<[f32; 3]>,
+    /// Its rest pose, for a static part.
+    pub rest: Option<Rest>,
 }
 
 /// Emit the part `item` draws: `file`'s node `node_path`, its `primitives`.
@@ -109,11 +111,22 @@ fn emit_part_in(
                 center = Some(part.center);
             }
         }
+        // A static part rests where the file puts it; a morphing one has no
+        // single rest pose for a modifier to measure.
+        let rest = part.filter(|_| morph.is_none()).map(|part| {
+            let half = part.half_extent;
+            let (lo, hi, offset) = if own_centre {
+                (half.map(|h| -h), half, part.center)
+            } else {
+                (std::array::from_fn(|axis| part.center[axis] - half[axis]), std::array::from_fn(|axis| part.center[axis] + half[axis]), [0.0; 3])
+            };
+            Rest { lo, hi, offset, vertices: part.vertex_count.max(vertex_count) }
+        });
         let vertices = match morph {
             Some(morph) => emit_morph(b, item, file, node_path, known, vertex_count, morph, (source, "vertices"), false),
             None => (source, "vertices"),
         };
-        return Part { source, vertices, center };
+        return Part { source, vertices, center, rest };
     };
     // A skinned or animated part: its vertices stay in the node's own space
     // and the pose places them.
@@ -147,7 +160,7 @@ fn emit_part_in(
         None => (source, "vertices"),
     };
     b.wire(deformed.0, deformed.1, skin, "in");
-    Part { source, vertices: (skin, "out"), center: None }
+    Part { source, vertices: (skin, "out"), center: None, rest: None }
 }
 
 /// Blend `base` with the part's morph targets; returns the blend's output.
@@ -262,6 +275,9 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
         };
         let drawn = emit_part_in(b, part, file, node_path, *vertex_count, *primitives, false);
         let object = b.add(part.id.as_str(), "object", "node.scene_object");
+        if let Some(rest) = drawn.rest {
+            b.drawn.push(Drawn { object, item: part.id.clone(), rest });
+        }
         let (surface, maps) = surface_for(b, &part.id);
         for w in object_wires(drawn.source, surface, transform, object) {
             if w.to_port == "vertices" {

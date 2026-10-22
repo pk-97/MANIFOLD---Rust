@@ -19,7 +19,6 @@ fn item(id: &str, kind: ItemKind, name: &str, depth: usize, parent: Option<&str>
         copy_view: false,
         aim_sun_file: None,
         row_reasons: Vec::new(),
-        modifiers: Vec::new(),
     }
 }
 

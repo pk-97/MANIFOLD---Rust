@@ -12,9 +12,10 @@
 //! decides which rows exist.
 //!
 //! The Ocean shape compiles to nothing yet (L16). Water and its sources
-//! splice the water family template (`water.rs`). Forces and mesh modifiers
-//! compile to scene modifier instances (`forces.rs`); Copies emit a copies
-//! body per item (`copies.rs`); physics emits a body per item (`physics.rs`).
+//! splice the water family template (`water.rs`). Forces (`forces.rs`) and
+//! Modifier cards (`modifiers.rs`, in chain order) compile to scene modifier
+//! instances; Copies emit a copies body per item (`copies.rs`); physics
+//! emits a body per item (`physics.rs`).
 
 mod builder;
 mod camera;
@@ -25,6 +26,7 @@ mod light;
 mod material;
 mod mesh;
 mod model_material;
+mod modifiers;
 mod object;
 mod physics;
 mod swarm;
@@ -52,6 +54,7 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     camera::finish_cut(&mut b);
     copies::join_world(&mut b);
     forces::emit_all(&mut b)?;
+    modifiers::emit_all(&mut b)?;
     b.finish()
 }
 

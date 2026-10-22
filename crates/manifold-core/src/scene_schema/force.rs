@@ -223,32 +223,26 @@ pub static FORCE_FIELDS: [FieldRow; 2] = [
         id: "targets",
         label: "Targets",
         section: ControlGroup::Force,
-        control: FieldControl::ItemSet { items: is_object_or_group, all: "Everything with physics" },
+        control: FieldControl::ItemSet { items: is_object_or_group, all: "Everything with physics", refused: |_, _| None },
         applies: always,
         disabled: enabled,
         read: |fields| match fields {
-            ItemFields::Force(f) => FieldValue::Items(match &f.targets {
-                ForceTargets::Physics => Vec::new(),
-                ForceTargets::Items(ids) => ids.clone(),
-            }),
-            _ => FieldValue::Items(Vec::new()),
+            ItemFields::Force(f) => match &f.targets {
+                ForceTargets::Physics => FieldValue::Everything,
+                ForceTargets::Items(ids) => FieldValue::Items(ids.clone()),
+            },
+            _ => FieldValue::Everything,
         },
         write: |fields, value| {
-            let (ItemFields::Force(f), FieldValue::Item(pick)) = (fields, value) else {
+            let ItemFields::Force(f) = fields else {
                 return Err(wrong_value("targets", value));
             };
-            f.targets = match (pick, std::mem::take(&mut f.targets)) {
-                (None, _) => ForceTargets::Physics,
-                (Some(id), ForceTargets::Physics) => ForceTargets::Items(vec![id.clone()]),
-                (Some(id), ForceTargets::Items(mut ids)) => {
-                    match ids.iter().position(|held| held == id) {
-                        Some(at) => {
-                            ids.remove(at);
-                        }
-                        None => ids.push(id.clone()),
-                    }
-                    if ids.is_empty() { ForceTargets::Physics } else { ForceTargets::Items(ids) }
-                }
+            f.targets = match value {
+                FieldValue::Everything => ForceTargets::Physics,
+                // Unchoosing the last item goes back to everything with physics.
+                FieldValue::Items(ids) if ids.is_empty() => ForceTargets::Physics,
+                FieldValue::Items(ids) => ForceTargets::Items(ids.clone()),
+                _ => return Err(wrong_value("targets", value)),
             };
             Ok(())
         },

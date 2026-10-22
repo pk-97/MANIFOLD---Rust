@@ -46,20 +46,8 @@ pub(super) fn selected_objects(
                     });
                 }
             }
-            // A static import has one authored object with several material
-            // draws. Its shared transform identifies the parts of that object.
-            let roots = selected.clone();
-            for target in &roots {
-                let transform = index.input(target, "parent_transform")?.or(index.input(target, "transform")?);
-                for part in &available {
-                    if transform.is_some()
-                        && index.input(part, "parent_transform")?.or(index.input(part, "transform")?).map(|w| (w.from_node, &w.from_port))
-                            == transform.map(|w| (w.from_node, &w.from_port))
-                    {
-                        selected.insert(part.clone());
-                    }
-                }
-            }
+            // The scene compiler names every part a card reaches, so the
+            // selection is exactly the named objects.
             selected.into_iter().collect()
         }
     };
@@ -142,7 +130,7 @@ pub fn resolve_modifier_mesh_frames(
     let mut result = Vec::with_capacity(targets.len());
     for target in targets {
         let (source, source_node) = source_route(&index, &target)?;
-        let fingerprint = source_fingerprint(owner, source_node)?;
+        let fingerprint = source_fingerprint(owner, &index, source_node)?;
         if let Some(frame) = saved.get(&target) {
             if frame.source != source || frame.source_definition_hash != fingerprint {
                 return Err(frame_error(
@@ -187,6 +175,43 @@ pub fn resolve_modifier_mesh_frames(
         }
     }
     Ok(result)
+}
+
+/// The frames of `instance` where its owner already knows each target's
+/// rest-pose placement: `offsets` gives every selected target's source
+/// offset, all in one frame of `radius` (the scene compiler measures both from
+/// the items it compiled). Only the source identity is read here, so a
+/// recipe reads every shape's frame the same way.
+pub fn capture_mesh_frames(
+    owner: &EffectGraphDef,
+    instance: &SceneModifierInstanceDef,
+    offsets: &[(NodeId, [f64; 3])],
+    radius: f64,
+) -> Result<Vec<SceneMeshReferenceFrame>, SceneModifierExpandError> {
+    let index = FlatSceneIndex::build(owner)?;
+    let targets = selected_objects(&index, instance)?;
+    if !needs_mesh_frame(instance) {
+        return Ok(Vec::new());
+    }
+    let mut frames = Vec::with_capacity(targets.len());
+    for target in targets {
+        let (source, source_node) = source_route(&index, &target)?;
+        let source_offset = offsets
+            .iter()
+            .find(|(placed, _)| *placed == target)
+            .map(|(_, offset)| *offset)
+            .ok_or_else(|| frame_error(&target, "the target has no rest-pose placement"))?;
+        let frame = SceneMeshReferenceFrame {
+            target,
+            source,
+            source_definition_hash: source_fingerprint(owner, &index, source_node)?,
+            source_offset,
+            scene_radius: radius,
+        };
+        validate_numbers(&frame)?;
+        frames.push(frame);
+    }
+    Ok(frames)
 }
 
 /// Validate a complete authored snapshot without capturing or changing frames.
@@ -234,7 +259,7 @@ pub(super) fn validate_saved_frames(
         radius = Some(frame.scene_radius);
         let (source, node) = source_route(index, &frame.target)?;
         if source != frame.source
-            || source_fingerprint(owner, node)? != frame.source_definition_hash
+            || source_fingerprint(owner, index, node)? != frame.source_definition_hash
         {
             return Err(frame_error(
                 &frame.target,
@@ -276,15 +301,47 @@ fn source_route<'a>(
         .get(&wire.from_node)
         .ok_or_else(|| frame_error(target, "vertices producer has no stable identity"))?;
     let node = index.node(source)?;
-    if node.type_id == "node.gltf_skinned_mesh_source"
-        || index.flat.wires.iter().any(|wire| wire.to_node == node.id)
-    {
+    let static_source = match detail_input(index, node) {
+        Some(upstream) => upstream.is_some_and(|upstream| is_static_source(index, upstream)),
+        None => is_static_source(index, node),
+    };
+    if !static_source {
         return Err(frame_error(
             target,
             "animated or transformed mesh-source chains require a separately qualified coordinate frame",
         ));
     }
     Ok((source.clone(), node))
+}
+
+/// A source with nothing wired in and no skin: its rest pose is its own.
+fn is_static_source(index: &FlatSceneIndex, node: &EffectGraphNode) -> bool {
+    node.type_id != "node.gltf_skinned_mesh_source"
+        && !index.flat.wires.iter().any(|wire| wire.to_node == node.id)
+}
+
+/// The type that only adds detail to a static source: it splits triangles
+/// without moving the surface, so its source's rest pose is still the frame.
+const MESH_DETAIL: &str = "node.subdivide_mesh";
+
+/// For a mesh-detail node, `Some` of the one node feeding it (`None` inside
+/// when it is fed by anything but one wire into `in`); `None` for any other
+/// node.
+fn detail_input<'a>(
+    index: &'a FlatSceneIndex,
+    node: &EffectGraphNode,
+) -> Option<Option<&'a EffectGraphNode>> {
+    if node.type_id != MESH_DETAIL {
+        return None;
+    }
+    let mut incoming = index.flat.wires.iter().filter(|wire| wire.to_node == node.id);
+    let upstream = match (incoming.next(), incoming.next()) {
+        (Some(wire), None) if wire.to_port == "in" => {
+            index.flat.nodes.iter().find(|upstream| upstream.id == wire.from_node)
+        }
+        _ => None,
+    };
+    Some(upstream)
 }
 
 fn scalar(
@@ -410,7 +467,20 @@ fn scene_radius(
 
 /// Hash source-defining data, excluding labels, document IDs, display
 /// provenance, capacity and downstream object placement. No asset I/O occurs.
+/// A mesh-detail node's fingerprint covers the source it details too.
 fn source_fingerprint(
+    owner: &EffectGraphDef,
+    index: &FlatSceneIndex,
+    node: &EffectGraphNode,
+) -> Result<String, SceneModifierExpandError> {
+    let own = node_fingerprint(owner, node)?;
+    match detail_input(index, node).flatten() {
+        Some(upstream) => Ok(format!("{own}+{}", node_fingerprint(owner, upstream)?)),
+        None => Ok(own),
+    }
+}
+
+fn node_fingerprint(
     owner: &EffectGraphDef,
     node: &EffectGraphNode,
 ) -> Result<String, SceneModifierExpandError> {

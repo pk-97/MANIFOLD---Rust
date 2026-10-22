@@ -10,7 +10,7 @@ use manifold_core::effects::{ParameterDriver, PresetInstance};
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::material_inspector::MaterialFeature;
-use manifold_core::scene_doc::{FeatureSetting, ItemFields, ItemId, ItemKind, MaterialFields, MaterialType, PhysicsSetting, SceneCompiler, SceneDoc, param_id};
+use manifold_core::scene_doc::{FeatureSetting, ItemFields, ItemId, ItemKind, MaterialFields, MaterialType, ModifierFields, ModifierTargets, ModifierType, PhysicsSetting, SceneCompiler, SceneDoc, param_id};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{LayerId, PresetTypeId};
 
@@ -140,6 +140,65 @@ fn every_scene_edit_undoes_exactly() {
         assert!(undo.execute(edit, &mut project), "{name} applies");
         let after = state(&project);
         assert_ne!(after, before, "{name} changes the scene");
+        assert!(undo.undo(&mut project));
+        assert_eq!(state(&project), before, "{name} undoes exactly");
+        assert!(undo.redo(&mut project));
+        assert_eq!(state(&project), after, "{name} redoes exactly");
+    }
+
+    // The Modifiers chain, from a scene with two cards: the first aimed at
+    // the cube, the second at the whole scene.
+    let carded = || {
+        let (mut project, layer) = self::project();
+        let doc = scene(&project).scene.clone().unwrap();
+        let peel = new_modifier(&doc, id("peel"), ModifierType::SurfacePeel, &[id(CUBE)]);
+        assert!(UndoRedoManager::new().execute(Box::new(add_modifier(&layer, &doc, peel)), &mut project));
+        let doc = scene(&project).scene.clone().unwrap();
+        let waves = new_modifier(&doc, id("waves"), ModifierType::SurfaceWaves, &[]);
+        assert!(UndoRedoManager::new().execute(Box::new(add_modifier(&layer, &doc, waves)), &mut project));
+        project
+    };
+    let card = |project: &Project, card: &str| match scene(project).scene.as_ref().unwrap().find(&id(card)).map(|item| &item.fields) {
+        Some(ItemFields::Modifier(fields)) => fields.clone(),
+        _ => panic!("{card} is a card"),
+    };
+    let chain = |project: &Project| -> Vec<String> {
+        let doc = scene(project).scene.as_ref().unwrap();
+        doc.items.iter().filter(|item| item.kind() == ItemKind::Modifier).map(|item| item.id.to_string()).collect()
+    };
+    let base = carded();
+    assert_eq!(chain(&base), ["peel", "waves"]);
+    assert_eq!(card(&base, "peel").targets, ModifierTargets::Items(vec![id(CUBE)]), "Add aims at the selection");
+    assert_eq!(card(&base, "waves").targets, ModifierTargets::Scene, "Add with nothing selected aims at the scene");
+    let doc = scene(&base).scene.clone().unwrap();
+    let off = ModifierFields { on: false, ..card(&base, "peel") };
+    let swapped = ModifierFields { modifier: ModifierType::OrderedRecon, ..card(&base, "peel") };
+    let third = new_modifier(&doc, id("echo"), ModifierType::SpatialEchoes, &[]);
+    let card_edits: Vec<(&str, Box<dyn Command>)> = vec![
+        ("add card", Box::new(add_modifier(&layer, &doc, third))),
+        ("reorder", Box::new(move_modifier(&layer, &doc, &id("waves"), 0).unwrap())),
+        ("toggle", Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id("peel"), ItemFields::Modifier(off)))),
+        ("swap", Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id("peel"), ItemFields::Modifier(swapped)))),
+        ("remove target", Box::new(RemoveSceneItemCommand::new(layer.clone(), id(CUBE)))),
+    ];
+    for (name, edit) in card_edits {
+        let mut project = carded();
+        let before = state(&project);
+        let mut undo = UndoRedoManager::new();
+        assert!(undo.execute(edit, &mut project), "{name} applies");
+        let after = state(&project);
+        assert_ne!(after, before, "{name} changes the scene");
+        match name {
+            "add card" => assert_eq!(chain(&project), ["peel", "waves", "echo"]),
+            "reorder" => assert_eq!(chain(&project), ["waves", "peel"]),
+            "swap" => {
+                let peel = card(&project, "peel");
+                assert_eq!(chain(&project), ["peel", "waves"], "a swap keeps the card's place");
+                assert!(peel.on && peel.targets == ModifierTargets::Items(vec![id(CUBE)]), "and its toggle and targets");
+            }
+            "remove target" => assert_eq!(card(&project, "peel").targets, ModifierTargets::Items(Vec::new())),
+            _ => {}
+        }
         assert!(undo.undo(&mut project));
         assert_eq!(state(&project), before, "{name} undoes exactly");
         assert!(undo.redo(&mut project));

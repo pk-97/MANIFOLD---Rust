@@ -136,6 +136,8 @@ pub fn scene_item_icon(kind: manifold_foundation::scene_surface::ItemKind, plane
         ItemKind::Water | ItemKind::WaterSource => Icon::SceneWater,
         ItemKind::Swarm => Icon::SceneSwarm,
         ItemKind::Force => Icon::SceneForce,
+        // A wave: a modifier bends what it targets.
+        ItemKind::Modifier => Icon::WaveSine,
         ItemKind::World => Icon::SceneWorld,
     }
 }

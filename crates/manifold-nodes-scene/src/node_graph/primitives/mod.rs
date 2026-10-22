@@ -26,6 +26,7 @@ mod edges_from_grid_uv;
 mod edges_from_mesh;
 mod edges_from_hypercube;
 mod facet_normals;
+mod subdivide_mesh;
 mod fold_mesh;
 manifold_core::testkit_visible! { mod generate_cube_mesh; }
 mod generate_grid_mesh;

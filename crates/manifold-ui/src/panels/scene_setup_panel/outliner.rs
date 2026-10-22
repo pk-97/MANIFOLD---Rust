@@ -1,7 +1,8 @@
 //! The Scene tab tree (SCENE_DOCUMENT_DESIGN.md section 8): the item
 //! hierarchy as it is in the document. World and the cameras are pinned at
 //! the top, then one Lighting row for every light, then every other item in
-//! its place with a kind icon, nested groups shown as a real tree. Each row
+//! its place with a kind icon, nested groups shown as a real tree, then the
+//! Forces and the Modifiers chain in their own sections. Each row
 //! is the item's kind icon, its name, and an eye where the item has Visible.
 
 use super::*;
@@ -118,11 +119,28 @@ impl ScenePanel {
             if item.kind == ItemKind::Group && item.has_children && collapsed.contains(&item.id) {
                 hidden_below = Some(item.depth);
             }
-            if pinned(item) || item.kind == ItemKind::Light {
+            if pinned(item) || matches!(item.kind, ItemKind::Light | ItemKind::Force | ItemKind::Modifier) {
                 continue;
             }
             let indent = item.depth as f32 * STEP_W;
             cy = self.build_item_row(tree, (inner_x, inner_w, indent), cy, vm, item, selected);
+        }
+        // Forces and Modifiers act on the scene, so they sit apart from it,
+        // each in its own section. Modifiers are listed in the order they
+        // apply; dragging a card reorders the chain.
+        for (title, kind) in [("Forces", ItemKind::Force), ("Modifiers", ItemKind::Modifier)] {
+            cy += ROW_GAP;
+            let header = tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, title, label_style());
+            tree.set_name(header, format!("scene_tree.section.{}", title.to_lowercase()));
+            cy += ROW_H;
+            for item in vm.items.iter().filter(|item| item.kind == kind) {
+                cy = self.build_item_row(tree, (inner_x, inner_w, 0.0), cy, vm, item, selected);
+                if kind == ItemKind::Modifier
+                    && let Some((row, _)) = self.outliner_row_ids.last()
+                {
+                    self.chain_rows.push((*row, item.id.clone()));
+                }
+            }
         }
         cy
     }

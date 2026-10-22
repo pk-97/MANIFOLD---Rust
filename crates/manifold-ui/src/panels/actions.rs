@@ -204,8 +204,9 @@ pub enum ProjectAction {
     ToggleMonitor,
     EnterPerformMode,
     /// An Add menu entry: add the entry's item to the layer's scene, under
-    /// `parent` when it is a group. One undo step.
-    SceneAdd { layer_id: LayerId, entry: String, parent: Option<ItemId> },
+    /// `parent` when it is a group. A Modifier aims at the `selected` Objects
+    /// and Groups, or the whole scene when there are none. One undo step.
+    SceneAdd { layer_id: LayerId, entry: String, parent: Option<ItemId>, selected: Vec<ItemId> },
     /// Remove an item and everything under it. One undo step.
     SceneRemove(LayerId, ItemId),
     /// Duplicate an item with everything under it. One undo step.
@@ -220,9 +221,9 @@ pub enum ProjectAction {
     /// Add a feature to a Material, or take it off again: one `Set` of its
     /// features with the feature's seed values, so one undo reverses it.
     SceneMaterialFeature { layer_id: LayerId, material: ItemId, feature: crate::param_surface::MaterialFeature, add: bool },
-    /// Remove an Object's mesh modifier `key` (`to` is `None`) or move it to
-    /// `to` in its list.
-    SceneModifierEdit { layer_id: LayerId, item: ItemId, key: String, to: Option<usize> },
+    /// Move the Modifier card `item` to place `to` in the chain, counted
+    /// without the card itself. One undo step.
+    SceneChainMove { layer_id: LayerId, item: ItemId, to: usize },
     /// Give an item a Material for it alone: a copy of the one it draws with
     /// (Make Unique), or a new one when it draws with none (New Material).
     SceneMakeMaterialUnique(LayerId, ItemId),

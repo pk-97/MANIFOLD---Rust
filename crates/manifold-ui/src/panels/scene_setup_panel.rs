@@ -314,9 +314,11 @@ pub struct ScenePanel {
     /// within the panel. UI-local, never serialized. Missing = expanded.
     section_folded: ahash::AHashMap<String, bool>,
     material_block: material_block::MaterialButtons,
-    /// Each modifier section's header buttons built this frame: (button,
-    /// object, modifier key, where it moves to; `None` removes it).
-    modifier_buttons: Vec<(NodeId, ItemId, String, Option<usize>)>,
+    /// The Modifiers chain rows built this frame, in chain order: (row,
+    /// card).
+    chain_rows: Vec<(NodeId, ItemId)>,
+    /// The Modifier card being dragged to a new place in the chain.
+    chain_drag: Option<ItemId>,
     panel_rect: Rect,
 }
 
@@ -358,7 +360,8 @@ impl Default for ScenePanel {
             scale_unlinked: ahash::AHashSet::new(),
             section_folded: ahash::AHashMap::new(),
             material_block: Default::default(),
-            modifier_buttons: Vec::new(),
+            chain_rows: Vec::new(),
+            chain_drag: None,
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         }
     }
@@ -538,7 +541,7 @@ impl ScenePanel {
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
         self.material_block.clear();
-        self.modifier_buttons.clear();
+        self.chain_rows.clear();
         // The properties card's old ids would otherwise register intents on
         // whatever now sits in those slots.
         self.properties_card.clear_nodes();
@@ -747,6 +750,7 @@ impl ScenePanel {
                 None => entry.top_level.then_some((entry, None)),
             })
             .collect();
+        let selected_items = self.selected_scene_items();
         let mut items: Vec<super::dropdown::DropdownItem> = Vec::with_capacity(entries.len());
         for (index, &(entry, ref parent)) in entries.iter().enumerate() {
             let mut item = super::dropdown::DropdownItem::new(&format!("{} \u{2014} {}", entry.group, entry.label));
@@ -757,6 +761,7 @@ impl ScenePanel {
                 layer_id: vm.layer_id.clone(),
                 entry: entry.key.clone(),
                 parent: parent.clone(),
+                selected: selected_items.clone(),
             }));
             item.separator_after = entries.get(index + 1).is_some_and(|(next, _)| next.group != entry.group);
             items.push(item);
@@ -838,7 +843,7 @@ impl ScenePanel {
                             button_node_id: *node_id,
                             items: self.add_menu_items(),
                         }));
-                    } else if let Some(act) = self.item_header_click(*node_id, vm).or_else(|| self.material_click(*node_id, vm)).or_else(|| self.modifier_click(*node_id, vm)) {
+                    } else if let Some(act) = self.item_header_click(*node_id, vm).or_else(|| self.material_click(*node_id, vm)) {
                         actions.push(act);
                     } else if let Some(row_role) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id)) {
                         let (row, role) = row_role;
@@ -885,7 +890,16 @@ impl ScenePanel {
                 }
                 (self.owns_node(*node_id) || self.point_in_panel(*pos), Vec::new())
             }
+            UIEvent::DragBegin { node_id: Some(node_id), .. } if self.chain_rows.iter().any(|(row, _)| row == node_id) => {
+                self.chain_drag = self.chain_rows.iter().find(|(row, _)| row == node_id).map(|(_, card)| card.clone());
+                (true, Vec::new())
+            }
             UIEvent::DragBegin { .. } => (self.properties_card.row_host.is_dragging(), Vec::new()),
+            UIEvent::Drag { .. } if self.chain_drag.is_some() => (true, Vec::new()),
+            UIEvent::DragEnd { pos, .. } if self.chain_drag.is_some() => {
+                let card = self.chain_drag.take().expect("a chain drag");
+                (true, self.chain_drop(tree, &card, pos.y).into_iter().collect())
+            }
             UIEvent::Drag { pos, modifiers, .. } => {
                 if let SceneSetupState::Live(vm) = &self.state {
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
@@ -906,6 +920,25 @@ impl ScenePanel {
             }
             _ => (false, Vec::new()),
         }
+    }
+
+    /// Where a Modifier card dropped at height `y` lands: its place among the
+    /// other cards, by the rows whose middle sits above the drop.
+    fn chain_drop(&self, tree: &UITree, card: &ItemId, y: f32) -> Option<PanelAction> {
+        let vm = self.state.as_live()?;
+        let from = self.chain_rows.iter().position(|(_, row_card)| row_card == card)?;
+        let to = self
+            .chain_rows
+            .iter()
+            .filter(|(_, row_card)| row_card != card)
+            .filter(|(row, _)| {
+                let bounds = tree.get_bounds(*row);
+                bounds.y + bounds.height * 0.5 < y
+            })
+            .count();
+        (to != from).then(|| {
+            PanelAction::Project(ProjectAction::SceneChainMove { layer_id: vm.layer_id.clone(), item: card.clone(), to })
+        })
     }
 
     /// A drag's actions after the colour swatch's RGB rewrite.
