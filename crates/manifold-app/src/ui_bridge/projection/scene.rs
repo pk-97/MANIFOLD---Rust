@@ -9,7 +9,7 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, SceneDoc, Shape, param_id, split_param_id};
 use manifold_core::scene_schema::{
-    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, break_unavailable, choice_disabled, impulse_unavailable,
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, break_unavailable, choice_disabled, impulse_unavailable, item_disabled,
 };
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
@@ -194,15 +194,16 @@ fn closed(choices: &[Choice], held: &FieldValue) -> Vec<FieldOptionVm> {
         .collect()
 }
 
-fn item_options(doc: &SceneDoc, item: &Item, passes: fn(&Item) -> bool, held: &FieldValue) -> Vec<FieldOptionVm> {
+fn item_options(doc: &SceneDoc, item: &Item, field: &str, passes: fn(&Item) -> bool, held: &FieldValue) -> Vec<FieldOptionVm> {
     let mut options = Vec::new();
     doc.walk(|other, _| {
         if other.id != item.id && passes(other) {
+            let checked = matches!(held, FieldValue::Item(Some(id)) if *id == other.id);
             options.push(FieldOptionVm {
                 label: other.name.clone(),
                 pick: FieldPick::Item(Some(other.id.clone())),
-                checked: matches!(held, FieldValue::Item(Some(id)) if *id == other.id),
-                disabled: None,
+                checked,
+                disabled: item_disabled(doc, item, field, other).filter(|_| !checked).map(str::to_owned),
             });
         }
     });
@@ -228,7 +229,7 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
         }
         FieldControl::ClosedOrItem { closed: choices, items } => {
             let mut options = closed(choices, &held);
-            options.extend(item_options(doc, item, items, &held));
+            options.extend(item_options(doc, item, row.id, items, &held));
             pick(options)
         }
         FieldControl::Item { items, none } => {
@@ -238,7 +239,7 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                 checked: matches!(held, FieldValue::Item(None)),
                 disabled: None,
             }];
-            options.extend(item_options(doc, item, items, &held));
+            options.extend(item_options(doc, item, row.id, items, &held));
             pick(options)
         }
         FieldControl::ItemSet { items, all, refused } => {

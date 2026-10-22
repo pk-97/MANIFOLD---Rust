@@ -153,7 +153,11 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             b.object_items.push(item.id.clone());
         }
         None => {
-            if let DrawAs::Item(prototype) = &fields.draw_as {
+            // One copy source draws an item: the first swarm in tree order
+            // keeps it (the Draw As picker refuses a second, with its reason).
+            if let DrawAs::Item(prototype) = &fields.draw_as
+                && !b.swarm_draws.contains_key(prototype)
+            {
                 // A Group or Object with Copies on keeps them: its whole
                 // layout rides every particle ([`nest_layout`] wires the
                 // layout in).

@@ -11,7 +11,7 @@ use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, is_object_or_group, wrong_value,
 };
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, follows, perform, row, setup};
-use crate::scene_doc::{DrawAs, EmitFrom, ItemFields};
+use crate::scene_doc::{DrawAs, EmitFrom, Item, ItemFields, ItemId, SceneDoc, Shape};
 
 /// Particles a swarm holds: the seed's capacity and Count's ceiling.
 pub const MAX_COUNT: f32 = 100_000.0;
@@ -228,3 +228,89 @@ pub static SWARM_FIELDS: [FieldRow; 3] = [
     },
     MATERIAL_BINDING,
 ];
+
+/// Why `swarm` cannot take `pick` as its field `field`'s item, or `None`.
+/// The picker draws the item disabled with the reason, and a pick of it is
+/// refused, so a swarm never sits on an item it cannot use.
+pub(super) fn pick_unavailable(doc: &SceneDoc, swarm: &Item, field: &str, pick: &Item) -> Option<&'static str> {
+    let ocean = matches!(&pick.fields, ItemFields::Object(object) if object.shape == Shape::Ocean);
+    match field {
+        "emit_from" if ocean => Some("An Ocean is endless: it has no surface to emit from"),
+        "draw_as" if ocean => Some("An Ocean is endless: it cannot be drawn at every particle"),
+        "draw_as" => draw_as_refused(doc, swarm, pick),
+        _ => None,
+    }
+}
+
+/// One copy source draws an item: another Swarm drawing it, or a Group
+/// above it whose Copies (or whose Swarm) draw it already, leaves nothing
+/// for this swarm to place.
+fn draw_as_refused(doc: &SceneDoc, swarm: &Item, pick: &Item) -> Option<&'static str> {
+    let drawn_by_other = |id: &ItemId| {
+        let mut drawn = false;
+        doc.walk(|other, _| {
+            if other.id != swarm.id
+                && let ItemFields::Swarm(fields) = &other.fields
+                && fields.draw_as == DrawAs::Item(id.clone())
+            {
+                drawn = true;
+            }
+        });
+        drawn
+    };
+    if drawn_by_other(&pick.id) {
+        return Some("Another Swarm draws this already");
+    }
+    let mut copied_above = false;
+    doc.walk(|other, ancestors| {
+        if other.id == pick.id {
+            copied_above = ancestors
+                .iter()
+                .any(|holder| matches!(&holder.fields, ItemFields::Group(group) if group.copies) || drawn_by_other(&holder.id));
+        }
+    });
+    copied_above.then_some("Inside a group whose copies draw it already")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{field_for, set_field};
+    use super::*;
+
+    /// A pick a swarm cannot use is refused with its reason, never held silently.
+    #[test]
+    fn a_swarm_refuses_picks_it_cannot_use() {
+        let mut doc = SceneDoc::base();
+        let swarm = |id: &str, draw: Option<&str>| {
+            let mut fields = ItemFields::default_for(crate::scene_doc::ItemKind::Swarm);
+            if let (ItemFields::Swarm(s), Some(draw)) = (&mut fields, draw) {
+                s.draw_as = DrawAs::Item(ItemId::new(draw));
+            }
+            Item::new(ItemId::new(id), id, fields)
+        };
+        let mut sea = ItemFields::default_for(crate::scene_doc::ItemKind::Object);
+        if let ItemFields::Object(object) = &mut sea {
+            object.shape = Shape::Ocean;
+        }
+        let mut copied = ItemFields::default_for(crate::scene_doc::ItemKind::Group);
+        if let ItemFields::Group(group) = &mut copied {
+            group.copies = true;
+        }
+        let end = doc.items.len();
+        doc.insert(None, end, Item::new(ItemId::new("sea"), "sea", sea)).unwrap();
+        doc.insert(None, end + 1, Item::new(ItemId::new("rack"), "rack", copied)).unwrap();
+        doc.insert(Some(&ItemId::new("rack")), 0, Item::new(ItemId::new("ball"), "ball", ItemFields::default_for(crate::scene_doc::ItemKind::Object))).unwrap();
+        doc.insert(None, end + 2, swarm("first", Some("rack"))).unwrap();
+        doc.insert(None, end + 3, swarm("second", None)).unwrap();
+        let second = doc.find(&ItemId::new("second")).unwrap().clone();
+        let pick = |field: &str, id: &str| {
+            let row = field_for(&second.fields, field).unwrap();
+            set_field(&doc, &second, row, &FieldValue::Item(Some(ItemId::new(id)))).err()
+        };
+        assert_eq!(pick("draw_as", "rack").as_deref(), Some("Another Swarm draws this already"));
+        assert_eq!(pick("draw_as", "ball").as_deref(), Some("Inside a group whose copies draw it already"));
+        assert!(pick("draw_as", "sea").is_some_and(|reason| reason.starts_with("An Ocean")));
+        assert!(pick("emit_from", "sea").is_some_and(|reason| reason.starts_with("An Ocean")));
+        assert_eq!(pick("emit_from", "rack"), None, "emitting from a drawn group is fine");
+    }
+}

@@ -38,7 +38,7 @@ mod world;
 pub use add_menu::{ADD_ENTRIES, AddEntry, add_entry, unique_name};
 pub use camera::{CAMERA_ROWS, FAR_CLIP, NEAR_CLIP};
 pub use fields::{
-    Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, field_rows, is_material,
+    Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, item_disabled, field_rows, is_material,
     is_object_or_group, set_field,
 };
 pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, SURFACE_ROLE, acts_on_copies, can_copy, copies_unavailable};
