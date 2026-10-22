@@ -282,17 +282,72 @@ pub fn modifier_rows(fields: &ItemFields) -> &'static [PropertyRow] {
     }
 }
 
-/// Why Shatter cannot break `target`: it breaks rigid bodies only. The
-/// Targets menu shows it after the item's name, so it does not name Shatter.
-pub fn shatter_refuses(target: &Item) -> Option<&'static str> {
+/// Whether a card aimed at `targets` reaches `item`, whose ancestors are
+/// `ancestors`: directly, through a Group target, or as the whole scene.
+fn reaches(targets: &ModifierTargets, item: &Item, ancestors: &[&Item]) -> bool {
+    match targets {
+        ModifierTargets::Scene => true,
+        ModifierTargets::Items(ids) => ids.contains(&item.id) || ancestors.iter().any(|above| ids.contains(&above.id)),
+    }
+}
+
+/// Why the Shatter card `shatter` cannot break `target`; these are the targets
+/// the compiler leaves whole (`shatterable` in `scene_compile/modifiers.rs`).
+/// The Targets menu shows it after the item's name, so it does not name
+/// Shatter.
+pub fn shatter_refuses(doc: &SceneDoc, shatter: &Item, target: &Item) -> Option<&'static str> {
+    // The parts reason below names this limit.
+    const _: () = assert!(manifold_foundation::mesh_partition::MAX_PIECES == 64);
     if target.fields.physics() != PhysicsSetting::Body {
         return Some("Not a Body: set its Physics to Body");
     }
     // Copies are a group of bodies the world lays out, not one body.
-    target.fields.copies().then_some("Copies on: each copy is a body of the copies, not one body to break")
+    if target.fields.copies() {
+        return Some("Copies on: each copy is a body of the copies, not one body to break");
+    }
+    let on = |item: &Item| card(&item.fields).is_some_and(|m| m.on);
+    let bending: Vec<&ModifierTargets> = doc
+        .items
+        .iter()
+        .filter(|item| on(item))
+        .filter_map(|item| card(&item.fields))
+        .filter(|m| modifier_type(m.modifier).deforms)
+        .map(|m| &m.targets)
+        .collect();
+    // Shatter cards before this one in the chain break their bodies first.
+    let earlier: Vec<&ModifierTargets> = doc
+        .items
+        .iter()
+        .take_while(|item| item.id != shatter.id)
+        .filter(|item| on(item))
+        .filter_map(|item| card(&item.fields))
+        .filter(|m| m.modifier == ModifierType::Shatter)
+        .map(|m| &m.targets)
+        .collect();
+    let (mut parts, mut bent, mut broken) = (0usize, false, false);
+    doc.walk(|item, ancestors| {
+        if item.id == target.id {
+            broken = earlier.iter().any(|targets| reaches(targets, item, ancestors));
+        }
+        let inside = item.id == target.id || ancestors.iter().any(|above| above.id == target.id);
+        if inside && item.kind() == crate::scene_doc::ItemKind::Object {
+            parts += 1;
+            bent |= bending.iter().any(|targets| reaches(targets, item, ancestors));
+        }
+    });
+    if broken {
+        Some("An earlier Shatter card already breaks this body")
+    } else if bent {
+        Some("A modifier card bends this body: Shatter breaks only an unbent shape")
+    } else if parts > 64 {
+        Some("More than 64 parts: a body breaks into at most 64 pieces")
+    } else {
+        None
+    }
 }
 
-/// Why a Shatter card's Break does nothing: no target is a Body.
+/// Why a Shatter card's Break does nothing: no target can break. Names the
+/// first Body target's reason, else that none is a Body.
 pub fn break_unavailable(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     let ItemFields::Modifier(card) = &item.fields else {
         return None;
@@ -300,15 +355,20 @@ pub fn break_unavailable(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     if card.modifier != ModifierType::Shatter {
         return None;
     }
-    let mut any_body = false;
+    let (mut any_body, mut reason) = (false, None);
     doc.walk(|other, ancestors| {
-        let aimed = match &card.targets {
-            ModifierTargets::Scene => true,
-            ModifierTargets::Items(ids) => ids.contains(&other.id) || ancestors.iter().any(|above| ids.contains(&above.id)),
-        };
-        any_body |= aimed && is_object_or_group(other) && shatter_refuses(other).is_none();
+        if !(reaches(&card.targets, other, ancestors) && is_object_or_group(other)) {
+            return;
+        }
+        match shatter_refuses(doc, item, other) {
+            None => any_body = true,
+            Some(why) if other.fields.physics() == PhysicsSetting::Body => {
+                reason.get_or_insert(why);
+            }
+            Some(_) => {}
+        }
     });
-    (!any_body).then_some("None of this card's targets is a Body: set a target's Physics to Body")
+    (!any_body).then(|| reason.unwrap_or("None of this card's targets is a Body: set a target's Physics to Body"))
 }
 
 /// The Type row's choices, one per entry of [`MODIFIER_TYPES`].
@@ -381,9 +441,9 @@ pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
 }
 
 /// A Modifier's target picks: Objects and Groups; never an Ocean; Shatter
-/// refuses a target that is not a Body.
-fn target_refused(card_fields: &ItemFields, target: &Item) -> Option<&'static str> {
-    modifier_refuses(target).or_else(|| is_shatter(card_fields).then(|| shatter_refuses(target)).flatten())
+/// refuses a target it cannot break.
+fn target_refused(doc: &SceneDoc, modifier: &Item, target: &Item) -> Option<&'static str> {
+    modifier_refuses(target).or_else(|| is_shatter(&modifier.fields).then(|| shatter_refuses(doc, modifier, target)).flatten())
 }
 
 pub static MODIFIER_FIELDS: [FieldRow; 6] = [

@@ -259,7 +259,7 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                         pick: FieldPick::Toggle(other.id.clone()),
                         checked,
                         // A held target stays pickable, so it can be taken off.
-                        disabled: refused(&item.fields, other).filter(|_| !checked).map(str::to_owned),
+                        disabled: refused(doc, item, other).filter(|_| !checked).map(str::to_owned),
                     });
                 }
             });
