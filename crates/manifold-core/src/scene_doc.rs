@@ -150,6 +150,8 @@ pub struct GroupFields {
     /// animated part below plays. Structural, so it is never mapped; Rate,
     /// Loop Mode and Retrigger are the live rows.
     pub clip: u32,
+    /// An import's clip names, in file order: what Clip picks from.
+    pub clip_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -16,7 +16,7 @@
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, PhysicsSetting};
-use manifold_core::scene_schema::COPIES_ROLE;
+use manifold_core::scene_schema::{BODY_ROLE, COPIES_ROLE, MAX_GROUP_PARTS};
 
 use super::builder::{Builder, SCENE};
 
@@ -33,6 +33,8 @@ fn add_body(b: &mut Builder<'_>, item: &Item, transform: u32, physics: PhysicsSe
     b.set(body, "enabled", SerializedParamValue::Bool { value: physics != PhysicsSetting::None });
     let motion = if physics == PhysicsSetting::Collider { FIXED } else { MOVING };
     b.set(body, "motion", SerializedParamValue::Enum { value: motion });
+    // The Physics section's rows (Mass, Bounce, Friction) set every copy.
+    b.adopt(owner, BODY_ROLE, body);
     b.copy_bodies.push(body);
     body
 }
@@ -54,11 +56,22 @@ pub(crate) fn emit_object(
     body
 }
 
-/// A Group's copies: the body takes the group's transform, a unit solid at
-/// the group's scale sizes one copy's spacing, and the group's draws read the
-/// body's instances in Group space.
+/// A Group's copies: the body takes the group's transform, every object
+/// inside is one part of its shape ([`add_part`]), so the group's bounds size
+/// one copy's spacing, and the group's draws read the body's instances in
+/// Group space.
 pub(crate) fn emit_group(b: &mut Builder<'_>, item: &Item, transform: u32, physics: PhysicsSetting) -> u32 {
     add_body(b, item, transform, physics)
+}
+
+/// One object inside a copied group: its mesh, placed by its transform inside
+/// one copy, is one part of the copies body's shape. A body takes at most
+/// [`MAX_GROUP_PARTS`]; the Copies switch says so before that.
+pub(crate) fn add_part(b: &mut Builder<'_>, body: u32, mesh: u32, transform: u32) {
+    let parts = b.copy_parts.entry(body).or_default();
+    if parts.len() < MAX_GROUP_PARTS {
+        parts.push((mesh, transform));
+    }
 }
 
 /// Make `object` draw `body`'s copies.
@@ -82,6 +95,12 @@ pub(crate) fn join_world(b: &mut Builder<'_>) {
         .and_then(|item| b.id(item.id.as_str(), "physics"))
         .or_else(|| b.id(SCENE, "physics"))
         .unwrap_or_else(|| b.add(SCENE, "physics", "node.physics_world"));
+    for (body, parts) in std::mem::take(&mut b.copy_parts) {
+        for (k, (mesh, transform)) in parts.into_iter().enumerate() {
+            b.wire(mesh, "source", body, &format!("mesh_{k}"));
+            b.wire(transform, "transform", body, &format!("part_{k}"));
+        }
+    }
     let bodies = std::mem::take(&mut b.copy_bodies);
     for (group, body) in bodies.iter().enumerate() {
         b.wire(*body, "body", world, &format!("copies_{group}"));

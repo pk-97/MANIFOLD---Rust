@@ -28,7 +28,15 @@ fn blast_field(def: &EffectGraphDef) -> FieldValue {
         .id
         .clone();
     let mut runtime = PresetRuntime::from_def_for_render(def.clone(), &registry(), Some(&manifest), false).unwrap();
-    runtime.execute_frame(time(0.0));
+    // The load-time pre-roll: bodies join the world once their collision
+    // shapes are built, so the world's first accepted frame follows them.
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("rubble collision shapes");
+    loop {
+        runtime.execute_frame(time(0.0));
+        if !wait.pending(&runtime) {
+            break;
+        }
+    }
     let mut sequence = 0;
     assert_eq!(runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence), Ok(ImpulseFire::Admitted));
     runtime.execute_frame(time(DT));

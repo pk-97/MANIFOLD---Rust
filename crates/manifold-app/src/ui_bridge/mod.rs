@@ -281,6 +281,14 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             // The blocking native picker, as every other file field uses; the
             // picked path is one `SceneFieldSet`.
             RootAction::SceneFieldFileClicked { layer_id, item, field, .. } => {
+                // A new Model File is a swap: the parts whose file node is
+                // still there keep their edits.
+                if field == "model_file" {
+                    ctx.ui.pending_keyboard_actions.push(manifold_ui::panels::PanelAction::Project(
+                        manifold_ui::panels::ProjectAction::SceneSetupSwapModelFile(layer_id.clone(), item.clone()),
+                    ));
+                    return DispatchResult::handled();
+                }
                 let picked = crate::file_dialogs::pick_file(crate::file_dialogs::DialogAction::NodeFile, ctx.dialogs, ctx.user_prefs);
                 match picked {
                     Some(path) => {

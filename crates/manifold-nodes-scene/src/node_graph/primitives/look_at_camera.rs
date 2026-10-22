@@ -18,7 +18,7 @@ use manifold_node_engine::primitive::Primitive;
 manifold_node_engine::primitive! {
     name: LookAtCamera,
     type_id: "node.look_at_camera",
-    purpose: "Look-at perspective camera source. Emits one Camera on `out` from a world-space position (pos_x/pos_y/pos_z) and a world-space target point (target_x/target_y/target_z) — fwd = normalize(target - pos), right/up orthonormalized against fixed world up (0,1,0). The third standard camera authoring mode alongside node.orbit_camera's target-orbit style and node.free_camera's Euler pos+angles. fov_y is radians (Angle param; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input.",
+    purpose: "Look-at perspective camera source. Emits one Camera on `out` from a world-space position (pos_x/pos_y/pos_z) and a world-space target point (target_x/target_y/target_z) — fwd = normalize(target - pos), right/up orthonormalized against fixed world up (0,1,0). The third standard camera authoring mode alongside node.orbit_camera's target-orbit style and node.free_camera's Euler pos+angles. fov_y is radians (Angle param; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input. An optional parent Transform places it inside a group: it moves and turns with the group.",
     inputs: {
         pos_x: ScalarF32 optional,
         pos_y: ScalarF32 optional,
@@ -27,6 +27,7 @@ manifold_node_engine::primitive! {
         target_y: ScalarF32 optional,
         target_z: ScalarF32 optional,
         fov_y: ScalarF32 optional,
+        parent: Transform optional,
     },
     outputs: {
         out: Camera,
@@ -140,6 +141,11 @@ impl Primitive for LookAtCamera {
             near,
             far,
         );
+        // Inside a group, the camera moves and turns with it.
+        let cam = match ctx.inputs.transform("parent") {
+            Some(parent) => cam.placed_in(&parent.world()),
+            None => cam,
+        };
         let pos = cam.pos;
         ctx.outputs.set_camera("out", cam);
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));

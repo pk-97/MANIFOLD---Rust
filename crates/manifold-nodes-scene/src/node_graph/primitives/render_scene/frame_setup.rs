@@ -244,7 +244,12 @@ impl RenderScene {
             } else {
                 t.rot_euler
             };
-            let local_model = model_matrix(t.pos, rot_euler, t.scale);
+            // In Group space the part's place inside one copy is its whole
+            // chain: the groups between it and the copied group.
+            let in_copy = object.instances_space == manifold_node_engine::scene::scene_object::InstanceSpace::Group
+                && object.instances.is_some();
+            let local_model =
+                if in_copy { t.world_with_rotation(rot_euler) } else { model_matrix(t.pos, rot_euler, t.scale) };
             let parent_model = object.parent_transform.map(|parent| {
                 let parent_rot = if parent.billboard {
                     parent.billboard_rot_euler(cam.pos)

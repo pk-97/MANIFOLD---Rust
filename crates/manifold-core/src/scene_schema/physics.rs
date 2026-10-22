@@ -98,6 +98,15 @@ pub fn physics_unavailable(doc: &SceneDoc, item: &ItemId) -> Option<&'static str
         ItemFields::Object(_) | ItemFields::Group(_) => {}
         _ => return Some("Only Objects and Groups have physics"),
     }
+    let mut inside_copies = false;
+    doc.walk(|other, ancestors| {
+        if &other.id == item {
+            inside_copies = ancestors.iter().any(|above| copies(&above.fields));
+        }
+    });
+    if inside_copies {
+        return Some("The group's Copies place this; set physics on the copied group");
+    }
     let parts = physics_parts(doc);
     let inside_body = matches!(
         parts.get(item),
@@ -204,4 +213,29 @@ fn classify(items: &[Item], within: &Within, local: Option<&ItemId>, parts: &mut
             _ => {}
         }
     }
+}
+
+/// Why no more bodies can join: the world already holds as many as it takes.
+pub fn world_full(doc: &SceneDoc) -> Option<&'static str> {
+    let bodies = physics_parts(doc)
+        .values()
+        .filter(|part| matches!(part, PhysicsPart::Solo(_) | PhysicsPart::Group(_)))
+        .count();
+    (bodies >= crate::scene_impulse::RigidImpulseTargets::BODY_CAPACITY)
+        .then_some("The physics world is full: it takes 256 bodies")
+}
+
+const _: () = assert!(crate::scene_impulse::RigidImpulseTargets::BODY_CAPACITY == 256, "the world-full reason names the capacity");
+
+/// The items whose bodies the world has no room for: every body past the
+/// first 256, in tree order, as the compiler joins them.
+pub fn bodies_past_capacity(doc: &SceneDoc) -> Vec<ItemId> {
+    let parts = physics_parts(doc);
+    let mut bodies = Vec::new();
+    doc.walk(|item, _| {
+        if matches!(parts.get(&item.id), Some(PhysicsPart::Solo(_) | PhysicsPart::Group(_))) {
+            bodies.push(item.id.clone());
+        }
+    });
+    bodies.split_off(bodies.len().min(crate::scene_impulse::RigidImpulseTargets::BODY_CAPACITY))
 }

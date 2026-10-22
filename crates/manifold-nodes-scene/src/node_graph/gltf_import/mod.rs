@@ -82,7 +82,10 @@ pub fn import_model(path: &Path) -> Result<ImportedModel, String> {
             ],
         })
         .collect();
-    let clips = document.animations().count() as u32;
+    let clips = document
+        .animations()
+        .map(|clip| clip.name().map_or_else(|| format!("Clip {}", clip.index() + 1), str::to_owned))
+        .collect();
     Ok(ImportedModel { name, roots, materials, lights, cameras, clips, bounds })
 }
 

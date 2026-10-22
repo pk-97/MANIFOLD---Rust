@@ -21,7 +21,8 @@ use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
 use manifold_core::project::Project;
 use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_nodes_scene::node_graph::scene_vm::{
-    CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupProblem, copies_anchors, copies_problems, problems_with_runtime,
+    BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupProblem, body_anchors, body_problems, copies_anchors, copies_problems,
+    problems_with_runtime,
 };
 use manifold_ui::param_surface::{ParamRow, ParamSurface};
 
@@ -42,6 +43,9 @@ pub(crate) struct SetupFitEntry {
     /// Coupled-world bodies the liquid could not take: the most seen while
     /// latched.
     pub uncoupled_bodies: u32,
+    /// Bodies and copy groups the world left out: (world input, reason), the
+    /// first reason seen for each input while latched.
+    pub refused: Vec<(String, Arc<str>)>,
 }
 
 /// Every such domain the cards warn about: the content thread's report,
@@ -59,6 +63,7 @@ pub(crate) type SetupFitReport = Arc<[SetupFitEntry]>;
 pub(crate) struct SetupFitObservations {
     domains: Vec<(NodeId, FluidDomainSnapshot)>,
     not_made: Vec<(NodeId, u32)>,
+    refused: Vec<(NodeId, String, Arc<str>)>,
     /// The latched entries; `report` is a copy taken when they change.
     scratch: Vec<SetupFitEntry>,
     latched_layers: Vec<LatchedLayer>,
@@ -69,7 +74,7 @@ pub(crate) struct SetupFitObservations {
 
 impl Default for SetupFitObservations {
     fn default() -> Self {
-        Self { domains: Vec::new(), not_made: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), edits: None, report: Arc::from([]) }
+        Self { domains: Vec::new(), not_made: Vec::new(), refused: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), edits: None, report: Arc::from([]) }
     }
 }
 
@@ -125,9 +130,11 @@ impl LatchedLayer {
     }
 }
 
-/// Hands each rendered layer's domain snapshots and its worlds' unmade
-/// copies to the callback, refilling the buffers it is given.
-pub(crate) type EachRenderedSetup<'a> = &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)]);
+/// Hands each rendered layer's domain snapshots, its worlds' unmade copies
+/// and the bodies they left out to the callback, refilling the buffers it is
+/// given.
+pub(crate) type EachRenderedSetup<'a> =
+    &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, String, Arc<str>)]);
 
 /// A card param's authored value, as `PresetInstance::get_base_param` reads
 /// it, from the param in hand rather than a lookup by id.
@@ -141,6 +148,8 @@ struct Seen<'a> {
     refusal: Option<&'a Arc<str>>,
     copies_not_made: u32,
     uncoupled_bodies: u32,
+    /// The world's refused bodies: (world, input, reason).
+    refused: &'a [(NodeId, String, Arc<str>)],
 }
 
 impl Seen<'_> {
@@ -172,6 +181,12 @@ impl Seen<'_> {
             entry.uncoupled_bodies = self.uncoupled_bodies;
             changed = true;
         }
+        for (_, input, reason) in self.refused {
+            if !entry.refused.iter().any(|(held, _)| held == input) {
+                entry.refused.push((input.clone(), reason.clone()));
+                changed = true;
+            }
+        }
         changed
     }
 }
@@ -184,7 +199,7 @@ impl SetupFitObservations {
         &mut self,
         project: Option<&Project>,
         stamps: PartStamps,
-        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<(NodeId, u32)>, EachRenderedSetup<'_>),
+        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<(NodeId, u32)>, &mut Vec<(NodeId, String, Arc<str>)>, EachRenderedSetup<'_>),
     ) {
         let find = |id: &LayerId| project.and_then(|p| p.timeline.find_layer_by_id(id)).map(|(_, layer)| layer);
         let edits = stamps.key(LATCH_PARTS);
@@ -195,11 +210,17 @@ impl SetupFitObservations {
         self.scratch.retain(|entry| latched_layers.iter().any(|latched| latched.layer == entry.layer));
         let mut changed = self.scratch.len() != before;
         let (scratch, latched_layers) = (&mut self.scratch, &mut self.latched_layers);
-        observe(&mut self.domains, &mut self.not_made, &mut |layer, domains, not_made| {
-            let domains = domains.iter().map(|(node, snapshot)| (node, Seen { fit: snapshot.fit, refusal: snapshot.refusal.as_ref(), copies_not_made: 0, uncoupled_bodies: snapshot.uncoupled_bodies }));
-            let worlds = not_made.iter().map(|(node, count)| (node, Seen { fit: SetupFit::default(), refusal: None, copies_not_made: *count, uncoupled_bodies: 0 }));
-            for (node, seen) in domains.chain(worlds) {
-                if seen.fit.is_clean() && seen.refusal.is_none() && seen.copies_not_made == 0 && seen.uncoupled_bodies == 0 {
+        observe(&mut self.domains, &mut self.not_made, &mut self.refused, &mut |layer, domains, not_made, refused| {
+            // A world's refusals arrive together.
+            let refused_by = |node: &NodeId| refused.chunk_by(|a, b| a.0 == b.0).find(|chunk| &chunk[0].0 == node).unwrap_or(&[]);
+            let domains = domains.iter().map(|(node, snapshot)| (node, Seen { fit: snapshot.fit, refusal: snapshot.refusal.as_ref(), copies_not_made: 0, uncoupled_bodies: snapshot.uncoupled_bodies, refused: &[] }));
+            let worlds = not_made.iter().map(|(node, count)| (node, Seen { fit: SetupFit::default(), refusal: None, copies_not_made: *count, uncoupled_bodies: 0, refused: refused_by(node) }));
+            let refusing = refused
+                .chunk_by(|a, b| a.0 == b.0)
+                .filter(|chunk| !not_made.iter().any(|(node, _)| *node == chunk[0].0))
+                .map(|chunk| (&chunk[0].0, Seen { fit: SetupFit::default(), refusal: None, copies_not_made: 0, uncoupled_bodies: 0, refused: chunk }));
+            for (node, seen) in domains.chain(worlds).chain(refusing) {
+                if seen.fit.is_clean() && seen.refusal.is_none() && seen.copies_not_made == 0 && seen.uncoupled_bodies == 0 && seen.refused.is_empty() {
                     continue;
                 }
                 if !latched_layers.iter().any(|latched| &latched.layer == layer) {
@@ -216,6 +237,7 @@ impl SetupFitObservations {
                             refusal: seen.refusal.cloned(),
                             copies_not_made: seen.copies_not_made,
                             uncoupled_bodies: seen.uncoupled_bodies,
+                            refused: seen.refused.iter().map(|(_, input, reason)| (input.clone(), reason.clone())).collect(),
                         });
                         changed = true;
                     }
@@ -250,6 +272,27 @@ pub(crate) fn problems_of<'a>(def: &EffectGraphDef, runtime: impl IntoIterator<I
     let mut out = Vec::new();
     copies_problems(&copies_anchors(def), runtime, &mut out);
     out
+}
+
+/// The first body `now` reports refused that `before` did not, as the toast
+/// says it.
+pub(crate) fn new_refusal(before: &[SetupFitEntry], now: &[SetupFitEntry]) -> Option<String> {
+    now.iter().find_map(|entry| {
+        let held = before.iter().find(|old| old.layer == entry.layer && old.node == entry.node);
+        entry
+            .refused
+            .iter()
+            .find(|(input, _)| held.is_none_or(|old| !old.refused.iter().any(|(seen, _)| seen == input)))
+            .map(|(_, reason)| format!("Physics: a body is out of the world: {reason}"))
+    })
+}
+
+/// `layer`'s refused bodies in the report: (world, world input, reason).
+pub(crate) fn refused_bodies<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId) -> impl Iterator<Item = (&'a NodeId, &'a str, &'a str)> + 'a {
+    report
+        .iter()
+        .filter(move |entry| &entry.layer == layer)
+        .flat_map(|entry| entry.refused.iter().map(move |(input, reason)| (&entry.node, input.as_str(), &**reason)))
 }
 
 /// `f` over a generator layer's graph, its own else the catalog's.
@@ -289,7 +332,11 @@ fn card_binding_id(def: &EffectGraphDef, addr: &ParamAddr) -> Option<String> {
 
 /// Mark a generator layer's card with its problems.
 pub(crate) fn mark_layer_card(card: &mut ParamSurface, layer: &Layer, report: &[SetupFitEntry]) {
-    with_layer_def(layer, |def| mark_rows(&mut card.rows, &problems_of(def, runtime_fits(report, &layer.layer_id)), def));
+    with_layer_def(layer, |def| {
+        let mut problems = problems_of(def, runtime_fits(report, &layer.layer_id));
+        body_problems(&body_anchors(def), refused_bodies(report, &layer.layer_id), &mut problems);
+        mark_rows(&mut card.rows, &problems, def);
+    });
 }
 
 /// Put each problem's warning on the first exposed row that edits one of its
@@ -323,6 +370,8 @@ struct SlotCheck {
     graph: u64,
     /// The Physics Worlds that copy bodies, read once per graph.
     copies: Vec<CopiesAnchor>,
+    /// The Physics Worlds' wired bodies, read once per graph.
+    bodies: Vec<BodyAnchor>,
     report: Option<SetupFitReport>,
     problems: Vec<SetupProblem>,
     /// What the card shows of the problems; 0 when none.
@@ -350,6 +399,7 @@ impl SlotCheck {
         let Some(layer) = layer.and_then(|id| project.timeline.find_layer_by_id(id)).map(|(_, layer)| layer).filter(|layer| layer.gen_params().is_some()) else {
             if self.layer.take().is_some() || self.hash != 0 {
                 self.copies.clear();
+                self.bodies.clear();
                 self.report = None;
                 self.problems.clear();
                 self.hash = 0;
@@ -362,6 +412,7 @@ impl SlotCheck {
         if !same_layer || graph != self.graph {
             self.layer = Some(layer.layer_id.clone());
             self.copies = with_layer_def(layer, copies_anchors).unwrap_or_default();
+            self.bodies = with_layer_def(layer, body_anchors).unwrap_or_default();
             self.graph = graph;
             moved = true;
         }
@@ -371,6 +422,7 @@ impl SlotCheck {
         self.report = Some(report.clone());
         self.problems.clear();
         copies_problems(&self.copies, runtime_fits(report, &layer.layer_id), &mut self.problems);
+        body_problems(&self.bodies, refused_bodies(report, &layer.layer_id), &mut self.problems);
         let mut hasher = DefaultHasher::new();
         for problem in &self.problems {
             problem.hash_card(&mut hasher);

@@ -221,6 +221,9 @@ pub enum ProjectAction {
     /// Add a feature to a Material, or take it off again: one `Set` of its
     /// features with the feature's seed values, so one undo reverses it.
     SceneMaterialFeature { layer_id: LayerId, material: ItemId, feature: crate::param_surface::MaterialFeature, add: bool },
+    /// Remove an Object's mesh modifier `key` (`to` is `None`) or move it to
+    /// `to` in its list.
+    SceneModifierEdit { layer_id: LayerId, item: ItemId, key: String, to: Option<usize> },
     /// Give an item a copy of the Material it draws with, for it alone.
     SceneMakeMaterialUnique(LayerId, ItemId),
     /// "Aim Sun at HDRI": turn the scene's Sun toward the brightest region of

@@ -18,7 +18,7 @@ use manifold_node_engine::primitive::Primitive;
 manifold_node_engine::primitive! {
     name: FreeCamera,
     type_id: "node.free_camera",
-    purpose: "Free-look perspective camera source. Emits one Camera on `out` from world-space position (pos_x/pos_y/pos_z) and Euler angles (yaw about world up Y, pitch about the camera's right axis, roll about fwd) — the gizmo- and import-friendly authoring mode, as opposed to node.orbit_camera's target-orbit style. At yaw=pitch=roll=0 the camera looks down -Z (right-handed convention). yaw/pitch/roll/fov_y are radians (Angle params; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input.",
+    purpose: "Free-look perspective camera source. Emits one Camera on `out` from world-space position (pos_x/pos_y/pos_z) and Euler angles (yaw about world up Y, pitch about the camera's right axis, roll about fwd) — the gizmo- and import-friendly authoring mode, as opposed to node.orbit_camera's target-orbit style. At yaw=pitch=roll=0 the camera looks down -Z (right-handed convention). yaw/pitch/roll/fov_y are radians (Angle params; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input. An optional parent Transform places it inside a group: it moves and turns with the group.",
     inputs: {
         pos_x: ScalarF32 optional,
         pos_y: ScalarF32 optional,
@@ -27,6 +27,7 @@ manifold_node_engine::primitive! {
         pitch: ScalarF32 optional,
         roll: ScalarF32 optional,
         fov_y: ScalarF32 optional,
+        parent: Transform optional,
     },
     outputs: {
         out: Camera,
@@ -137,6 +138,11 @@ impl Primitive for FreeCamera {
         let far = ctx.param_f32("far", 200.0);
 
         let cam = Camera::from_pos_euler([pos_x, pos_y, pos_z], yaw, pitch, roll, fov_y, near, far);
+        // Inside a group, the camera moves and turns with it.
+        let cam = match ctx.inputs.transform("parent") {
+            Some(parent) => cam.placed_in(&parent.world()),
+            None => cam,
+        };
         let pos = cam.pos;
         ctx.outputs.set_camera("out", cam);
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));

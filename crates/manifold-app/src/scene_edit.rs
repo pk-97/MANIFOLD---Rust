@@ -13,6 +13,8 @@ use manifold_editing::commands::effects::ChangeGraphParamCommand;
 use manifold_editing::commands::scene_doc::{
     AddSceneItemCommand, RemoveSceneItemCommand, RenameSceneItemCommand, ReparentSceneItemCommand, SetSceneItemFieldsCommand,
     group_commands,
+    move_modifier,
+    remove_modifier,
     ungroup_commands,
 };
 use manifold_core::scene_surface::FieldPick;
@@ -389,4 +391,15 @@ pub(crate) fn nudge(project: &Project, layer: &LayerId, item: &ItemId, delta: i3
 pub(crate) struct SceneItemClipboard {
     pub layer: LayerId,
     pub items: Vec<ItemId>,
+}
+
+/// Remove an Object's modifier `key` (`to` is `None`) or move it to `to` in
+/// its list: one undo step either way.
+pub(crate) fn modifier_edit(project: &Project, layer: &LayerId, object: &ItemId, key: &str, to: Option<usize>) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    let (command, description) = match to {
+        None => (remove_modifier(layer, doc, object, key)?, "Remove Modifier"),
+        Some(index) => (move_modifier(layer, doc, object, key, index)?, "Move Modifier"),
+    };
+    Ok(batch(vec![Box::new(command)], description, Some(object.clone())))
 }

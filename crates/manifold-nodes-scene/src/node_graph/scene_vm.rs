@@ -11,8 +11,8 @@ use manifold_foundation::ItemId;
 
 mod setup_check;
 pub use setup_check::{
-    CopiesAnchor, RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, copies_anchors, copies_problems,
-    problems_with_runtime,
+    BodyAnchor, CopiesAnchor, RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, body_anchors,
+    body_problems, copies_anchors, copies_problems, problems_with_runtime,
 };
 mod shapes;
 pub use shapes::{FluidRole, SceneShapeVm, ShapeOwner, ShapeParamVm, ShapeWrite};

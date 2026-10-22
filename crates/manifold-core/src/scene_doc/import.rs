@@ -77,8 +77,8 @@ pub struct ImportedModel {
     pub materials: Vec<ImportedMaterial>,
     pub lights: Vec<ImportedLight>,
     pub cameras: Vec<ImportedCamera>,
-    /// How many animation clips the file carries.
-    pub clips: u32,
+    /// The file's animation clips by name, in file order.
+    pub clips: Vec<String>,
     /// The world-space box around every mesh, when the file has geometry.
     pub bounds: Option<([f32; 3], [f32; 3])>,
 }
@@ -137,7 +137,7 @@ impl ImportedModel {
             let materials = self.materials.iter().filter(|m| only.material.as_ref() == Some(&m.key));
             return std::iter::once(object).chain(materials.map(|m| material_item(&id, m, file))).collect();
         }
-        let fields = ItemFields::Group(GroupFields { source: Some(file.to_owned()), ..GroupFields::default() });
+        let fields = ItemFields::Group(GroupFields { source: Some(file.to_owned()), clip_names: self.clips.clone(), ..GroupFields::default() });
         let mut group = Item::new(id.clone(), self.name.clone(), fields);
         group.children = self.group_children().iter().map(|node| node_item(&id, node, file)).collect();
         group.children.extend(self.materials.iter().map(|m| material_item(&id, m, file)));
@@ -166,7 +166,7 @@ impl ImportedModel {
     /// Whether the model is one Object rather than a Group: one mesh part,
     /// and no lights, cameras or animation clips to hold beside it.
     pub fn is_single_mesh(&self) -> bool {
-        self.mesh_nodes().len() == 1 && self.lights.is_empty() && self.cameras.is_empty() && self.clips == 0
+        self.mesh_nodes().len() == 1 && self.lights.is_empty() && self.cameras.is_empty() && self.clips.is_empty()
     }
 
     /// The one mesh part of a model that has exactly one.

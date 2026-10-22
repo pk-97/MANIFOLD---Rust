@@ -618,7 +618,9 @@ class ScopeTests(unittest.TestCase):
         result = g.plan_for_paths(["crates/manifold-nodes-scene/src/node_graph/scene_vm.rs"], repo)
         runs = {(run['package'], run['target']): run for run in result.runs()}
         for harness in (('manifold-nodes', 'gpu_proofs'), ('manifold-nodes-scene', 'gpu_proofs')):
-            self.assertTrue(set(g.SMOKE_FILTERS) <= set(runs[harness]['filters']), harness)
+            filters = runs[harness]['filters']
+            # No filters is the whole harness, smoke included.
+            self.assertTrue(not filters or set(g.SMOKE_FILTERS) <= set(filters), harness)
 
     def test_manifest_and_lockfile_edits_keep_smoke_and_report_whole_packages(self):
         # BUG-bkfv2 evidence (BUG-xrdq2 dependency trim): describe() named only

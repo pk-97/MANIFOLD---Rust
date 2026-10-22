@@ -154,6 +154,9 @@ pub fn sync_inspector_data(
                     driver_timing,
                 );
                 attach_project_sources(std::slice::from_mut(&mut surface), project);
+                // Setup warnings (a refused body, unmade copies) sit on the
+                // item's rows, as on the generator card.
+                crate::setup_check::mark_layer_card(&mut surface, layer, &ui.setup_fits);
                 surface
             }),
             _ => None,

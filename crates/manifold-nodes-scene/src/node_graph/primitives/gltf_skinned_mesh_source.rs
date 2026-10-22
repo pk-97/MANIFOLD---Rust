@@ -21,6 +21,9 @@
 
 use std::borrow::Cow;
 use std::sync::mpsc;
+use std::sync::Arc;
+use manifold_node_engine::scene::mesh_selection::MeshSelection;
+use manifold_node_engine::scene::mesh_source::MeshSource;
 
 use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -43,12 +46,13 @@ fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) ->
 manifold_node_engine::primitive! {
     name: GltfSkinnedMeshSource,
     type_id: "node.gltf_skinned_mesh_source",
-    purpose: "Read a glTF/.glb file's sole skinned mesh-owning node contributing `material_index` and emit its LOCAL-space (bind-pose) geometry as Array(MeshVertex), plus coincident per-vertex JOINTS_0 (as f32 indices) and WEIGHTS_0 arrays. NO node transform is applied (glTF skinning ignores the mesh node's own transform) — wire `vertices`/`joints`/`weights` into node.skin_mesh along with a node.gltf_skeleton_pose's joint-matrix palette to deform the mesh per frame.",
+    purpose: "Read a glTF/.glb file's sole skinned mesh-owning node contributing `material_index` and emit its LOCAL-space (bind-pose) geometry as Array(MeshVertex), plus coincident per-vertex JOINTS_0 (as f32 indices) and WEIGHTS_0 arrays. NO node transform is applied (glTF skinning ignores the mesh node's own transform) — wire `vertices`/`joints`/`weights` into node.skin_mesh along with a node.gltf_skeleton_pose's joint-matrix palette to deform the mesh per frame. `source` describes the same node's mesh as the model file places it at rest, for a rigid body's collision shape.",
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
         joints: Array(Vec4Vertex),
         weights: Array(Vec4Vertex),
+        source: MeshSource,
     },
     params: [
         ParamDef {
@@ -228,6 +232,28 @@ impl Primitive for GltfSkinnedMeshSource {
                     log::error!("node.gltf_skinned_mesh_source: background load channel disconnected");
                 }
             }
+        }
+
+        // The rest shape a body collides with: the node's mesh, loaded by
+        // the body when it asks.
+        if !self.cached_verts.is_empty() {
+            ctx.outputs.set_mesh_source(
+                "source",
+                MeshSource::Gltf {
+                    path: Arc::from(self.last_key.0.as_str()),
+                    node_path: (!self.last_key.3.is_empty()).then(|| Arc::from(self.last_key.3.as_str())),
+                    selection: MeshSelection {
+                        mesh: -1,
+                        primitive: -1,
+                        material: self.last_key.1,
+                        fit: false,
+                        recenter: false,
+                        translate: [0.0; 3],
+                        fragment_count: 1,
+                        fragment_index: 0,
+                    },
+                },
+            );
         }
 
         let Some(dst_verts) = ctx.outputs.array("vertices") else {

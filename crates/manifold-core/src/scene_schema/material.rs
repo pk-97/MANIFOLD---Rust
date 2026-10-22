@@ -12,7 +12,7 @@
 
 use manifold_foundation::scene_surface::ControlGroup;
 
-use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, wrong_value};
+use super::fields::{Choice, FieldControl, FieldRow, FieldValue, enabled, wrong_value};
 use super::{Exposure, PropertyRow, Reach, row};
 use crate::scene_doc::{ItemFields, TextureSource};
 
@@ -128,40 +128,67 @@ pub static MATERIAL_ROWS: [PropertyRow; 8 + 7 * MODEL_MAP_ROLES.len()] = materia
 
 const TEXTURE_SOURCES: &[Choice] = &[Choice { key: "none", label: "None" }, Choice { key: "file", label: "File" }];
 
+/// A model file's material keeps its file's maps until another source is
+/// picked.
+const MODEL_TEXTURE_SOURCES: &[Choice] =
+    &[Choice { key: "model", label: "From Model File" }, Choice { key: "none", label: "None" }, Choice { key: "file", label: "File" }];
+
+fn not_model(fields: &ItemFields) -> bool {
+    !model(fields)
+}
+
+fn read_texture(fields: &ItemFields) -> FieldValue {
+    match fields {
+        ItemFields::Material(m) => match &m.texture {
+            TextureSource::None => FieldValue::Choice("none".to_owned()),
+            TextureSource::File { .. } => FieldValue::Choice("file".to_owned()),
+            TextureSource::Layer { layer } => FieldValue::Layer(layer.clone()),
+            TextureSource::Model { .. } => FieldValue::Choice("model".to_owned()),
+        },
+        _ => FieldValue::Choice("none".to_owned()),
+    }
+}
+
+fn write_texture(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String> {
+    let ItemFields::Material(m) = fields else {
+        return Err(wrong_value("texture", value));
+    };
+    m.texture = match value {
+        FieldValue::Choice(key) if key == "none" => TextureSource::None,
+        FieldValue::Choice(key) if key == "file" => match &m.texture {
+            TextureSource::File { .. } => m.texture.clone(),
+            _ => TextureSource::File { path: String::new() },
+        },
+        // The model's maps can be kept, never picked back once replaced.
+        FieldValue::Choice(key) if key == "model" && matches!(m.texture, TextureSource::Model { .. }) => m.texture.clone(),
+        FieldValue::Layer(layer) => TextureSource::Layer { layer: layer.clone() },
+        other => return Err(wrong_value("texture", other)),
+    };
+    Ok(())
+}
+
 /// The texture source is a field; the features are set by the feature menu
 /// (one `Set` with the feature's defaults, so one undo removes it).
-pub static MATERIAL_FIELDS: [FieldRow; 2] = [
+pub static MATERIAL_FIELDS: [FieldRow; 3] = [
     FieldRow {
         id: "texture",
         label: "Texture",
         section: Material,
         control: FieldControl::ClosedOrLayer(TEXTURE_SOURCES),
-        applies: always,
+        applies: not_model,
         disabled: enabled,
-        read: |fields| match fields {
-            ItemFields::Material(m) => match &m.texture {
-                TextureSource::None => FieldValue::Choice("none".to_owned()),
-                TextureSource::File { .. } => FieldValue::Choice("file".to_owned()),
-                TextureSource::Layer { layer } => FieldValue::Layer(layer.clone()),
-                TextureSource::Model { .. } => FieldValue::Choice("model".to_owned()),
-            },
-            _ => FieldValue::Choice("none".to_owned()),
-        },
-        write: |fields, value| {
-            let ItemFields::Material(m) = fields else {
-                return Err(wrong_value("texture", value));
-            };
-            m.texture = match value {
-                FieldValue::Choice(key) if key == "none" => TextureSource::None,
-                FieldValue::Choice(key) if key == "file" => match &m.texture {
-                    TextureSource::File { .. } => m.texture.clone(),
-                    _ => TextureSource::File { path: String::new() },
-                },
-                FieldValue::Layer(layer) => TextureSource::Layer { layer: layer.clone() },
-                other => return Err(wrong_value("texture", other)),
-            };
-            Ok(())
-        },
+        read: read_texture,
+        write: write_texture,
+    },
+    FieldRow {
+        id: "texture",
+        label: "Texture",
+        section: Material,
+        control: FieldControl::ClosedOrLayer(MODEL_TEXTURE_SOURCES),
+        applies: model,
+        disabled: enabled,
+        read: read_texture,
+        write: write_texture,
     },
     FieldRow {
         id: "texture_file",

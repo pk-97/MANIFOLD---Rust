@@ -910,5 +910,3 @@ mod routing_tests {
 #[cfg(test)]
 pub(crate) mod tests;
 
-#[cfg(test)]
-mod clip_tests;

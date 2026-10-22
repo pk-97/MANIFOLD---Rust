@@ -231,12 +231,19 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
     for (source, port) in maps {
         b.wire(source, "out", object, port);
     }
-    if let Some(parent) = frame.transform {
-        b.wire(parent, "transform", object, "parent_transform");
-    }
     b.wire(frame.visible, "out", object, "parent_visible");
     if let Some(body) = frame.copies {
+        // Inside one copy, as an Object under copies is.
+        if let Some(parent) = frame.transform {
+            b.wire(parent, "transform", transform, "parent");
+        }
+        super::copies::add_part(b, body, mesh, transform);
         super::copies::draw_instances(b, body, object, true);
+    } else {
+        if let Some(parent) = frame.transform {
+            b.wire(parent, "transform", object, "parent_transform");
+        }
+        super::physics::combined(b, group, mesh, transform);
     }
     b.objects.push(object);
     b.object_items.push(group.id.clone());

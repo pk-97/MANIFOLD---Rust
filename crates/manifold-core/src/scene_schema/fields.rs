@@ -36,6 +36,9 @@ pub enum FieldControl {
     ClosedOrLayer(&'static [Choice]),
     /// A file picker.
     File { extensions: &'static [&'static str] },
+    /// One of a list the item itself holds (an import's clips): the key is
+    /// the position, the label the name.
+    Listed { names: fn(&ItemFields) -> &[String] },
 }
 
 /// What a field holds, or what a pick sets it to.
@@ -187,6 +190,25 @@ fn physics_blocked(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     None
 }
 
+/// The Physics row: refused inside a Body, and while the item has none, when
+/// it cannot take a body or the world is full. None always stays pickable
+/// once a setting is on.
+fn physics_disabled(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
+    physics_blocked(doc, item).or_else(|| {
+        (item.fields.physics() == crate::scene_doc::PhysicsSetting::None)
+            .then(|| super::physics_unavailable(doc, &item.id).or_else(|| super::physics::world_full(doc)))
+            .flatten()
+    })
+}
+
+/// The Copies switch: refused while off when the item cannot take copies.
+fn copies_disabled(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
+    if item.fields.copies() {
+        return None;
+    }
+    super::copies_unavailable(item).or_else(|| super::copies::copy_groups_full(doc))
+}
+
 fn write_physics(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String> {
     use crate::scene_doc::PhysicsSetting;
     let FieldValue::Choice(key) = value else {
@@ -213,7 +235,7 @@ pub(super) const PHYSICS: FieldRow = FieldRow {
     section: ControlGroup::Body,
     control: FieldControl::Closed(PHYSICS_CHOICES),
     applies: always,
-    disabled: physics_blocked,
+    disabled: physics_disabled,
     read: |fields| {
         FieldValue::Choice(
             match physics_of(fields) {
@@ -234,7 +256,7 @@ pub(super) const COPIES: FieldRow = FieldRow {
     section: ControlGroup::Copies,
     control: on_off(),
     applies: always,
-    disabled: enabled,
+    disabled: copies_disabled,
     read: |fields| {
         is_on(match fields {
             ItemFields::Object(o) => o.copies,

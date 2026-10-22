@@ -12006,6 +12006,11 @@
           "name": "fov_y",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "parent",
+          "required": false,
+          "type": "Transform"
         }
       ],
       "label": "Free Camera",
@@ -12119,7 +12124,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Free-look perspective camera source. Emits one Camera on `out` from world-space position (pos_x/pos_y/pos_z) and Euler angles (yaw about world up Y, pitch about the camera's right axis, roll about fwd) — the gizmo- and import-friendly authoring mode, as opposed to node.orbit_camera's target-orbit style. At yaw=pitch=roll=0 the camera looks down -Z (right-handed convention). yaw/pitch/roll/fov_y are radians (Angle params; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input.",
+      "purpose": "Free-look perspective camera source. Emits one Camera on `out` from world-space position (pos_x/pos_y/pos_z) and Euler angles (yaw about world up Y, pitch about the camera's right axis, roll about fwd) — the gizmo- and import-friendly authoring mode, as opposed to node.orbit_camera's target-orbit style. At yaw=pitch=roll=0 the camera looks down -Z (right-handed convention). yaw/pitch/roll/fov_y are radians (Angle params; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input. An optional parent Transform places it inside a group: it moves and turns with the group.",
       "role": "Source",
       "stratum": "driver",
       "summary": "A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly.",
@@ -13178,6 +13183,10 @@
           "capacity": "param:max_capacity=200000",
           "name": "weights",
           "type": "Array"
+        },
+        {
+          "name": "source",
+          "type": "MeshSource"
         }
       ],
       "params": [
@@ -13236,7 +13245,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Read a glTF/.glb file's sole skinned mesh-owning node contributing `material_index` and emit its LOCAL-space (bind-pose) geometry as Array(MeshVertex), plus coincident per-vertex JOINTS_0 (as f32 indices) and WEIGHTS_0 arrays. NO node transform is applied (glTF skinning ignores the mesh node's own transform) — wire `vertices`/`joints`/`weights` into node.skin_mesh along with a node.gltf_skeleton_pose's joint-matrix palette to deform the mesh per frame.",
+      "purpose": "Read a glTF/.glb file's sole skinned mesh-owning node contributing `material_index` and emit its LOCAL-space (bind-pose) geometry as Array(MeshVertex), plus coincident per-vertex JOINTS_0 (as f32 indices) and WEIGHTS_0 arrays. NO node transform is applied (glTF skinning ignores the mesh node's own transform) — wire `vertices`/`joints`/`weights` into node.skin_mesh along with a node.gltf_skeleton_pose's joint-matrix palette to deform the mesh per frame. `source` describes the same node's mesh as the model file places it at rest, for a rigid body's collision shape.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Loads an imported glTF character's bind-pose geometry and its per-vertex joint weights, ready to be deformed by a Skin Mesh node.",
@@ -18071,6 +18080,11 @@
           "name": "light_size",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "parent",
+          "required": false,
+          "type": "Transform"
         }
       ],
       "label": "Light",
@@ -18318,7 +18332,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage. shadow_softness's Contact tier (REALTIME_3D_DESIGN section 11 D12) trades the fixed PCF kernel for PCSS contact-hardening: shadows go sharp where the caster touches the receiver and soften with distance, driven by the port-shadowed light_size (world-units light diameter).",
+      "purpose": "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage. shadow_softness's Contact tier (REALTIME_3D_DESIGN section 11 D12) trades the fixed PCF kernel for PCSS contact-hardening: shadows go sharp where the caster touches the receiver and soften with distance, driven by the port-shadowed light_size (world-units light diameter). An optional parent Transform places it inside a group: it moves and turns with the group.",
       "role": "Source",
       "stratum": "driver",
       "summary": "A single light source for 3D scenes, set to a sun for parallel rays or a point for a local glow. Wire it into a material or a mesh renderer.",
@@ -19953,6 +19967,11 @@
           "name": "fov_y",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "parent",
+          "required": false,
+          "type": "Transform"
         }
       ],
       "label": "Look-At Camera",
@@ -20066,7 +20085,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Look-at perspective camera source. Emits one Camera on `out` from a world-space position (pos_x/pos_y/pos_z) and a world-space target point (target_x/target_y/target_z) — fwd = normalize(target - pos), right/up orthonormalized against fixed world up (0,1,0). The third standard camera authoring mode alongside node.orbit_camera's target-orbit style and node.free_camera's Euler pos+angles. fov_y is radians (Angle param; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input.",
+      "purpose": "Look-at perspective camera source. Emits one Camera on `out` from a world-space position (pos_x/pos_y/pos_z) and a world-space target point (target_x/target_y/target_z) — fwd = normalize(target - pos), right/up orthonormalized against fixed world up (0,1,0). The third standard camera authoring mode alongside node.orbit_camera's target-orbit style and node.free_camera's Euler pos+angles. fov_y is radians (Angle param; editor displays degrees). All seven spatial inputs are port-shadowed scalar inputs, so any of them can be driven by a beat_ramp or LFO — camera moves are beat-addressable. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, render_scene) that takes a `camera: Camera` input. An optional parent Transform places it inside a group: it moves and turns with the group.",
       "role": "Source",
       "stratum": "driver",
       "summary": "A camera positioned directly and aimed at a target point, instead of orbiting or using Euler angles.",
@@ -27127,6 +27146,11 @@
           "name": "roll",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "parent",
+          "required": false,
+          "type": "Transform"
         }
       ],
       "label": "Orbit Camera",
@@ -27238,7 +27262,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y): pos = (distance*cos(orbit)*cos(tilt), distance*sin(tilt) + look_y, distance*sin(orbit)*cos(tilt)); target = (0, look_y, 0); world up = (0, 1, 0) — the bit-exact formula every legacy 3D renderer used pre-Camera-port. orbit/tilt/fov_y/roll are radians (Angle params; editor displays degrees), distance ∈ (0.01, 100], fov_y ∈ [0.05, 2.5] rad, look_y ∈ [-10, 10]. Also exposes pos_x/pos_y/pos_z scalar outputs for PBR shading atoms that need the camera world position per pixel. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire.",
+      "purpose": "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y): pos = (distance*cos(orbit)*cos(tilt), distance*sin(tilt) + look_y, distance*sin(orbit)*cos(tilt)); target = (0, look_y, 0); world up = (0, 1, 0) — the bit-exact formula every legacy 3D renderer used pre-Camera-port. orbit/tilt/fov_y/roll are radians (Angle params; editor displays degrees), distance ∈ (0.01, 100], fov_y ∈ [0.05, 2.5] rad, look_y ∈ [-10, 10]. Also exposes pos_x/pos_y/pos_z scalar outputs for PBR shading atoms that need the camera world position per pixel. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire. An optional parent Transform places it inside a group: it moves and turns with the group.",
       "role": "Source",
       "stratum": "driver",
       "summary": "A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering.",

@@ -90,6 +90,21 @@ pub struct SceneItemVm {
     pub environment: bool,
     /// An Environment light in HDRI mode: the file "Aim Sun at HDRI" aims at.
     pub aim_sun_file: Option<String>,
+    /// Why a manifest row cannot be used right now, by param id: drawn
+    /// dimmed with the reason on hover.
+    pub row_reasons: Vec<(String, String)>,
+    /// An Object's mesh modifiers, in the order they apply: each is its own
+    /// section.
+    pub modifiers: Vec<ModifierVm>,
+}
+
+/// One mesh modifier on an Object's card.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModifierVm {
+    /// Its key: its params are `<object>.<key>.<param>`.
+    pub key: String,
+    /// Its section title, unique on the card.
+    pub label: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -7,7 +7,7 @@ use manifold_foundation::scene_surface::{ControlGroup, Unit};
 
 use super::fields::{COPIES, Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, PHYSICS, always, enabled, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, row, setup};
-use crate::scene_doc::{ItemFields, ObjectFields, Shape};
+use crate::scene_doc::{Item, ItemFields, MeshModifierKind, ObjectFields, SceneDoc, Shape};
 
 const T: Reach = Reach::Own("transform");
 const DRAW: Reach = Reach::Own("object");
@@ -167,7 +167,37 @@ fn mesh_shape(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Object(o) if matches!(o.shape, Shape::Mesh { .. }))
 }
 
-pub static OBJECT_FIELDS: [FieldRow; 5] = [
+/// A part inside an import Group takes its file from the Group's Model File.
+fn part_of_import(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
+    let mut inside = false;
+    doc.walk(|other, ancestors| {
+        if other.id == item.id {
+            inside = ancestors.iter().any(|above| matches!(&above.fields, ItemFields::Group(group) if group.source.is_some()));
+        }
+    });
+    inside.then_some("This part comes from its group's Model File; swap it there")
+}
+
+const MODIFIER_KINDS: &[Choice] = &[
+    Choice { key: "surface_peel", label: "Surface Peel" },
+    Choice { key: "ordered_recon", label: "Ordered Recon" },
+    Choice { key: "surface_waves", label: "Surface Waves" },
+    Choice { key: "spatial_echoes", label: "Spatial Echoes" },
+];
+
+/// The label a modifier kind shows: its section title and Add entry.
+pub fn modifier_label(kind: MeshModifierKind) -> &'static str {
+    MODIFIER_KINDS[MeshModifierKind::ALL.iter().position(|k| *k == kind).unwrap_or(0)].label
+}
+
+fn add_modifier_disabled(_: &SceneDoc, item: &Item) -> Option<&'static str> {
+    match &item.fields {
+        ItemFields::Object(object) => super::modifiers_unavailable(&object.shape),
+        _ => None,
+    }
+}
+
+pub static OBJECT_FIELDS: [FieldRow; 6] = [
     FieldRow {
         id: "shape",
         label: "Shape",
@@ -199,12 +229,12 @@ pub static OBJECT_FIELDS: [FieldRow; 5] = [
         },
     },
     FieldRow {
-        id: "mesh_file",
-        label: "Mesh File",
+        id: "model_file",
+        label: "Model File",
         section: ControlGroup::Shape,
         control: FieldControl::File { extensions: &["glb", "gltf"] },
         applies: mesh_shape,
-        disabled: enabled,
+        disabled: part_of_import,
         read: |fields| match fields {
             ItemFields::Object(ObjectFields { shape: Shape::Mesh { file, .. }, .. }) => FieldValue::File(file.clone()),
             _ => FieldValue::File(String::new()),
@@ -214,10 +244,32 @@ pub static OBJECT_FIELDS: [FieldRow; 5] = [
                 *file = path.clone();
                 Ok(())
             }
-            _ => Err(wrong_value("mesh_file", value)),
+            _ => Err(wrong_value("model_file", value)),
         },
     },
     MATERIAL_BINDING,
     PHYSICS,
     COPIES,
+    // Adds a modifier at the end of the list; each modifier is its own
+    // section, removed and reordered from its header.
+    FieldRow {
+        id: "add_modifier",
+        label: "Add Modifier",
+        section: ControlGroup::Modifier,
+        control: FieldControl::Closed(MODIFIER_KINDS),
+        applies: always,
+        disabled: add_modifier_disabled,
+        read: |_| FieldValue::Choice(String::new()),
+        write: |fields, value| {
+            let (ItemFields::Object(object), FieldValue::Choice(key)) = (&*fields, value) else {
+                return Err(wrong_value("add_modifier", value));
+            };
+            let Some(at) = MODIFIER_KINDS.iter().position(|choice| choice.key == key) else {
+                return Err(wrong_value("add_modifier", value));
+            };
+            let next = object.with_modifier(crate::math::short_id(), MeshModifierKind::ALL[at]);
+            *fields = ItemFields::Object(next);
+            Ok(())
+        },
+    },
 ];

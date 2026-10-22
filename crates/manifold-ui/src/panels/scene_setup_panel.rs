@@ -328,6 +328,9 @@ pub struct ScenePanel {
     /// within the panel. UI-local, never serialized. Missing = expanded.
     section_folded: ahash::AHashMap<String, bool>,
     material_block: material_block::MaterialButtons,
+    /// Each modifier section's header buttons built this frame: (button,
+    /// object, modifier key, where it moves to; `None` removes it).
+    modifier_buttons: Vec<(NodeId, ItemId, String, Option<usize>)>,
     panel_rect: Rect,
 }
 
@@ -370,6 +373,7 @@ impl Default for ScenePanel {
             scale_drag: None,
             section_folded: ahash::AHashMap::new(),
             material_block: Default::default(),
+            modifier_buttons: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         }
     }
@@ -549,6 +553,7 @@ impl ScenePanel {
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
         self.material_block.clear();
+        self.modifier_buttons.clear();
         // The properties card's old ids would otherwise register intents on
         // whatever now sits in those slots.
         self.properties_card.clear_nodes();
@@ -838,7 +843,7 @@ impl ScenePanel {
                             button_node_id: *node_id,
                             items: self.add_menu_items(),
                         }));
-                    } else if let Some(act) = self.item_header_click(*node_id, vm).or_else(|| self.material_click(*node_id, vm)) {
+                    } else if let Some(act) = self.item_header_click(*node_id, vm).or_else(|| self.material_click(*node_id, vm)).or_else(|| self.modifier_click(*node_id, vm)) {
                         actions.push(act);
                     } else if let Some(row_role) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id)) {
                         let (row, role) = row_role;

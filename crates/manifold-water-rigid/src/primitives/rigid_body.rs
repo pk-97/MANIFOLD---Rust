@@ -133,8 +133,8 @@ fn same_source(a: &MeshSource, b: &MeshSource) -> bool {
         (MeshSource::Plane { width: wa, height: ha }, MeshSource::Plane { width: wb, height: hb }) => {
             wa.to_bits() == wb.to_bits() && ha.to_bits() == hb.to_bits()
         }
-        (MeshSource::Gltf { path: path_a, selection: a }, MeshSource::Gltf { path: path_b, selection: b }) => {
-            path_a == path_b && same_selection(a, b)
+        (MeshSource::Gltf { path: path_a, node_path: node_a, selection: a }, MeshSource::Gltf { path: path_b, node_path: node_b, selection: b }) => {
+            path_a == path_b && node_a == node_b && same_selection(a, b)
         }
         _ => a == b,
     }

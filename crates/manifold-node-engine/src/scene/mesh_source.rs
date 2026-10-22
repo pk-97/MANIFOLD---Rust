@@ -18,6 +18,9 @@ pub enum MeshSource {
     Plane { width: f32, height: f32 },
     Gltf {
         path: Arc<str>,
+        /// The one file node whose mesh this is (an imported part), or `None`
+        /// for what `selection` picks from the whole file.
+        node_path: Option<Arc<str>>,
         selection: MeshSelection,
     },
 }
@@ -41,7 +44,7 @@ impl MeshSource {
                 }
                 (*shape, *radius)
             }
-            Self::Gltf { path, selection } => {
+            Self::Gltf { path, node_path, selection } => {
                 if path.is_empty() {
                     return Err("mesh source has no file".into());
                 }
@@ -56,7 +59,7 @@ impl MeshSource {
                 {
                     return Err("mesh source has invalid selectors".into());
                 }
-                return selection.load(std::path::Path::new(path.as_ref()));
+                return selection.load_node(std::path::Path::new(path.as_ref()), node_path.as_deref());
             }
         };
         if shape >= PLATONIC_SHAPES.len() as u32 {
@@ -101,6 +104,7 @@ mod tests {
     fn source() -> MeshSource {
         MeshSource::Gltf {
             path: Arc::from("assets/mesh.glb"),
+            node_path: None,
             selection: MeshSelection {
                 mesh: 2,
                 primitive: 3,
@@ -209,6 +213,7 @@ mod tests {
         .is_err());
         assert!(MeshSource::Gltf {
             path: Arc::from("assets/mesh.glb"),
+            node_path: None,
             selection: MeshSelection {
                 mesh: -1,
                 primitive: -1,

@@ -185,6 +185,14 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
         ui.toast.show_with_accent(message, color::RED_BASE);
     }
 
+    // A body the world newly left out: once, red, beside its card warning.
+    if !std::sync::Arc::ptr_eq(&ui.refusal_toast_seen, &content_state.setup_fits) {
+        if let Some(message) = crate::setup_check::new_refusal(&ui.refusal_toast_seen, &content_state.setup_fits) {
+            ui.toast.show_with_accent(message, color::RED_BASE);
+        }
+        ui.refusal_toast_seen = content_state.setup_fits.clone();
+    }
+
     let slot = ui.scene_impulse_toast.slot(&ui.toast);
     if let Some((message, refused)) = ui.scene_impulse_toast.update(&content_state.scene_impulses, slot) {
         ui.toast.refresh(message.to_owned(), refused.then_some(color::RED_BASE));

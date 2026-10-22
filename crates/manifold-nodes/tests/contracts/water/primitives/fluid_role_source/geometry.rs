@@ -75,6 +75,7 @@ pub(super) mod tests {
         for (slot, source_path) in [&path, &second_path].into_iter().enumerate() {
             wired.sources[slot] = Some(MeshSource::Gltf {
                 path: std::sync::Arc::from(source_path.to_str().unwrap()),
+                node_path: None,
                 selection: manifold_water_liquid::primitives::fluid_role_source::default_selection().with_material(slot as i32),
             });
         }

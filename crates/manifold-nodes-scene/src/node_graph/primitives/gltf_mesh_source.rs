@@ -581,6 +581,7 @@ impl Primitive for GltfMeshSource {
                         self.content_version = self.content_version.wrapping_add(1);
                         self.published_source = Some(MeshSource::Gltf {
                             path: Arc::from(self.last_key.0.as_str()),
+                            node_path: (!self.last_key.11.is_empty()).then(|| Arc::from(self.last_key.11.as_str())),
                             selection: MeshSelection {
                                 mesh: mesh_index,
                                 primitive: primitive_index,
@@ -1005,7 +1006,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection }) = source_a else {
+        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection, .. }) = source_a else {
             panic!("CPU-only glTF source did not settle");
         };
         assert_eq!(loaded_path.as_ref(), path_a);
@@ -1045,7 +1046,7 @@ mod tests {
             if !pending {
                 source_b = backend.mesh_source(source_slot);
                 if source_b.as_ref().is_some_and(|source| match source {
-                    MeshSource::Gltf { path, selection } => path.as_ref() == path_b && selection.mesh == 0,
+                    MeshSource::Gltf { path, selection, .. } => path.as_ref() == path_b && selection.mesh == 0,
                     _ => false,
                 }) {
                     break;
@@ -1053,7 +1054,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection }) = source_b else {
+        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection, .. }) = source_b else {
             panic!("changed CPU-only glTF source did not settle");
         };
         assert_eq!(loaded_path.as_ref(), path_b);
@@ -1472,10 +1473,16 @@ mod gpu_tests {
     }
 }
 
-fn load_physics_mesh_asset(path: &std::path::Path, selection: &manifold_node_engine::scene::mesh_selection::MeshSelection) -> Result<Vec<MeshVertex>, String> {
+fn load_physics_mesh_asset(
+    path: &std::path::Path,
+    node: Option<&str>,
+    selection: &manifold_node_engine::scene::mesh_selection::MeshSelection,
+) -> Result<Vec<MeshVertex>, String> {
     use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
     use crate::node_graph::decode_cache::cached_load_gltf_mesh;
-        let selector = if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
+        let selector = if let Some(node) = node.filter(|node| !node.is_empty()) {
+            GltfMeshSelector::Node { path: node.into(), material: selection.material }
+        } else if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
             GltfMeshSelector::DefaultMaterial
         } else if selection.material >= 0 {
             GltfMeshSelector::Material {
@@ -1529,7 +1536,7 @@ mod mesh_asset_source_tests {
                 mesh, primitive, material: -1, fit: true, recenter: true,
                 translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0,
             };
-            let direct = super::load_physics_mesh_asset(&path, &selection).unwrap();
+            let direct = super::load_physics_mesh_asset(&path, None, &selection).unwrap();
             let registered = manifold_node_engine::scene::mesh_asset_source::load_mesh(&path, &selection).unwrap();
             let selected = selection.load(&path).unwrap();
             assert_eq!(direct.len(), 3);

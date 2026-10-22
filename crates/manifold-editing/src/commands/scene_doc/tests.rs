@@ -205,7 +205,7 @@ fn model(paths: &[&str]) -> manifold_core::scene_doc::ImportedModel {
         materials: Vec::new(),
         lights: Vec::new(),
         cameras: Vec::new(),
-        clips: 0,
+        clips: Vec::new(),
         bounds: None,
     }
 }

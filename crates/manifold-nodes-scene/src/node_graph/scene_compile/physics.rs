@@ -91,6 +91,21 @@ pub(crate) fn object(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>, me
     }
 }
 
+/// A group drawn as one combined mesh (Combine Meshes on) is one part: of
+/// its own body, or of the group body it sits in.
+pub(crate) fn combined(b: &mut Builder<'_>, group: &Item, mesh: u32, transform: u32) {
+    match b.physics.part(group) {
+        PhysicsPart::Group(_) => add_part(b, group.id.clone(), (mesh, transform)),
+        PhysicsPart::Member { root, .. } => {
+            if let Some(local) = b.id(group.id.as_str(), "body_local") {
+                b.wire(local, "transform", transform, "parent");
+            }
+            add_part(b, root, (mesh, transform));
+        }
+        PhysicsPart::Off | PhysicsPart::Solo(_) => {}
+    }
+}
+
 fn add_part(b: &mut Builder<'_>, root: ItemId, part: (u32, u32)) {
     match b.physics.group_parts.iter_mut().find(|(known, _)| *known == root) {
         Some((_, parts)) => parts.push(part),

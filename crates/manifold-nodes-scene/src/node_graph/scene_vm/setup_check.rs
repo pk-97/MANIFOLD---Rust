@@ -47,6 +47,8 @@ pub enum SetupProblemKind {
     /// The particle pool is full and an inflow wants more: the inflow is
     /// held back until water drains. Only the solver sees it.
     PoolFull,
+    /// The world left a body or copy group out. Carries the world's reason.
+    BodyRefused(String),
 }
 
 impl SetupProblemKind {
@@ -64,6 +66,7 @@ impl SetupProblemKind {
             Self::CopiesNotMade(1) => "1 copy not made; the world's copy pool is full".to_owned(),
             Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
             Self::PoolFull => "Water pool is full; the inflow is held back. Add a Drain or lower Resolution".to_owned(),
+            Self::BodyRefused(reason) => format!("Out of the physics world: {reason}"),
         }
     }
 }
@@ -394,6 +397,67 @@ pub fn copies_problems<'a>(anchors: &[CopiesAnchor], runtime: impl IntoIterator<
             owner: ShapeOwner::World(anchor.world.clone()),
             kind: SetupProblemKind::CopiesNotMade(report.copies_not_made),
             params: anchor.counts.clone(),
+            bounds: None,
+        });
+    }
+}
+
+/// The rows a refused body warns under, most telling first: what it bounces
+/// and weighs with, or a copy group's Count.
+const BODY_ROWS: [&str; 4] = ["bounce", "mass", "friction", COPY_COUNT];
+
+/// A Physics World and the body wired into each of its inputs (`body_k`,
+/// `copies_k`), for the rows a refused body warns under.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BodyAnchor {
+    pub world: NodeId,
+    /// (world input, body node doc id).
+    pub inputs: Vec<(String, u32)>,
+    pub scope_path: Vec<u32>,
+}
+
+/// Every world in `def` with a body wired in, at any group depth. Reads
+/// wires alone, so a value change never moves one.
+pub fn body_anchors(def: &EffectGraphDef) -> Vec<BodyAnchor> {
+    let mut out = Vec::new();
+    collect_body_anchors(&def.nodes, &def.wires, &mut Vec::new(), &mut out);
+    out
+}
+
+fn collect_body_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], scope: &mut Vec<u32>, out: &mut Vec<BodyAnchor>) {
+    for world in nodes.iter().filter(|n| n.type_id == PHYSICS_WORLD_TYPE_ID) {
+        let inputs: Vec<(String, u32)> = wires
+            .iter()
+            .filter(|w| w.to_node == world.id && manifold_core::physics_members::member_input(&w.to_port).is_some())
+            .map(|w| (w.to_port.clone(), w.from_node))
+            .collect();
+        if !inputs.is_empty() {
+            out.push(BodyAnchor { world: world.node_id.clone(), inputs, scope_path: scope.clone() });
+        }
+    }
+    for node in nodes {
+        if let Some(group) = &node.group {
+            scope.push(node.id);
+            collect_body_anchors(&group.nodes, &group.wires, scope, out);
+            scope.pop();
+        }
+    }
+}
+
+/// Each body or copy group a world left out, as a warning under that body's
+/// rows: `refused` is (world, world input, reason).
+pub fn body_problems<'a>(anchors: &[BodyAnchor], refused: impl IntoIterator<Item = (&'a NodeId, &'a str, &'a str)>, out: &mut Vec<SetupProblem>) {
+    for (world, input, reason) in refused {
+        let Some(anchor) = anchors.iter().find(|anchor| &anchor.world == world) else { continue };
+        let Some(&(_, body)) = anchor.inputs.iter().find(|(port, _)| port == input) else { continue };
+        let params = BODY_ROWS
+            .iter()
+            .map(|param| ParamAddr { scope_path: anchor.scope_path.clone(), node_doc_id: body, param_id: (*param).to_owned() })
+            .collect();
+        out.push(SetupProblem {
+            owner: ShapeOwner::World(anchor.world.clone()),
+            kind: SetupProblemKind::BodyRefused(reason.to_owned()),
+            params,
             bounds: None,
         });
     }

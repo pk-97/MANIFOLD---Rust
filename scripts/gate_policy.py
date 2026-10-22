@@ -583,7 +583,7 @@ PREFIX_ROWS += [
     (RIGID_SRC, ".rs", CATALOG_PACKAGE,
      ["contracts::node_graph::catalog_tests::physics_sampling",
       "contracts::node_graph::catalog_tests::physics_host_modulation",
-      "contracts::node_graph::catalog_tests::wind_gust_replay", "physics_scene"], []),
+      "contracts::node_graph::catalog_tests::wind_gust_replay"], []),
 ]
 
 # The GPU MPM leaf's CPU contract: the default-build tests that construct Matter nodes.
@@ -632,9 +632,6 @@ CATALOG_TEST_ROWS = [
     ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_tests", False),
     ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_warmup_tests", False),
     ("crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade", "loop_upgrade", True),
-    ("crates/manifold-nodes-scene/src/node_graph/scene_vm", "scene_vm", True),
-    ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "scene_exposure", True),
-    ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "fluid_objects", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/gltf_animation_source", "gltf_animation_source", True),
     (SURF_SRC + "primitives/surface_mesh_normals", "surface_mesh_normals", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/copy_positions", "copy_positions", False),
@@ -653,7 +650,7 @@ CATALOG_TEST_ROWS = [
     (LIQUID_SRC + "primitives/particle_publication", "particle_publication_gpu_tests", False),
 ]
 APP_CATALOG_MODULES = {"layer_compositor", "preset_thumbnail", "generator_renderer_tests",
-                       "generator_renderer_warmup_tests", "fluid_objects", "bokeh_gather"}
+                       "generator_renderer_warmup_tests", "bokeh_gather"}
 PREFIX_ROWS += [(prefix, ".rs", "manifold-app" if module in APP_CATALOG_MODULES else CATALOG_PACKAGE,
                  ["contracts::node_graph::catalog_tests::" + module] if module in APP_CATALOG_MODULES
                  else ["contracts::node_graph::catalog_tests::" + module], [])

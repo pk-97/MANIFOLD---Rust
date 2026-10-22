@@ -520,6 +520,16 @@ fn latest<T: Clone + Send + 'static>(slot: &mut Option<T>, inputs: &NodeInputs<'
 }
 
 impl PhysicsNode for PhysicsWorldNode {
+    fn write_body_refusals(&self, out: &mut Vec<(String, std::sync::Arc<str>)>) {
+        for refusal in self.simulation.refusals() {
+            let input = match refusal.member {
+                crate::physics::Member::Body(k) => format!("body_{k}"),
+                crate::physics::Member::Copies(k) => format!("copies_{k}"),
+            };
+            out.push((input, std::sync::Arc::from(refusal.reason.to_string())));
+        }
+    }
+
     // A coupled world steps inside its liquid, on the liquid's samples.
     fn request_physics_samples(&mut self, from: manifold_core::PlayedTime, until: manifold_core::PlayedTime, out: &mut Vec<manifold_core::PlayedTime>) {
         if !self.coupled_mode {

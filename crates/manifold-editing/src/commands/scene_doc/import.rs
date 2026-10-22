@@ -160,6 +160,11 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
     };
     let mut source = fields.clone();
     source.source = Some(file.to_owned());
+    // The new file's clips; the pick stays when the file still has it.
+    source.clip_names.clone_from(&model.clips);
+    if source.clip as usize >= model.clips.len() {
+        source.clip = 0;
+    }
     let mut commands: Vec<Box<dyn Command>> =
         vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), group.clone(), ItemFields::Group(source)))];
 

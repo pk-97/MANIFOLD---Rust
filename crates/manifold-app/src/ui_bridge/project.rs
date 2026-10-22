@@ -266,6 +266,10 @@ pub(super) fn dispatch_project(
             let built = crate::scene_edit::material_feature(project, layer_id, material, *feature, *add);
             send_scene_edit(content_tx, layer_id, built)
         }
+        ProjectAction::SceneModifierEdit { layer_id, item, key, to } => {
+            let built = crate::scene_edit::modifier_edit(project, layer_id, item, key, *to).map(Some);
+            send_scene_edit(content_tx, layer_id, built)
+        }
         ProjectAction::SceneMakeMaterialUnique(layer_id, owner) => {
             let built = crate::scene_edit::make_material_unique(project, layer_id, owner).map(Some);
             send_scene_edit(content_tx, layer_id, built)

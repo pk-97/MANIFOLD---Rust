@@ -42,7 +42,13 @@ impl MeshSelection {
     }
 
     pub fn load(&self, path: &Path) -> Result<Vec<MeshVertex>, String> {
-        let vertices = super::mesh_asset_source::load_mesh(path, self)?;
+        self.load_node(path, None)
+    }
+
+    /// [`Self::load`] of the mesh of one file node (an imported part), when
+    /// `node` names one.
+    pub fn load_node(&self, path: &Path, node: Option<&str>) -> Result<Vec<MeshVertex>, String> {
+        let vertices = super::mesh_asset_source::load_mesh_node(path, node, self)?;
         select_fragment(vertices, self.fragment_count, self.fragment_index)
     }
 }

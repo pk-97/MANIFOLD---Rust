@@ -2241,7 +2241,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.gizmos.take_frame_depth(generators, self.physics_overlay.layer());
             #[cfg(target_os = "macos")]
             self.gizmos.compose_output(project, &stamps, self.physics_overlay.frames[self.write_surface_index].as_ref(), (self.output_w, self.output_h));
-            self.setup_fits.record(project, stamps, |domains, not_made, each| generators.into_iter().for_each(|g| g.each_rendered_setup(domains, not_made, &mut *each)));
+            self.setup_fits.record(project, stamps, |domains, not_made, refused, each| generators.into_iter().for_each(|g| g.each_rendered_setup(domains, not_made, refused, &mut *each)));
             // Selection masks and a generator viewport frame, beside the pictures (D9).
             #[cfg(target_os = "macos")]
             if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,

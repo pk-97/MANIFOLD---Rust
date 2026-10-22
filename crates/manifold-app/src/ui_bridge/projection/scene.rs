@@ -7,13 +7,15 @@ use crate::ui_root::UIRoot;
 use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{CameraRig, EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, SceneDoc, Shape, split_param_id};
-use manifold_core::scene_schema::{ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields};
+use manifold_core::scene_doc::{CameraRig, EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, SceneDoc, Shape, param_id, split_param_id};
+use manifold_core::scene_schema::{
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, bodies_past_capacity, impulse_unavailable, modifier_label,
+};
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
 use manifold_core::scene_surface::FieldPick;
 use manifold_ui::panels::scene_setup_panel::{
-    AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, SceneItemVm, SceneSetupState, SceneSetupVm,
+    AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, ModifierVm, SceneItemVm, SceneSetupState, SceneSetupVm,
 };
 
 /// The panel's state for the selected layer.
@@ -50,6 +52,14 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
     doc.walk(|item, ancestors| {
         items.push(item_vm(doc, item, ancestors, &owned, &layers));
     });
+    // A body the world has no room for: its physics rows say so.
+    for body in bodies_past_capacity(doc) {
+        if let Some(vm) = items.iter_mut().find(|vm: &&mut SceneItemVm| vm.id == body) {
+            for property in ["mass", "bounce", "friction"] {
+                vm.row_reasons.push((param_id(&body, property), "The physics world is full: this body is not in it".to_owned()));
+            }
+        }
+    }
     let add_entries = ADD_ENTRIES
         .iter()
         .map(|entry| AddEntryVm { key: entry.key.to_owned(), group: entry.group.to_owned(), label: entry.label.to_owned() })
@@ -94,7 +104,39 @@ fn item_vm(doc: &SceneDoc, item: &Item, ancestors: &[&Item], owned: &ahash::AHas
         copy_view: matches!(&item.fields, ItemFields::Camera(camera) if matches!(camera.rig, CameraRig::Orbit | CameraRig::Free)),
         environment,
         aim_sun_file,
+        row_reasons: row_reasons(doc, item),
+        modifiers: modifiers(item),
     }
+}
+
+/// Why rows of `item` cannot be used: a Force whose Impulse has nothing to
+/// push.
+fn row_reasons(doc: &SceneDoc, item: &Item) -> Vec<(String, String)> {
+    let mut reasons = Vec::new();
+    if let Some(reason) = impulse_unavailable(doc, item) {
+        reasons.push((param_id(&item.id, "fire"), reason.to_owned()));
+    }
+    reasons
+}
+
+/// An Object's modifiers, each titled by its kind, numbered when the kind
+/// repeats.
+fn modifiers(item: &Item) -> Vec<ModifierVm> {
+    let ItemFields::Object(object) = &item.fields else {
+        return Vec::new();
+    };
+    object
+        .modifiers
+        .iter()
+        .enumerate()
+        .map(|(at, modifier)| {
+            let label = modifier_label(modifier.kind);
+            let before = object.modifiers[..at].iter().filter(|other| other.kind == modifier.kind).count();
+            let repeats = object.modifiers.iter().filter(|other| other.kind == modifier.kind).count() > 1;
+            let label = if repeats { format!("{label} {}", before + 1) } else { label.to_owned() };
+            ModifierVm { key: modifier.key.clone(), label }
+        })
+        .collect()
 }
 
 fn material_block(doc: &SceneDoc, material: &Item, owned: &ahash::AHashMap<&str, Vec<String>>, layers: &[(LayerId, String)]) -> MaterialBlockVm {
@@ -158,7 +200,10 @@ fn item_options(doc: &SceneDoc, item: &Item, passes: fn(&Item) -> bool, held: &F
 fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, String)]) -> FieldControlVm {
     let held = (row.read)(&item.fields);
     let pick = |options: Vec<FieldOptionVm>| {
-        let current = options.iter().filter(|option| option.checked).map(|option| option.label.as_str()).collect::<Vec<_>>().join(", ");
+        let mut current = options.iter().filter(|option| option.checked).map(|option| option.label.as_str()).collect::<Vec<_>>().join(", ");
+        if current.is_empty() {
+            current.push_str("Choose");
+        }
         FieldControlVm::Pick { current, options }
     };
     match row.control {
@@ -203,6 +248,17 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
             }));
             pick(options)
         }
+        FieldControl::Listed { names } => pick(
+            names(&item.fields)
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    let key = index.to_string();
+                    let checked = matches!(&held, FieldValue::Choice(held) if *held == key);
+                    FieldOptionVm { label: name.clone(), pick: FieldPick::Choice(key), checked }
+                })
+                .collect(),
+        ),
         FieldControl::File { extensions } => FieldControlVm::File {
             path: match held {
                 FieldValue::File(path) => path,

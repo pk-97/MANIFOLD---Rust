@@ -36,14 +36,14 @@ pub use fields::{
     Choice, FieldControl, FieldRow, FieldValue, applicable_fields, field_for, field_rows, is_camera, is_material,
     is_object_or_group, set_field,
 };
-pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, can_copy, copies_unavailable};
+pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, can_copy, copies_unavailable, copy_groups_full};
 pub use force::{FORCE_ROWS, impulse_unavailable};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily};
 pub use modifier::{modifier_param_id, modifier_property, modifier_rows, modifiers_unavailable};
-pub use object::OBJECT_ROWS;
-pub use physics::{BODY_ROLE, MAX_GROUP_PARTS, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
+pub use object::{OBJECT_ROWS, modifier_label};
+pub use physics::{BODY_ROLE, MAX_GROUP_PARTS, PHYSICS_ROWS, PhysicsPart, bodies_past_capacity, physics_parts, physics_unavailable, world_full};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
 pub use world::{SPEED_RANGE, WORLD_ROWS};
 

@@ -53,6 +53,10 @@ pub(crate) struct Builder<'d> {
     pub(crate) physics: super::physics::State,
     /// The copies bodies, in copy-group order.
     pub(crate) copy_bodies: Vec<u32>,
+    /// Each group copies body's parts, (mesh node, transform node), by body.
+    pub(crate) copy_parts: BTreeMap<u32, Vec<(u32, u32)>>,
+    /// The transform each Group's lights and cameras sit in, by group.
+    pub(crate) group_frames: BTreeMap<ItemId, u32>,
     /// The scene modifiers (forces, mesh modifiers), in application order.
     modifiers: Vec<SceneModifierInstanceDef>,
 }
@@ -78,6 +82,8 @@ impl<'d> Builder<'d> {
             clocks: Vec::new(),
             physics: super::physics::State::new(doc),
             copy_bodies: Vec::new(),
+            copy_parts: BTreeMap::new(),
+            group_frames: BTreeMap::new(),
             modifiers: Vec::new(),
         };
         b.add(SCENE, "input", "system.generator_input");

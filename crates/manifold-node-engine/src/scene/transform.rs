@@ -35,6 +35,16 @@ fn is_identity_mat4(m: &Mat4) -> bool {
     *m == IDENTITY_MAT4
 }
 
+/// `m` applied to the point `p`.
+pub fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|row| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row])
+}
+
+/// `m` applied to the direction `v`: no translation.
+pub fn transform_direction(m: &Mat4, v: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|row| m[0][row] * v[0] + m[1][row] * v[1] + m[2][row] * v[2])
+}
+
 /// A TRS inside a parent frame. CPU-only wire value (`PortType::Transform`),
 /// composed to a model matrix by the consuming renderer per frame. Euler
 /// radians, XYZ application order — matching `render_scene`'s existing

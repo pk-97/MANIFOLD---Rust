@@ -316,6 +316,23 @@ impl Camera {
         }
     }
 
+    /// This camera placed inside the frame `parent` (a group's world matrix):
+    /// its position and aim move with the frame, its up follows the frame's
+    /// turn. An identity frame returns the camera unchanged.
+    pub fn placed_in(self, parent: &[[f32; 4]; 4]) -> Self {
+        use super::transform::{IDENTITY_MAT4, transform_direction, transform_point};
+        if *parent == IDENTITY_MAT4 {
+            return self;
+        }
+        let pos = transform_point(parent, self.pos);
+        let fwd = normalize3(transform_direction(parent, self.fwd));
+        let up_hint = normalize3(transform_direction(parent, self.up));
+        let right = normalize3(cross3(fwd, up_hint));
+        let up = normalize3(cross3(right, fwd));
+        let target = [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]];
+        Self { pos, fwd, right, up, view: look_at_rh(pos, target, up), ..self }
+    }
+
     /// Rotate the basis by camera-local Euler angles (radians), applied in
     /// yaw → pitch → roll order, each about the evolving camera-local axis:
     /// yaw about `up`, pitch about `right`, roll about `fwd`. Signs follow

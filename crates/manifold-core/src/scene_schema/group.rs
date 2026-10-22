@@ -46,7 +46,18 @@ pub static GROUP_ROWS: [PropertyRow; 18] = [
 
 /// A Group's Source file is an import; its children come from the file (lane
 /// L3 owns the swap that keeps the children whose path still exists).
-pub static GROUP_FIELDS: [FieldRow; 5] = [
+fn has_clips(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Group(g) if g.source.is_some() && !g.clip_names.is_empty())
+}
+
+fn clip_names(fields: &ItemFields) -> &[String] {
+    match fields {
+        ItemFields::Group(g) => &g.clip_names,
+        _ => &[],
+    }
+}
+
+pub static GROUP_FIELDS: [FieldRow; 6] = [
     FieldRow {
         id: "model_file",
         label: "Model File",
@@ -81,6 +92,31 @@ pub static GROUP_FIELDS: [FieldRow; 5] = [
                 _ => return Err(wrong_value("combine_meshes", value)),
             }
             Ok(())
+        },
+    },
+    // The clip every animated part below plays.
+    FieldRow {
+        id: "clip",
+        label: "Clip",
+        section: Animation,
+        control: FieldControl::Listed { names: clip_names },
+        applies: has_clips,
+        disabled: enabled,
+        read: |fields| match fields {
+            ItemFields::Group(g) => FieldValue::Choice(g.clip.to_string()),
+            _ => FieldValue::Choice(String::new()),
+        },
+        write: |fields, value| {
+            let (ItemFields::Group(g), FieldValue::Choice(key)) = (fields, value) else {
+                return Err(wrong_value("clip", value));
+            };
+            match key.parse::<u32>() {
+                Ok(clip) if (clip as usize) < g.clip_names.len() => {
+                    g.clip = clip;
+                    Ok(())
+                }
+                _ => Err(wrong_value("clip", value)),
+            }
         },
     },
     MATERIAL_BINDING,

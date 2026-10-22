@@ -43,6 +43,8 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         return;
     };
     let owner = item.id.as_str();
+    let group_copies = frame.and_then(|frame| frame.copies);
+    let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
     let mut center = None;
     let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
         let part = super::mesh::emit_part(b, item, file, node_path, *vertex_count, *primitives);
@@ -66,19 +68,16 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     }
     let object = b.add(owner, "object", "node.scene_object");
     let (surface, maps) = surface_for(b, &item.id);
-    // The enclosing group's copies draw this object; otherwise its own. A
-    // copied object takes its pose from each instance, not from a transform.
-    let group_copies = frame.and_then(|frame| frame.copies);
-    let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
     // An object that is its own body draws at the body's solved pose.
     let pose = super::physics::object(b, item, frame, mesh, transform);
-    let placed_elsewhere = pose.is_some() || own_copies || group_copies.is_some();
     for w in object_wires(mesh, surface, transform, object) {
         if w.to_port == "vertices" {
             b.wire(vertices.0, vertices.1, object, "vertices");
             continue;
         }
-        if placed_elsewhere && w.to_port == "transform" {
+        // A body's transform is its start, and its own copies' layout
+        // centre; the draw reads the solved poses instead.
+        if (pose.is_some() || own_copies) && w.to_port == "transform" {
             continue;
         }
         b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
@@ -87,20 +86,25 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         b.wire(source, "out", object, port);
     }
     if let Some(frame) = frame {
-        if pose.is_none()
-            && let Some(parent) = frame.transform
-        {
-            b.wire(parent, "transform", object, "parent_transform");
-        }
         b.wire(frame.visible, "out", object, "parent_visible");
     }
+    let parent = frame.and_then(|frame| frame.transform);
     if let Some(pose) = pose {
         b.wire(pose, "transform", object, "parent_transform");
-    }
-    if own_copies {
-        copies::emit_object(b, item, mesh, transform, object, fields.physics);
-    } else if let Some(body) = group_copies {
-        copies::draw_instances(b, body, object, true);
+    } else if own_copies || group_copies.is_some() {
+        // Copies are laid out and drawn in the world: the transform carries
+        // its enclosing frame (inside one copy, under a group's copies).
+        if let Some(parent) = parent {
+            b.wire(parent, "transform", transform, "parent");
+        }
+        if own_copies {
+            copies::emit_object(b, item, mesh, transform, object, fields.physics);
+        } else if let Some(body) = group_copies {
+            copies::add_part(b, body, mesh, transform);
+            copies::draw_instances(b, body, object, true);
+        }
+    } else if let Some(parent) = parent {
+        b.wire(parent, "transform", object, "parent_transform");
     }
     b.objects.push(object);
     b.object_items.push(item.id.clone());

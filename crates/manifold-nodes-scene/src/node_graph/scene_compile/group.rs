@@ -1,7 +1,8 @@
 //! Group: a transform every item inside sits in (transforms chain through
 //! nested groups, BUG-8k8ko.2 (nested groups)), and a Visible that
 //! multiplies down the tree, so hiding an outer group hides everything in
-//! it. Walks the tree and hands each Object its enclosing frame.
+//! it. Walks the tree and hands each Object its enclosing frame. Lights and
+//! cameras inside a group follow its frame too.
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, ItemFields};
@@ -9,9 +10,11 @@ use manifold_core::scene_doc::{Item, ItemFields};
 use super::builder::Builder;
 use super::copies;
 
-/// What an item inside a group reads from it: the transform node it sits in
-/// (none under a group whose copies place it), the node whose `out` is its
-/// visibility, and the copies body whose instances draw it.
+/// What an item inside a group reads from it: the transform node it sits
+/// in, the node whose `out` is its visibility, and the copies body whose
+/// instances draw it. Under copies, `transform` is the frame inside one copy
+/// (`None` at the copied group itself): each instance already carries the
+/// copies' world pose.
 pub(crate) struct Frame {
     pub transform: Option<u32>,
     pub visible: u32,
@@ -21,10 +24,12 @@ pub(crate) struct Frame {
 /// `node.math`'s Multiply.
 const MULTIPLY: u32 = 2;
 
-/// Emit every Group and Object, depth first in tree order.
+/// Emit every Group and Object, depth first in tree order, then put each
+/// light and camera inside a group in its frame.
 pub(crate) fn emit_tree(b: &mut Builder<'_>) {
     let items = b.doc.items.clone();
     walk(b, &items, None);
+    place_rigs(b);
 }
 
 fn walk(b: &mut Builder<'_>, items: &[Item], frame: Option<&Frame>) {
@@ -33,6 +38,17 @@ fn walk(b: &mut Builder<'_>, items: &[Item], frame: Option<&Frame>) {
             ItemFields::Group(_) => {
                 let inner = emit(b, item, frame);
                 let inner = super::physics::group(b, item, inner);
+                // Lights and cameras follow the group's world frame: its own
+                // transform when its copies place it, nothing extra inside
+                // a copy (they follow the copied group).
+                let rig_frame = match (inner.transform, inner.copies) {
+                    (Some(transform), None) => Some(transform),
+                    (None, Some(_)) => b.id(item.id.as_str(), "transform"),
+                    _ => None,
+                };
+                if let Some(rig_frame) = rig_frame {
+                    b.group_frames.insert(item.id.clone(), rig_frame);
+                }
                 if !super::mesh::emit_combined(b, item, &inner) {
                     walk(b, &item.children, Some(&inner));
                 }
@@ -61,14 +77,41 @@ fn emit(b: &mut Builder<'_>, item: &Item, outer: Option<&Frame>) -> Frame {
             chain
         }
     };
-    // A group with Copies on is placed by its copies: the instances carry its
-    // transform, so what is inside sits in the group's own outer frame.
-    let copies = match &item.fields {
-        ItemFields::Group(group) if group.copies && outer.is_none_or(|outer| outer.copies.is_none()) => {
+    // A group with Copies on is placed by its copies: the body takes the
+    // group's transform, and what is inside sits at each copy's pose. Inside
+    // another group's copies, Copies is that group's.
+    let enclosing = outer.and_then(|outer| outer.copies);
+    let own = match &item.fields {
+        ItemFields::Group(group) if group.copies && enclosing.is_none() => {
             Some(copies::emit_group(b, item, transform, group.physics))
         }
         _ => None,
     };
     b.rows(item);
-    Frame { transform: if copies.is_some() { outer.and_then(|outer| outer.transform) } else { Some(transform) }, visible, copies }
+    match own {
+        Some(body) => Frame { transform: None, visible, copies: Some(body) },
+        None => Frame { transform: Some(transform), visible, copies: enclosing },
+    }
+}
+
+/// Wire each light's and camera's enclosing group frame into its `parent`.
+fn place_rigs(b: &mut Builder<'_>) {
+    let mut placed = Vec::new();
+    b.doc.walk(|item, ancestors| {
+        let role = match item.fields {
+            ItemFields::Light(_) => "light",
+            ItemFields::Camera(_) => "rig",
+            _ => return,
+        };
+        let frame = ancestors.iter().rev().find_map(|group| b.group_frames.get(&group.id).copied());
+        if let Some(frame) = frame {
+            placed.push((item.id.clone(), role, frame));
+        }
+    });
+    for (item, role, frame) in placed {
+        // An Environment has no node of its own to place.
+        if let Some(node) = b.id(item.as_str(), role) {
+            b.wire(frame, "transform", node, "parent");
+        }
+    }
 }
