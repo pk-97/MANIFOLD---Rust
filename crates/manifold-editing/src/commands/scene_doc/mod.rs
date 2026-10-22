@@ -41,6 +41,16 @@ pub(crate) struct Before {
     doc: SceneDoc,
     removed: ParamSlice,
     pick: Option<(String, f32)>,
+    /// Params the edit wrote once installed (a moved item kept in place),
+    /// with their value and base before, in write order.
+    written: Vec<(String, f32, f32)>,
+}
+
+impl Before {
+    /// Remember what `writes` replaced, so undo puts it back.
+    pub(crate) fn note_written(&mut self, writes: Vec<(String, f32, f32)>) {
+        self.written.extend(writes);
+    }
 }
 
 /// Some params of an instance and every modulator aimed at them.
@@ -113,13 +123,14 @@ fn scene_instance<'p>(project: &'p mut Project, layer: &LayerId) -> Result<&'p m
 pub(crate) fn apply(
     project: &mut Project,
     layer: &LayerId,
-    edit: impl FnOnce(&mut SceneDoc) -> Result<(), SceneEditError>,
+    edit: impl FnOnce(&mut SceneDoc, &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError>,
 ) -> Result<Before, String> {
     let instance = scene_instance(project, layer)?;
     let doc = instance.scene.clone().expect("scene layer");
     let shown = shown_camera(&doc, instance);
     let mut edited = doc.clone();
-    edit(&mut edited).map_err(|error| error.to_string())?;
+    let values = |id: &str| instance.params.contains(id).then(|| instance.get_base_param(id));
+    edit(&mut edited, &values).map_err(|error| error.to_string())?;
     // A swapped Modifier card's rows start at the new type's defaults
     // (section 7.19), even where the two types share a property name.
     let swapped = swapped_cards(&doc, &edited);
@@ -140,7 +151,7 @@ pub(crate) fn apply(
     let changed: Vec<String> = gone.into_iter().chain(reset).collect();
     held = ParamSlice::capture_kept(held, &changed);
     let pick = keep_showing(instance, shown);
-    Ok(Before { doc, removed: held, pick })
+    Ok(Before { doc, removed: held, pick, written: Vec::new() })
 }
 
 impl ParamSlice {
@@ -212,6 +223,12 @@ pub(crate) fn restore(project: &mut Project, layer: &LayerId, before: Before) {
     before.removed.restore(instance);
     if let Some((id, was)) = before.pick {
         instance.set_base_param(&id, was);
+    }
+    for (id, value, base) in before.written.into_iter().rev() {
+        if let Some(param) = instance.params.get_mut(&id) {
+            param.value = value;
+            param.base = base;
+        }
     }
 }
 

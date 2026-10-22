@@ -59,3 +59,30 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
             Some((top("swarm:forces"), "acceleration_field".to_string()))
         );
     }
+
+    /// A Force aimed at one swarm reaches that swarm's particles and no other
+    /// swarm's: a new Swarm's own forces stay its own.
+    #[test]
+    fn a_force_aimed_at_a_swarm_reaches_that_swarm_only() {
+        use manifold_core::scene_doc::{ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, ItemKind, SceneDoc};
+        let mut doc = SceneDoc::base();
+        for id in ["swarm", "other"] {
+            let at = doc.items.len();
+            doc.insert(None, at, Item::new(ItemId::new(id), id, ItemFields::default_for(ItemKind::Swarm))).unwrap();
+        }
+        let force = ItemFields::Force(ForceFields { force: ForceType::Vortex, targets: ForceTargets::Items(vec![ItemId::new("swarm")]) });
+        let at = doc.items.len();
+        doc.insert(None, at, Item::new(ItemId::new("spin"), "spin", force)).unwrap();
+        let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::from_string("Scene".into()), 0);
+        layer.gen_params_mut().unwrap().install_scene_document(doc).unwrap();
+        let def = layer.gen_params().unwrap().graph.clone().unwrap();
+        let spin = def.scene_modifiers.iter().find(|instance| instance.id == top("spin:force")).expect("the force compiles");
+        let SceneTargetSelection::Explicit { objects } = &spin.targets else { panic!("an aimed force names its objects") };
+        assert_eq!(objects, &vec![top("swarm:object")]);
+        let registry = PrimitiveRegistry::with_builtin();
+        let index = FlatSceneIndex::build(&def).unwrap();
+        assert_eq!(
+            recipient_key(&index, &objects[0], &registry).unwrap(),
+            Some((top("swarm:forces"), "acceleration_field".to_string()))
+        );
+    }

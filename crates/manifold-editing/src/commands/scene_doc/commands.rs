@@ -22,7 +22,7 @@ impl Step {
         &mut self,
         project: &mut Project,
         layer: &LayerId,
-        edit: impl FnOnce(&mut SceneDoc) -> Result<(), SceneEditError>,
+        edit: impl FnOnce(&mut SceneDoc, &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError>,
     ) -> bool {
         match apply(project, layer, edit) {
             Ok(before) => {
@@ -53,10 +53,14 @@ impl Step {
 pub trait SceneEdit {
     /// The scene layer the edit writes.
     fn layer(&self) -> &LayerId;
-    /// Edit the document only.
-    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError>;
+    /// Edit the document only. `values` reads the layer's params as they
+    /// were before the edit.
+    fn edit_doc(&mut self, doc: &mut SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError>;
     /// Once the edited document is installed: write what needs its params.
-    fn after_install(&mut self, _project: &mut Project) {}
+    /// Returns each written param's value and base before, for undo.
+    fn after_install(&mut self, _project: &mut Project) -> Vec<(String, f32, f32)> {
+        Vec::new()
+    }
 }
 
 /// The trait items every scene document command shares.
@@ -65,10 +69,13 @@ macro_rules! scene_command_common {
         fn do_execute(&mut self, project: &mut Project) {
             let layer = self.layer.clone();
             let mut step = std::mem::take(&mut self.step);
-            let applied = step.run(project, &layer, |doc| SceneEdit::edit_doc(self, doc));
+            let applied = step.run(project, &layer, |doc, values| SceneEdit::edit_doc(self, doc, values));
             self.step = step;
             if applied {
-                SceneEdit::after_install(self, project);
+                let written = SceneEdit::after_install(self, project);
+                if let Some(before) = self.step.before.as_mut() {
+                    before.note_written(written);
+                }
             }
         }
         fn do_undo(&mut self, project: &mut Project) {
@@ -164,7 +171,7 @@ impl SceneEdit for AddSceneItemCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
+    fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
         if self.prepared.is_none() {
             self.prepared = Some(self.prepare(doc)?);
         }
@@ -172,11 +179,13 @@ impl SceneEdit for AddSceneItemCommand {
         doc.insert(self.parent.as_ref(), self.index, item)
     }
 
-    fn after_install(&mut self, project: &mut Project) {
+    // The new item's params leave with it on undo, so nothing is noted.
+    fn after_install(&mut self, project: &mut Project) -> Vec<(String, f32, f32)> {
         if let Some((_, map)) = &self.prepared {
             copy_values(project, &self.layer, map);
         }
         write_values(project, &self.layer, &self.values);
+        Vec::new()
     }
 }
 
@@ -243,7 +252,7 @@ impl SceneEdit for RemoveSceneItemCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
+    fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
         doc.remove(&self.id).map(|_| ())
     }
 }
@@ -257,19 +266,23 @@ impl Command for RemoveSceneItemCommand {
     scene_command_common!();
 }
 
-/// Move an item under `parent` at `index`; also reorders.
+/// Move an item under `parent` at `index`; also reorders. The item keeps
+/// its place on screen: its transform rows are rewritten into the new
+/// parent's frame (Blender's Keep Transform), in the same undo step.
 #[derive(Debug)]
 pub struct ReparentSceneItemCommand {
     layer: LayerId,
     id: ItemId,
     parent: Option<ItemId>,
     index: usize,
+    /// The transform writes that keep the item in place, once installed.
+    keep: Vec<(String, f32)>,
     step: Step,
 }
 
 impl ReparentSceneItemCommand {
     pub fn new(layer: LayerId, id: ItemId, parent: Option<ItemId>, index: usize) -> Self {
-        Self { layer, id, parent, index, step: Step::default() }
+        Self { layer, id, parent, index, keep: Vec::new(), step: Step::default() }
     }
 }
 
@@ -278,8 +291,29 @@ impl SceneEdit for ReparentSceneItemCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
-        doc.reparent(&self.id, self.parent.as_ref(), self.index)
+    fn edit_doc(&mut self, doc: &mut SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
+        use manifold_core::scene_doc::transform::{frame_of, keep_world};
+        let (old_parent, _) = doc.locate(&self.id).ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?;
+        let from = frame_of(doc, old_parent.as_ref(), values);
+        doc.reparent(&self.id, self.parent.as_ref(), self.index)?;
+        let to = frame_of(doc, self.parent.as_ref(), values);
+        self.keep = doc.find(&self.id).map(|item| keep_world(item, from, to, values)).unwrap_or_default();
+        Ok(())
+    }
+
+    fn after_install(&mut self, project: &mut Project) -> Vec<(String, f32, f32)> {
+        let Ok(instance) = scene_instance(project, &self.layer) else {
+            return Vec::new();
+        };
+        let mut before = Vec::new();
+        for (id, value) in &self.keep {
+            if let Some(param) = instance.params.get_mut(id) {
+                before.push((id.clone(), param.value, param.base));
+                param.value = *value;
+                param.base = *value;
+            }
+        }
+        before
     }
 }
 
@@ -311,7 +345,7 @@ impl SceneEdit for RenameSceneItemCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
+    fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
         doc.find_mut(&self.id).ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?.name = self.name.clone();
         Ok(())
     }
@@ -347,7 +381,7 @@ impl SceneEdit for SetSceneItemFieldsCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc) -> Result<(), SceneEditError> {
+    fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
         let item = doc.find_mut(&self.id).ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?;
         if item.kind() != self.fields.kind() {
             return Err(SceneEditError::KindChange { from: item.kind(), to: self.fields.kind() });

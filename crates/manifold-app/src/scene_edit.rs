@@ -6,7 +6,7 @@
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
-    CameraFields, CameraRig, FeatureSetting, ForceFields, ForceType, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields,
+    CameraFields, CameraRig, FeatureSetting, ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields,
     MaterialType, SceneDoc, Shape, SourceRole, TextureFeeds, TextureSource, WaterFields, WaterSourceFields, param_id,
 };
 use manifold_core::scene_schema::{self, FieldControl, FieldValue, add_entry, field_for, unique_name};
@@ -115,7 +115,8 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
             commands.push(Box::new(SetSceneItemFieldsCommand::new(
                 layer.clone(),
                 force_id.clone(),
-                ItemFields::Force(ForceFields { force: *force, ..ForceFields::default() }),
+                // Aimed at this swarm only, not every body, water or other swarm.
+                ItemFields::Force(ForceFields { force: *force, targets: ForceTargets::Items(vec![id.clone()]) }),
             )));
             commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), force_id.clone(), name)));
             // The force's params exist once it is added; they start at the stock recipe's values.

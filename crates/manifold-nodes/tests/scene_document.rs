@@ -715,3 +715,67 @@ mod every_kind_and_choice_survives {
         assert!(failures.is_empty(), "{} cases failed:\n{}", failures.len(), failures.join("\n"));
     }
 }
+
+/// Group, Ungroup and a move out of a turned, scaled Group keep every item
+/// where it is on screen (SCENE_DOCUMENT_DESIGN.md section 7.2), and undo
+/// puts the item's rows back.
+#[test]
+fn moving_an_item_between_groups_keeps_it_in_place() {
+    use manifold_core::scene_doc::param_id;
+    use manifold_core::scene_doc::transform::{Mat4, frame_of, mat4_mul, trs_matrix};
+    use manifold_editing::command::CompositeCommand;
+    use manifold_editing::commands::scene_doc::{ReparentSceneItemCommand, group_commands, ungroup_commands};
+    use manifold_editing::undo::UndoRedoManager;
+
+    let (cube, rig, outer) = (ItemId::new("cube"), ItemId::new("rig"), ItemId::new("outer"));
+    let mut doc = SceneDoc::base();
+    doc.insert(None, 0, Item::new(outer.clone(), "Outer", ItemFields::default_for(ItemKind::Group))).unwrap();
+    doc.insert(Some(&outer), 0, Item::new(rig.clone(), "Rig", ItemFields::default_for(ItemKind::Group))).unwrap();
+    doc.reparent(&cube, Some(&rig), 0).unwrap();
+    let mut layer = scene_layer(doc);
+    layer.layer_id = manifold_core::LayerId::new("scene");
+    let layer_id = layer.layer_id.clone();
+    {
+        let fx = layer.gen_params_mut().unwrap();
+        for (item, values) in [
+            (&outer, [3.0, -1.0, 2.0, 0.2, 0.0, -0.4, 2.0, 2.0, 2.0]),
+            (&rig, [1.0, 2.0, -3.0, 0.3, -0.7, 1.1, 0.5, 0.5, 0.5]),
+            (&cube, [0.5, -1.0, 0.25, -0.2, 0.4, 0.9, 1.5, 1.5, 1.5]),
+        ] {
+            for (name, value) in ["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z"].into_iter().zip(values) {
+                assert!(fx.set_base_param(&param_id(item, name), value), "{item} has {name}");
+            }
+        }
+    }
+    let mut project = Project::default();
+    project.timeline.layers.push(layer);
+    let world = |project: &Project| -> Mat4 {
+        let fx = project.timeline.layers[0].gen_params().unwrap();
+        let doc = fx.scene.as_ref().unwrap();
+        let values = |id: &str| fx.params.contains(id).then(|| fx.get_base_param(id));
+        let read = |names: [&str; 3]| names.map(|name| fx.get_base_param(&param_id(&cube, name)));
+        let parent = doc.locate(&cube).unwrap().0;
+        mat4_mul(
+            frame_of(doc, parent.as_ref(), &values),
+            trs_matrix(read(["pos_x", "pos_y", "pos_z"]), read(["rot_x", "rot_y", "rot_z"]), read(["scale_x", "scale_y", "scale_z"])),
+        )
+    };
+    let same = |a: Mat4, b: Mat4| a.iter().flatten().zip(b.iter().flatten()).all(|(x, y)| (x - y).abs() < 1e-3);
+    let start = world(&project);
+    let doc_now = |project: &Project| project.timeline.layers[0].gen_params().unwrap().scene.clone().unwrap();
+    let mut undo = UndoRedoManager::new();
+
+    let out = ReparentSceneItemCommand::new(layer_id.clone(), cube.clone(), None, 0);
+    assert!(undo.execute(Box::new(out), &mut project));
+    assert!(same(world(&project), start), "a move to the root keeps the cube in place");
+    assert!(undo.undo(&mut project));
+    assert!(same(world(&project), start) && doc_now(&project).locate(&cube).unwrap().0 == Some(rig.clone()), "undo puts it back");
+
+    let ungroup = CompositeCommand::new(ungroup_commands(&layer_id, &doc_now(&project), &rig), "Ungroup".into());
+    assert!(undo.execute(Box::new(ungroup), &mut project));
+    assert!(same(world(&project), start), "ungrouping keeps the cube in place");
+
+    let group = CompositeCommand::new(group_commands(&layer_id, &doc_now(&project), std::slice::from_ref(&cube), ItemId::new("new")), "Group".into());
+    assert!(undo.execute(Box::new(group), &mut project));
+    assert!(same(world(&project), start), "grouping keeps the cube in place");
+}

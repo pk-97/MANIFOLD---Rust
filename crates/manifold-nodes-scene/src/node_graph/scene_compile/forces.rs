@@ -9,7 +9,7 @@
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef};
 use manifold_core::effects::ParamConvert;
-use manifold_core::scene_doc::{ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, PhysicsSetting, param_id};
+use manifold_core::scene_doc::{ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, ItemKind, PhysicsSetting, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
 use manifold_core::scene_schema::{self, Exposure, PropertyRow};
 use manifold_foundation::scene_surface::SurfaceRole;
@@ -65,6 +65,27 @@ fn object_ref(b: &Builder<'_>, item: &Item) -> Option<NodeId> {
     b.id(item.id.as_str(), "object").map(|_| node(item.id.as_str(), "object"))
 }
 
+/// The scene objects a swarm draws its particles with: its own built-in
+/// shape, or the Object or Group it draws as (every part of the Group). A
+/// force aimed at them enters at the swarm's forces node.
+fn swarm_objects(b: &mut Builder<'_>, swarm: &ItemId, items: &[Placed<'_>]) -> Vec<NodeId> {
+    let copies = b.id(swarm.as_str(), "copies");
+    let drawn_by_swarm = |owner: &ItemId| {
+        copies.is_some()
+            && items.iter().find(|placed| &placed.item.id == owner).is_some_and(|placed| {
+                placed.lineage.iter().any(|above| b.swarm_draws.get(above).copied() == copies)
+            })
+    };
+    let drawn: Vec<u32> = b
+        .objects
+        .iter()
+        .zip(&b.object_items)
+        .filter(|(_, owner)| *owner == swarm || drawn_by_swarm(owner))
+        .map(|(&object, _)| object)
+        .collect();
+    drawn.into_iter().filter_map(|object| b.node_id_of(object)).collect()
+}
+
 fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Placed<'_>]) -> Result<(), String> {
     let targets = match &force.targets {
         ForceTargets::Physics => SceneTargetSelection::AllObjects,
@@ -77,6 +98,16 @@ fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Pl
                     && !objects.contains(&target)
                 {
                     objects.push(target);
+                }
+            }
+            // A chosen Swarm (or one inside a chosen Group): what it draws.
+            for placed in items.iter().filter(|placed| placed.item.kind() == ItemKind::Swarm) {
+                if ids.iter().any(|chosen| placed.lineage.contains(chosen)) {
+                    for target in swarm_objects(b, &placed.item.id, items) {
+                        if !objects.contains(&target) {
+                            objects.push(target);
+                        }
+                    }
                 }
             }
             SceneTargetSelection::Explicit { objects }

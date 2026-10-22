@@ -13,6 +13,7 @@
 
 mod base;
 mod import;
+pub mod transform;
 mod tree;
 
 pub use base::{BASE_CUBE, BASE_CUBE_MATERIAL};

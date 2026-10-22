@@ -190,11 +190,11 @@ impl CompositeCommand {
     fn run_scene_edits(&mut self, project: &mut Project, range: std::ops::Range<usize>) -> Result<(), String> {
         let run = &mut self.commands[range.clone()];
         let layer = run[0].scene_edit().expect("a scene run").layer().clone();
-        let before = crate::commands::scene_doc::apply(project, &layer, |doc| {
-            run.iter_mut().try_for_each(|command| command.scene_edit().expect("a scene run").edit_doc(doc))
+        let mut before = crate::commands::scene_doc::apply(project, &layer, |doc, values| {
+            run.iter_mut().try_for_each(|command| command.scene_edit().expect("a scene run").edit_doc(doc, values))
         })?;
         for command in run.iter_mut() {
-            command.scene_edit().expect("a scene run").after_install(project);
+            before.note_written(command.scene_edit().expect("a scene run").after_install(project));
         }
         self.scene_runs.push(SceneRun { range, layer, before: Some(before) });
         Ok(())
