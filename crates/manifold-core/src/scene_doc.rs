@@ -13,6 +13,7 @@
 
 mod base;
 mod import;
+mod models;
 mod tree;
 
 pub use base::{BASE_CUBE, BASE_CUBE_MATERIAL};
@@ -21,7 +22,8 @@ pub use import::{
     ImportPlacement, ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, camera_item, import_child_id,
     is_import_child, light_item, material_item, node_item,
 };
-pub use tree::{SceneEditError, can_hold};
+pub use models::{ModelFacts, SceneModels};
+pub use tree::{ONE_ENVIRONMENT, ONE_FILL, SceneEditError, can_hold, draws_with_material};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +35,9 @@ use crate::material_inspector::MaterialFeature;
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SceneDoc {
     pub items: Vec<Item>,
+    /// What its model files say, read on the import worker; never saved.
+    #[serde(skip)]
+    pub models: SceneModels,
 }
 
 /// One item: a stable id, a display name, its kind's structural fields, and
@@ -93,7 +98,8 @@ impl ItemFields {
             ItemKind::Light => ItemFields::Light(LightFields::default()),
             ItemKind::Material => ItemFields::Material(MaterialFields::default()),
             ItemKind::Water => ItemFields::Water(WaterFields::default()),
-            ItemKind::WaterSource => ItemFields::WaterSource(WaterSourceFields::default()),
+            // An Inflow, so a new source never makes a second Fill; Add sets its role next.
+            ItemKind::WaterSource => ItemFields::WaterSource(WaterSourceFields { role: SourceRole::Inflow, ..WaterSourceFields::default() }),
             ItemKind::Swarm => ItemFields::Swarm(SwarmFields::default()),
             ItemKind::Force => ItemFields::Force(ForceFields::default()),
             ItemKind::Modifier => ItemFields::Modifier(ModifierFields::default()),

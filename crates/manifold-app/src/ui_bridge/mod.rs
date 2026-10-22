@@ -36,12 +36,6 @@ pub(crate) use context::{DispatchCtx, LocalProject, ProjectRef};
 pub(crate) use scrub::ScrubState;
 pub(crate) use state_sync::SceneImpulseToast;
 
-/// Re-exported so `Application::handle_text_input_commit`'s
-/// `SceneObjectRename` arm (main-window text-input commit, not a
-/// `PanelAction`) can resolve a layer's generator-graph catalog default the
-/// same way the Scene Setup panel's other dispatch arms do.
-pub(crate) use project::generator_catalog_default;
-
 use manifold_core::LayerId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
@@ -77,10 +71,10 @@ pub struct DispatchResult {
         manifold_ui::panels::picker_core::Source,
         String,
     )>,
-    /// Set by the Scene tab's "Mesh from file" Add entry: the picked model
-    /// file and the scene layer it joins. Only the caller can start the
+    /// Set by the Scene tab's "Mesh from file" Add entry and Model File swap:
+    /// the picked model file and where it goes. Only the caller can start the
     /// import worker a drop uses, so the handoff rides here.
-    pub import_model: Option<(std::path::PathBuf, LayerId)>,
+    pub import_model: Option<(std::path::PathBuf, crate::import_worker::ImportTarget)>,
 }
 
 impl DispatchResult {
@@ -729,7 +723,7 @@ pub use state_sync::{
     LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, intake_overlay_state, push_chrome, push_clock, push_zoom_label, push_frame, push_live, push_selection,
     sync_automation_lane_geometry,
     sync_clip_positions, sync_driver_readouts, sync_markers,
-    sync_scene_outliner_eyes,
+    sync_scene_row_values,
     sync_audio_dock, sync_inspector_data, sync_project_all, sync_project_data, sync_track_layout, sync_trigger_catalog,
 };
 #[cfg(feature = "ui-snapshot")]

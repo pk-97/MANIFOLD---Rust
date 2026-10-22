@@ -77,8 +77,8 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             }
             vec![(texture, "base_color_map")]
         }
-        TextureSource::Model { file, material } => match model_file(file) {
-            Some(model) => super::model_material::emit(b, owner, surface, file, &model, *material),
+        TextureSource::Model { file, material } => match model_file(b.doc, file) {
+            Some(model) => super::model_material::emit(b, owner, surface, file, model, *material),
             None => Vec::new(),
         },
     };

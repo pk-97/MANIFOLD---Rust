@@ -1,9 +1,9 @@
 //! Gizmo drags as knob scrubs (REALTIME_3D_DESIGN.md D8): a gizmo handle
-//! writes each param it names exactly as that param's knob does. A param
-//! bound to a card scrubs the card (`ValueRef::Param`); an unbound node
-//! param scrubs as the graph node face does; a direction's three card
-//! params move as one gesture. Live writes while dragging, one undo entry
-//! on release, no private path.
+//! writes each param it names exactly as that param's card knob does
+//! (`ValueRef::Param`); a direction's three card params move as one
+//! gesture. A scene's shapes name only card params, so a drag never writes
+//! the compiled graph (SCENE_DOCUMENT_DESIGN.md ruling 18). Live writes
+//! while dragging, one undo entry on release, no private path.
 //!
 //! The scene VM here is what the viewport reads: the scene document at the
 //! layer's card values, so handles sit at the values the knobs show.
@@ -11,10 +11,8 @@
 use manifold_core::effects::{ParamId, invert_card_reshape};
 use manifold_core::macro_bank::MacroCurve;
 use manifold_core::scene_doc::ItemId;
-use manifold_editing::command::Command;
 use manifold_core::{GraphTarget, LayerId, project::Project};
-use manifold_core::effect_graph_def::SerializedParamValue;
-use manifold_nodes_scene::node_graph::scene_vm::{ParamAddr, SceneVm, ShapeOwner, ShapeWrite};
+use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, ShapeOwner, ShapeWrite};
 use manifold_nodes_scene::node_graph::viewport_gizmo::{
     GizmoDrag, GizmoMode, GizmoSelection, GizmoTarget, HandleValues, HandleWrite, SelectionWrite, gizmo_target_for,
     gizmo_targets, pick_axis, pick_target, selection_writes,
@@ -22,7 +20,6 @@ use manifold_nodes_scene::node_graph::viewport_gizmo::{
 use manifold_ui::panels::scene_setup_panel::SceneSelection;
 use manifold_ui::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
 
-use crate::app_render::UnboundNodeParamDrag;
 use crate::content_command::ContentCommand;
 use crate::ui_bridge::DispatchCtx;
 use crate::ui_bridge::scrub::{ResolvedScrub, begin_param_group, commit_param_group, dispatch_scrub, move_param_group};
@@ -43,24 +40,23 @@ pub(crate) fn scene_vm_of(project: &Project, target: &GraphTarget) -> Option<Sce
     }
 }
 
-/// The knob a shape param already has.
+/// The card knob a shape param has, with the reshape from its value to the
+/// shape's.
 #[derive(Debug, Clone, PartialEq)]
-enum Knob {
-    /// A card param, with the reshape from its value to the shape's.
-    Card { id: ParamId, min: f32, max: f32, invert: bool, curve: MacroCurve, scale: f32, offset: f32 },
-    /// An unbound graph node param.
-    Node(ParamAddr),
+struct Knob {
+    id: ParamId,
+    min: f32,
+    max: f32,
+    invert: bool,
+    curve: MacroCurve,
+    scale: f32,
+    offset: f32,
 }
 
 impl Knob {
     /// The knob value that places the shape param at `value`.
     fn card_value(&self, value: f32) -> Option<f32> {
-        match self {
-            Knob::Card { min, max, invert, curve, scale, offset, .. } => {
-                invert_card_reshape(value, *min, *max, *invert, *curve, *scale, *offset)
-            }
-            Knob::Node(_) => Some(value),
-        }
+        invert_card_reshape(value, self.min, self.max, self.invert, self.curve, self.scale, self.offset)
     }
 }
 
@@ -91,10 +87,7 @@ struct SelectionGesture {
     params: Vec<MemberParam>,
     /// Card values at the press, in the group scrub's card order.
     card_base: Vec<f32>,
-    /// Unbound node values at the press, in the group scrub's node order.
-    node_base: Vec<f32>,
     cards: Vec<f32>,
-    nodes: Vec<f32>,
     writes: Vec<SelectionWrite>,
 }
 
@@ -103,14 +96,8 @@ struct MemberParam {
     member: usize,
     id: String,
     knob: Knob,
-    slot: Slot,
-}
-
-/// Where a member param sits in the group scrub.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Slot {
-    Card(usize),
-    Node(usize),
+    /// Where the param sits in the group scrub's card order.
+    slot: usize,
 }
 
 impl GizmoGesture {
@@ -127,26 +114,21 @@ impl GizmoGesture {
             .collect::<Option<Vec<_>>>()
             .ok_or("This handle's parameter has no control to drag")?;
         match (&drag.handle().write, knobs.as_slice()) {
-            (HandleWrite::Direction { .. }, [Knob::Card { id: x, .. }, Knob::Card { id: y, .. }, Knob::Card { id: z, .. }]) => {
-                if !begin_param_group(ctx, target, vec![x.clone(), y.clone(), z.clone()], Vec::new(), "Turn direction") {
+            (HandleWrite::Direction { .. }, [x, y, z]) => {
+                if !begin_param_group(ctx, target, vec![x.id.clone(), y.id.clone(), z.id.clone()], Vec::new(), "Turn direction") {
                     return Err("This direction cannot be turned here".into());
                 }
             }
-            (HandleWrite::Uniform { .. }, [Knob::Card { id: x, .. }, Knob::Card { id: y, .. }, Knob::Card { id: z, .. }]) => {
-                if !begin_param_group(ctx, target, vec![x.clone(), y.clone(), z.clone()], Vec::new(), "Scale copies") {
+            (HandleWrite::Uniform { .. }, [x, y, z]) => {
+                if !begin_param_group(ctx, target, vec![x.id.clone(), y.id.clone(), z.id.clone()], Vec::new(), "Scale copies") {
                     return Err("This scale cannot be changed here".into());
                 }
             }
-            (HandleWrite::Linear { .. } | HandleWrite::Angle(_), [Knob::Card { id, .. }]) => {
+            (HandleWrite::Linear { .. } | HandleWrite::Angle(_), [Knob { id, .. }]) => {
                 dispatch_scrub(&card_ref(&layer, id), &ScrubPhase::Begin, ctx);
                 if !matches!(&ctx.scrub.active, Some(ResolvedScrub::Param { param_id, .. }) if param_id == id) {
                     return Err("This handle's control is locked".into());
                 }
-            }
-            (HandleWrite::Linear { param, .. } | HandleWrite::Angle(param), [Knob::Node(addr)]) => {
-                let drag = node_drag(ctx, &layer, addr, param.value).ok_or("Generator graph is unavailable")?;
-                ctx.scrub.check_single_active_on_begin("gizmo-node-param");
-                ctx.scrub.active = Some(ResolvedScrub::UnboundNodeParam(Box::new(drag)));
             }
             (HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Direction { .. } | HandleWrite::Uniform { .. }, _) => {
                 return Err("A direction or a uniform scale moves only through its card controls".into());
@@ -162,36 +144,25 @@ impl GizmoGesture {
     /// why nothing can move.
     pub(crate) fn begin_selection(ctx: &mut DispatchCtx, layer: LayerId, drag: GizmoDrag, members: Vec<GizmoTarget>) -> Result<Self, String> {
         let target = GraphTarget::Generator(layer.clone());
-        let (mut params, mut cards, mut nodes) = (Vec::new(), Vec::<ParamId>::new(), Vec::new());
-        let (mut card_base, mut node_base) = (Vec::new(), Vec::new());
+        let (mut params, mut cards, mut card_base) = (Vec::new(), Vec::<ParamId>::new(), Vec::new());
         for (member, shape) in members.iter().enumerate().filter(|(_, shape)| !shape.unplaced) {
             for param in shape.handles.iter().flat_map(|handle| handle.write.params()) {
                 if param.wired || params.iter().any(|seen: &MemberParam| seen.member == member && seen.id == param.id) {
                     continue;
                 }
                 let Some(knob) = knob(&ctx.project, &target, &param.write) else { continue };
-                let slot = match &knob {
-                    Knob::Card { id, .. } => {
-                        if crate::graph_target::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()).is_some() {
+                if crate::graph_target::macro_parameter_lock_reason(&ctx.project, &target, knob.id.as_ref()).is_some() {
+                    continue;
+                }
+                let slot = match cards.iter().position(|card| *card == knob.id) {
+                    Some(at) => at,
+                    None => {
+                        let Some(base) = ctx.project.with_preset_graph(&target, |inst| inst.get_base_param(knob.id.as_ref())) else {
                             continue;
-                        }
-                        match cards.iter().position(|card| card == id) {
-                            Some(at) => Slot::Card(at),
-                            None => {
-                                let Some(base) = ctx.project.with_preset_graph(&target, |inst| inst.get_base_param(id.as_ref())) else {
-                                    continue;
-                                };
-                                cards.push(id.clone());
-                                card_base.push(base);
-                                Slot::Card(cards.len() - 1)
-                            }
-                        }
-                    }
-                    Knob::Node(addr) => {
-                        let Some(drag) = node_drag(ctx, &layer, addr, param.value) else { continue };
-                        nodes.push(drag);
-                        node_base.push(param.value);
-                        Slot::Node(nodes.len() - 1)
+                        };
+                        cards.push(knob.id.clone());
+                        card_base.push(base);
+                        cards.len() - 1
                     }
                 };
                 params.push(MemberParam { member, id: param.id.clone(), knob, slot });
@@ -205,18 +176,10 @@ impl GizmoGesture {
             GizmoMode::Rotate => "Turn selection",
             GizmoMode::Scale => "Scale selection",
         };
-        if !begin_param_group(ctx, target, cards, nodes, label) {
+        if !begin_param_group(ctx, target, cards, Vec::new(), label) {
             return Err("The selection cannot move here".into());
         }
-        let selection = SelectionGesture {
-            members,
-            params,
-            cards: card_base.clone(),
-            nodes: node_base.clone(),
-            card_base,
-            node_base,
-            writes: Vec::new(),
-        };
+        let selection = SelectionGesture { members, params, cards: card_base.clone(), card_base, writes: Vec::new() };
         Ok(Self { layer, drag, kind: GestureKind::Selection(Box::new(selection)), moved: false })
     }
 
@@ -234,22 +197,10 @@ impl GizmoGesture {
             (GestureKind::Selection(_), HandleValues::Three(_)) => return,
         };
         match (values, knobs.as_slice()) {
-            (HandleValues::One(value), [knob @ Knob::Card { id, .. }]) => {
+            (HandleValues::One(value), [knob]) => {
                 if let Some(card) = knob.card_value(value) {
-                    dispatch_scrub(&card_ref(&self.layer, id), &ScrubPhase::Move(ScrubValue::Scalar(card)), ctx);
+                    dispatch_scrub(&card_ref(&self.layer, &knob.id), &ScrubPhase::Move(ScrubValue::Scalar(card)), ctx);
                 }
-            }
-            (HandleValues::One(value), [Knob::Node(_)]) => {
-                let target = GraphTarget::Generator(self.layer.clone());
-                let graph_absent = ctx.project.preset_instance(&target).is_none_or(|inst| inst.graph.is_none());
-                let Some(ResolvedScrub::UnboundNodeParam(drag)) = ctx.scrub.active.as_mut() else { return };
-                drag.set_current(SerializedParamValue::Float { value });
-                let live = (**drag).clone();
-                // The first write may materialise the graph override (D21).
-                let touches = crate::content_command::touch::shapes_first_move(!self.moved && graph_absent);
-                ctx.gesture_move(touches, move |project| {
-                    live.live_command().execute(project);
-                });
             }
             (HandleValues::Three(values), [x, y, z]) => {
                 if let (Some(x), Some(y), Some(z)) = (x.card_value(values[0]), y.card_value(values[1]), z.card_value(values[2])) {
@@ -268,16 +219,8 @@ impl GizmoGesture {
             GestureKind::Selection(_) => return commit_param_group(ctx),
         };
         match knobs {
-            [Knob::Card { id, .. }] => {
+            [Knob { id, .. }] => {
                 dispatch_scrub(&card_ref(&self.layer, id), &ScrubPhase::Commit, ctx);
-            }
-            [Knob::Node(_)] => {
-                if let Some(ResolvedScrub::UnboundNodeParam(drag)) = ctx.scrub.active.take()
-                    && self.moved
-                    && drag.moved()
-                {
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(drag.into_command())));
-                }
             }
             _ => commit_param_group(ctx),
         }
@@ -290,37 +233,18 @@ impl SelectionGesture {
     fn move_to(&mut self, ctx: &mut DispatchCtx, mode: GizmoMode, axis: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis, amount: f32) {
         selection_writes(&self.members, mode, axis, amount, &mut self.writes);
         self.cards.copy_from_slice(&self.card_base);
-        self.nodes.copy_from_slice(&self.node_base);
         for write in &self.writes {
             let Some(param) = self.params.iter().find(|param| param.member == write.member && param.id == write.param.id) else { continue };
-            match param.slot {
-                Slot::Card(at) => {
-                    if let Some(card) = param.knob.card_value(write.value) {
-                        self.cards[at] = card;
-                    }
-                }
-                Slot::Node(at) => self.nodes[at] = write.value,
+            if let Some(card) = param.knob.card_value(write.value) {
+                self.cards[param.slot] = card;
             }
         }
-        move_param_group(ctx, &self.cards, &self.nodes);
+        move_param_group(ctx, &self.cards, &[]);
     }
 }
 
 fn card_ref(layer: &LayerId, id: &ParamId) -> ValueRef {
     ValueRef::Param(GraphParamTarget::GeneratorOf(layer.clone()), id.clone())
-}
-
-/// An unbound node param scrub on `layer`'s generator graph from its value
-/// now (`shown` when the key is absent). `None` without a graph.
-fn node_drag(ctx: &DispatchCtx, layer: &LayerId, addr: &ParamAddr, shown: f32) -> Option<UnboundNodeParamDrag> {
-    let target = GraphTarget::Generator(layer.clone());
-    let catalog = crate::ui_bridge::generator_catalog_default(&ctx.project, layer)?;
-    let pre_drag_value = ctx
-        .project
-        .graph_for_target(&target, Some(&catalog))
-        .and_then(|def| crate::editor_bridge::node_param_value(def, &addr.scope_path, addr.node_doc_id, &addr.param_id));
-    let current = pre_drag_value.clone().unwrap_or(SerializedParamValue::Float { value: shown });
-    Some(UnboundNodeParamDrag::new(target, addr.scope_path.clone(), addr.node_doc_id, addr.param_id.clone(), catalog, pre_drag_value, current))
 }
 
 pub(crate) use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoView;
@@ -352,7 +276,7 @@ pub(crate) struct PressAt<'a> {
 /// selection's one handle set first, then a pick of a helper that draws no
 /// pixels. With `at.extend` (Shift) the pick adds its item to the Scene
 /// panel's selection or takes it out. `scene` is the host's cached
-/// `SceneVm` of `layer`'s authored graph and `selection` was built over it.
+/// `SceneVm` of `layer`'s scene document and `selection` was built over it.
 pub(crate) fn press(
     ctx: &mut DispatchCtx,
     layer: &LayerId,
@@ -428,16 +352,15 @@ pub(crate) fn selected_object(target: &GizmoTarget) -> Option<&ItemId> {
     }
 }
 
-/// The knob behind `write`: a host card, or the node param itself.
+/// The card knob behind `write`; `None` for a shape not placed yet.
 fn knob(project: &Project, target: &GraphTarget, write: &ShapeWrite) -> Option<Knob> {
     let owner = project.graph_target_owner(target)?;
     match write {
         ShapeWrite::Card { id, scale, offset } => {
             let spec = &owner.params.get(id)?.spec;
-            Some(Knob::Card { id: ParamId::from(id.clone()), min: spec.min, max: spec.max, invert: spec.invert, curve: spec.curve, scale: *scale, offset: *offset })
+            Some(Knob { id: ParamId::from(id.clone()), min: spec.min, max: spec.max, invert: spec.invert, curve: spec.curve, scale: *scale, offset: *offset })
         }
         ShapeWrite::Unplaced => None,
-        ShapeWrite::Node(addr) => Some(Knob::Node(addr.clone())),
     }
 }
 

@@ -41,6 +41,10 @@ fn physics_field() -> FieldRowVm {
 fn live_panel(fields: Vec<FieldRowVm>) -> (ScenePanel, UITree) {
     let mut cube = item("cube", ItemKind::Object, "Cube", 0, None);
     cube.fields = fields;
+    live_panel_with(cube)
+}
+
+fn live_panel_with(cube: SceneItemVm) -> (ScenePanel, UITree) {
     let vm = SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
         items: vec![item("world", ItemKind::World, "World", 0, None), cube],
@@ -109,4 +113,167 @@ fn a_disabled_field_row_does_nothing_and_keeps_its_reason_on_hover() {
     let button = panel.properties_card.row_host.toggle_ids[0].as_ref().unwrap().button_id;
     assert!(click(&mut panel, &mut tree, button).is_empty());
     assert_eq!(tree.get_node(button).unwrap().tooltip.as_deref(), Some("A group above is already a Body"));
+}
+
+/// A panel showing the World and two Modifier cards.
+fn chain_panel() -> (ScenePanel, UITree) {
+    let vm = SceneSetupVm {
+        layer_id: LayerId::new("layer-1"),
+        items: vec![
+            item("world", ItemKind::World, "World", 0, None),
+            item("bend", ItemKind::Modifier, "Bend", 0, None),
+            item("twist", ItemKind::Modifier, "Twist", 0, None),
+        ],
+        add_entries: Vec::new(),
+    };
+    let mut panel = ScenePanel::new();
+    panel.open();
+    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    let mut tree = UITree::new();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    (panel, tree)
+}
+
+fn drag_begin(node_id: Option<NodeId>, pos: Vec2) -> UIEvent {
+    UIEvent::DragBegin { node_id, pos, origin: pos, modifiers: Modifiers::default() }
+}
+
+/// A tree of a Group and a cube beside it.
+fn tree_panel() -> (ScenePanel, UITree) {
+    let mut rig = item("rig", ItemKind::Group, "Rig", 0, None);
+    rig.has_children = false;
+    let vm = SceneSetupVm {
+        layer_id: LayerId::new("layer-1"),
+        items: vec![item("world", ItemKind::World, "World", 0, None), rig, item("cube", ItemKind::Object, "Cube", 0, None)],
+        add_entries: Vec::new(),
+    };
+    let mut panel = ScenePanel::new();
+    panel.open();
+    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    let mut tree = UITree::new();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    (panel, tree)
+}
+
+fn tree_row(panel: &ScenePanel, id: &str) -> NodeId {
+    let item = SceneSelection::Item(ItemId::new(id));
+    panel.outliner_row_ids.iter().find(|(_, sel)| *sel == item).expect("the item has a row").0
+}
+
+/// Dragging a row onto the middle of a Group's row moves it into the
+/// Group; onto a row's top half, before that row.
+#[test]
+fn a_tree_row_drag_moves_the_item_into_a_group_or_beside_a_row() {
+    let (mut panel, mut tree) = tree_panel();
+    let (cube, rig) = (tree_row(&panel, "cube"), tree_row(&panel, "rig"));
+    let from = tree.get_bounds(cube);
+    let target = tree.get_bounds(rig);
+    for (at, parent, before) in [(0.5, Some("rig"), None), (0.1, None, Some("rig"))] {
+        let start = Vec2::new(from.x + 4.0, from.y + from.height * 0.5);
+        assert!(panel.handle_event(&drag_begin(Some(cube), start), &mut tree).0, "the row drag begins");
+        let drop = Vec2::new(target.x + 4.0, target.y + target.height * at);
+        let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: drop }, &mut tree);
+        let [PanelAction::Project(ProjectAction::SceneTreeMove { item, parent: to, before: ahead, .. })] = actions.as_slice() else {
+            panic!("expected one move, got {actions:?}");
+        };
+        assert_eq!(item.as_str(), "cube");
+        assert_eq!(to.as_ref().map(ItemId::as_str), parent);
+        assert_eq!(ahead.as_ref().map(ItemId::as_str), before);
+    }
+}
+
+/// Double-clicking a tree row renames its item, the name field over the row.
+#[test]
+fn a_tree_row_double_click_renames_in_place() {
+    let (mut panel, mut tree) = tree_panel();
+    let row = tree_row(&panel, "cube");
+    let event = UIEvent::DoubleClick { node_id: row, pos: Vec2::ZERO, modifiers: Modifiers::default() };
+    let (_, actions) = panel.handle_event(&event, &mut tree);
+    let [PanelAction::Root(RootAction::SceneRenameClicked(_, item, name))] = actions.as_slice() else {
+        panic!("expected a rename, got {actions:?}");
+    };
+    assert_eq!((item.as_str(), name.as_str()), ("cube", "Cube"));
+    let anchor = panel.item_name_rect(&tree, item).expect("an anchor");
+    let bounds = tree.get_bounds(row);
+    assert_eq!((anchor.x, anchor.y), (bounds.x, bounds.y), "the name field opens over the row");
+}
+
+/// Closing the tab mid card drag ends the drag: the release the panel never
+/// saw cannot reorder the chain when the tab is next open.
+#[test]
+fn closing_the_tab_mid_card_drag_drops_the_drag() {
+    let (mut panel, mut tree) = chain_panel();
+    let row = panel.chain_rows[0].0;
+    let bounds = tree.get_bounds(row);
+    let at = Vec2::new(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
+    assert!(panel.handle_event(&drag_begin(Some(row), at), &mut tree).0, "the card drag begins");
+    panel.close();
+    panel.open();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: Vec2::new(at.x, 2000.0) }, &mut tree);
+    assert!(
+        !actions.iter().any(|action| matches!(action, PanelAction::Project(ProjectAction::SceneChainMove { .. }))),
+        "a stale card drag reordered the chain: {actions:?}"
+    );
+}
+
+/// The inline Material's structural rows on an Object card edit the
+/// Material, not the Object that draws with it.
+#[test]
+fn an_inline_material_row_sets_the_material_not_its_owner() {
+    let mut cube = item("cube", ItemKind::Object, "Cube", 0, None);
+    let mut material_type = physics_field();
+    material_type.id = "material_type".into();
+    material_type.label = "Type".into();
+    material_type.section = ControlGroup::Material;
+    cube.material = Some(MaterialBlockVm {
+        item: ItemId::new("cube-material"),
+        name: "Material".into(),
+        used_by: 1,
+        features: Vec::new(),
+        parameter_ids: Vec::new(),
+        fields: vec![material_type],
+        look: None,
+        pbr: true,
+    });
+    let (mut panel, mut tree) = live_panel_with(cube);
+    let button = panel.properties_card.row_host.toggle_ids.iter().flatten().next().expect("the Type row is a button row").button_id;
+    let actions = click(&mut panel, &mut tree, button);
+    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] = actions.as_slice() else {
+        panic!("expected one menu, got {actions:?}");
+    };
+    assert!(matches!(
+        &items[0].action,
+        Some(PanelAction::Project(ProjectAction::SceneFieldSet { item, field, .. })) if item.as_str() == "cube-material" && field == "material_type"
+    ), "{:?}", items[0].action);
+}
+
+/// A structural field row is no manifest param: right-clicking it opens no
+/// param menu, so it can never be mapped (ruling 3).
+#[test]
+fn a_field_row_opens_no_param_menu() {
+    let (panel, tree) = live_panel(vec![physics_field()]);
+    let ids = panel.properties_card.row_host.toggle_ids.iter().flatten().next().expect("the Physics row is a button row");
+    let mut intents = crate::intent::IntentRegistry::new();
+    panel.register_intents(&mut intents);
+    for node in std::iter::once(ids.button_id).chain(ids.label_id) {
+        let action = intents.resolve(&tree, Some(node), crate::intent::Gesture::RightClick);
+        assert!(
+            !matches!(action, Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(..)))),
+            "a field row opened the param menu: {action:?}"
+        );
+    }
+}
+
+/// Every base scene names its cube "cube": unlinking one layer's cube scale
+/// leaves another layer's cube linked.
+#[test]
+fn the_scale_link_belongs_to_one_layers_item() {
+    let (mut panel, _tree) = live_panel(Vec::new());
+    let cube = ItemId::new("cube");
+    panel.properties_card.rows.push(panel.scale_link_row(&cube));
+    let row = panel.properties_card.rows.len() - 1;
+    assert!(panel.scale_link_click(row));
+    assert!(!panel.scale_linked(&LayerId::new("layer-1"), &cube));
+    assert!(panel.scale_linked(&LayerId::new("layer-2"), &cube), "another layer's cube keeps its own link");
 }

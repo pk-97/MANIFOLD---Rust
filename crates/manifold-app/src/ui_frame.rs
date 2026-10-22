@@ -606,7 +606,7 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     }
     // The inspector projection already built the eyes from the project.
     if projections.contains(Projection::SceneEyes) && !inspector_sync {
-        crate::ui_bridge::sync_scene_outliner_eyes(ui_root, project);
+        crate::ui_bridge::sync_scene_row_values(ui_root, project);
     }
     if driver_periods_moved {
         crate::ui_bridge::sync_driver_readouts(ui_root, project, idx);

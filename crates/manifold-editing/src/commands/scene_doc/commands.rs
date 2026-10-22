@@ -322,7 +322,10 @@ impl Command for SetSceneItemFieldsCommand {
                 return Err(SceneEditError::KindChange { from: item.kind(), to: fields.kind() });
             }
             item.fields = fields;
-            Ok(())
+            match doc.second_fill(&id) {
+                Some(reason) => Err(SceneEditError::SecondOfType(reason)),
+                None => Ok(()),
+            }
         });
     }
 

@@ -186,14 +186,14 @@ fn turned_bounds(centre: [f32; 3], turn: [f32; 3], size: [f32; 3]) -> ([f32; 3],
     (min, max)
 }
 
-/// The node params of `shape` that place it along `axes` first (size, then
+/// The card rows of `shape` that place it along `axes` first (size, then
 /// centre), then every other it names.
 fn placing_params(shape: &SceneShapeVm, axes: impl Iterator<Item = usize> + Clone) -> Vec<ParamAddr> {
     let SceneShape::Box { center, size, .. } = &shape.decl.shape else { return Vec::new() };
     let addr = |id: &str| {
         shape.params.iter().find(|param| param.id == id).and_then(|param| match &param.write {
-            ShapeWrite::Node(addr) => Some(addr.clone()),
-            ShapeWrite::Card { .. } | ShapeWrite::Unplaced => None,
+            ShapeWrite::Card { id, .. } => Some(ParamAddr { scope_path: Vec::new(), node_doc_id: 0, param_id: id.clone() }),
+            ShapeWrite::Unplaced => None,
         })
     };
     let ids: Vec<&str> = axes.clone().map(|d| size[d].as_ref()).chain(axes.map(|d| center[d].as_ref())).collect();
@@ -546,32 +546,14 @@ fn at_value(value: SetupValues<'_>, (addr, authored): &(ParamAddr, f32)) -> f32 
     value(addr).unwrap_or(*authored)
 }
 
-/// `shape` with each node param it names at `value`, borrowed when none moved.
-fn shape_at<'a>(shape: &'a SceneShapeVm, value: SetupValues<'_>) -> std::borrow::Cow<'a, SceneShapeVm> {
-    let moved = |param: &super::ShapeParamVm| match &param.write {
-        ShapeWrite::Node(addr) => value(addr).filter(|v| v.to_bits() != param.value.to_bits()),
-        ShapeWrite::Card { .. } | ShapeWrite::Unplaced => None,
-    };
-    if !shape.params.iter().any(|param| moved(param).is_some()) {
-        return std::borrow::Cow::Borrowed(shape);
-    }
-    let mut shape = shape.clone();
-    for param in &mut shape.params {
-        if let Some(v) = moved(param) {
-            param.value = v;
-        }
-    }
-    std::borrow::Cow::Owned(shape)
-}
-
 impl SetupSite {
     /// Check the site at `value`, appending its problems and its anchor. With
     /// no override this is the check the scene model was built with.
     pub(super) fn check(&self, shapes: &[SceneShapeVm], value: SetupValues<'_>, problems: &mut Vec<SetupProblem>, anchors: &mut Vec<SetupAnchor>) {
-        let at = |index: Option<usize>| index.map(|i| shape_at(&shapes[i], value));
+        let at = |index: Option<usize>| index.map(|i| &shapes[i]);
         let (box_shape, column) = (at(self.box_shape), at(self.column));
         let fill = self.fill_authored.map(|authored| (self.fill.clone(), value(&self.fill).unwrap_or(authored)));
-        anchors.push(SetupAnchor::new(self.owner.clone(), self.fill.clone(), box_shape.as_deref(), column.as_deref()));
+        anchors.push(SetupAnchor::new(self.owner.clone(), self.fill.clone(), box_shape, column));
         let layout = {
             let SiteLayout { transform, resolution } = &self.layout;
             let triple = |addr: &(ParamAddr, ParamAddr, ParamAddr), v: (f32, f32, f32)| {
@@ -590,11 +572,11 @@ impl SetupSite {
             Ok(layout) => DomainState::Layout(layout),
             Err(reason) => DomainState::Refused(reason),
         };
-        check_domain(&self.owner, state, box_shape.as_deref(), column.as_deref(), fill, problems);
+        check_domain(&self.owner, state, box_shape, column, fill, problems);
         if let Ok(layout) = &layout {
             for &(role, index) in &self.sources {
-                let shape = shape_at(&shapes[index], value);
-                check_source(layout, &shape.owner, role, &shape, problems);
+                let shape = &shapes[index];
+                check_source(layout, &shape.owner, role, shape, problems);
             }
         }
     }
@@ -695,7 +677,7 @@ mod tests {
             .param_ids()
             .map(|id| ShapeParamVm {
                 id: id.to_owned(),
-                write: ShapeWrite::Node(ParamAddr { scope_path: vec![1], node_doc_id: 7, param_id: id.to_owned() }),
+                write: ShapeWrite::Card { id: id.to_owned(), scale: 1.0, offset: 0.0 },
                 value: value(id),
                 wired: wired.contains(&id),
             })

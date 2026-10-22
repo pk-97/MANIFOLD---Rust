@@ -195,14 +195,15 @@ impl ScenePanel {
             let switch_first = p.spec.scene.is_none_or(|scene| scene.switch.is_none());
             picked.push(((self.group_key(p), 1 + u32::from(switch_first)), i));
         }
-        // Structural fields: the item's own, then its Material's.
-        let mut field_rows: Vec<&FieldRowVm> = item.fields.iter().collect();
+        // Structural fields: the item's own, then its Material's, each
+        // addressed at the item that holds it.
+        let mut field_rows: Vec<(&ItemId, &FieldRowVm)> = item.fields.iter().map(|field| (&item.id, field)).collect();
         if let Some(material) = item.material.as_ref().filter(|material| material.item != item.id) {
-            field_rows.extend(material.fields.iter());
+            field_rows.extend(material.fields.iter().map(|field| (&material.item, field)));
         }
-        for field in field_rows {
+        for (owner, field) in field_rows {
             let index = config.rows.len();
-            config.rows.push(field_param_row(&item.id, field));
+            config.rows.push(field_param_row(owner, field));
             picked.push(((field.section as usize * 2, 0), index));
         }
         // The Material block's rows.

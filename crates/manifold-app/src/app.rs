@@ -134,6 +134,8 @@ pub struct Application {
     /// (D3: "concurrent drops queue... one worker at a time"). Drained by
     /// `drain_import_progress` immediately after each `Done`/`Failed`.
     pub(crate) import_queue: std::collections::VecDeque<crate::import_worker::ImportRequest>,
+    /// Model file facts by path, read on a worker (`crate::scene_models`).
+    pub(crate) model_store: crate::scene_models::ModelStore,
 
     /// Gig-resilience breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1), phase
     /// P2. Cadence gate — pure logic, ticked from the content-state drain in
@@ -565,6 +567,7 @@ impl Application {
             import_progress_rx,
             import_worker_busy: false,
             import_queue: std::collections::VecDeque::new(),
+            model_store: Default::default(),
             window_registry: WindowRegistry::new(),
             primary_window_id: None,
             app_menu: None,

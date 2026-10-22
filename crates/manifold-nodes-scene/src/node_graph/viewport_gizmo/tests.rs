@@ -94,7 +94,7 @@ fn scene_with(objects: Vec<TestObject>) -> SceneVm {
                             "scale_y" => (&t.scale_addr.1, t.scale_value.1, t.scale_driven.1),
                             _ => (&t.scale_addr.2, t.scale_value.2, t.scale_driven.2),
                         };
-                        ShapeParamVm { id: id.to_string(), write: ShapeWrite::Node(addr.clone()), value, wired: driven }
+                        ShapeParamVm { id: id.to_string(), write: ShapeWrite::Card { id: addr.param_id.clone(), scale: 1.0, offset: 0.0 }, value, wired: driven }
                     })
                     .collect(),
                 None => decl
@@ -126,14 +126,14 @@ fn object_id(id: u32) -> GizmoTargetId {
     GizmoTargetId { owner: ShapeOwner::Item(item_id(id)), shape: 0 }
 }
 
-/// A node shape whose params live on node 77, valued from `values` by id.
-fn node_shape(owner: ShapeOwner, index: usize, decl: &SceneShapeDecl, values: &[(&str, f32)], wired: &[&str]) -> SceneShapeVm {
+/// A shape over card params named by its param ids, valued from `values` by id.
+fn card_rows_shape(owner: ShapeOwner, index: usize, decl: &SceneShapeDecl, values: &[(&str, f32)], wired: &[&str]) -> SceneShapeVm {
     let params = decl
         .shape
         .param_ids()
         .map(|id| ShapeParamVm {
             id: id.to_string(),
-            write: ShapeWrite::Node(ParamAddr { scope_path: vec![9], node_doc_id: 77, param_id: id.to_string() }),
+            write: ShapeWrite::Card { id: id.to_string(), scale: 1.0, offset: 0.0 },
             value: values.iter().find(|(name, _)| *name == id).map_or(0.0, |(_, v)| *v),
             wired: wired.contains(&id),
         })
@@ -172,8 +172,8 @@ fn written(target: &GizmoTarget, mode: GizmoMode, axis: GizmoAxis) -> Vec<ShapeW
     target.handle(mode, axis).unwrap().write.params().iter().map(|param| param.write.clone()).collect()
 }
 
-fn node_write(param: &str) -> ShapeWrite {
-    ShapeWrite::Node(ParamAddr { scope_path: vec![9], node_doc_id: 77, param_id: param.to_string() })
+fn card_write(param: &str) -> ShapeWrite {
+    ShapeWrite::Card { id: param.to_string(), scale: 1.0, offset: 0.0 }
 }
 
 /// The 640x480 view every helper projects through.
@@ -206,8 +206,8 @@ fn object_target_derives_from_its_box_declaration() {
     assert_eq!(target.kind, GizmoTargetKind::Object);
     assert_eq!(target.origin, [1.0, 2.0, 3.0]);
     assert!([GizmoMode::Move, GizmoMode::Rotate, GizmoMode::Scale].into_iter().all(|mode| target.supports_mode(mode)));
-    let ShapeWrite::Node(addr) = &written(&target, GizmoMode::Scale, GizmoAxis::Y)[0] else { panic!("node write") };
-    assert_eq!(addr.param_id, "scale_y");
+    let ShapeWrite::Card { id, .. } = &written(&target, GizmoMode::Scale, GizmoAxis::Y)[0] else { panic!("card write") };
+    assert_eq!(id, "scale_y");
     assert!(gizmo_target_for(&scene, &object_id(42)).is_none());
 }
 
@@ -266,9 +266,9 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
     let decls = &LIQUID_DOMAIN_SHAPES[..];
     assert_eq!(decls.len(), 1, "the domain declares its box alone; the column is an Initial Fill");
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
-    let domain = node_shape(owner.clone(), 0, &decls[0], &[("pos_y", 2.0), ("pos_z", -6.0), ("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
+    let domain = card_rows_shape(owner.clone(), 0, &decls[0], &[("pos_y", 2.0), ("pos_z", -6.0), ("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
     let fill = ShapeOwner::RoleSource { node: NodeId::new("fill"), role: FluidRole::InitialFill };
-    let column = node_shape(fill.clone(), 0, &INITIAL_FILL_SHAPES[0], &[("pos_x", -1.0), ("pos_z", -6.0), ("scale_x", 1.0)], &[]);
+    let column = card_rows_shape(fill.clone(), 0, &INITIAL_FILL_SHAPES[0], &[("pos_x", -1.0), ("pos_z", -6.0), ("scale_x", 1.0)], &[]);
     let scene = scene_of(vec![domain, column]);
     let targets: Vec<_> = gizmo_targets(&scene).collect();
     assert_eq!(targets.len(), 2, "a domain's box and its Initial Fill are two targets");
@@ -277,7 +277,7 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
     assert_eq!(box_target.origin, [0.0, 2.0, -6.0]);
     assert!(!box_target.supports_mode(GizmoMode::Rotate), "the declaration gives the domain no rotation");
     assert!(lines_of(GizmoMode::Rotate, box_target).is_empty());
-    assert_eq!(written(box_target, GizmoMode::Scale, GizmoAxis::X), vec![node_write("scale_x")]);
+    assert_eq!(written(box_target, GizmoMode::Scale, GizmoAxis::X), vec![card_write("scale_x")]);
     let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([1.0, 2.0, -6.0]), px([-20.0, 2.0, -6.0])) else {
         panic!("one value")
     };
@@ -305,11 +305,11 @@ fn role_source_targets_derive_their_kind_from_the_role() {
         (FluidRole::Outflow, GizmoTargetKind::Drain),
     ] {
         let owner = ShapeOwner::RoleSource { node: NodeId::new("role"), role };
-        let shape = node_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_z", -5.0)], &[]);
+        let shape = card_rows_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_z", -5.0)], &[]);
         let target = GizmoTarget::from_shape(&shape);
         assert_eq!(target.kind, kind);
         assert_eq!(target.origin, [1.0, 0.0, -5.0]);
-        assert_eq!(written(&target, GizmoMode::Move, GizmoAxis::X), vec![node_write("pos_x")]);
+        assert_eq!(written(&target, GizmoMode::Move, GizmoAxis::X), vec![card_write("pos_x")]);
         let HandleValues::One(x) = drag(&target, GizmoMode::Move, GizmoAxis::X, px([1.0, 0.0, -5.0]), px([2.0, 0.0, -5.0])) else {
             panic!("one value")
         };
@@ -347,7 +347,7 @@ fn vortex_force_rotate_turns_its_axis_and_keeps_its_length() {
         .into_iter()
         .map(|write| match write {
             ShapeWrite::Card { id, .. } => id,
-            ShapeWrite::Node(_) | ShapeWrite::Unplaced => panic!("card write"),
+            ShapeWrite::Unplaced => panic!("card write"),
         })
         .collect();
     assert_eq!(ids, ["host_axis_x", "host_axis_y", "host_axis_z"]);
@@ -386,7 +386,7 @@ fn plane_rotate_writes_a_unit_normal() {
         extent_limit: None,
         uniform_scale: false,
     };
-    let target = GizmoTarget::from_shape(&node_shape(ShapeOwner::Item(item_id(1)), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
+    let target = GizmoTarget::from_shape(&card_rows_shape(ShapeOwner::Item(item_id(1)), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
     let o = px(target.origin);
     let HandleValues::Three(n) = drag(&target, GizmoMode::Rotate, GizmoAxis::X, (o.0 + 80.0, o.1 + 10.0), (o.0 + 10.0, o.1 - 80.0)) else {
         panic!("three values")
@@ -803,7 +803,7 @@ fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, v
     use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
     let decls = &LIQUID_DOMAIN_SHAPES[..];
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
-    let shape = node_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
+    let shape = card_rows_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
     let scene = scene_of(vec![shape]);
     let target = gizmo_target_for(&scene, &GizmoTargetId { owner, shape: 0 }).unwrap();
     let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None, uncoupled_bodies: 0 })];
@@ -962,9 +962,9 @@ fn edge_px(target: &GizmoTarget) -> (f32, f32) {
 fn domain_and_column() -> (SceneVm, GizmoTarget, GizmoTarget) {
     let decls = &LIQUID_DOMAIN_SHAPES[..];
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
-    let domain = node_shape(owner, 0, &decls[0], &[("pos_z", -10.0), ("scale_x", 6.0), ("scale_y", 4.0), ("scale_z", 6.0)], &[]);
+    let domain = card_rows_shape(owner, 0, &decls[0], &[("pos_z", -10.0), ("scale_x", 6.0), ("scale_y", 4.0), ("scale_z", 6.0)], &[]);
     let fill = ShapeOwner::RoleSource { node: NodeId::new("fill"), role: FluidRole::InitialFill };
-    let column = node_shape(fill, 0, &INITIAL_FILL_SHAPES[0], &[("pos_x", 1.5), ("pos_y", -1.0), ("pos_z", -10.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
+    let column = card_rows_shape(fill, 0, &INITIAL_FILL_SHAPES[0], &[("pos_x", 1.5), ("pos_y", -1.0), ("pos_z", -10.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
     let scene = scene_of(vec![domain, column]);
     let targets: Vec<_> = gizmo_targets(&scene).collect();
     (scene, targets[0].clone(), targets[1].clone())
@@ -1005,14 +1005,14 @@ fn a_camera_inside_the_box_picks_it_by_the_edges_in_view() {
 /// edges away from its centre: a box, a ball's rings, a direction's ray.
 #[test]
 fn every_declared_shape_is_picked_by_its_own_edges() {
-    let source = node_shape(
+    let source = card_rows_shape(
         ShapeOwner::RoleSource { node: NodeId::new("inflow"), role: FluidRole::Inflow },
         0,
         &WATER_SOURCE_SHAPES[0],
         &[("pos_z", -8.0), ("scale_x", 4.0), ("scale_y", 4.0), ("scale_z", 1.0)],
         &[],
     );
-    let swarm = node_shape(
+    let swarm = card_rows_shape(
         ShapeOwner::Swarm(NodeId::new("swarm")),
         0,
         &SWARM_SHAPES[0],
@@ -1134,12 +1134,12 @@ fn the_selection_moves_turns_and_scales_about_its_centre() {
 fn a_copy_group_gizmo_is_at_the_group_transform_and_scales_uniformly() {
     let decl = &crate::node_graph::scene_surface::COPY_GROUP_SHAPES[0];
     let owner = ShapeOwner::Item(item_id(7));
-    let shape = node_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_y", 2.0), ("pos_z", -3.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
+    let shape = card_rows_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_y", 2.0), ("pos_z", -3.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
     let target = GizmoTarget::from_shape(&shape);
     assert_eq!(target.origin, [1.0, 2.0, -3.0], "the gizmo is the group transform");
     assert_eq!(
         written(&target, GizmoMode::Scale, GizmoAxis::Uniform),
-        vec![node_write("scale_x"), node_write("scale_y"), node_write("scale_z")]
+        vec![card_write("scale_x"), card_write("scale_y"), card_write("scale_z")]
     );
     assert!(target.handle(GizmoMode::Scale, GizmoAxis::X).is_none(), "no per-axis scale");
     let along = |d: f32| px(offset(target.origin, GizmoAxis::Uniform.unit(), d));
@@ -1193,6 +1193,6 @@ fn an_inner_group_gizmo_sits_at_its_world_place_and_drags_in_its_parent_frame() 
     let end = px(offset(target.origin, target.axis_direction(GizmoAxis::X), 1.0));
     let HandleValues::One(value) = drag(&target, GizmoMode::Move, GizmoAxis::X, start, end) else { panic!("one value") };
     assert!((value - 2.0).abs() < 1e-4, "one unit in the outer group's frame moves pos_x by one, got {value}");
-    assert_eq!(written(&target, GizmoMode::Move, GizmoAxis::X), vec![ShapeWrite::Node(ParamAddr { scope_path: Vec::new(), node_doc_id: 99, param_id: "pos_x".into() })]);
+    assert_eq!(written(&target, GizmoMode::Move, GizmoAxis::X), vec![ShapeWrite::Card { id: "pos_x".into(), scale: 1.0, offset: 0.0 }]);
 }
 

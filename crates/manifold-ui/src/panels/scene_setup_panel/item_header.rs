@@ -49,7 +49,7 @@ impl ScenePanel {
     pub(super) fn build_item_header(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, item: &SceneItemVm) -> f32 {
         // Frame needs two icon-cell widths for its label.
         let frame_w = STEP_W * 2.0;
-        let framed = !matches!(item.kind, ItemKind::World | ItemKind::Material | ItemKind::Camera);
+        let framed = !matches!(item.kind, ItemKind::World | ItemKind::Material | ItemKind::Camera | ItemKind::Modifier);
         let view_w = if item.copy_view {
             tree.text_width(USE_VIEW, color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0
         } else {
@@ -97,14 +97,25 @@ impl ScenePanel {
     /// One light's header inside Lighting: its name (click to rename) and
     /// kind, copy and delete, then "Aim Sun at HDRI" for an HDRI environment.
     pub(super) fn build_light_header(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), mut cy: f32, item: &SceneItemVm) -> f32 {
-        let buttons_w = STEP_W * 2.0;
+        // A scene has one Environment, so its header has no Duplicate.
+        let buttons_w = if item.environment { STEP_W } else { STEP_W * 2.0 };
         self.build_name_and_kind(tree, Rect::new(inner_x, cy, (inner_w - buttons_w - 4.0).max(0.0), ROW_H), item);
         let x = inner_x + inner_w - buttons_w;
-        let dup = tree.add_button_keyed(Some(self.content_parent), x, cy, STEP_W, ROW_H, btn_style(), "\u{29C9}", item_key(&item.id, "dup"));
-        tree.set_name(dup, "scene_setup.properties.duplicate");
-        self.header_buttons.duplicate.push((dup, item.id.clone()));
-        let remove =
-            tree.add_button_keyed(Some(self.content_parent), x + STEP_W, cy, STEP_W, ROW_H, btn_style(), "\u{2715}", item_key(&item.id, "remove"));
+        if !item.environment {
+            let dup = tree.add_button_keyed(Some(self.content_parent), x, cy, STEP_W, ROW_H, btn_style(), "\u{29C9}", item_key(&item.id, "dup"));
+            tree.set_name(dup, "scene_setup.properties.duplicate");
+            self.header_buttons.duplicate.push((dup, item.id.clone()));
+        }
+        let remove = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + inner_w - STEP_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2715}",
+            item_key(&item.id, "remove"),
+        );
         tree.set_name(remove, "scene_setup.properties.remove");
         self.header_buttons.remove.push((remove, item.id.clone()));
         cy += ROW_H + ROW_GAP;

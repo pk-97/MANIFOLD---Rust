@@ -7,7 +7,9 @@ use crate::ui_root::UIRoot;
 use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, SceneDoc, Shape, param_id, split_param_id};
+use manifold_core::scene_doc::{
+    EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, SceneDoc, Shape, draws_with_material, param_id, split_param_id,
+};
 use manifold_core::scene_schema::{
     ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, break_unavailable, choice_disabled, impulse_unavailable,
 };
@@ -80,7 +82,7 @@ fn item_vm(
     let fields = field_rows(doc, item, layers);
     let material_item = match item.kind() {
         ItemKind::Material => Some(item.id.clone()),
-        ItemKind::Object | ItemKind::Group | ItemKind::Water => materials.effective.get(&item.id).cloned(),
+        _ if draws_with_material(item) => materials.effective.get(&item.id).cloned(),
         _ => None,
     };
     let material = material_item
@@ -315,8 +317,37 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     }
 }
 
-/// The outliner eyes follow each item's Visible between structural syncs: the
-/// eyes are rows of the same value channel the properties read.
-pub fn sync_scene_outliner_eyes(ui: &mut UIRoot, project: &Project) {
-    sync_scene_row_values(ui, project);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::PresetTypeId;
+    use manifold_core::scene_doc::{BASE_CUBE_MATERIAL, SwarmFields};
+    use manifold_ui::panels::scene_setup_panel::SceneSetupState;
+
+    /// A Swarm drawing its own solids is a user of its Material: the
+    /// Material counts it, and the Swarm's card carries the Material block.
+    #[test]
+    fn a_swarm_counts_as_a_user_of_its_material() {
+        let mut project = Project::default();
+        let index = project.timeline.add_layer("A", LayerType::Generator, PresetTypeId::from_string("Scene".to_string()));
+        let layer = project.timeline.layers[index].layer_id.clone();
+        let mut doc = project.scene_of(&layer).expect("a scene layer").clone();
+        let material = ItemId::new(BASE_CUBE_MATERIAL);
+        let swarm = Item::new(
+            ItemId::new("swarm"),
+            "Swarm",
+            ItemFields::Swarm(SwarmFields { material: Some(material.clone()), ..SwarmFields::default() }),
+        );
+        doc.items.push(swarm);
+        let inst = project.timeline.layers[index].gen_params_mut().expect("scene params");
+        inst.install_scene_document(doc).expect("the scene compiles");
+
+        let SceneSetupState::Live(vm) = scene_state(&project, Some(&project.timeline.layers[index])) else {
+            panic!("the scene tab is live");
+        };
+        let block = vm.items.iter().find(|item| item.id.as_str() == "swarm").and_then(|item| item.material.as_ref());
+        let block = block.expect("the Swarm's card shows its Material");
+        assert_eq!(block.item, material);
+        assert_eq!(block.used_by, 2, "the cube and the Swarm both draw with it");
+    }
 }

@@ -292,6 +292,7 @@ impl Application {
         // IMPORT_RESPONSIVENESS_DESIGN.md D3: drain the background
         // model-import worker's progress channel at the same per-frame site.
         self.drain_import_progress();
+        self.sweep_model_facts();
 
         // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1). Unlike
         // autosave this is NOT parked in perform mode — see the matching
@@ -1046,8 +1047,8 @@ impl Application {
             if let Some((kind, id, source, initial_name)) = result.begin_rename_preset {
                 self.begin_rename_preset_prompt(kind, id, source, initial_name);
             }
-            if let Some((path, layer)) = result.import_model {
-                self.import_model_into_layer(&path, &layer);
+            if let Some((path, target)) = result.import_model {
+                self.queue_import(&path, target);
             }
         }
 

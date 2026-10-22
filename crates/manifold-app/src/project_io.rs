@@ -179,6 +179,11 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
     let mut notices = Vec::new();
     for layer in &mut project.timeline.layers {
         let Some(host) = layer.gen_params_mut() else { continue; };
+        // A scene layer's graph is the compiler's alone (SCENE_DOCUMENT_DESIGN.md
+        // ruling 18): its load is the compile, never a repair of the graph.
+        if host.scene.is_some() {
+            continue;
+        }
         let Some(graph) = host.graph.as_mut() else { continue; };
         match manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(graph) {
             Ok(true) => notices.push("Scene camera controls restored with depth of field and motion blur off.".into()),

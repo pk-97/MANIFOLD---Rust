@@ -29,7 +29,7 @@ pub struct SceneData {
 /// command into a brand-new `Project`, so no flow sees another's edits.
 #[derive(Default)]
 pub struct FixtureCache {
-    imports: ahash::AHashMap<std::path::PathBuf, manifold_core::scene_doc::ImportedModel>,
+    imports: ahash::AHashMap<std::path::PathBuf, (manifold_core::scene_doc::ImportedModel, manifold_core::scene_doc::ModelFacts)>,
 }
 
 impl FixtureCache {
@@ -39,11 +39,12 @@ impl FixtureCache {
         self.imports.len()
     }
 
-    fn import_model(&mut self, path: &std::path::Path, scene_name: &str) -> manifold_core::scene_doc::ImportedModel {
+    fn import_model(&mut self, path: &std::path::Path, scene_name: &str) -> (manifold_core::scene_doc::ImportedModel, manifold_core::scene_doc::ModelFacts) {
         self.imports
             .entry(path.to_path_buf())
             .or_insert_with(|| {
-                manifold_nodes_scene::node_graph::gltf_import::import_model(path)
+                manifold_nodes_scene::node_graph::gltf_import::read_model(path)
+                    .map(|read| (read.model, read.facts))
                     .unwrap_or_else(|e| panic!("ui-snap {scene_name}: import_model({}) failed: {e}", path.display()))
             })
             .clone()
@@ -283,9 +284,11 @@ fn imported_gltf_scene(
     use manifold_editing::command::Command;
     use manifold_editing::commands::layer::ImportModelLayerCommand;
 
-    let model = cache.import_model(path, scene_name);
+    let (model, facts) = cache.import_model(path, scene_name);
     let display_name = if model.name.is_empty() { fallback_name.to_string() } else { model.name.clone() };
-    let doc = model.scene_doc(&path.to_string_lossy(), manifold_core::scene_doc::ItemId::new("model"));
+    let file = path.to_string_lossy();
+    let mut doc = model.scene_doc(&file, manifold_core::scene_doc::ItemId::new("model"));
+    doc.models.insert(file.into_owned(), facts);
 
     let mut project = Project::default();
     let mut cmd = ImportModelLayerCommand::new(display_name, doc, Vec::new(), 0, None);

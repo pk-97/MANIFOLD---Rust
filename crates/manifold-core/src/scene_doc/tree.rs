@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::{
-    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, ModifierTargets, ModifierType, SceneDoc,
+    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, LightType, ModifierTargets, ModifierType, SceneDoc,
 };
 
 /// Why a document edit was refused. The document is untouched.
@@ -43,6 +43,31 @@ impl std::fmt::Display for SceneEditError {
             }
             SceneEditError::SecondOfType(reason) => f.write_str(reason),
         }
+    }
+}
+
+/// Why a scene refuses a second Environment light.
+pub const ONE_ENVIRONMENT: &str = "A scene has one Environment";
+
+fn is_environment(item: &Item) -> bool {
+    matches!(&item.fields, ItemFields::Light(light) if matches!(light.light, LightType::Environment { .. }))
+}
+
+/// Why a Water refuses a second Fill.
+pub const ONE_FILL: &str = "This Water already has a Fill; a Water takes one";
+
+fn is_fill(item: &Item) -> bool {
+    matches!(&item.fields, ItemFields::WaterSource(source) if source.role == super::SourceRole::Fill)
+}
+
+/// Whether `item` draws with its effective Material: an Object, Group or
+/// Water, and a Swarm whose particles are its own solids (one drawing
+/// another item draws that item's Material).
+pub fn draws_with_material(item: &Item) -> bool {
+    match &item.fields {
+        ItemFields::Object(_) | ItemFields::Group(_) | ItemFields::Water(_) => true,
+        ItemFields::Swarm(swarm) => !matches!(swarm.draw_as, DrawAs::Item(_)),
+        _ => false,
     }
 }
 
@@ -201,23 +226,52 @@ impl SceneDoc {
             return Err(SceneEditError::CannotHold { parent: self.parent_kind(parent)?, kind });
         }
         let mut incoming = Vec::new();
-        let mut worlds = 0;
+        let (mut worlds, mut environments) = (0, 0);
         item.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| {
             incoming.push(inner.id.clone());
             worlds += usize::from(inner.kind() == ItemKind::World);
+            environments += usize::from(is_environment(inner));
         });
         if let Some(id) = incoming.iter().find(|id| self.find(id).is_some()) {
             return Err(SceneEditError::DuplicateId(id.clone()));
         }
-        let mut existing_worlds = 0;
-        self.walk(|inner, _| existing_worlds += usize::from(inner.kind() == ItemKind::World));
+        let (mut existing_worlds, mut existing_environments) = (0, 0);
+        self.walk(|inner, _| {
+            existing_worlds += usize::from(inner.kind() == ItemKind::World);
+            existing_environments += usize::from(is_environment(inner));
+        });
         if worlds + existing_worlds > 1 {
             return Err(SceneEditError::SecondWorld);
+        }
+        // A second Environment would compile to nothing: the scene lights
+        // from one environment.
+        if environments + existing_environments > 1 {
+            return Err(SceneEditError::SecondOfType(ONE_ENVIRONMENT));
+        }
+        if is_fill(item) && self.parent_kind(parent)? == Some(ItemKind::Water) && self.fills_under(parent) > 0 {
+            return Err(SceneEditError::SecondOfType(ONE_FILL));
         }
         if let Some(reason) = self.second_of_type(item) {
             return Err(SceneEditError::SecondOfType(reason));
         }
         Ok(())
+    }
+
+    /// How many Fill sources sit directly under `parent`.
+    fn fills_under(&self, parent: Option<&ItemId>) -> usize {
+        let children = match parent {
+            Some(id) => self.find(id).map_or(&[][..], |item| item.children.as_slice()),
+            None => self.items.as_slice(),
+        };
+        children.iter().filter(|child| is_fill(child)).count()
+    }
+
+    /// Why the Water holding `item` refuses it: a second Fill. A field set
+    /// checks this after it writes, as an insert checks before.
+    pub fn second_fill(&self, item: &ItemId) -> Option<&'static str> {
+        let (parent, _) = self.locate(item)?;
+        let water = self.find(parent.as_ref()?).filter(|water| water.kind() == ItemKind::Water)?;
+        (water.children.iter().filter(|child| is_fill(child)).count() > 1).then_some(ONE_FILL)
     }
 
     /// Why `item` would be a second card of a type a scene holds one of.
@@ -287,7 +341,13 @@ impl SceneDoc {
 
     /// Clear every reference to an item in `removed`.
     fn drop_references(&mut self, removed: &[ItemId]) {
-        let gone = |id: &ItemId| removed.contains(id);
+        self.retain_references(|id| !removed.contains(id));
+    }
+
+    /// Clear every reference to an item `keep` refuses; each falls back to
+    /// its default, as a removal does.
+    pub fn retain_references(&mut self, keep: impl Fn(&ItemId) -> bool) {
+        let gone = |id: &ItemId| !keep(id);
         fn each(items: &mut [Item], f: &mut impl FnMut(&mut ItemFields)) {
             for item in items {
                 f(&mut item.fields);
@@ -376,12 +436,12 @@ impl SceneDoc {
         effective
     }
 
-    /// How many Objects, Groups and Waters draw with each Material.
+    /// How many items draw with each Material ([`draws_with_material`]).
     pub fn material_users(&self) -> HashMap<ItemId, usize> {
         let effective = self.effective_materials();
         let mut users = HashMap::new();
         self.walk(|item, _| {
-            if matches!(item.kind(), ItemKind::Object | ItemKind::Group | ItemKind::Water)
+            if draws_with_material(item)
                 && let Some(material) = effective.get(&item.id)
             {
                 *users.entry(material.clone()).or_insert(0) += 1;
@@ -463,6 +523,77 @@ impl SceneDoc {
         let mut any = false;
         self.walk(|item, _| any |= item.kind() == super::ItemKind::Swarm);
         any
+    }
+
+    /// Every model file the compile reads facts from: a Group's source, a
+    /// Mesh shape's file and a Material's model. Empty paths included.
+    pub fn model_files<'a>(&'a self, mut f: impl FnMut(&'a str)) {
+        use super::{Shape, TextureSource};
+        self.walk(|item, _| match &item.fields {
+            ItemFields::Group(group) => group.source.as_deref().into_iter().for_each(&mut f),
+            ItemFields::Object(object) => {
+                if let Shape::Mesh { file, .. } = &object.shape {
+                    f(file);
+                }
+            }
+            ItemFields::Material(material) => {
+                if let TextureSource::Model { file, .. } = &material.texture {
+                    f(file);
+                }
+            }
+            _ => {}
+        });
+    }
+
+    /// Every file path the document names, with the family it collects into:
+    /// an import's model file (its Group's source, its parts' meshes, its
+    /// materials), an Environment's HDRI, a Material's texture file and a
+    /// Displace by Texture file. Empty paths included; the one list Collect,
+    /// save and load relink read.
+    pub fn files_mut(&mut self, mut f: impl FnMut(crate::file_loader::AssetFamily, &mut String)) {
+        use super::{EnvironmentSource, ModifierTexture, Shape, TextureSource};
+        use crate::file_loader::AssetFamily;
+        fn each(items: &mut [Item], f: &mut impl FnMut(AssetFamily, &mut String)) {
+            for item in items {
+                match &mut item.fields {
+                    ItemFields::Group(group) => {
+                        if let Some(source) = &mut group.source {
+                            f(AssetFamily::Mesh, source);
+                        }
+                    }
+                    ItemFields::Object(object) => {
+                        if let Shape::Mesh { file, .. } = &mut object.shape {
+                            f(AssetFamily::Mesh, file);
+                        }
+                    }
+                    ItemFields::Light(light) => {
+                        if let LightType::Environment { source: EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file } } =
+                            &mut light.light
+                        {
+                            f(AssetFamily::Hdri, file);
+                        }
+                    }
+                    ItemFields::Material(material) => match &mut material.texture {
+                        TextureSource::File { path } => f(AssetFamily::Images, path),
+                        TextureSource::Model { file, .. } => f(AssetFamily::Mesh, file),
+                        TextureSource::None | TextureSource::Layer { .. } => {}
+                    },
+                    ItemFields::Modifier(modifier) => {
+                        if let ModifierTexture::File { path } = &mut modifier.texture {
+                            f(AssetFamily::Images, path);
+                        }
+                    }
+                    ItemFields::Camera(_)
+                    | ItemFields::Water(_)
+                    | ItemFields::WaterSource(_)
+                    | ItemFields::Swarm(_)
+                    | ItemFields::Force(_)
+                    | ItemFields::World(_) => {}
+                }
+                each(&mut item.children, f);
+            }
+        }
+        each(&mut self.items, &mut f);
     }
 
     /// Whether any Object or Group has a physics setting.

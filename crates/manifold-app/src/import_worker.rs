@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use manifold_core::scene_doc::ImportedModel;
+use manifold_core::scene_doc::{ImportedModel, ModelFacts};
 
 use crate::blender_import;
 use crate::user_prefs::UserPrefs;
@@ -42,6 +42,21 @@ impl ImportStage {
     }
 }
 
+/// Where a parsed model goes. Layers and items travel by id, never by
+/// position: the stack can change while the file parses.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ImportTarget {
+    /// A drop at `beat`: the scene layer `under` the cursor, else the active
+    /// one, takes the model; with neither, a new scene layer sits above
+    /// `under` (at the top when the drop missed the tracks).
+    Drop { beat: f32, under: Option<manifold_core::LayerId> },
+    /// Add > Mesh from file: into scene layer `layer`, under `parent` when it
+    /// is a Group.
+    Into { layer: manifold_core::LayerId, parent: Option<manifold_core::scene_doc::ItemId> },
+    /// Model File swap: `item` of scene layer `layer` reads the new file.
+    Swap { layer: manifold_core::LayerId, item: manifold_core::scene_doc::ItemId },
+}
+
 /// One event on the background-import channel (D3's committed shape).
 /// `Stage` fires zero or more times per import (zero when the source is
 /// already glTF and skips the Converting stage); exactly one of
@@ -57,15 +72,24 @@ pub(crate) enum ImportProgress {
         /// converted it to. It is the import Group.s Source.
         file: PathBuf,
         model: Box<ImportedModel>,
+        /// What the compiler reads from the file, from the same parse.
+        facts: ModelFacts,
+        /// What the file's materials hold that the surface cannot draw.
+        warnings: Vec<String>,
         /// Set only when the source needed Blender conversion — folded into
         /// the UI-thread success log line exactly as the old inline code did.
         conversion_report_line: Option<String>,
-        drop_beat: f32,
-        layer_under_cursor: Option<usize>,
+        target: ImportTarget,
     },
     Failed {
         path: PathBuf,
         message: String,
+    },
+    /// A model file's facts, read for a document that names the file
+    /// without them (`crate::scene_models`), and its material warnings.
+    Facts {
+        path: String,
+        read: Result<(ModelFacts, Vec<String>), String>,
     },
 }
 
@@ -77,8 +101,7 @@ pub(crate) enum ImportProgress {
 /// only field the conversion path touches.
 pub(crate) struct ImportRequest {
     pub(crate) path: PathBuf,
-    pub(crate) drop_beat: f32,
-    pub(crate) layer_under_cursor: Option<usize>,
+    pub(crate) target: ImportTarget,
     pub(crate) blender_path_pref: String,
 }
 
@@ -93,8 +116,7 @@ pub(crate) fn run_import_worker(
 ) {
     let ImportRequest {
         path,
-        drop_beat,
-        layer_under_cursor,
+        target,
         blender_path_pref,
     } = req;
 
@@ -152,8 +174,8 @@ pub(crate) fn run_import_worker(
         path: path.clone(),
         stage: ImportStage::Parsing,
     });
-    let model = match manifold_nodes_scene::node_graph::gltf_import::import_model(&import_path) {
-        Ok(model) => model,
+    let read = match manifold_nodes_scene::node_graph::gltf_import::read_model(&import_path) {
+        Ok(read) => read,
         Err(e) => {
             let _ = progress_tx.send(ImportProgress::Failed {
                 path,
@@ -166,9 +188,10 @@ pub(crate) fn run_import_worker(
     let _ = progress_tx.send(ImportProgress::Done {
         path,
         file: import_path,
-        model: Box::new(model),
+        model: Box::new(read.model),
+        facts: read.facts,
+        warnings: read.warnings,
         conversion_report_line,
-        drop_beat,
-        layer_under_cursor,
+        target,
     });
 }

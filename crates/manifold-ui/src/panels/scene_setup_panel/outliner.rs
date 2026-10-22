@@ -231,6 +231,7 @@ impl ScenePanel {
                 outliner_eye_key(&item.id),
             );
             tree.set_name(eye_id, format!("scene_setup.object_eye.{}", item.id));
+            self.outliner_eye_index.insert(param.clone(), self.outliner_eye_ids.len());
             self.outliner_eye_ids.push((eye_id, param, value));
         }
         cy + ROW_H

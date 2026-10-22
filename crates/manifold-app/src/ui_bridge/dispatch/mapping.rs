@@ -14,7 +14,7 @@ use manifold_ui::MappingAction;
 
 use super::super::DispatchResult;
 use super::resolve::{
-    ableton_mapping_target, macro_mapping_target, resolve_graph_target, resolve_param_range,
+    ableton_mapping_target, macro_mapping_target, manifest_holds, resolve_graph_target, resolve_param_range,
 };
 use crate::content_command::ContentCommand;
 
@@ -27,6 +27,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
             let macro_idx = *macro_idx;
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
+                && manifest_holds(&ctx.project, &target, param_id.as_ref())
                 && let Some(mapping_target) = macro_mapping_target(&target, param_id)
             {
                 // Graph-authority-first range so a generator's (or graph-backed
@@ -91,6 +92,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
         MappingAction::MapParamToAbleton(gpt, param_id, address) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
+                && manifest_holds(&ctx.project, &target, param_id.as_ref())
                 && let Some(mapping_target) =
                     ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
             {

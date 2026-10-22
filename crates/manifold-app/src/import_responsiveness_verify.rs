@@ -67,8 +67,7 @@ fn corrupt_glb_fails_through_worker_as_failed_event() {
     let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let req = ImportRequest {
         path: bad_path.clone(),
-        drop_beat: 0.0,
-        layer_under_cursor: None,
+        target: crate::import_worker::ImportTarget::Drop { beat: 0.0, under: None },
         blender_path_pref: String::new(),
     };
 

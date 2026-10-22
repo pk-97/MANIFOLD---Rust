@@ -3,7 +3,6 @@
 
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
-use manifold_core::project::Project;
 use manifold_ui::ProjectAction;
 
 use super::DispatchResult;
@@ -245,7 +244,8 @@ pub(super) fn dispatch_project(
                 let Some(path) = crate::file_dialogs::pick_file(crate::file_dialogs::DialogAction::ImportModel, dialogs, user_prefs) else {
                     return DispatchResult::handled();
                 };
-                return DispatchResult { import_model: Some((path, layer_id.clone())), ..DispatchResult::handled() };
+                let target = crate::import_worker::ImportTarget::Into { layer: layer_id.clone(), parent: parent.clone() };
+                return DispatchResult { import_model: Some((path, target)), ..DispatchResult::handled() };
             }
             let built = crate::scene_edit::add(project, layer_id, entry, parent.as_ref(), selected).map(Some);
             send_scene_edit(content_tx, layer_id, built)
@@ -278,6 +278,10 @@ pub(super) fn dispatch_project(
             let built = crate::scene_edit::chain_move(project, layer_id, item, *to).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
+        ProjectAction::SceneTreeMove { layer_id, item, parent, before } => {
+            let built = crate::scene_tree_move::tree_move(project, layer_id, item, parent.as_ref(), before.as_ref());
+            send_scene_edit(content_tx, layer_id, built)
+        }
         ProjectAction::SceneMaterialLook { layer_id, material, look } => {
             let built = crate::scene_edit::material_look(project, layer_id, material, *look);
             send_scene_edit(content_tx, layer_id, built)
@@ -304,8 +308,9 @@ pub(super) fn dispatch_project(
         }
         // Model File swap on an imported Group or Object: the picked file
         // replaces the Source and the parts are reconciled by file node path,
-        // in one undo step. A file that cannot be read, or an item that is no
-        // import, toasts.
+        // in one undo step, once the import worker has parsed it off the UI
+        // thread. A file that cannot be read, or an item that is no import,
+        // toasts.
         ProjectAction::SceneSetupSwapModelFile(layer_id, item) => {
             let Some(path) = crate::file_dialogs::pick_file(
                 crate::file_dialogs::DialogAction::ImportModel,
@@ -314,19 +319,8 @@ pub(super) fn dispatch_project(
             ) else {
                 return DispatchResult::handled();
             };
-            match crate::scene_import::swap_model_file(project, layer_id, item, &path) {
-                Ok(swap) => {
-                    project.execute_batch(swap.commands, "Swap Model File".to_string());
-                    if let Some(toast) = swap.toast {
-                        ui.toast.show(toast);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[Scene Setup] Model File swap failed for {}: {e}", path.display());
-                    ui.toast.show_with_accent(format!("Couldn't swap the model file: {e}"), manifold_ui::color::RED_BASE);
-                }
-            }
-            DispatchResult::handled()
+            let target = crate::import_worker::ImportTarget::Swap { layer: layer_id.clone(), item: item.clone() };
+            DispatchResult { import_model: Some((path, target)), ..DispatchResult::handled() }
         }
         // BUG-184: the automation-lane right-click context menu's two items
         // — `ClearLaneCommand`/`RemoveLaneCommand` had zero UI callers before
@@ -357,23 +351,6 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
     }
-}
-
-/// The layer's generator catalog default: the lookup
-/// `Application::watch_generator_graph` performs, so the Scene Setup arms
-/// address the layer directly without the graph editor open.
-pub(crate) fn generator_catalog_default(
-    project: &Project,
-    layer_id: &LayerId,
-) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-    let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
-    let gt = layer.generator_type().clone();
-    if gt.is_none() {
-        return None;
-    }
-    // Use the same migrated definition as the visible parameter manifest.
-    // Re-parsing raw catalog JSON drops scene exposures on the first edit.
-    manifold_nodes::bundled_presets::bundled_preset_def(&gt).map(|def| (*def).clone())
 }
 
 /// Shared parameter/lane menu path: remove the envelope and its stale UI targets.

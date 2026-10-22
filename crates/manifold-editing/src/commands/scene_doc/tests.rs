@@ -273,6 +273,74 @@ fn rename_and_move_keep_an_items_params_attached() {
     assert_eq!(scene(&project).scene.as_ref().unwrap().find(&id(CUBE)).unwrap().name, "Box");
 }
 
+/// A second Environment would light nothing, so Duplicate refuses it with
+/// the reason and leaves the scene as it was; the one Environment still moves.
+#[test]
+fn a_second_environment_is_refused_with_its_reason() {
+    let (mut project, layer) = project();
+    let before = state(&project);
+    let mut duplicate = AddSceneItemCommand::new(layer.clone(), ItemKind::Light, None, 0, Some(id("environment")), id("environment2"));
+    duplicate.execute(&mut project);
+    assert!(!duplicate.was_applied());
+    assert_eq!(duplicate.rejection_reason(), Some(manifold_core::scene_doc::ONE_ENVIRONMENT));
+    assert_eq!(state(&project), before, "a refused duplicate changes nothing");
+    let mut undo = UndoRedoManager::new();
+    assert!(undo.execute(Box::new(ReparentSceneItemCommand::new(layer, id("environment"), None, 3)), &mut project), "the one Environment still moves");
+}
+
+/// A Water takes one Fill: a Fill added, duplicated or set into a filled
+/// Water is refused with the reason; an Inflow still joins.
+#[test]
+fn a_second_fill_is_refused_with_its_reason() {
+    use manifold_core::scene_doc::{ONE_FILL, SourceRole, WaterSourceFields};
+    let (mut project, layer) = project();
+    let fill = |role| ItemFields::WaterSource(WaterSourceFields { role, ..WaterSourceFields::default() });
+    let mut undo = UndoRedoManager::new();
+    assert!(undo.execute(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Water, None, 0, None, id("water"))), &mut project));
+    let add = |source: &str, role| -> Box<dyn Command> {
+        Box::new(CompositeCommand::new(
+            vec![
+                Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::WaterSource, Some(id("water")), 0, None, id(source))),
+                Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id(source), fill(role))),
+            ],
+            "Add Source".into(),
+        ))
+    };
+    assert!(undo.execute(add("fill", SourceRole::Fill), &mut project), "the first Fill joins");
+    let before = state(&project);
+
+    let mut second = add("fill2", SourceRole::Fill);
+    second.execute(&mut project);
+    assert!(!second.was_applied());
+    assert_eq!(second.rejection_reason(), Some(ONE_FILL));
+    assert_eq!(state(&project), before, "a refused Add changes nothing");
+
+    let mut duplicate = AddSceneItemCommand::new(layer.clone(), ItemKind::WaterSource, Some(id("water")), 1, Some(id("fill")), id("fill3"));
+    duplicate.execute(&mut project);
+    assert_eq!(duplicate.rejection_reason(), Some(ONE_FILL));
+    assert_eq!(state(&project), before, "a refused duplicate changes nothing");
+
+    assert!(undo.execute(add("inflow", SourceRole::Inflow), &mut project), "an Inflow still joins");
+    let mut set = SetSceneItemFieldsCommand::new(layer, id("inflow"), fill(SourceRole::Fill));
+    set.execute(&mut project);
+    assert_eq!(set.rejection_reason(), Some(ONE_FILL), "an Inflow cannot become a second Fill");
+}
+
+/// Model facts only arrive: an undo back past their arrival keeps them, so
+/// a model never falls back to a plain mesh.
+#[test]
+fn undo_keeps_model_facts_read_since_the_edit() {
+    let (mut project, layer) = project();
+    let mut undo = UndoRedoManager::new();
+    assert!(undo.execute(Box::new(RenameSceneItemCommand::new(layer, id(CUBE), "Box")), &mut project));
+    let inst = project.timeline.layers[0].gen_params_mut().unwrap();
+    let mut doc = inst.scene.clone().unwrap();
+    doc.models.insert("a.glb".into(), manifold_core::scene_doc::ModelFacts::new(()));
+    inst.scene = Some(doc);
+    assert!(undo.undo(&mut project));
+    assert!(scene(&project).scene.as_ref().unwrap().models.contains("a.glb"), "the undo dropped the facts");
+}
+
 /// A param write changes a value, never the scene's structure.
 #[test]
 fn a_param_write_never_recompiles() {
