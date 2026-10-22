@@ -14,6 +14,7 @@ pub mod layer;
 pub mod marker;
 pub mod material;
 pub mod preset;
+pub mod scene_doc;
 pub mod selection;
 pub mod session_commands;
 pub mod settings;

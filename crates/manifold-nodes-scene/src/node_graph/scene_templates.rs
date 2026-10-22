@@ -15,6 +15,7 @@ use manifold_core::scene_object_model::scene_object_models;
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, TemplatePhysics};
 
+use super::scene_compile::{lamp_node, object_wires};
 use super::scene_modifier_authoring::stock_force;
 
 use super::scene_exposure::metadata_for_node_type;
@@ -126,12 +127,10 @@ fn object_group(
             params: Vec::new(),
         },
         nodes,
-        wires: vec![
-            wire(MESH, "vertices", OBJECT, "vertices"),
-            wire(MATERIAL, "out", OBJECT, "material"),
-            wire(TRANSFORM, "transform", OBJECT, "transform"),
-            wire(OBJECT, "object", OUTPUT, "object"),
-        ],
+        wires: object_wires(MESH, MATERIAL, TRANSFORM, OBJECT)
+            .into_iter()
+            .chain([wire(OBJECT, "object", OUTPUT, "object")])
+            .collect(),
         tint: Some([tint.r, tint.g, tint.b, 1.0]),
     }));
     SceneTemplate { group, metadata, physics: Default::default() }
@@ -255,18 +254,7 @@ pub fn role_source_template(kind: RoleSourceKind, domain: &FluidDomainLayout) ->
 /// It stays a plain node on the scene, named "Light N", `position` its
 /// graph editor spot.
 pub fn light_template(position: (f32, f32)) -> SceneTemplate {
-    let params = BTreeMap::from([
-        ("mode".to_owned(), SerializedParamValue::Enum { value: 0 }),
-        ("pos_x".to_owned(), float(0.0)),
-        ("pos_y".to_owned(), float(7.0)),
-        ("pos_z".to_owned(), float(7.0)),
-        ("color_r".to_owned(), float(1.0)),
-        ("color_g".to_owned(), float(1.0)),
-        ("color_b".to_owned(), float(1.0)),
-        ("intensity".to_owned(), float(1.0)),
-        ("cast_shadows".to_owned(), float(1.0)),
-    ]);
-    let mut light = node(1, "node.light", Some(HANDLE_TOKEN), params);
+    let mut light = lamp_node(1, HANDLE_TOKEN);
     light.editor_pos = Some(position);
     let mut metadata = empty_metadata("Light");
     stamp_scene_node_exposures_into(

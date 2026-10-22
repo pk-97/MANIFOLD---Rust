@@ -14,6 +14,7 @@ mod param_wrap_smoke;
 mod photoscan_modifier_plans;
 mod physics_scene;
 mod project_preset_overlay;
+mod scene_document;
 mod scene_force_presets;
 mod swarm_hold;
 mod scene_loop_e2e_import;

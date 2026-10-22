@@ -104,6 +104,7 @@ fn effect_instance_serialize_omits_params_without_registry() {
         graph_structure_version: 0,
         folded_sections: Vec::new(),
         unfolded_sections: Vec::new(),
+        scene: None,
     };
     let json = serde_json::to_string(&fx).unwrap();
     assert!(
@@ -137,6 +138,7 @@ fn effect_instance_serialize_round_trips_hidden_and_visible_params() {
         graph_structure_version: 0,
         folded_sections: Vec::new(),
         unfolded_sections: Vec::new(),
+        scene: None,
     };
     let json = serde_json::to_string(&fx).unwrap();
     assert!(json.contains("\"alpha\":{\"value\":0.1,\"exposed\":true}"));

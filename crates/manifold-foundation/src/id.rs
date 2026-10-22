@@ -63,6 +63,14 @@ pub struct AudioSendId(Arc<str>);
 #[serde(transparent)]
 pub struct SceneId(Arc<str>);
 
+/// Scene item identifier (SCENE_DOCUMENT_DESIGN.md section 7.2 (Identity and
+/// the five commands)): minted once when an item is added and stable through
+/// rename and reparent, so a param id `<item id>.<property>` never changes.
+/// Never a path. Contains no `.`, so a param id splits at its first dot.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ItemId(Arc<str>);
+
 // ── Macro for shared impls ──
 
 macro_rules! impl_id_type {
@@ -170,6 +178,7 @@ impl_id_type!(MarkerId);
 impl_id_type!(NodeId);
 impl_id_type!(AudioSendId);
 impl_id_type!(SceneId);
+impl_id_type!(ItemId);
 
 #[cfg(test)]
 mod tests {

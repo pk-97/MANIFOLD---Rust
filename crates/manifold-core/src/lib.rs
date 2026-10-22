@@ -73,7 +73,9 @@ pub mod preset_type_registry;
 pub mod project;
 pub mod recording;
 pub mod retired_cpu_flip;
+pub mod scene_doc;
 pub mod scene_exposure;
+pub mod scene_schema;
 pub mod scene_graph_edit;
 pub mod scene_template;
 pub mod scene_object_model;
@@ -124,7 +126,7 @@ pub use control_history::{
     ControlContribution, ControlHistory, ControlHistoryError, ControlObservation,
     TriggerSourceStamp,
 };
-pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId, SceneId};
+pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, ItemId, LayerId, MarkerId, NodeId, SceneId};
 pub use layer::OverlapAction;
 pub use macro_bank::{
     MACRO_COUNT, MacroBank, MacroCurve, MacroMapping, MacroMappingTarget, MacroSlot,

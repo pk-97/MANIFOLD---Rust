@@ -326,6 +326,8 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
     }
     fp.put(Part::Automation, &inst.automation_lanes);
     fp.put(Part::Effects, &inst.group_id);
+    // A scene document is structure: its edits are commands, never drags.
+    fp.put(Part::Effects, &inst.scene);
     // Overrides is whether a materialized copy exists; what the copy holds
     // is Effects, except unbound node param values, which are Shapes (D21).
     fp.put(Part::Overrides, &inst.graph.is_some());
