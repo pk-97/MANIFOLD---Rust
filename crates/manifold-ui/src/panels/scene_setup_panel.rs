@@ -489,7 +489,8 @@ impl ScenePanel {
         self.live_layer_id().map_or(&[], |layer| self.selected_of(layer))
     }
 
-    fn selected_of(&self, layer: &LayerId) -> &[SceneSelection] {
+    /// Every selected item of `layer`'s scene, in selection order.
+    pub fn selected_of(&self, layer: &LayerId) -> &[SceneSelection] {
         match self.selected.get(layer) {
             Some(set) => set,
             None => self.selection.get(layer).map_or(&[], std::slice::from_ref),
@@ -576,9 +577,10 @@ impl ScenePanel {
     /// External selection write of a whole set (a Shift-click on a gizmo):
     /// `items` selected, the last one active. An empty set clears the
     /// selection and keeps the active item's card showing, as Blender does.
+    /// The set keeps each item as picked, a light included, so its gizmo
+    /// handle shows; the card shows the last one as the tab shows it.
     pub fn select_items(&mut self, layer_id: LayerId, items: Vec<SceneSelection>) {
-        let items: Vec<SceneSelection> = items.into_iter().map(|sel| self.shown(&layer_id, sel)).collect();
-        match items.last().cloned() {
+        match items.last().cloned().map(|last| self.shown(&layer_id, last)) {
             None => {
                 self.selected.insert(layer_id.clone(), items);
                 self.note_selection(&layer_id);
@@ -588,8 +590,9 @@ impl ScenePanel {
                     self.clear_item_focus();
                     self.reveal_properties = true;
                 }
+                let lone = items.len() == 1 && items[0] == active;
                 self.selection.insert(layer_id.clone(), active);
-                if items.len() == 1 {
+                if lone {
                     self.selected.remove(&layer_id);
                 } else {
                     self.selected.insert(layer_id.clone(), items);
@@ -613,10 +616,9 @@ impl ScenePanel {
         self.select_items(layer_id, Vec::new());
     }
 
-    /// A Shift-click on an outliner row: `sel` joins the selection as the
-    /// active item, or leaves it when it was selected.
-    fn toggle_selected(&mut self, layer_id: &LayerId, sel: SceneSelection) {
-        let sel = self.shown(layer_id, sel);
+    /// A Shift-click on an outliner row or a picture: `sel` joins the
+    /// selection as the active item, or leaves it when it was selected.
+    pub fn toggle_selected(&mut self, layer_id: &LayerId, sel: SceneSelection) {
         let mut items = self.selected_of(layer_id).to_vec();
         let before = items.len();
         items.retain(|item| *item != sel);

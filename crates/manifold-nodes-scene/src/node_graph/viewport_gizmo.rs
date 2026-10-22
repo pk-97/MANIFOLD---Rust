@@ -12,13 +12,15 @@
 //! its values follow the shape kind alone; no target kind has handle code
 //! of its own.
 //!
-//! **Picking is geometric, not an ID-buffer pass.** [`pick_target`]
+//! **Only what draws no pixels is picked here** (SCENE_DOCUMENT_DESIGN.md
+//! section 7.14): lamps, forces, water domains and sources. Everything that
+//! draws is picked by the scene's item-id buffer (`render_scene/item_pick.rs`),
+//! and its shape only carries the selected item's handles. [`pick_target`]
 //! projects each pickable target through the camera the frame was rendered
 //! with and takes the nearest: its own drawn edges within
 //! [`EDGE_PICK_TOLERANCE_PT`], or its origin within [`PICK_RADIUS_PT`]. A
 //! domain box is picked by its edges, not only at its centre, where its
-//! fill column sits too. An object has no edges here (its declared box is
-//! its transform, not its mesh), so it is picked at its origin.
+//! fill column sits too. A lamp has no edges, so it is picked at its origin.
 //!
 //! A handle whose param is wired reports locked: the host refuses the drag
 //! and the handle draws in [`LOCKED_COLOR`]. The viewport never fights the
@@ -53,7 +55,7 @@ use crate::node_graph::viewport_overlay::{
 };
 
 mod selection;
-pub use selection::{GizmoSelection, SelectionWrite, selection_writes, toggle_pick};
+pub use selection::{GizmoSelection, SelectionWrite, selection_writes};
 
 /// Hit-test radius around a target's origin, screen points.
 pub const PICK_RADIUS_PT: f32 = 22.0;

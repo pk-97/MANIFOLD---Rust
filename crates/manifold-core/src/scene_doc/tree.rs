@@ -73,6 +73,39 @@ impl Item {
         }
         ancestors.pop();
     }
+
+    /// This item and its subtree with every id `map` names swapped, the
+    /// references between items included; an id `map` does not name stays.
+    pub fn remapped(&self, map: &BTreeMap<ItemId, ItemId>) -> Item {
+        let swap = |id: &ItemId| map.get(id).cloned().unwrap_or_else(|| id.clone());
+        let mut fields = self.fields.clone();
+        match &mut fields {
+            ItemFields::Group(g) => g.material = g.material.as_ref().map(swap),
+            ItemFields::Object(o) => o.material = o.material.as_ref().map(swap),
+            ItemFields::Camera(c) => c.target = c.target.as_ref().map(swap),
+            ItemFields::Swarm(s) => {
+                s.material = s.material.as_ref().map(swap);
+                if let DrawAs::Item(id) = &mut s.draw_as {
+                    *id = swap(id);
+                }
+                if let EmitFrom::Item(id) = &mut s.emit_from {
+                    *id = swap(id);
+                }
+            }
+            ItemFields::Force(f) => {
+                if let ForceTargets::Items(ids) = &mut f.targets {
+                    ids.iter_mut().for_each(|id| *id = swap(id));
+                }
+            }
+            _ => {}
+        }
+        Item {
+            id: swap(&self.id),
+            name: self.name.clone(),
+            fields,
+            children: self.children.iter().map(|child| child.remapped(map)).collect(),
+        }
+    }
 }
 
 impl SceneDoc {
@@ -260,37 +293,7 @@ impl SceneDoc {
         source.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| {
             map.insert(inner.id.clone(), fresh(&inner.id));
         });
-        fn remap(item: &Item, map: &BTreeMap<ItemId, ItemId>) -> Item {
-            let swap = |id: &ItemId| map.get(id).cloned().unwrap_or_else(|| id.clone());
-            let mut fields = item.fields.clone();
-            match &mut fields {
-                ItemFields::Group(g) => g.material = g.material.as_ref().map(swap),
-                ItemFields::Object(o) => o.material = o.material.as_ref().map(swap),
-                ItemFields::Camera(c) => c.target = c.target.as_ref().map(swap),
-                ItemFields::Swarm(s) => {
-                    s.material = s.material.as_ref().map(swap);
-                    if let DrawAs::Item(id) = &mut s.draw_as {
-                        *id = swap(id);
-                    }
-                    if let EmitFrom::Item(id) = &mut s.emit_from {
-                        *id = swap(id);
-                    }
-                }
-                ItemFields::Force(f) => {
-                    if let ForceTargets::Items(ids) = &mut f.targets {
-                        ids.iter_mut().for_each(|id| *id = swap(id));
-                    }
-                }
-                _ => {}
-            }
-            Item {
-                id: swap(&item.id),
-                name: item.name.clone(),
-                fields,
-                children: item.children.iter().map(|child| remap(child, map)).collect(),
-            }
-        }
-        Ok((remap(source, &map), map))
+        Ok((source.remapped(&map), map))
     }
 
     /// The material `id` draws with: its own binding, else the nearest

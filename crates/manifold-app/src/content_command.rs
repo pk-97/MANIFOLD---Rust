@@ -347,6 +347,9 @@ pub enum ContentCommand {
         output: Option<crate::selection_outline::OutlineSlots>,
         viewport: Option<crate::selection_outline::OutlineSlots>,
     },
+    /// A click on a scene picture: select the item drawn there
+    /// (SCENE_DOCUMENT_DESIGN.md section 7.14).
+    PickSceneItem(crate::scene_pick::ScenePick),
     /// The gizmo lines to draw over the output preview and the scene viewport,
     /// and the draw mode for them and for an export (BUG-b36b8 gizmo draw modes).
     SetGizmoOverlay(Box<crate::gizmo_overlay::GizmoOverlay>),

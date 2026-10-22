@@ -772,6 +772,9 @@ impl ContentThread {
             ContentCommand::SetPhysicsOverlay(layer) => {
                 self.content_pipeline.set_physics_overlay(layer);
             }
+            ContentCommand::PickSceneItem(pick) => {
+                self.content_pipeline.push_scene_pick(pick);
+            }
             #[cfg(target_os = "macos")]
             ContentCommand::SetSelectionOutline { output, viewport } => {
                 self.content_pipeline.set_selection_outline(output, viewport);

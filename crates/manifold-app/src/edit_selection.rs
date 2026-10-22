@@ -15,6 +15,9 @@ pub(crate) enum EditSelection {
         layer_id: LayerId,
         item: ItemId,
     },
+    /// A click on a scene picture found this item, or empty space
+    /// (`scene_pick.rs`).
+    Picked(crate::scene_pick::PickedItem),
 }
 
 #[derive(Debug)]
@@ -147,22 +150,48 @@ pub(crate) fn apply_update(
                 return false;
             }
             focus_scene_tab(selection, active_layer, layer_id);
-            let mut parents = Vec::new();
-            doc.walk(|found, ancestors| {
-                if &found.id == item {
-                    parents = ancestors.iter().map(|a| a.id.clone()).collect();
-                }
-            });
-            for parent in parents {
-                ui.scene_setup_panel.unfold(layer_id.clone(), parent);
-            }
+            reveal(ui, doc, layer_id, item);
             ui.scene_setup_panel.set_selection(
                 layer_id.clone(),
                 manifold_ui::panels::scene_setup_panel::SceneSelection::Item(item.clone()),
             );
         }
+        EditSelection::Picked(picked) => {
+            let layer_id = &picked.pick.layer;
+            let Some(doc) = project.scene_of(layer_id) else {
+                return false;
+            };
+            match picked.item.as_ref().filter(|item| doc.find(item).is_some()) {
+                Some(item) => {
+                    reveal(ui, doc, layer_id, item);
+                    let picked_item = manifold_ui::panels::scene_setup_panel::SceneSelection::Item(item.clone());
+                    if picked.pick.extend {
+                        ui.scene_setup_panel.toggle_selected(layer_id, picked_item);
+                    } else {
+                        ui.scene_setup_panel.select_items(layer_id.clone(), vec![picked_item]);
+                    }
+                }
+                // Empty space clears the selection, as in Blender; Shift on
+                // empty space keeps it.
+                None if !picked.pick.extend => ui.scene_setup_panel.clear_selected(layer_id.clone()),
+                None => {}
+            }
+        }
     }
     true
+}
+
+/// Unfold every group above `item`, so its row shows in the tree.
+fn reveal(ui: &mut crate::ui_root::UIRoot, doc: &manifold_core::scene_doc::SceneDoc, layer_id: &LayerId, item: &ItemId) {
+    let mut parents = Vec::new();
+    doc.walk(|found, ancestors| {
+        if &found.id == item {
+            parents = ancestors.iter().map(|a| a.id.clone()).collect();
+        }
+    });
+    for parent in parents {
+        ui.scene_setup_panel.unfold(layer_id.clone(), parent);
+    }
 }
 
 /// A scene item selection shows in the inspector's Scene tab (SCENE_SURFACES

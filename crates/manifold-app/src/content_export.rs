@@ -482,6 +482,7 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
         | ContentCommand::SetSceneViewport(_)
         | ContentCommand::SetPhysicsOverlay(_)
         | ContentCommand::SetSelectionOutline { .. }
+        | ContentCommand::PickSceneItem(_)
         | ContentCommand::SetGizmoOverlay(_)
         | ContentCommand::SetModifierPreviewContext { .. }
         | ContentCommand::SetNodePreviewNormalize(_)

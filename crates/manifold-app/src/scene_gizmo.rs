@@ -16,8 +16,8 @@ use manifold_core::{GraphTarget, LayerId, project::Project};
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_nodes_scene::node_graph::scene_vm::{ParamAddr, SceneVm, ShapeOwner, ShapeWrite};
 use manifold_nodes_scene::node_graph::viewport_gizmo::{
-    GizmoDrag, GizmoMode, GizmoSelection, GizmoTarget, GizmoTargetId, HandleValues, HandleWrite, SelectionWrite,
-    gizmo_target_for, gizmo_targets, pick_axis, pick_target, selection_writes, toggle_pick,
+    GizmoDrag, GizmoMode, GizmoSelection, GizmoTarget, HandleValues, HandleWrite, SelectionWrite, gizmo_target_for,
+    gizmo_targets, pick_axis, pick_target, selection_writes,
 };
 use manifold_ui::panels::scene_setup_panel::SceneSelection;
 use manifold_ui::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
@@ -332,10 +332,11 @@ pub(crate) enum GizmoPress {
     /// A locked handle, or one whose drag cannot begin, still takes the
     /// press, so it never falls through to what lies under it.
     Handle(Option<Box<GizmoGesture>>),
-    /// No handle there: the selection after the pick, or `None` for a press
-    /// on empty space. A pick has already selected its items in the Scene
-    /// panel.
-    Picked(Option<Vec<GizmoTargetId>>),
+    /// No handle there. `true` when the press picked something that draws
+    /// no pixels (a lamp, a force, a water box or source) and selected it in
+    /// the Scene panel; `false` otherwise, and the host picks what is drawn
+    /// there through the item-id buffer (`scene_pick.rs`).
+    Picked(bool),
 }
 
 /// Where a press landed: the picture it landed on, the point in that
@@ -348,10 +349,10 @@ pub(crate) struct PressAt<'a> {
 }
 
 /// One press on any gizmo host (REALTIME_3D_DESIGN.md D7a): the
-/// selection's one handle set first, then a pick. With `at.extend` (Shift)
-/// the pick adds its shape to the selection or takes it out. `scene` is the
-/// host's `SceneVm` of `layer`'s authored graph and `selection` was built
-/// over it.
+/// selection's one handle set first, then a pick of a helper that draws no
+/// pixels. With `at.extend` (Shift) the pick adds its item to the Scene
+/// panel's selection or takes it out. `scene` is the host's cached
+/// `SceneVm` of `layer`'s authored graph and `selection` was built over it.
 pub(crate) fn press(
     ctx: &mut DispatchCtx,
     layer: &LayerId,
@@ -392,47 +393,34 @@ pub(crate) fn press(
             }
         });
     }
-    let Some(picked) = pick_target(scene, view, point) else { return GizmoPress::Picked(None) };
-    let next = toggle_pick(&selection.ids(), picked, extend);
-    select_in_panel(ctx, layer, scene, &next);
-    GizmoPress::Picked(Some(next))
-}
-
-/// The Scene panel follows the gizmo selection `ids`: the items their
-/// shapes belong to, the last shape's item the one whose card shows.
-pub(crate) fn select_in_panel(ctx: &mut DispatchCtx, layer: &LayerId, scene: &SceneVm, ids: &[GizmoTargetId]) {
-    let mut items: Vec<SceneSelection> = Vec::new();
-    for item in ids.iter().filter_map(|id| gizmo_target_for(scene, id)).filter_map(|target| scene_selection(&target)) {
-        items.retain(|other| *other != item);
-        items.push(item);
+    let Some(item) = pick_target(scene, view, point).and_then(|id| gizmo_target_for(scene, &id)).and_then(|target| scene_selection(&target)) else {
+        return GizmoPress::Picked(false);
+    };
+    let panel = &mut ctx.ui.scene_setup_panel;
+    if extend {
+        panel.toggle_selected(layer, item);
+    } else {
+        panel.select_items(layer.clone(), vec![item]);
     }
-    ctx.ui.scene_setup_panel.select_items(layer.clone(), items);
+    GizmoPress::Picked(true)
 }
 
-/// The shapes the Scene panel's selected `items` show: for each item, its
-/// shapes in `picked`, else its first declared shape.
-pub(crate) fn selected_targets(scene: &SceneVm, items: &[SceneSelection], picked: &[GizmoTargetId]) -> Vec<GizmoTarget> {
-    let mut out = Vec::new();
-    for item in items {
-        let belongs = |target: &GizmoTarget| scene_selection(target).as_ref() == Some(item);
-        let before = out.len();
-        out.extend(picked.iter().filter_map(|id| gizmo_target_for(scene, id)).filter(belongs));
-        if out.len() == before {
-            out.extend(gizmo_targets(scene).find(belongs));
-        }
-    }
-    out
+/// The shapes the Scene panel's selected `items` show: each item's first
+/// declared shape.
+pub(crate) fn selected_targets(scene: &SceneVm, items: &[SceneSelection]) -> Vec<GizmoTarget> {
+    items
+        .iter()
+        .filter_map(|item| gizmo_targets(scene).find(|target| scene_selection(target).as_ref() == Some(item)))
+        .collect()
 }
 
-/// The Scene panel item a target belongs to: an object or group shape selects
-/// its own row. Forces, role sources and the other owners the water, swarm and
-/// force lanes bring select through their own rows.
+/// The Scene panel item a target belongs to: the row its shape selects.
 pub(crate) fn scene_selection(target: &GizmoTarget) -> Option<SceneSelection> {
-    selected_object(target).cloned().map(SceneSelection::Item)
+    target.row.clone().map(SceneSelection::Item)
 }
 
-/// The item row a target selects, without allocating: what the preview
-/// outline reads every frame.
+/// The scene object a target outlines, without allocating: what the preview
+/// outline reads every frame. Only an item's own shape draws pixels.
 pub(crate) fn selected_object(target: &GizmoTarget) -> Option<&ItemId> {
     match target.id.owner {
         ShapeOwner::Item(_) => target.row.as_ref(),
@@ -566,46 +554,6 @@ mod tests {
         project.graph_target_owner(&GraphTarget::Generator(layer.clone())).unwrap().get_base_param(&param_id(item, property))
     }
 
-    /// A press at `point` with the shapes `selected` selected, as a host
-    /// presses; `extend` is Shift.
-    fn tap(ctx: &mut DispatchCtx, layer: &LayerId, scene: &SceneVm, selected: &[GizmoTargetId], extend: bool, view: &GizmoView, point: (f32, f32)) -> GizmoPress {
-        let selection = GizmoSelection::of_ids(scene, selected);
-        press(ctx, layer, scene, &selection, GizmoMode::Move, PressAt { view, point, extend })
-    }
-
-    /// A pick selects its item's row in the Scene panel.
-    #[test]
-    fn a_pick_selects_its_item() {
-        let (mut project, layer, first, _) = two_cubes();
-        let scene = scene_vm(&project, &layer).unwrap();
-        let view = GizmoView::new(camera(), W, H);
-        let target = target_of(&scene, &first);
-        let mut rig = Rig::new(&layer);
-        let picked = rig.with_ctx(&mut project, |ctx| tap(ctx, &layer, &scene, &[], false, &view, px(target.origin)));
-        assert!(matches!(&picked, GizmoPress::Picked(Some(ids)) if *ids == [target.id.clone()]), "the cube is picked: {picked:?}");
-        assert_eq!(rig.ui.scene_setup_panel.live_selected(), [], "no panel is open to follow");
-        assert_eq!(scene_selection(&target), Some(SceneSelection::Item(first)));
-    }
-
-    /// Shift-click adds a shape to the selection, a second Shift-click on
-    /// it takes it out, and a plain click selects one.
-    #[test]
-    fn shift_click_adds_and_removes_a_shape() {
-        let (mut project, layer, first, second) = two_cubes();
-        let scene = scene_vm(&project, &layer).unwrap();
-        let (a, b) = (target_of(&scene, &first), target_of(&scene, &second));
-        let view = GizmoView::new(camera(), W, H);
-        let mut rig = Rig::new(&layer);
-        let mut tap_at = |selected: &[GizmoTargetId], extend: bool, point: (f32, f32)| match rig.with_ctx(&mut project, |ctx| tap(ctx, &layer, &scene, selected, extend, &view, point)) {
-            GizmoPress::Picked(Some(ids)) => ids,
-            other => panic!("a pick, got {other:?}"),
-        };
-        let both = tap_at(std::slice::from_ref(&a.id), true, px(b.origin));
-        assert_eq!(both, [a.id.clone(), b.id.clone()], "Shift adds");
-        assert_eq!(tap_at(&both, true, px(b.origin)), std::slice::from_ref(&a.id), "Shift on a selected shape takes it out");
-        assert_eq!(tap_at(&both, false, px(b.origin)), std::slice::from_ref(&b.id), "a plain click selects one");
-    }
-
     /// One handle drag writes the item's card and lands as one undo entry.
     #[test]
     fn a_handle_drag_scrubs_the_card_and_undoes_in_one_step() {
@@ -640,7 +588,7 @@ mod tests {
         let scene = scene_vm(&local, &layer).unwrap();
         let (a, b) = (target_of(&scene, &first), target_of(&scene, &second));
         let view = GizmoView::new(camera(), W, H);
-        let selection = GizmoSelection::of_ids(&scene, &[a.id.clone(), b.id.clone()]);
+        let selection = GizmoSelection::new(&scene, vec![a, b]);
         let group = selection.handles.clone().expect("one handle set for the selection");
         let grip = group.grip(GizmoMode::Move, GizmoAxis::X, &view).expect("the selection's X handle");
         let mut rig = Rig::new(&layer);

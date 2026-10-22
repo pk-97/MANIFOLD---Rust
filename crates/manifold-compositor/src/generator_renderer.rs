@@ -457,6 +457,30 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Pick the item drawn at a point of `layer_id`'s output render
+    /// (SCENE_DOCUMENT_DESIGN.md section 7.14); [`Self::take_pick`] answers a
+    /// render later.
+    pub fn request_pick(&mut self, layer_id: &LayerId, pick: manifold_node_engine::scene::pick::PickRequest) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.request_pick(pick);
+        }
+    }
+
+    pub fn take_pick(&mut self, layer_id: &LayerId) -> Option<manifold_node_engine::scene::pick::PickHit> {
+        self.layer_generators.get_mut(layer_id)?.generator.take_pick()
+    }
+
+    /// [`Self::request_pick`] in `layer_id`'s scene viewport.
+    pub fn request_scene_viewport_pick(&mut self, layer_id: &LayerId, pick: manifold_node_engine::scene::pick::PickRequest) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.request_scene_viewport_pick(pick);
+        }
+    }
+
+    pub fn take_scene_viewport_pick(&mut self, layer_id: &LayerId) -> Option<manifold_node_engine::scene::pick::PickHit> {
+        self.layer_generators.get_mut(layer_id)?.generator.take_scene_viewport_pick()
+    }
+
     /// The selection mask `layer_id`'s output render drew in the last
     /// `render_all`.
     pub fn selection_mask(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {

@@ -259,7 +259,7 @@ pub struct UIRoot {
     pub effect_clipboard: manifold_editing::clipboard::EffectClipboard,
     /// Generator clipboard for copy/paste between generator layers.
     pub gen_clipboard: manifold_editing::clipboard::GeneratorClipboard,
-    pub scene_item_clipboard: Option<crate::scene_edit::SceneItemClipboard>,
+    pub scene_item_clipboard: Option<crate::scene_clipboard::SceneItemClipboard>,
     pub object_cards_have_focus: bool,
 
     /// Hover actions produced by continuous cursor movement, drained in process_events.

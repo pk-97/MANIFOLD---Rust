@@ -1823,13 +1823,13 @@ impl Runner {
         }
     }
 
-    /// A left release: it ends a text drag, clears the selection after a
-    /// click on empty preview space, then ends a preview gizmo drag
-    /// (`window_input`'s release order), else reaches the tree.
+    /// A left release: it ends a text drag, sends a pick after a click on
+    /// the preview, then ends a preview gizmo drag (`window_input`'s release
+    /// order), else reaches the tree.
     fn release(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
         crate::text_session::pointer_up(&mut self.text_input);
-        self.preview_gizmo(ui, data, |host, ctx, _| {
-            host.release_click(ctx, pos);
+        self.preview_gizmo(ui, data, |host, ctx, fit| {
+            host.release_click(ctx, fit, pos);
             false
         });
         if !self.preview_gizmo(ui, data, |host, ctx, _| host.release(ctx)) {

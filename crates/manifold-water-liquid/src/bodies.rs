@@ -828,7 +828,8 @@ impl LiquidBodies {
     /// The box around every enabled body and region at the first tick's
     /// start of the last [`Self::rows`] call, posed as the solver poses it.
     pub fn write_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
-        let bodies = self.rows.iter().take(self.count()).map(|row| (row, PhysicsGizmoFamily::Body));
+        // A body with no inverse mass is prescribed: a collider the water meets.
+        let bodies = self.rows.iter().take(self.count()).map(|row| (row, if row.position_inv_mass[3] == 0.0 { PhysicsGizmoFamily::Collider } else { PhysicsGizmoFamily::Body }));
         let regions = self.region_rows.iter().take(self.region_count()).map(|row| {
             (row, if row.angular_velocity[3] == REGION_INFLOW { PhysicsGizmoFamily::Source } else { PhysicsGizmoFamily::Drain })
         });

@@ -5,13 +5,13 @@
 //! knows a handle.
 
 use manifold_core::NodeId;
-use manifold_core::scene_doc::{Item, ItemKind, SceneDoc, param_id};
+use manifold_core::scene_doc::{ForceType, Item, ItemFields, ItemKind, LightFields, LightType, SceneDoc, param_id};
 use manifold_foundation::ItemId;
 use manifold_foundation::scene_surface::SceneShapeDecl;
 use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Mat4, Transform};
 
 use super::ParamAddr;
-use crate::node_graph::scene_surface::ITEM_SHAPES;
+use crate::node_graph::scene_surface::{CENTRED_FORCE_SHAPES, DIRECTED_FORCE_SHAPES, ITEM_SHAPES, LAMP_SHAPES};
 
 /// The roles a placed fluid source plays (`node.fluid_role_source`'s
 /// `role` values 0 to 2).
@@ -25,13 +25,13 @@ pub enum FluidRole {
 /// Who declares a shape.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShapeOwner {
-    /// A scene item (an Object or a Group), by its id.
+    /// A scene item (an Object, a Group, a Swarm or a lamp), by its id.
     Item(ItemId),
     /// A liquid domain node.
     LiquidDomain(NodeId),
     /// A fluid role source node.
     RoleSource { node: NodeId, role: FluidRole },
-    /// A force scene modifier instance.
+    /// A Force item, by its id.
     Force(NodeId),
     /// A swarm's forces node, whose box its forces are laid over.
     Swarm(NodeId),
@@ -111,16 +111,38 @@ fn frame_of(values: &dyn Fn(&str) -> Option<f32>, chain: &[&Item]) -> Option<Mat
     })
 }
 
-/// Each Object's, Group's and Swarm's declared shapes over its transform rows, in the
-/// frame of the groups it sits in.
+/// Each Object's, Group's and Swarm's declared shapes over its transform rows,
+/// in the frame of the groups it sits in, and each lamp's and force's.
+/// Objects, Groups and Swarms draw pixels, so a click picks them through the
+/// item-id buffer and their shapes only carry the selected item's handles;
+/// a lamp or a force draws none, so its shape is how it is clicked
+/// (SCENE_DOCUMENT_DESIGN.md section 7.14).
 pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> Vec<SceneShapeVm> {
     let mut out = Vec::new();
     doc.walk(|item, ancestors| {
+        match &item.fields {
+            ItemFields::Light(LightFields { light: LightType::Sun | LightType::Point | LightType::Spot }) => {
+                let mut lamp = card_shape(ShapeOwner::Item(item.id.clone()), item, &LAMP_SHAPES[0], values);
+                lamp.frame = frame_of(values, ancestors);
+                out.push(lamp);
+                return;
+            }
+            ItemFields::Force(force) => {
+                let decl = match force.force {
+                    ForceType::Radial | ForceType::Vortex | ForceType::Attractor | ForceType::Explosion => &CENTRED_FORCE_SHAPES[0],
+                    ForceType::Uniform | ForceType::Wind => &DIRECTED_FORCE_SHAPES[0],
+                    // Still air has nowhere to be and no direction.
+                    ForceType::Drag => return,
+                };
+                out.push(card_shape(ShapeOwner::Force(NodeId::new(item.id.as_str())), item, decl, values));
+                return;
+            }
+            _ => {}
+        }
         if !matches!(item.kind(), ItemKind::Object | ItemKind::Group | ItemKind::Swarm) {
             return;
         }
         let frame = frame_of(values, ancestors);
-        let visible = values(&param_id(&item.id, "visible")).is_none_or(|v| v > 0.5);
         for (index, decl) in ITEM_SHAPES.iter().enumerate() {
             let params = decl
                 .shape
@@ -143,7 +165,7 @@ pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) 
                 frame,
                 anchor: [0.0; 3],
                 row: Some(item.id.clone()),
-                pickable: visible && ancestors.is_empty(),
+                pickable: false,
             });
         }
     });

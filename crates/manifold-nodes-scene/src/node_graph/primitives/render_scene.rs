@@ -70,6 +70,7 @@ mod rt_changes;
 mod volume_optics;
 mod live_draw_args;
 mod selection_mask;
+mod item_pick;
 mod construction;
 mod frame_setup;
 mod post_passes;
@@ -1104,6 +1105,8 @@ pub struct RenderScene {
     rendered_lights: Vec<[f32; 3]>,
     /// The selection mask the editor outlines (D-102).
     selection: selection_mask::SelectionMask,
+    /// The item-id buffer a click reads (SCENE_DOCUMENT_DESIGN.md section 7.14).
+    pick: item_pick::ItemPick,
     /// The editor asked for this frame's scene depth (gizmo lines test
     /// against it); resolved into `shaft_depth_internal` when `depth` is
     /// unwired, copied there when it is wired.
@@ -2494,6 +2497,8 @@ impl EffectNode for RenderScene {
 
     fn set_selection_mask(&mut self, slots: &[u32]) { self.selection.set(slots); }
     fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> { self.selection.texture() }
+    fn request_pick(&mut self, pick: manifold_node_engine::scene::pick::PickRequest) { self.pick.request(pick); }
+    fn take_pick(&mut self) -> Option<manifold_node_engine::scene::pick::PickHit> { self.pick.take() }
     fn set_gizmo_depth(&mut self, wanted: bool) { self.gizmo_depth_wanted = wanted; }
     fn gizmo_depth(&self) -> Option<&manifold_gpu::GpuTexture> {
         if self.gizmo_depth_ready { self.shaft_depth_internal.as_ref() } else { None }
@@ -2667,6 +2672,7 @@ impl EffectNode for RenderScene {
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
         self.selection.drawn = false;
+        self.pick.read_back();
         self.gizmo_depth_ready = false;
         self.rendered_camera = None;
         self.render_objects(ctx, None);
@@ -2989,6 +2995,7 @@ impl RenderScene {
             return;
         };
         self.selection_mask_pass(ctx, &pre, &draws);
+        self.item_pick_pass(ctx, &pre, &draws);
         let target = &target;
         let resolve_target = &resolve_target;
         let depth_resolve_target = depth_resolve_target.as_ref();

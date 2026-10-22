@@ -1521,6 +1521,18 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
+    /// On the next render, draw the item ids around `pick`'s point through
+    /// the camera this node renders with; the render after that reads the
+    /// answer back for [`Self::take_pick`] (SCENE_DOCUMENT_DESIGN.md section
+    /// 7.14). Editing chrome: the output never changes.
+    fn request_pick(&mut self, _pick: crate::scene::pick::PickRequest) {}
+
+    /// The answer to the last [`Self::request_pick`], once it has been read
+    /// back; taken once.
+    fn take_pick(&mut self) -> Option<crate::scene::pick::PickHit> {
+        None
+    }
+
     /// From the next render on, keep the scene's raw depth for the editor's
     /// gizmo lines (the preview, the viewport and an export test them against
     /// it). Editing chrome: the output never changes.

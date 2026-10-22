@@ -10,6 +10,7 @@ mod mesh_boundary;
 pub mod mesh_change;
 pub mod mesh_source;
 pub mod mesh_selection;
+pub mod pick;
 pub mod render_mode;
 pub mod scene_object;
 pub mod scene_viewport;

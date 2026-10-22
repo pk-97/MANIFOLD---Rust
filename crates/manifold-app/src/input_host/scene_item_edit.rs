@@ -2,9 +2,7 @@
 //! reorder, rename and frame. Each queues the same action the panel's
 //! buttons send, so there is one path per edit.
 use super::*;
-use crate::scene_edit::SceneItemClipboard;
 use manifold_ui::panels::actions::CardEditAction;
-use manifold_ui::{PanelAction, ProjectAction};
 
 impl AppInputHost<'_> {
     pub(super) fn edit_scene_items(&mut self, action: CardEditAction) -> bool {
@@ -20,10 +18,10 @@ impl AppInputHost<'_> {
         let selected = self.ui_root.scene_setup_panel.selected_scene_items();
         let queued = match action {
             CardEditAction::Copy | CardEditAction::Cut => {
-                if selected.is_empty() {
+                let Some(clipboard) = crate::scene_clipboard::copy(&self.project, &layer, &selected) else {
                     return true;
-                }
-                self.ui_root.scene_item_clipboard = Some(SceneItemClipboard { layer, items: selected });
+                };
+                self.ui_root.scene_item_clipboard = Some(clipboard);
                 self.ui_root.effect_clipboard.clear();
                 if matches!(action, CardEditAction::Cut) {
                     self.ui_root.scene_setup_panel.remove_selection_action()
@@ -32,23 +30,18 @@ impl AppInputHost<'_> {
                 }
             }
             CardEditAction::Delete => self.ui_root.scene_setup_panel.remove_selection_action(),
-            CardEditAction::Duplicate => self.ui_root.scene_setup_panel.duplicate_selection_action(),
+            CardEditAction::Duplicate => {
+                crate::ui_bridge::project::send_scene_edit(self.content_tx, &layer, crate::scene_edit::duplicate(&self.project, &layer, &selected).map(Some));
+                None
+            }
             CardEditAction::Group => self.ui_root.scene_setup_panel.group_selection_action(),
             CardEditAction::Ungroup => self.ui_root.scene_setup_panel.ungroup_selection_action(),
             CardEditAction::Paste => {
-                let Some(clipboard) = self.ui_root.scene_item_clipboard.clone() else {
+                let Some(clipboard) = self.ui_root.scene_item_clipboard.as_ref() else {
                     return true;
                 };
-                if clipboard.layer != layer {
-                    ContentCommand::send(
-                        self.content_tx,
-                        ContentCommand::GraphEditRejected("Paste into the scene the items were copied from".into()),
-                    );
-                    return true;
-                }
-                for item in clipboard.items {
-                    self.ui_root.pending_keyboard_actions.push(PanelAction::Project(ProjectAction::SceneDuplicate(layer.clone(), item)));
-                }
+                let built = crate::scene_clipboard::paste(&self.project, &layer, clipboard).map(Some);
+                crate::ui_bridge::project::send_scene_edit(self.content_tx, &layer, built);
                 None
             }
         };

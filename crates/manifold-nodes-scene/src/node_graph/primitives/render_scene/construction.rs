@@ -62,6 +62,7 @@ impl RenderScene {
             rendered_camera: None,
             rendered_lights: Vec::new(),
             selection: Default::default(),
+            pick: Default::default(),
             gizmo_depth_wanted: false,
             gizmo_depth_ready: false,
             prev_jitter_ndc: None,
