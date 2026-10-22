@@ -206,22 +206,21 @@ fn physics_blocked(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
 }
 
 /// The Physics row: refused inside a Body, and while the item has none, when
-/// it cannot take a body or the world is full. None always stays pickable
-/// once a setting is on.
+/// it cannot take a body. None always stays pickable once a setting is on.
 fn physics_disabled(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     physics_blocked(doc, item).or_else(|| {
         (item.fields.physics() == crate::scene_doc::PhysicsSetting::None)
-            .then(|| super::physics_unavailable(doc, &item.id).or_else(|| super::physics::world_full(doc)))
+            .then(|| super::physics_unavailable(doc, &item.id))
             .flatten()
     })
 }
 
 /// The Copies switch: refused while off when the item cannot take copies.
-fn copies_disabled(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
+fn copies_disabled(_doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     if item.fields.copies() {
         return None;
     }
-    super::copies_unavailable(item).or_else(|| super::copies::copy_groups_full(doc))
+    super::copies_unavailable(item)
 }
 
 fn write_physics(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String> {

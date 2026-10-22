@@ -33260,32 +33260,22 @@
         },
         {
           "contract": {
-            "max": "256",
             "min": "1",
             "reason": "count"
           },
           "default": "64",
           "label": "Bodies",
           "name": "bodies",
-          "range": [
-            "1",
-            "256"
-          ],
           "type": "int"
         },
         {
           "contract": {
-            "max": "32",
             "min": "0",
             "reason": "count"
           },
           "default": "1",
           "label": "Copy Groups",
           "name": "copy_groups",
-          "range": [
-            "0",
-            "32"
-          ],
           "type": "int"
         }
       ],

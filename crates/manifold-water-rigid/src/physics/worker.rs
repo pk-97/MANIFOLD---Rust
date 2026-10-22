@@ -8,7 +8,6 @@ use manifold_core::scene_surface::{PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_D
 
 use super::{
     same_topology_body, AdvancementPolicy, ResolvedRigidImpulse, RigidBody, RigidSimulation, SceneRef,
-    IMPULSE_CAPACITY,
 };
 
 /// The retained scene inputs of one Physics World: one entry per body port,
@@ -284,9 +283,6 @@ impl RigidSimulation {
         &self,
         events: &[AppliedEvent<ResolvedRigidImpulse>],
     ) -> Result<(), String> {
-        if events.len() > IMPULSE_CAPACITY {
-            return Err("Physics worker assigned impulse batch exceeds capacity".into());
-        }
         let Some(epoch) = self.impulse_epoch else {
             return Err("Physics worker assigned impulses require an initialized epoch".into());
         };
@@ -315,7 +311,7 @@ impl RigidSimulation {
             {
                 return Err("Physics worker assigned impulse timing is invalid".into());
             }
-            self.validate_impulse_targets(event.value.targets)?;
+            self.validate_impulse_targets(&event.value.targets)?;
         }
         Ok(())
     }
@@ -352,9 +348,6 @@ impl RigidSimulation {
         {
             return Err("Physics worker interval must have finite positive duration".into());
         }
-        if events.len() > IMPULSE_CAPACITY {
-            return Err("Physics worker assigned impulse batch exceeds capacity".into());
-        }
         let Some(epoch) = self.impulse_epoch else {
             return Err("Physics worker assigned impulses require an initialized epoch".into());
         };
@@ -377,7 +370,7 @@ impl RigidSimulation {
             {
                 return Err("Physics worker assigned impulse is outside its interval".into());
             }
-            self.validate_impulse_targets(event.value.targets)?;
+            self.validate_impulse_targets(&event.value.targets)?;
         }
         Ok(())
     }
@@ -826,12 +819,7 @@ mod tests {
         let before_pose = simulation.native_world().unwrap().pose(handle).unwrap();
         let before_cursor = simulation.impulse_queue.as_ref().unwrap().next_tick();
         let before_physics_time = simulation.physics_time;
-        let invalid_target = assigned_event(
-            epoch,
-            0,
-            1,
-            RigidImpulseTargets::body(1).unwrap(),
-        );
+        let invalid_target = assigned_event(epoch, 0, 1, RigidImpulseTargets::default());
         assert!(simulation
             .advance_worker_tick(
                 &inputs,

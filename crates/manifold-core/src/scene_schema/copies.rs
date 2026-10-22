@@ -94,18 +94,3 @@ pub fn copies_unavailable(item: &Item) -> Option<&'static str> {
         _ => None,
     }
 }
-
-const COPY_GROUPS_FULL: &str = "The physics world is full: it takes 32 copy groups";
-const _: () = assert!(crate::scene_impulse::RigidImpulseTargets::GROUP_CAPACITY == 32, "the full reason names the capacity");
-
-/// Why no more items can take Copies: the world holds as many copy groups as
-/// it takes.
-pub fn copy_groups_full(doc: &crate::scene_doc::SceneDoc) -> Option<&'static str> {
-    let mut groups = 0;
-    doc.walk(|item, ancestors| {
-        if item.fields.copies() && !ancestors.iter().any(|above| above.fields.copies()) {
-            groups += 1;
-        }
-    });
-    (groups >= crate::scene_impulse::RigidImpulseTargets::GROUP_CAPACITY).then_some(COPY_GROUPS_FULL)
-}

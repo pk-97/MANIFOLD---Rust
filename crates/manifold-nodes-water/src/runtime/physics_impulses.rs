@@ -247,7 +247,7 @@ impl WaterRuntimeRef<'_> {
                 id = self.graph.get_node(instance).expect("coupled owner exists").node_id.clone();
             }
             if let Some(existing) = recipients.iter_mut().find(|entry| entry.instance == instance) {
-                existing.target = existing.target.union(target)?;
+                existing.target = existing.target.clone().union(target)?;
             } else {
                 recipients.push(Recipient { id, instance, target });
             }
@@ -476,7 +476,7 @@ impl WaterRuntime<'_> {
                 stamp,
                 ResolvedNodeImpulse {
                     field: field.clone(),
-                    target: recipient.target,
+                    target: recipient.target.clone(),
                 },
             )?);
         }

@@ -214,28 +214,3 @@ fn classify(items: &[Item], within: &Within, local: Option<&ItemId>, parts: &mut
         }
     }
 }
-
-/// Why no more bodies can join: the world already holds as many as it takes.
-pub fn world_full(doc: &SceneDoc) -> Option<&'static str> {
-    let bodies = physics_parts(doc)
-        .values()
-        .filter(|part| matches!(part, PhysicsPart::Solo(_) | PhysicsPart::Group(_)))
-        .count();
-    (bodies >= crate::scene_impulse::RigidImpulseTargets::BODY_CAPACITY)
-        .then_some("The physics world is full: it takes 256 bodies")
-}
-
-const _: () = assert!(crate::scene_impulse::RigidImpulseTargets::BODY_CAPACITY == 256, "the world-full reason names the capacity");
-
-/// The items whose bodies the world has no room for: every body past the
-/// first 256, in tree order, as the compiler joins them.
-pub fn bodies_past_capacity(doc: &SceneDoc) -> Vec<ItemId> {
-    let parts = physics_parts(doc);
-    let mut bodies = Vec::new();
-    doc.walk(|item, _| {
-        if matches!(parts.get(&item.id), Some(PhysicsPart::Solo(_) | PhysicsPart::Group(_))) {
-            bodies.push(item.id.clone());
-        }
-    });
-    bodies.split_off(bodies.len().min(crate::scene_impulse::RigidImpulseTargets::BODY_CAPACITY))
-}

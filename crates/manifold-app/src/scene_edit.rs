@@ -292,13 +292,7 @@ fn shape_change(layer: &LayerId, doc: &SceneDoc, object: &Item, old: &Shape, fie
 
 /// How many Objects and Groups draw with `material`.
 fn material_users(doc: &SceneDoc, material: &ItemId) -> usize {
-    let mut users = 0;
-    doc.walk(|item, _| {
-        if matches!(item.kind(), ItemKind::Object | ItemKind::Group) && doc.effective_material(&item.id).as_ref() == Some(material) {
-            users += 1;
-        }
-    });
-    users
+    doc.material_users().get(material).copied().unwrap_or(0)
 }
 
 pub(crate) fn core_feature(feature: UiFeature) -> manifold_core::material_inspector::MaterialFeature {

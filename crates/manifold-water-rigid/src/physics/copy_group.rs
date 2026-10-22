@@ -45,6 +45,12 @@ impl CopyGroup {
         self.width = prototype.map_or([1.0; 3], copy_width);
     }
 
+    /// Whether the world has never laid this group out: no description and
+    /// no arrangement.
+    pub fn is_new(&self) -> bool {
+        self.description.is_none() && self.arrangement.is_none()
+    }
+
     /// Copy `index`'s rest pose under the installed arrangement.
     pub fn rest(&self, index: usize) -> BodyPose {
         self.arrangement.map_or(BodyPose { position: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0] }, |arrangement| {

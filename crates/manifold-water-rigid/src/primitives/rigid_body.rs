@@ -399,12 +399,22 @@ ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamTy
     refused: Option<Arc<str>> = None,
     // A wired mesh is still loading.
     loading: bool = false,
+    // This node's body, the same for the node's life: a recompile that
+    // carries the node keeps it, so the world follows the body to its new
+    // port (`RigidBody::identity`).
+    identity: u64 = next_identity(),
     // A mesh has reached this node since it was built. Until one has, an
     // empty ask means the wired mesh has not arrived (the first replay after
     // a structural edit runs before the mesh's producer), not that the body
     // has none.
     mesh_seen: bool = false,
  },
+}
+
+/// A fresh body identity: never 0, never repeated in this run.
+fn next_identity() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl RigidBodyNode {
@@ -573,6 +583,7 @@ impl Primitive for RigidBodyNode {
             collider,
             refused: self.refused.clone(),
             wall: false,
+            identity: self.identity,
             spawn: read_spawn(ctx),
         };
         ctx.outputs.set_cpu_value("body", body);

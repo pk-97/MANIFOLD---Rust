@@ -48,6 +48,8 @@ pub(crate) struct Builder<'d> {
     pub(crate) active_lens: Option<u32>,
     /// Each Material's texture sources and the `node.scene_object` port
     /// each feeds, by material id.
+    /// The material each item draws with (`SceneDoc::effective_materials`).
+    pub(crate) effective_materials: std::collections::HashMap<ItemId, ItemId>,
     pub(crate) material_maps: BTreeMap<String, Vec<(u32, &'static str)>>,
     /// Every imported part's animation clocks: (part id, clock node).
     pub(crate) clocks: Vec<(ItemId, u32)>,
@@ -124,6 +126,7 @@ impl<'d> Builder<'d> {
             lights: Vec::new(),
             tail: None,
             active_lens: None,
+            effective_materials: doc.effective_materials(),
             material_maps: BTreeMap::new(),
             clocks: Vec::new(),
             physics: super::physics::State::new(doc),

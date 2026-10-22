@@ -207,12 +207,6 @@ pub(super) fn prepare(
                 .free_slots()
                 .take(count)
                 .collect();
-            if slots.len() != count {
-                return Err(invalid(
-                    "shatter",
-                    "not enough physics body slots for these Pieces",
-                ));
-            }
             // Distribute the total across materials; every original triangle
             // and its attributes belong to exactly one resulting fragment.
             let mut allocation = vec![1usize; parts.len()];

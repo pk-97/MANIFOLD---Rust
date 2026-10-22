@@ -1,6 +1,7 @@
-//! Worlds past the old 64-body cap and with several copy groups.
+//! Worlds of hundreds of bodies and several copy groups.
 
 use super::*;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_physics::input::EventStamp;
 
 const DT: f64 = 1.0 / 60.0;
@@ -24,13 +25,13 @@ fn hit(simulation: &mut RigidSimulation, sequence: u64, targets: RigidImpulseTar
 }
 
 #[test]
-fn a_256_body_world_takes_every_body_and_a_hit_lands_on_body_200_only() {
-    let bodies: Vec<_> = (0..MAX_BODIES)
+fn a_300_body_world_takes_every_body_and_a_hit_lands_on_body_200_only() {
+    let bodies: Vec<_> = (0..300)
         .map(|index| Some(at([(index % 16) as f32 * 2.0, 0.0, (index / 16) as f32 * 2.0])))
         .collect();
     let mut simulation = RigidSimulation::default();
     simulation.advance(&bodies, [0.0; 3], PlayedTime::ZERO, 1.0, 0.0).unwrap();
-    assert!(simulation.native_handles().iter().all(Option::is_some), "every one of 256 bodies is installed");
+    assert!(simulation.native_handles().iter().all(Option::is_some), "every one of 300 bodies is installed");
     let before = simulation.poses.clone();
     hit(&mut simulation, 1, RigidImpulseTargets::body(200).unwrap());
     simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0).unwrap();
@@ -64,8 +65,8 @@ fn two_copy_groups_share_one_world_and_a_hit_on_group_one_moves_only_its_copies(
         assert!(now.pos[0] - then.pos[0] > 0.04, "every copy of group 1 takes the hit");
     }
     assert!(
-        RigidImpulseTargets::group(2).is_some_and(|missing| simulation.validate_impulse_targets(missing).is_err()),
-        "a group the world does not have refuses the hit"
+        RigidImpulseTargets::group(2).is_some_and(|missing| simulation.validate_impulse_targets(&missing).is_ok()),
+        "a group the world does not have takes nothing and refuses nothing"
     );
 }
 
@@ -119,10 +120,10 @@ fn the_world_copy_budget_is_shared_and_later_groups_make_what_fits() {
 
 #[test]
 fn steady_ticks_never_regrow_the_world_storage() {
-    let mut bodies = vec![None; MAX_BODIES];
+    let mut bodies = vec![None; 300];
     bodies[0] = Some(at([0.0, 4.0, 0.0]));
     bodies[255] = Some(at([4.0, 4.0, 0.0]));
-    let mut targeted = vec![None; MAX_BODIES + 2];
+    let mut targeted = vec![None; 302];
     targeted[255] = Some(FieldValue::uniform([0.0, 1.0, 0.0]).unwrap());
     let scene = RigidSceneInputs {
         bodies,
@@ -159,7 +160,7 @@ fn steady_ticks_never_regrow_the_world_storage() {
 }
 
 #[test]
-fn a_new_body_count_rebuilds_the_world_with_the_same_wired_bodies() {
+fn a_body_added_past_the_count_joins_the_running_world() {
     let mut small = vec![None; 64];
     small[3] = Some(at([1.0, 2.0, 3.0]));
     let mut simulation = RigidSimulation::default();
@@ -169,7 +170,7 @@ fn a_new_body_count_rebuilds_the_world_with_the_same_wired_bodies() {
     large.resize(200, None);
     large[150] = Some(at([5.0, 2.0, 3.0]));
     simulation.advance(&large, [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0).unwrap();
-    assert_ne!(simulation.impulse_epoch(), epoch, "a count change is a new world");
+    assert_eq!(simulation.impulse_epoch(), epoch, "adding a body never restarts the world");
     assert_eq!(simulation.native_handles().len(), 200);
     assert_eq!(simulation.poses[3].pos, [1.0, 2.0, 3.0]);
     assert_eq!(simulation.poses[150].pos, [5.0, 2.0, 3.0]);

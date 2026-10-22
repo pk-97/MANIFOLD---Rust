@@ -113,7 +113,7 @@ mod tests {
         let colliders = RigidImpulseTargets::body(0).unwrap();
         let open = manifold_water_liquid::coupling::DomainWalls::default();
         let capacity = manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-        let mut owner = LiquidRigidOwner::new(&scene, open, colliders, capacity, 3, None).expect("owner");
+        let mut owner = LiquidRigidOwner::new(&scene, open, &colliders, capacity, 3, None).expect("owner");
         let scale = ReactionScale { unit: 128.0, cell_size: 0.0625, offset: 0 };
         let mut words = [0i32; 16];
         words[1] = (16_777_216.0 / f64::from(scale.unit)) as i32;

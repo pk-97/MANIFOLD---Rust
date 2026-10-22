@@ -67,7 +67,7 @@ pub fn prepare_coupled_scenes(
                 ImpulseTarget::Rigid(targets) => {
                     rigids
                         .entry(node.as_str().to_owned())
-                        .and_modify(|existing| *existing = existing.union(targets))
+                        .and_modify(|existing| *existing = std::mem::take(existing).union(targets.clone()))
                         .or_insert(targets);
                 }
                 ImpulseTarget::FluidAndRigid(_) => {
@@ -119,7 +119,7 @@ pub fn prepare_coupled_scenes(
 
         pairs
             .entry((fluid, rigid))
-            .and_modify(|existing| *existing = existing.union(colliders))
+            .and_modify(|existing| *existing = std::mem::take(existing).union(colliders.clone()))
             .or_insert(colliders);
     }
 

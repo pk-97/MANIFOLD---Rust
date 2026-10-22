@@ -1075,13 +1075,13 @@ impl GpuFlipDomain {
         if (observation.transport.seconds() - played.seconds()).abs() > 1e-9 {
             return Err("GPU FLIP coupling: rigid observation transport does not match water transport".into());
         }
-        CoupledRigidInputs { scene: &observation.inputs, colliders: *colliders, density: f64::from(WATER_DENSITY) }
+        CoupledRigidInputs { scene: &observation.inputs, colliders, density: f64::from(WATER_DENSITY) }
             .validate()?;
         let reset_edge = previous_reset.is_some_and(|previous| previous != observation.reset);
         *previous_reset = Some(observation.reset);
-        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, *colliders, *capacity)) {
+        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, &*colliders, *capacity)) {
             *epochs += 1;
-            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *capacity, *epochs, owner.as_ref())?;
+            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, &*colliders, *capacity, *epochs, owner.as_ref())?;
             built.set_step(*step);
             *owner = Some(built);
             *owner_fresh = true;
@@ -1147,7 +1147,7 @@ impl GpuFlipDomain {
     fn rebuild_owner(&mut self) -> Result<(), String> {
         let observation = self.coupled.observation.as_ref().ok_or("GPU FLIP coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.capacity, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, &self.coupled.colliders, self.coupled.capacity, self.coupled.epochs, self.coupled.owner.as_ref())?;
         owner.set_step(self.coupled.step);
         self.coupled.owner = Some(owner);
         Ok(())

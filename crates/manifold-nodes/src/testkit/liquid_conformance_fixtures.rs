@@ -260,6 +260,7 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
         };
         def.wires.extend([
             wire(start_k, "transform", body_k, "transform"),
+            wire(mesh, "source", body_k, "source"),
             wire(body_k, "body", world, &format!("body_{k}")),
             wire(body_k, "pose", object_k, "transform"),
             wire(mesh, "vertices", object_k, "vertices"),

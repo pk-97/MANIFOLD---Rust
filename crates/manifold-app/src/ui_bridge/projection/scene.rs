@@ -9,7 +9,7 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, SceneDoc, Shape, param_id, split_param_id};
 use manifold_core::scene_schema::{
-    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, bodies_past_capacity, break_unavailable, choice_disabled, impulse_unavailable,
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, break_unavailable, choice_disabled, impulse_unavailable,
 };
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
@@ -48,18 +48,11 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
         .filter(|other| other.layer_id != layer_id && other.layer_type != LayerType::Group)
         .map(|other| (other.layer_id.clone(), other.name.clone()))
         .collect();
+    let materials = Materials { effective: doc.effective_materials(), users: doc.material_users() };
     let mut items = Vec::new();
     doc.walk(|item, ancestors| {
-        items.push(item_vm(doc, inst, item, ancestors, &owned, &layers));
+        items.push(item_vm(doc, inst, item, ancestors, &owned, &layers, &materials));
     });
-    // A body the world has no room for: its physics rows say so.
-    for body in bodies_past_capacity(doc) {
-        if let Some(vm) = items.iter_mut().find(|vm: &&mut SceneItemVm| vm.id == body) {
-            for property in ["mass", "bounce", "friction"] {
-                vm.row_reasons.push((param_id(&body, property), "The physics world is full: this body is not in it".to_owned()));
-            }
-        }
-    }
     let add_entries = ADD_ENTRIES
         .iter()
         .map(|entry| AddEntryVm {
@@ -80,15 +73,18 @@ fn item_vm(
     ancestors: &[&Item],
     owned: &ahash::AHashMap<&str, Vec<String>>,
     layers: &[(LayerId, String)],
+    materials: &Materials,
 ) -> SceneItemVm {
     let params_of = |id: &ItemId| owned.get(id.as_str()).cloned().unwrap_or_default();
     let fields = field_rows(doc, item, layers);
     let material_item = match item.kind() {
         ItemKind::Material => Some(item.id.clone()),
-        ItemKind::Object | ItemKind::Group => doc.effective_material(&item.id),
+        ItemKind::Object | ItemKind::Group => materials.effective.get(&item.id).cloned(),
         _ => None,
     };
-    let material = material_item.and_then(|id| doc.find(&id)).map(|mat| material_block(doc, inst, mat, owned, layers));
+    let material = material_item
+        .and_then(|id| doc.find(&id))
+        .map(|mat| material_block(doc, inst, mat, owned, layers, materials.users.get(&mat.id).copied().unwrap_or(0)));
     let (environment, aim_sun_file) = match &item.fields {
         ItemFields::Light(light) => match &light.light {
             LightType::Environment { source } => (
@@ -134,19 +130,21 @@ fn row_reasons(doc: &SceneDoc, item: &Item) -> Vec<(String, String)> {
     reasons
 }
 
+/// Which Material each item draws with and how many draw with each, found
+/// once per projection so the panel stays linear in the scene's size.
+struct Materials {
+    effective: std::collections::HashMap<ItemId, ItemId>,
+    users: std::collections::HashMap<ItemId, usize>,
+}
+
 fn material_block(
     doc: &SceneDoc,
     inst: &PresetInstance,
     material: &Item,
     owned: &ahash::AHashMap<&str, Vec<String>>,
     layers: &[(LayerId, String)],
+    used_by: usize,
 ) -> MaterialBlockVm {
-    let mut used_by = 0;
-    doc.walk(|item, _| {
-        if matches!(item.kind(), ItemKind::Object | ItemKind::Group) && doc.effective_material(&item.id).as_ref() == Some(&material.id) {
-            used_by += 1;
-        }
-    });
     // Looks and features are PBR: an Unlit or Cel Material compiles neither.
     let pbr = matches!(&material.fields, ItemFields::Material(fields)
         if manifold_core::scene_schema::material_node_type(fields) == MaterialType::Pbr.node_type());

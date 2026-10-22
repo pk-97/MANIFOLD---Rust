@@ -16,7 +16,6 @@
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, ItemId, PhysicsSetting, SceneDoc};
-use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_core::scene_schema::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts};
 use std::collections::HashMap;
 
@@ -146,8 +145,6 @@ pub(crate) fn group(b: &mut Builder<'_>, item: &Item, inner: Frame) -> Frame {
 }
 
 /// Join every body to the World's `world` and give each group body its parts.
-/// A body past the world's capacity is in no world and stays where it is
-/// authored.
 pub(crate) fn join_world(b: &mut Builder<'_>, world: u32) {
     for (root, parts) in std::mem::take(&mut b.physics.group_parts) {
         let Some(body) = b.id(root.as_str(), BODY_ROLE) else {
@@ -159,13 +156,11 @@ pub(crate) fn join_world(b: &mut Builder<'_>, world: u32) {
         }
     }
     let bodies = std::mem::take(&mut b.physics.bodies);
-    let joined = bodies.len().min(RigidImpulseTargets::BODY_CAPACITY);
-    // The world keeps its default room, so a body added mid-show fills a
-    // free port and joins the running world; the bodies already moving keep
-    // going. Only past that room does the count grow and the world restart.
-    let room = joined.max(manifold_foundation::scene_surface::PHYSICS_WORLD_DEFAULT_BODIES as usize);
-    b.set(world, "bodies", SerializedParamValue::Int { value: room as i32 });
-    for (k, body) in bodies.into_iter().take(joined).enumerate() {
+    // The world sizes its ports to its bodies. A body added mid-show grows
+    // them and joins the running world; the bodies already moving keep going
+    // (`RigidSimulation` follows each body by identity, not by port).
+    b.set(world, "bodies", SerializedParamValue::Int { value: bodies.len().max(1) as i32 });
+    for (k, body) in bodies.into_iter().enumerate() {
         b.wire(body, "body", world, &format!("body_{k}"));
     }
 }

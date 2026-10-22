@@ -27,7 +27,7 @@ use std::sync::OnceLock;
 use manifold_foundation::mesh_partition::partition;
 
 use crate::sdf::{DistanceLattice, MAX_LATTICE_NODES, signed_distance_union_within, union_lattice_nodes};
-use crate::{BodyConfig, BodyHandle, MAX_BODY_HULLS, PhysicsError, PhysicsWorld, TriangleMesh, closed_triangles, cook_hull, cook_hull_mesh};
+use crate::{BodyConfig, BodyHandle, PhysicsError, PhysicsWorld, TriangleMesh, closed_triangles, cook_hull, cook_hull_mesh};
 
 /// The farthest any position or hull point may sit from the origin, in
 /// metres. Box3D treats bounds past 100 km as corrupt; this keeps every
@@ -51,9 +51,6 @@ pub const DISTANCE_NODES_ALONG_LONGEST: f32 = 32.0;
 /// Steps per octave a scale is rounded to before it enters a cache key, so a
 /// scale moving within one step (about 9%) rebuilds nothing.
 pub const SCALE_STEPS_PER_OCTAVE: f32 = 8.0;
-
-/// The most parts a compound body takes: one hull each at least.
-pub const MAX_BODY_PARTS: usize = MAX_BODY_HULLS;
 
 /// A body's longest side over this many metres earns one more hull.
 const METRES_PER_HULL: f32 = 0.05;
@@ -209,18 +206,14 @@ impl CollisionShape {
 
     /// Convex hulls for a moving body at `scale`, in the local frame: each
     /// part split in space into pieces, the count chosen from its triangles
-    /// and its size at this scale (one hull for a convex closed part), at
-    /// most [`MAX_BODY_HULLS`] in all. Open surfaces get a shell
+    /// and its size at this scale (one hull for a convex closed part), with
+    /// no cap on the total. Open surfaces get a shell
     /// [`SHELL_FRACTION`] of the shape's longest side thick so every hull has
     /// volume. Costs a hull cook per piece; never on the content thread.
     pub fn body_hulls(&self, scale: [f32; 3]) -> Result<Vec<Vec<[f32; 3]>>, PhysicsError> {
         validate_scale(scale)?;
-        if self.parts.len() > MAX_BODY_PARTS {
-            return Err(PhysicsError::InvalidInput("a body takes at most 64 parts"));
-        }
         let thickness = self.extent().into_iter().fold(0.0f32, f32::max) * SHELL_FRACTION;
-        let wanted: Vec<usize> = self.parts.iter().map(|part| automatic_pieces(part, scale)).collect::<Result<_, _>>()?;
-        let counts = share_hulls(&wanted);
+        let counts: Vec<usize> = self.parts.iter().map(|part| automatic_pieces(part, scale)).collect::<Result<_, _>>()?;
         let mut hulls = Vec::with_capacity(counts.iter().sum());
         for (part, count) in self.parts.iter().zip(counts) {
             let closed = closed_triangles(part).is_ok_and(|flags| !flags.contains(&false));
@@ -290,7 +283,7 @@ fn automatic_pieces(part: &TriangleMesh, scale: [f32; 3]) -> Result<usize, Physi
     let longest = (0..3).map(|axis| (max[axis] - min[axis]) * scale[axis].abs()).fold(0.0f32, f32::max);
     let by_size = (longest / METRES_PER_HULL).ceil().max(1.0) as usize;
     let by_detail = (triangles as f32).sqrt().ceil() as usize;
-    Ok(by_detail.min(by_size).clamp(1, MAX_BODY_HULLS).min(triangles))
+    Ok(by_detail.min(by_size).max(1).min(triangles))
 }
 
 /// Whether `part` is one closed volume its convex hull barely exceeds.
@@ -313,18 +306,6 @@ fn mesh_volume(mesh: &TriangleMesh) -> f64 {
         })
         .sum::<f64>()
         / 6.0
-}
-
-/// Each part's hull count: what it asks for when the total fits
-/// [`MAX_BODY_HULLS`], else shares of it in proportion, one at least.
-fn share_hulls(wanted: &[usize]) -> Vec<usize> {
-    let total: usize = wanted.iter().sum();
-    if total <= MAX_BODY_HULLS {
-        return wanted.to_vec();
-    }
-    let spare = MAX_BODY_HULLS - wanted.len();
-    let extra: usize = total - wanted.len();
-    wanted.iter().map(|&want| 1 + (want - 1) * spare / extra).collect()
 }
 
 fn any_open(meshes: &[TriangleMesh]) -> bool {
