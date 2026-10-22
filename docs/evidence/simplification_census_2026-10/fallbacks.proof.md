@@ -57,7 +57,7 @@ Serde-level and post-load passes:
 - whitewater `level_set` (`ww_level_set.jq`: wires into a `node.whitewater_step` node's `level_set` port) → 138_waterFunv3 1, 110_fluidTestGpuFlip 1; the Hung Up and Murmur shows 0.
 - old graph ids (`TYPE_ID_MIGRATIONS` minus the two `RETIRED_PARAMS` rows, 114 ids): 40 files hold one or more, by version 1.0.0 5, 1.1.0 17, 1.3.0 2, 1.6.0 3, 1.10.0 3, 1.12.0 7, 1.13.0 1, 1.14.0 2. No file at 1.15 or later.
 
-Line counts: `wc -l` per file and `rg -n '#\[cfg\(test\)\]'` for the product and test split (`crates/manifold-io/src/migrations/`: contacts_wire_v1200 82/78, param_storage_v14 491/393, pressure_cap_card_v1190 216/277, reversed_depth_v1160 56/48, rigid_body_density_v1170 100/43, scene_cinematic_tail_v1130 461/285, scene_scale_coc_v1140 193/144, scene_transform_v1120 553/352, solve_level_card_v1180 139/85; phong_migration 710/345; scene_object_migration 333/411; gltf_import/migration.rs 415/293; gltf upgrade.rs 393 plus upgrade/ 792; scene_modifier_legacy_migration 65 plus 2,649 in its folder). Test files: `crates/manifold-app/tests/legacy_param_id_resolution.rs` 705, `crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gltf_upgrade.rs` 604, `gltf_upgrade_project.rs` 199, `gpu_proofs/catalog/render_scene_material_upgrade.rs` 276, `gpu_proofs/scene_object_migration_round_trip.rs` 165, `scene_modifier_legacy_migration.rs` 177, `scene_modifier_photoscan_migration.rs` 307, `scene_modifier_fragment_masks.rs` 233, `gpu_proofs/scene_modifier_legacy.rs` 157, `catalog_tests/loop_upgrade.rs` 328, `catalog_tests/binding_migration.rs` 147.
+Line counts: `wc -l` per file and `rg -n '#\[cfg\(test\)\]'` for the product and test split (`crates/manifold-io/src/migrations/`: contacts_wire_v1200 82/78, param_storage_v14 491/393, pressure_cap_card_v1190 216/277, reversed_depth_v1160 56/48, rigid_body_density_v1170 100/43, scene_cinematic_tail_v1130 461/285, scene_scale_coc_v1140 193/144, scene_transform_v1120 553/352, solve_level_card_v1180 139/85; phong_migration 710/345; scene_object_migration 333/411; gltf_import/migration.rs 415/293; gltf upgrade.rs 393 plus upgrade/ 792; scene_modifier_legacy_migration 65 plus 2,649 in its folder). Test files: `crates/manifold-app/tests/legacy_param_id_resolution.rs` 705, `manifold-nodes/tests/contracts/node_graph/catalog_tests/gltf_upgrade.rs` (deleted) 604, `gltf_upgrade_project.rs` 199, `gpu_proofs/catalog/render_scene_material_upgrade.rs` 276, `gpu_proofs/scene_object_migration_round_trip.rs` 165, `scene_modifier_legacy_migration.rs` 177, `scene_modifier_photoscan_migration.rs` 307, `scene_modifier_fragment_masks.rs` 233, `gpu_proofs/scene_modifier_legacy.rs` 157, `catalog_tests/loop_upgrade.rs` 328, `catalog_tests/binding_migration.rs` 147.
 
 Note on `raw/type_id_migrations.tsv`: its regex also caught the two `RETIRED_PARAMS` rows (`node.gpu_flip_step`, `node.liquid_frame`, current ids with 11 hits each). The real rename table has 114 entries plus one fixture; 42 of the 114 old ids appear in projects, not 44 of 116 as census section 2 says.
 
@@ -104,7 +104,7 @@ Lines: about 21 stamps, 30 comment lines repeating the wrong rationale, 36 lines
 
 - Old table keys (`joint_parent_table`, `joint_root_world_table`, `inverse_bind_table`, `translation_tracks`, `rotation_tracks`, `scale_tracks`, `translation_track`, `rotation_track`, `scale_track`, `weight_tracks`): `rg -l -F` over `$P` → 0 each; over `crates/manifold-nodes/assets` → 0 each. Sampler nodes do exist (gltf_skeleton_pose 7 files, gltf_animation_source 4), all in the new shape.
 - `node.gltf_animation_source` first 2026-07-16 (8d48d7b80); `migrate_gltf_anim_v2` first 2026-07-18 (9f153abe4). Window: online-only 0, local 2 (neither carries it).
-- Code: `crates/manifold-nodes-scene/src/node_graph/gltf_import/migration.rs:5-153` plus its `GraphMigration` registration (~400); tests `migrate_gltf_anim_v2_strips_tables_and_stamps_sibling_path` (469) and `migrate_gltf_anim_v2_leaves_unresolvable_node_inert` (537) with their helpers, about 170 lines. `crates/manifold-nodes/tests/contracts/load/migration.rs` names the registration order and needs a one-line edit.
+- Code: `manifold-nodes-scene/src/node_graph/gltf_import/migration.rs:5-153` (deleted) plus its `GraphMigration` registration (~400); tests `migrate_gltf_anim_v2_strips_tables_and_stamps_sibling_path` (469) and `migrate_gltf_anim_v2_leaves_unresolvable_node_inert` (537) with their helpers, about 170 lines. `crates/manifold-nodes/tests/contracts/load/migration.rs` names the registration order and needs a one-line edit.
 - It runs at every graph build (`MigrationStage::BeforeFlatten` in `graph_loader.rs:528`), not once.
 
 ### fallbacks-007
@@ -135,7 +135,7 @@ Claim: 41 V1.0 flat fields deserialize, round-trip, and are read by nothing exce
 
 - `rg -l -F '"math_view_mode"' $P` → 7 files; 6 are 1.21.0 shows that already carry the standalone `MathView` recipe. `"VortexFragments"` (the only carrier recipe `legacy_eligible` accepts) → 1 file, 122_mathTesting (Downloads, 1.15.0, 2026-09-14).
 - Embedded controls first 2026-09-13 (ce78a59d0, `math_view_mode`); standalone recipe 2026-09-17 (8f8162316). Window online-only: Corrosion Music Video V6 and Corrosion No Thistles (09-13), Head Split (09-15).
-- Code: legacy helpers in `crates/manifold-core/src/scene_modifier_math_view.rs:76-552` (shared vocabulary is lines 1-75); `migrate_legacy_math_views` and `append_legacy_math_view` in `crates/manifold-app/src/project_io.rs:237-506`; core tests 553-1047; app journey tests in `crates/manifold-app/src/scene_modifier_journey.rs`.
+- Code: legacy helpers in `crates/manifold-core/src/scene_modifier_math_view.rs:76-552` (shared vocabulary is lines 1-75); `migrate_legacy_math_views` and `append_legacy_math_view` in `crates/manifold-app/src/project_io.rs:237-506`; core tests 553-1047; app journey tests in `manifold-app/src/scene_modifier_journey.rs` (deleted).
 - `bd show BUG-cavux` → six legacy Math View migration journeys are red on main (open P2).
 
 ### fallbacks-011
@@ -355,7 +355,7 @@ Starting idioms per crate (lead): `rg -c 'unwrap_or_default\(\)|unwrap_or_else\(
 
 ### fallbacks-046
 
-- Helper: `sed -n 205,300p crates/manifold-editing/src/commands/preset/modifier.rs` → `.ok()?` at 252, 253 and 268; the caller prints a generic message (140-154).
+- Helper: `sed -n 205,300p manifold-editing/src/commands/preset/modifier.rs` (deleted) → `.ok()?` at 252, 253 and 268; the caller prints a generic message (140-154).
 
 ### fallbacks-047
 

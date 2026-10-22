@@ -127,36 +127,22 @@ class AcceptanceRunnerTests(unittest.TestCase):
                                  "gpuAsMaintenance": {"p95Ms": 1.0}}],
             "gates": {"staticRegression": "compare with saved baseline"},
         }
-        held_out = {
-            "status": "measured",
-            "cpuWall": {"p95Ms": 999.0},
-            "enforced": {
-                "completeFrames": True,
-                "noGpuFaults": True,
-                "zeroPostWarmupBufferAllocations": True,
-                "zeroPostWarmupAccelerationStructureAllocations": True,
-                "rtDispatched": True,
-                "profilingClean": True,
-            },
-        }
-        reference_content = {
-            "status": "measured",
-            "cpuWall": {"p95Ms": 10.0},
-            "enforced": held_out["enforced"].copy(),
-        }
-        qualification, problems = runner._perf_qualification(
-            reference, held_out, reference_content)
+        qualification, problems = runner._perf_qualification(reference)
         self.assertFalse(problems)
         self.assertEqual(qualification["correctness"], "pass")
         self.assertEqual(qualification["resource"], "pass")
-        self.assertEqual(qualification["liveBudget"], "pass")
+        # The content-thread frame has no harness, so the live budget is unmeasured.
+        self.assertEqual(qualification["liveBudget"], "not_evaluated")
         self.assertEqual(qualification["staticBaseline"], "missing")
-        self.assertEqual(qualification["heldOutContentFrameP95Ms"], 999.0)
-        self.assertEqual(qualification["referenceContentFrameP95Ms"], 10.0)
         self.assertEqual(qualification["overall"], "blocked")
         reference["gates"]["staticRegression"] = {"passed": True}
-        qualified, _ = runner._perf_qualification(reference, held_out, reference_content)
-        self.assertEqual(qualified["overall"], "pass")
+        qualified, _ = runner._perf_qualification(reference)
+        self.assertEqual(qualified["staticBaseline"], "pass")
+        self.assertEqual(qualified["overall"], "blocked")
+        production[1]["gpuFrame"]["p95Ms"] = 20.0
+        over, _ = runner._perf_qualification(reference)
+        self.assertEqual(over["liveBudget"], "fail")
+        self.assertEqual(over["overall"], "fail")
 
     def test_ignored_selected_test_is_a_reported_failure(self):
         tests = runner.parse_test_results(

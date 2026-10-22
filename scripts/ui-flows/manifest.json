@@ -51,9 +51,6 @@
     "crates/manifold-app/src/ui_bridge/projection/trigger_routing.rs": [
       "trigger-lane-assignment"
     ],
-    "crates/manifold-editing/src/commands/graph/scene.rs": [
-      "water-family-controls"
-    ],
     "crates/manifold-ui/src/interaction_overlay.rs": [
       "automation-clear-parameter",
       "automation-clipboard-shapes",
@@ -105,12 +102,6 @@
       "drag-automation-point",
       "toggle-lanes"
     ],
-    "crates/manifold-nodes-scene/src/node_graph/scene_templates.rs": [
-      "scene-swarm-add"
-    ],
-    "crates/manifold-ui/src/panels/scene_setup_actions.rs": [
-      "scene-swarm-add"
-    ],
     "crates/manifold-app/src/scene_view_copy.rs": [
       "scene-use-this-view"
     ],
@@ -158,30 +149,7 @@
       "scene-fluid-role-lifecycle",
       "scene-forces-controls"
     ],
-    "crates/manifold-editing/src/commands/graph/scene/fluid": [
-      "scene-fluid-authoring",
-      "scene-physics-template",
-      "water-family-preset"
-    ],
-    "crates/manifold-editing/src/commands/graph/scene/physics.rs": [
-      "scene-physics-switch",
-      "scene-imported-physics"
-    ],
-    "crates/manifold-editing/src/commands/graph/scene/duplicate.rs": [
-      "scene-copy-group",
-      "scene-physics-duplicate-paused"
-    ],
-    "crates/manifold-editing/src/commands/graph/scene/make_copies.rs": [
-      "scene-copy-group"
-    ],
-    "crates/manifold-ui/src/panels/scene_setup_panel/copies.rs": [
-      "scene-copy-group"
-    ],
     "crates/manifold-core/src/scene_exposure.rs": [
-      "scene-fluid-dam-break-controls",
-      "water-family-preset"
-    ],
-    "crates/manifold-nodes-scene/src/node_graph/scene_exposure": [
       "scene-fluid-dam-break-controls",
       "water-family-preset"
     ],
@@ -294,20 +262,7 @@
     "crates/manifold-ui/src/panels/rt_quality_panel.rs": [
       "rt-quality-panel-demo"
     ],
-    "crates/manifold-app/src/scene_modifier_edit": [
-      "scene-modifier-preset"
-    ],
     "crates/manifold-app/src/ui_bridge/projection/material.rs": [
-      "material-inspector-colour",
-      "scene-colour-row-hex",
-      "material-inspector-features",
-      "material-inspector-groups",
-      "material-inspector-looks",
-      "material-preset-menu",
-      "material-add-feature-menu",
-      "material-inspector-textures"
-    ],
-    "crates/manifold-app/src/ui_bridge/material_looks.rs": [
       "material-inspector-colour",
       "scene-colour-row-hex",
       "material-inspector-features",

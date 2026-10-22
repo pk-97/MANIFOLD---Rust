@@ -69,7 +69,7 @@ Total: 56 rows to look at. 19 of them are named in app-ui.md. Of 106 rows new in
 
 | def | name | kind | verdict | lines | comment | impl | note |
 |---|---|---|---|---|---|---|---|
-| `crates/manifold-nodes-scene/src/node_graph/gltf_import/testkit.rs:102` | `write_synthetic_multimaterial_glb` | fn | TEST-ONLY | 90 | 4 | 0 |  |
+| `manifold-nodes-scene/src/node_graph/gltf_import/testkit.rs:102` (deleted) | `write_synthetic_multimaterial_glb` | fn | TEST-ONLY | 90 | 4 | 0 |  |
 | `crates/manifold-nodes-scene/src/node_graph/viewport_render.rs:148` | `render_viewport_frame` | fn | TEST-ONLY | 39 | 6 | 0 |  |
 
 ## manifold-nodes-water (1)

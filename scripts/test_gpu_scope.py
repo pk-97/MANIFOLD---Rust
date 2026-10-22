@@ -330,7 +330,6 @@ class ScopeTests(unittest.TestCase):
         cases = {
             "crates/manifold-compositor/src/layer_compositor.rs": ["layer_compositor"],
             "crates/manifold-compositor/src/preset_thumbnail.rs": ["preset_thumbnail"],
-            "crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade.rs": ["loop_upgrade"],
         }
         import cpu_scope
         for path, modules in cases.items():
@@ -342,8 +341,7 @@ class ScopeTests(unittest.TestCase):
                     prefix = "node_graph::catalog_tests::" + module + "::"
                     self.assertIn(prefix, cpu.filterset)
                     self.assertIn(prefix, gpu.filters)
-                if path.startswith(("crates/manifold-compositor/src/",
-                                    "crates/manifold-nodes-scene/src/")):
+                if path.startswith("crates/manifold-compositor/src/"):
                     self.assertNotIn(gpu.workspace.owner(path), gpu.whole_packages)
         gltf = plan(["crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs"])
         self.assertTrue({"render_scene_material_upgrade::", "rt_bug318_import_toggle::",
@@ -359,8 +357,6 @@ class ScopeTests(unittest.TestCase):
             "crates/manifold-compositor/src/layer_compositor.rs": "layer_compositor::",
             "crates/manifold-compositor/src/preset_thumbnail.rs": "preset_thumbnail::",
             "crates/manifold-compositor/src/generator_renderer.rs": "generator_renderer::",
-            "crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade.rs":
-                "node_graph::scene_modifier_legacy_migration::loop_upgrade::",
         }
         for path, local in cases.items():
             with self.subTest(path=path):

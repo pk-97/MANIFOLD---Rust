@@ -631,7 +631,6 @@ CATALOG_TEST_ROWS = [
     ("crates/manifold-compositor/src/preset_thumbnail", "preset_thumbnail", True),
     ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_tests", False),
     ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_warmup_tests", False),
-    ("crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade", "loop_upgrade", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/gltf_animation_source", "gltf_animation_source", True),
     (SURF_SRC + "primitives/surface_mesh_normals", "surface_mesh_normals", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/copy_positions", "copy_positions", False),
