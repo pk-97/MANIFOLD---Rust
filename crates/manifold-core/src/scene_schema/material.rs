@@ -1,6 +1,9 @@
 //! Material: one `node.pbr_material` that every item bound to it shares, and
 //! its texture source (`node.layer_source` for a layer, `node.gltf_texture_source`
-//! for a file) feeding the base colour of each object drawing with it.
+//! for a file) feeding the base colour of each object drawing with it. A
+//! material of a model file reads its factors, every map and every extension
+//! from the file: one `node.gltf_texture_source` per map, each feeding its
+//! own port of the objects drawing with it.
 //!
 //! The surface params are a family, not one row each: every param the
 //! material node declares is a card row in the Material section with the
@@ -41,18 +44,86 @@ fn file(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Material(m) if matches!(m.texture, TextureSource::File { .. }))
 }
 
+fn model(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Material(m) if matches!(m.texture, TextureSource::Model { .. }))
+}
+
 const TEXTURE: Reach = Reach::Own("texture");
 use ControlGroup::Material;
 
-pub static MATERIAL_ROWS: [PropertyRow; 8] = [
-    row("texture_layer", TEXTURE, Material, Exposure::Automatic("the texture source field")).param("layer").when(layer),
-    row("texture_file", TEXTURE, Material, Exposure::Automatic("the texture source field")).param("path").when(file),
-    row("texture_index", TEXTURE, Material, Exposure::Internal("a picked file holds one image")).when(file),
-    row("color_space", TEXTURE, Material, Exposure::Internal("a base colour image is sRGB")).when(file),
-    row("texture_width", TEXTURE, Material, Exposure::Internal("the file's own size")).param("width").when(file),
-    row("texture_height", TEXTURE, Material, Exposure::Internal("the file's own size")).param("height").when(file),
-    row("repack", TEXTURE, Material, Exposure::Internal("a base colour image is not repacked")).param("mode").when(file),
-    row("glossiness_factor", TEXTURE, Material, Exposure::Internal("only a repacked gloss map reads it")).when(file),
+const FROM_MODEL: Exposure = Exposure::Automatic("the model file's material");
+
+/// The roles of a model material's texture nodes: its base colour, then one
+/// per map family (`scene_compile::material`), each named for the
+/// `node.scene_object` port it feeds.
+pub const MODEL_MAP_ROLES: [&str; 19] = [
+    "base_color_map",
+    "normal_map",
+    "mr_map",
+    "occlusion_map",
+    "emissive_map",
+    "sheen_color_map",
+    "sheen_roughness_map",
+    "iridescence_map",
+    "iridescence_thickness_map",
+    "anisotropy_map",
+    "clearcoat_map",
+    "clearcoat_roughness_map",
+    "clearcoat_normal_map",
+    "specular_map",
+    "specular_color_map",
+    "transmission_map",
+    "diffuse_transmission_map",
+    "diffuse_transmission_color_map",
+    "volume_thickness_map",
+];
+
+/// The rows of every `node.gltf_texture_source` param on each model map
+/// role: all set from the file.
+macro_rules! material_rows {
+    ($($role:literal),* $(,)?) => {
+        [
+            row("texture_layer", TEXTURE, Material, Exposure::Automatic("the texture source field")).param("layer").when(layer),
+            row("texture_file", TEXTURE, Material, Exposure::Automatic("the texture source field")).param("path").when(file),
+            row("texture_index", TEXTURE, Material, Exposure::Internal("a picked file holds one image")).when(file),
+            row("color_space", TEXTURE, Material, Exposure::Internal("a base colour image is sRGB")).when(file),
+            row("texture_width", TEXTURE, Material, Exposure::Internal("the file's own size")).param("width").when(file),
+            row("texture_height", TEXTURE, Material, Exposure::Internal("the file's own size")).param("height").when(file),
+            row("repack", TEXTURE, Material, Exposure::Internal("a base colour image is not repacked")).param("mode").when(file),
+            row("glossiness_factor", TEXTURE, Material, Exposure::Internal("only a repacked gloss map reads it")).when(file),
+            $(
+                row(concat!($role, "_path"), Reach::Own($role), Material, FROM_MODEL).param("path").when(model),
+                row(concat!($role, "_index"), Reach::Own($role), Material, FROM_MODEL).param("texture_index").when(model),
+                row(concat!($role, "_color_space"), Reach::Own($role), Material, FROM_MODEL).param("color_space").when(model),
+                row(concat!($role, "_width"), Reach::Own($role), Material, FROM_MODEL).param("width").when(model),
+                row(concat!($role, "_height"), Reach::Own($role), Material, FROM_MODEL).param("height").when(model),
+                row(concat!($role, "_repack"), Reach::Own($role), Material, FROM_MODEL).param("mode").when(model),
+                row(concat!($role, "_glossiness"), Reach::Own($role), Material, FROM_MODEL).param("glossiness_factor").when(model),
+            )*
+        ]
+    };
+}
+
+pub static MATERIAL_ROWS: [PropertyRow; 8 + 7 * MODEL_MAP_ROLES.len()] = material_rows![
+    "base_color_map",
+    "normal_map",
+    "mr_map",
+    "occlusion_map",
+    "emissive_map",
+    "sheen_color_map",
+    "sheen_roughness_map",
+    "iridescence_map",
+    "iridescence_thickness_map",
+    "anisotropy_map",
+    "clearcoat_map",
+    "clearcoat_roughness_map",
+    "clearcoat_normal_map",
+    "specular_map",
+    "specular_color_map",
+    "transmission_map",
+    "diffuse_transmission_map",
+    "diffuse_transmission_color_map",
+    "volume_thickness_map",
 ];
 
 const TEXTURE_SOURCES: &[Choice] = &[Choice { key: "none", label: "None" }, Choice { key: "file", label: "File" }];
@@ -72,6 +143,7 @@ pub static MATERIAL_FIELDS: [FieldRow; 2] = [
                 TextureSource::None => FieldValue::Choice("none".to_owned()),
                 TextureSource::File { .. } => FieldValue::Choice("file".to_owned()),
                 TextureSource::Layer { layer } => FieldValue::Layer(layer.clone()),
+                TextureSource::Model { .. } => FieldValue::Choice("model".to_owned()),
             },
             _ => FieldValue::Choice("none".to_owned()),
         },

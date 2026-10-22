@@ -129,7 +129,7 @@ fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) ->
 manifold_node_engine::primitive! {
     name: GltfMeshSource,
     type_id: "node.gltf_mesh_source",
-    purpose: "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform.",
+    purpose: "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform. node_path (a file node path, empty by default) selects that one node's own mesh instead, already placed in the file's world space.",
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
@@ -141,6 +141,14 @@ manifold_node_engine::primitive! {
             label: "File",
             ty: ParamType::String,
             default: ParamValue::Float(0.0), // String default supplied via stringBindings; this slot is never read.
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("node_path"),
+            label: "File Node",
+            ty: ParamType::String,
+            default: ParamValue::Float(0.0), // String default supplied by the node param; this slot is never read.
             range: None,
             enum_values: &[],
         },
@@ -279,8 +287,8 @@ manifold_node_engine::primitive! {
         // port-shadowed performance scalars, so a full re-parse on change
         // is the simple, correct choice over a second CPU-side cache tier.
         // BUG-221: translate_x/y/z joined the tuple the same way.
-        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, u32, u32) =
-            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0, 1, 0),
+        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), String) =
+            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0, (1, 0), String::new()),
         // Last successfully parsed geometry (CPU-side), retained only until
         // it is uploaded to `staging`.
         cached_verts: Vec<MeshVertex> = Vec::new(),
@@ -375,6 +383,10 @@ impl Primitive for GltfMeshSource {
         let requested_translate_z = float_param("translate_z", 0.0);
         let requested_fragment_count = float_param("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
         let requested_fragment_index = float_param("fragment_index", 0.0).round().max(0.0) as u32;
+        let requested_node_path = match params.get("node_path") {
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
+        };
 
         let requested_key_matches = self.last_key.0.as_str() == requested_path
             && self.last_key.1 == requested_mesh_index
@@ -386,8 +398,8 @@ impl Primitive for GltfMeshSource {
             && self.last_key.7 == requested_translate_x
             && self.last_key.8 == requested_translate_y
             && self.last_key.9 == requested_translate_z
-            && self.last_key.10 == requested_fragment_count
-            && self.last_key.11 == requested_fragment_index;
+            && self.last_key.10 == (requested_fragment_count, requested_fragment_index)
+            && self.last_key.11 == requested_node_path;
         if !requested_key_matches {
             return SourceAssetIdentity::Pending;
         }
@@ -446,6 +458,10 @@ impl Primitive for GltfMeshSource {
         let translate = [translate_x, translate_y, translate_z];
         let fragment_count = ctx.param_f32("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
         let fragment_index = ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32;
+        let node_path = match ctx.params.get("node_path") {
+            Some(ParamValue::String(s)) => s.as_str().to_owned(),
+            _ => String::new(),
+        };
 
         // 2. Re-trigger a background parse if the effective selection (or
         // the fit/recenter/translate_* authoring choice) changed since the
@@ -461,8 +477,8 @@ impl Primitive for GltfMeshSource {
             translate_x,
             translate_y,
             translate_z,
-            fragment_count,
-            fragment_index,
+            (fragment_count, fragment_index),
+            node_path.clone(),
         );
         if key != self.last_key && self.pending_load.is_none() {
             if source_trace_enabled() {
@@ -490,7 +506,9 @@ impl Primitive for GltfMeshSource {
                 // every primitive of that material across the scene
                 // (the importer's per-material object). Otherwise the
                 // mesh_index / primitive_index path applies.
-                let selector = if material_index == DEFAULT_MATERIAL_MESH_PARAM {
+                let selector = if !node_path.is_empty() {
+                    GltfMeshSelector::Node { path: node_path.as_str().into(), material: material_index }
+                } else if material_index == DEFAULT_MATERIAL_MESH_PARAM {
                     // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): the
                     // synthetic default-material object — every primitive
                     // with no glTF material, scene-wide.
@@ -828,10 +846,9 @@ mod tests {
         params
     }
 
-    fn source_key(
-        path: &str,
-        mesh_index: i32,
-    ) -> (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, u32, u32) {
+    type SourceKey = (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), String);
+
+    fn source_key(path: &str, mesh_index: i32) -> SourceKey {
         (
             path.to_owned(),
             mesh_index,
@@ -843,8 +860,8 @@ mod tests {
             0.0,
             0.0,
             0.0,
-            1,
-            0,
+            (1, 0),
+            String::new(),
         )
     }
 

@@ -230,6 +230,15 @@ pub enum ProjectAction {
     SceneNew(LayerId),
     /// "Frame" in an item's header: point the camera at the item.
     SceneSetupFrameSelected(LayerId, ItemId),
+    /// "Import Model…" in the Add menu: opens the native file dialog and, on a
+    /// picked `.glb`/`.gltf`, adds it to this layer's scene as a Group of its
+    /// parts, one undo step.
+    SceneSetupImportModelClicked(LayerId),
+    /// A Model File swap on an imported Group or Object: `(layer_id, item)`.
+    /// Opens the native file dialog and, on a picked `.glb`/`.gltf`, points the
+    /// item at it: parts whose file node path survives keep their edits, the
+    /// rest are removed and new paths added, as one undo step.
+    SceneSetupSwapModelFile(LayerId, ItemId),
     MidiTriggerModeClicked(LayerId),
     /// "Clear points" context-menu item: empties the lane's points,
     /// keeping the (now-empty) lane — `ClearLaneCommand`.

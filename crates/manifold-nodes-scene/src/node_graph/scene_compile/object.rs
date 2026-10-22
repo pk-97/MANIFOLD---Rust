@@ -21,7 +21,7 @@ pub(crate) fn object_wires(mesh: u32, material: u32, transform: u32, object: u32
 }
 
 /// The mesh node a built-in shape is, and the platonic solid index where it
-/// is one. `None` for the shapes later lanes emit (Ocean, Mesh from file).
+/// is one. `None` for the shapes with their own emitter (Ocean, Mesh from file).
 fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
     Some(match shape {
         Shape::Cube => ("node.cube_mesh", None),
@@ -40,22 +40,39 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let ItemFields::Object(fields) = &item.fields else {
         return;
     };
-    let Some((mesh_type, solid)) = mesh_type(&fields.shape) else {
-        return;
-    };
     let owner = item.id.as_str();
-    let mesh = b.add(owner, "mesh", mesh_type);
-    if let Some(solid) = solid {
-        b.set(mesh, "shape", SerializedParamValue::Enum { value: solid });
-    }
+    let mut center = None;
+    let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
+        let part = super::mesh::emit_part(b, item, file, node_path, *vertex_count, *primitives);
+        center = part.center;
+        (part.source, part.vertices)
+    } else {
+        let Some((mesh_type, solid)) = mesh_type(&fields.shape) else {
+            return;
+        };
+        let mesh = b.add(owner, "mesh", mesh_type);
+        if let Some(solid) = solid {
+            b.set(mesh, "shape", SerializedParamValue::Enum { value: solid });
+        }
+        (mesh, (mesh, "vertices"))
+    };
     let transform = b.add(owner, "transform", "node.transform_3d");
+    if let Some(center) = center {
+        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
+            b.set(transform, param, SerializedParamValue::Float { value: center[axis] });
+        }
+    }
     let object = b.add(owner, "object", "node.scene_object");
-    let (surface, texture) = surface_for(b, &item.id);
+    let (surface, maps) = surface_for(b, &item.id);
     for w in object_wires(mesh, surface, transform, object) {
+        if w.to_port == "vertices" {
+            b.wire(vertices.0, vertices.1, object, "vertices");
+            continue;
+        }
         b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
     }
-    if let Some(texture) = texture {
-        b.wire(texture, "out", object, "base_color_map");
+    for (source, port) in maps {
+        b.wire(source, "out", object, port);
     }
     if let Some(frame) = frame {
         b.wire(frame.transform, "transform", object, "parent_transform");

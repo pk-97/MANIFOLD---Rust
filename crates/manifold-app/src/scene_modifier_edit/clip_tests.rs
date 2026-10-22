@@ -1,4 +1,3 @@
-use std::path::Path;
 
 use manifold_core::clip::TimelineClip;
 use manifold_core::effect_graph_def::{
@@ -10,14 +9,9 @@ use manifold_core::units::Beats;
 use manifold_core::{ClipId, LayerId, NodeId, PresetTypeId};
 use manifold_editing::commands::clip::SetClipStringParamCommand;
 use manifold_editing::service::EditingService;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
 use super::{SceneModifierAction, build_action, with_admission};
 
-const MUSHROOM_FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../tests/fixtures/gltf/cc0___mushroom.glb"
-);
 const CLIP_SOURCE_PARAM: &str = "clip_model_file";
 
 fn find_mesh_source(nodes: &[EffectGraphNode]) -> Option<NodeId> {
@@ -35,8 +29,8 @@ fn find_mesh_source(nodes: &[EffectGraphNode]) -> Option<NodeId> {
 }
 
 fn project_with_mushroom_clip() -> (Project, LayerId, ClipId, String) {
-    let (mut graph, _) = assemble_import_graph(Path::new(MUSHROOM_FIXTURE))
-        .expect("production mushroom import must assemble");
+    let mut graph = manifold_nodes::scene_modifier_qualify::mushroom_host()
+        .expect("the mushroom scene must import and compile");
     let source_node_id =
         find_mesh_source(&graph.nodes).expect("mushroom has a nested gltf mesh source");
     let source_path = graph

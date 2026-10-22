@@ -143,10 +143,6 @@ const MAX_RECENT_PROJECTS: usize = 12;
 pub struct ProjectIOAction {
     /// A project to apply (replaces host.ApplyProject + host.OnProjectOpened).
     pub apply_project: Option<Project>,
-    /// Open-from-path already runs the load-time material migration before
-    /// returning this action. Snapshot restores and detached copies go
-    /// straight through `Application::apply_project_io_action` instead.
-    pub(crate) material_upgrade_applied: bool,
     /// Whether the editing service should be marked clean.
     pub mark_clean: bool,
     /// New project path to set as current (for window title, save, etc.).
@@ -510,13 +506,6 @@ pub(crate) fn prepare_loaded_project(project: &mut Project) -> Vec<String> {
     // to stable node ids against each effect's graph so a grouped inner node
     // keeps driving its card slider.
     manifold_node_engine::load::binding_migration::migrate_user_param_bindings_to_node_id(project);
-    // BUG-q6j4: older embedded 3D scene presets have no `scene_bounds`;
-    // backfill them from the source GLB, then refresh the overlay and
-    // manifests so instances pick up the repaired ranges.
-    if manifold_nodes_scene::node_graph::gltf_import::repair_project_embedded_scene_bounds(project) > 0 {
-        install_project_preset_overlay(project);
-        project.load_report.unresolved_preset_templates = project.reconcile_param_manifests();
-    }
     // Imported material and camera graphs migrate here, at load, not only at
     // graph instantiation.
     migrate_project_scene_graphs(project)
@@ -525,16 +514,7 @@ pub(crate) fn prepare_loaded_project(project: &mut Project) -> Vec<String> {
 /// One load-time migration path for editable scene graphs and acceptance
 /// fixtures. Unsupported legacy ownership remains intact with a visible notice.
 pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String> {
-    let material_report =
-        manifold_nodes_scene::node_graph::gltf_import::upgrade_project_materials(project);
-    let mut notices = material_report.notices;
-    if material_report.changed_graphs > 0 {
-        // Upgrade metadata before the existing scene migrations refresh their
-        // manifests. This also ensures graph-less instances resolve through
-        // the corrected embedded catalog definition.
-        install_project_preset_overlay(project);
-        project.load_report.unresolved_preset_templates = project.reconcile_param_manifests();
-    }
+    let mut notices = Vec::new();
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let mut removed_macro_targets = Vec::new();
     for layer in &mut project.timeline.layers {
@@ -822,7 +802,6 @@ impl ProjectIOService {
 
                 ProjectIOAction {
                     apply_project: Some(project),
-                    material_upgrade_applied: true,
                     set_project_path: Some(path.to_path_buf()),
                     notice,
                     ..Default::default()

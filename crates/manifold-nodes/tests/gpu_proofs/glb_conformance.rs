@@ -1,6 +1,6 @@
 //! GLB conformance harness (GLB_CONFORMANCE_DESIGN.md G-P1) — renders every
 //! asset in `tests/fixtures/gltf/khronos/manifest.json` through the
-//! PRODUCTION import path (`assemble_import_graph`) and gates each
+//! PRODUCTION import path (`compile_model_scene`) and gates each
 //! `expect_pass` asset with the numeric asserts named in the manifest, never
 //! by pixel-matching Khronos's own published renders (D3). `xfail` assets
 //! still run (when their fixture is present) so a future phase's flip to
@@ -33,7 +33,7 @@ use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -230,29 +230,27 @@ fn region_mean_rgb(rgba: &[u8], region: [f64; 4]) -> (f64, f64, f64) {
 // Render (production import path + the ONE shared readback transform, D2)
 // ---------------------------------------------------------------------------
 
-/// Import `path` through `assemble_import_graph` and render it to converged,
+/// Import `path` through `compile_model_scene` and render it to converged,
 /// tonemapped RGBA8 pixels — same convergence-poll shape `render_import.rs`
 /// uses (BUG-100/BUG-117: byte-stability alone can't distinguish "done" from
 /// "every background texture decode is still mid-flight"), reimplemented
 /// here rather than shelling out to the bin so a test failure carries a Rust
 /// backtrace, not a subprocess exit code.
 fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) -> Result<Vec<u8>, String> {
-    let (def, _report) = assemble_import_graph(path)?;
+    let (def, _report) = compile_model_scene(path)?;
 
     let mut params: Vec<Param> = def
         .preset_metadata
         .as_ref()
         .map(|m| m.params.iter().map(|s| Param::bundled(s.clone())).collect())
         .unwrap_or_default();
-    for (id, v) in overrides {
-        if let Some(p) = params.iter_mut().find(|p| p.id() == *id) {
+    // Each override sets every card param whose id ends with its suffix:
+    // `.intensity` reaches every light, `.env_intensity` the environment.
+    // Imported materials start with no ambient term, so lights off is dark.
+    for (suffix, v) in overrides {
+        for p in params.iter_mut().filter(|p| p.id().ends_with(suffix)) {
             p.value = *v;
         }
-        // An override naming a param this asset's card doesn't expose (e.g.
-        // `sun_int` on an asset with no synthesized sun — shouldn't happen,
-        // every import graph carries the same outer-card shape, but this
-        // isn't the place to panic over it) is silently a no-op, same as
-        // `render_import`'s own tolerance for graphs that vary.
     }
     let manifest = ParamManifest::from_params(params);
 
@@ -435,7 +433,7 @@ fn run_check(device: &Arc<GpuDevice>, asset: &str, path: &Path, check: &CheckSpe
             let rgba = render_asset(
                 device,
                 path,
-                &[("sun_int", 0.0), ("env_intensity", 0.0), ("scene_ambient", 0.0)],
+                &[(".intensity", 0.0), (".env_intensity", 0.0)],
                 value / 2.0,
             )?;
             let frac = non_black_fraction(&rgba);

@@ -24,7 +24,7 @@ use manifold_core::{
     Beats, Bpm, LayerId, NodeId, PresetTypeId,
     cold_touch::{ColdTouchKind, cold_touch_count, reset_cold_touch_counts},
 };
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use serde::Serialize;
 
 use crate::content_command::ContentCommand;
@@ -129,11 +129,11 @@ enum CaseRecord {
 }
 
 fn fixture_project(fixture: Fixture) -> (Project, usize, Option<u64>) {
-    let (graph, report) = assemble_import_graph(Path::new(fixture.path))
+    let (graph, model) = compile_model_scene(Path::new(fixture.path))
         .unwrap_or_else(|error| panic!("{} import failed: {error}", fixture.path));
     let triangle_count = source_triangles(&graph);
     assert!(
-        report.object_count > 0,
+        !model.roots.is_empty(),
         "{} has no imported objects",
         fixture.path
     );
@@ -153,7 +153,7 @@ fn fixture_project(fixture: Fixture) -> (Project, usize, Option<u64>) {
     clip.layer_id = layer.layer_id.clone();
     layer.clips.push(clip);
     project.timeline.layers.push(layer);
-    (project, report.object_count, triangle_count)
+    (project, model.roots.len(), triangle_count)
 }
 
 fn generator_graph<'a>(project: &'a Project, layer_id: &LayerId) -> &'a EffectGraphDef {

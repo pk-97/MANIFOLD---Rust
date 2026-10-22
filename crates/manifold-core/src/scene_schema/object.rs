@@ -12,6 +12,11 @@ use crate::scene_doc::{ItemFields, ObjectFields, Shape};
 const T: Reach = Reach::Own("transform");
 const DRAW: Reach = Reach::Own("object");
 const MESH: Reach = Reach::Own("mesh");
+const POSE: Reach = Reach::Own("pose");
+const SKIN: Reach = Reach::Own("skin");
+const WEIGHTS: Reach = Reach::Own("morph_weights");
+const DELTAS: Reach = Reach::Own("morph_deltas");
+const BLEND: Reach = Reach::Own("morph_blend");
 use ControlGroup::{Look, Transform};
 
 fn cube(fields: &ItemFields) -> bool {
@@ -20,6 +25,10 @@ fn cube(fields: &ItemFields) -> bool {
 
 fn plane(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Object(o) if o.shape == Shape::Plane)
+}
+
+fn from_file(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Object(o) if matches!(o.shape, Shape::Mesh { .. }))
 }
 
 fn platonic(fields: &ItemFields) -> bool {
@@ -33,8 +42,13 @@ fn platonic(fields: &ItemFields) -> bool {
 }
 
 const SCALE_SETS_SIZE: &str = "Scale sets the size";
+const WHOLE_FILE_NODE: &str = "the file node path picks the mesh";
+const FROM_FILE: &str = "read from the model file";
+const OWN_CENTRE: &str = "the part's own centre, so it turns about itself";
+const GROUP_CLOCK: &str = "the import Group's Animation rows";
+const CLOCK_PAYLOAD: &str = "the clip data loads from the model file";
 
-pub static OBJECT_ROWS: [PropertyRow; 23] = [
+pub static OBJECT_ROWS: [PropertyRow; 72] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -66,6 +80,63 @@ pub static OBJECT_ROWS: [PropertyRow; 23] = [
         .param("radius")
         .default(0.5)
         .when(platonic),
+    // The model file's mesh node (`node.gltf_mesh_source`): the Shape field names the file and the
+    // file node; the rest keeps the importer's defaults.
+    row("file", MESH, Transform, Exposure::Automatic("the Shape field")).param("path").when(from_file),
+    row("file_node", MESH, Transform, Exposure::Automatic("the Shape field")).param("node_path").when(from_file),
+    row("file_capacity", MESH, Transform, Exposure::Automatic("the vertex count read at import"))
+        .param("max_capacity")
+        .when(from_file),
+    row("file_colours", MESH, Transform, Exposure::Automatic("always on: the file's vertex colours draw")).param("vertex_colors").when(from_file),
+    row("file_mesh", MESH, Transform, Exposure::Internal(WHOLE_FILE_NODE)).param("mesh_index").when(from_file),
+    row("file_primitive", MESH, Transform, Exposure::Internal(WHOLE_FILE_NODE)).param("primitive_index").when(from_file),
+    row("file_material", MESH, Transform, Exposure::Automatic("the Shape field's primitives")).param("material_index").when(from_file),
+    row("file_pieces", MESH, Transform, Exposure::Internal("a model is not cut into pieces here")).param("fragment_count").when(from_file),
+    row("file_piece", MESH, Transform, Exposure::Internal("a model is not cut into pieces here")).param("fragment_index").when(from_file),
+    row("file_fit", MESH, Transform, Exposure::Internal(SCALE_SETS_SIZE)).param("fit").when(from_file),
+    row("file_recenter", MESH, Transform, Exposure::Internal(SCALE_SETS_SIZE)).param("recenter").when(from_file),
+    row("file_shift_x", MESH, Transform, Exposure::Automatic(OWN_CENTRE)).param("translate_x").when(from_file),
+    row("file_shift_y", MESH, Transform, Exposure::Automatic(OWN_CENTRE)).param("translate_y").when(from_file),
+    row("file_shift_z", MESH, Transform, Exposure::Automatic(OWN_CENTRE)).param("translate_z").when(from_file),
+    row("file_source_vertices", MESH, Transform, Exposure::Automatic(FROM_FILE)).param("source_vertex_count").when(from_file),
+    row("file_source_radius", MESH, Transform, Exposure::Automatic(FROM_FILE)).param("source_bbox_radius").when(from_file),
+    // An animated part: its skin, or its node chain as a one-slot palette
+    // (`node.gltf_skeleton_pose`), deforming its mesh (`node.skin_mesh`).
+    row("pose_file", POSE, Transform, Exposure::Automatic("the Shape field")).param("path").when(from_file),
+    row("pose_skin", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("skin_index").when(from_file),
+    row("pose_slots", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("node_slots").when(from_file),
+    row("pose_joints", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("joint_count").when(from_file),
+    row("pose_duration", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("duration_s").when(from_file),
+    row("pose_clip_durations", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("clip_durations").when(from_file),
+    row("pose_rate", POSE, Transform, Exposure::Automatic(GROUP_CLOCK)).param("rate").when(from_file),
+    row("pose_clip", POSE, Transform, Exposure::Automatic(GROUP_CLOCK)).param("clip_index").when(from_file),
+    row("pose_loop_mode", POSE, Transform, Exposure::Automatic(GROUP_CLOCK)).param("loop_mode").when(from_file),
+    row("pose_retrigger", POSE, Transform, Exposure::Automatic(GROUP_CLOCK)).param("trigger_count").when(from_file),
+    row("pose_parents", POSE, Transform, Exposure::Internal(CLOCK_PAYLOAD)).param("joint_parent_table").when(from_file),
+    row("pose_root_worlds", POSE, Transform, Exposure::Internal(CLOCK_PAYLOAD)).param("joint_root_world_table").when(from_file),
+    row("pose_inverse_binds", POSE, Transform, Exposure::Internal(CLOCK_PAYLOAD)).param("inverse_bind_table").when(from_file),
+    row("pose_translations", POSE, Transform, Exposure::Internal(CLOCK_PAYLOAD)).param("translation_tracks").when(from_file),
+    row("pose_rotations", POSE, Transform, Exposure::Internal(CLOCK_PAYLOAD)).param("rotation_tracks").when(from_file),
+    row("pose_scales", POSE, Transform, Exposure::Internal(CLOCK_PAYLOAD)).param("scale_tracks").when(from_file),
+    row("skin_joints", SKIN, Transform, Exposure::Automatic(FROM_FILE)).param("joint_count").when(from_file),
+    // A morphed part (`node.gltf_morph_weights`, `node.gltf_morph_deltas_source`,
+    // `node.morph_targets_blend`).
+    row("morph_file", WEIGHTS, Transform, Exposure::Automatic("the Shape field")).param("path").when(from_file),
+    row("morph_node", WEIGHTS, Transform, Exposure::Automatic(FROM_FILE)).param("target_node").when(from_file),
+    row("morph_duration", WEIGHTS, Transform, Exposure::Automatic(FROM_FILE)).param("duration_s").when(from_file),
+    row("morph_clip_durations", WEIGHTS, Transform, Exposure::Automatic(FROM_FILE)).param("clip_durations").when(from_file),
+    row("morph_targets", WEIGHTS, Transform, Exposure::Automatic(FROM_FILE)).param("target_count").when(from_file),
+    row("morph_static_weights", WEIGHTS, Transform, Exposure::Automatic(FROM_FILE)).param("static_weights").when(from_file),
+    row("morph_rate", WEIGHTS, Transform, Exposure::Automatic(GROUP_CLOCK)).param("rate").when(from_file),
+    row("morph_clip", WEIGHTS, Transform, Exposure::Automatic(GROUP_CLOCK)).param("clip_index").when(from_file),
+    row("morph_loop_mode", WEIGHTS, Transform, Exposure::Automatic(GROUP_CLOCK)).param("loop_mode").when(from_file),
+    row("morph_retrigger", WEIGHTS, Transform, Exposure::Automatic(GROUP_CLOCK)).param("trigger_count").when(from_file),
+    row("deltas_file", DELTAS, Transform, Exposure::Automatic("the Shape field")).param("path").when(from_file),
+    row("deltas_node", DELTAS, Transform, Exposure::Automatic("the Shape field")).param("node_path").when(from_file),
+    row("deltas_material", DELTAS, Transform, Exposure::Automatic("the Shape field's primitives")).param("material_index").when(from_file),
+    row("deltas_capacity", DELTAS, Transform, Exposure::Automatic(FROM_FILE)).param("max_capacity").when(from_file),
+    row("deltas_skinned", DELTAS, Transform, Exposure::Automatic("whether the part is skinned")).param("skinned").when(from_file),
+    row("blend_targets", BLEND, Transform, Exposure::Automatic(FROM_FILE)).param("target_count").when(from_file),
 ];
 
 const SHAPES: &[Choice] = &[
@@ -121,7 +192,7 @@ pub static OBJECT_FIELDS: [FieldRow; 5] = [
                 "dodecahedron" => Shape::Dodecahedron,
                 "ocean" => Shape::Ocean,
                 "mesh" if matches!(o.shape, Shape::Mesh { .. }) => o.shape.clone(),
-                "mesh" => Shape::Mesh { file: String::new(), node_path: String::new() },
+                "mesh" => Shape::Mesh { file: String::new(), node_path: String::new(), vertex_count: 0, primitives: Default::default() },
                 _ => return Err(wrong_value("shape", value)),
             };
             Ok(())

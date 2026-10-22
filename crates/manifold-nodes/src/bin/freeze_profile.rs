@@ -585,11 +585,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
 /// (optimize the render instead), or spiky/sawtooth (pool churn or
 /// scheduling — different fix again)?
 ///
-/// Drives the production import door (`assemble_import_graph`) + production
+/// Drives the production import door (`import_model` into a compiled scene) + production
 /// `PresetRuntime::render`, two arms A/B:
 ///   - **static**: card params untouched every frame (time still advances,
 ///     exactly like a playing clip with no LFO);
-///   - **animated**: ONE card param (default `cam_orbit`) swept every frame
+///   - **animated**: ONE card param (default `orbit`) swept every frame
 ///     through the manifest, exactly what an LFO binding does.
 ///
 /// Per frame we record the CPU wall time of `render()` (= full param apply +
@@ -599,7 +599,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
 /// differently. Fresh runtime per arm (no state bleed).
 fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>, args: &[&str]) {
     use manifold_core::params::Param;
-    use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+    use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
     const SCENE_WARMUP: u32 = 60;
     let scene_frames: usize =
@@ -609,9 +609,9 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
         "/../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb"
     );
     let glb = args.first().copied().unwrap_or(default_glb);
-    let param_pref = args.get(1).copied().unwrap_or("cam_orbit");
+    let param_pref = args.get(1).copied().unwrap_or("orbit");
 
-    let (def, _report) = match assemble_import_graph(std::path::Path::new(glb)) {
+    let def = match compile_model_scene(std::path::Path::new(glb)).map(|(def, _)| def) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("scene: import failed for {glb}: {e}");

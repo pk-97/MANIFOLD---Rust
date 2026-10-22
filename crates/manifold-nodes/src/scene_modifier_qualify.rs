@@ -12,7 +12,7 @@ use manifold_core::scene_modifier_preset::{
 };
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 
 pub const MUSHROOM_FIXTURE: &str = concat!(
@@ -20,9 +20,10 @@ pub const MUSHROOM_FIXTURE: &str = concat!(
     "/../../tests/fixtures/gltf/cc0___mushroom.glb"
 );
 
-/// The imported mushroom scene every recipe is qualified against.
+/// The scene every recipe is qualified against: the imported mushroom in
+/// the base scene.
 pub fn mushroom_host() -> Result<EffectGraphDef, String> {
-    assemble_import_graph(Path::new(MUSHROOM_FIXTURE))
+    compile_model_scene(Path::new(MUSHROOM_FIXTURE))
         .map(|(def, _)| def)
         .map_err(|error| format!("mushroom validation fixture failed: {error}"))
 }

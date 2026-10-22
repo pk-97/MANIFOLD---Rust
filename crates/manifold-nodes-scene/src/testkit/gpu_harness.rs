@@ -40,12 +40,14 @@ pub fn import_rt_manifest(
         .expect("an imported def always carries card metadata");
     let mut manifest =
         ParamManifest::from_params(metadata.params.iter().cloned().map(Param::bundled).collect());
-    for (suffix, on) in [("_rt_enabled", rt_enabled), ("_rt_reflections", rt_reflections)] {
+    // A scene document names a card param `<item>.<property>`; an older
+    // graph prefixed its node handle with `_`.
+    for (name, on) in [("rt_enabled", rt_enabled), ("rt_reflections", rt_reflections)] {
         let id = manifest
             .iter()
-            .find(|p| p.id().ends_with(suffix))
+            .find(|p| p.id().strip_suffix(name).is_some_and(|head| head.ends_with(['.', '_'])))
             .map(|p| p.id().to_string())
-            .unwrap_or_else(|| panic!("imported def exposes no card param ending `{suffix}`"));
+            .unwrap_or_else(|| panic!("imported def exposes no card param for `{name}`"));
         manifest
             .get_mut(&id)
             .expect("id came from this manifest")

@@ -45,7 +45,7 @@
 
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -212,7 +212,7 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
         .join("../../tests/fixtures/gltf/DamagedHelmet.glb");
     assert!(glb.exists(), "fixture missing: {glb:?}");
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let (def, report) = assemble_import_graph(&glb).expect("helmet import must succeed");
+    let (def, report) = compile_model_scene(&glb).expect("helmet import must succeed");
     eprintln!("[bug-majv] import report: {report:?}");
 
     // Build RT-on with all kernels at their default (on) — Peter's state
@@ -268,26 +268,26 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
     // (pool texture reuse keeps the stale content valid; measured luma
     // ratio 0.94). See the module doc's discrimination note for what this
     // test does and doesn't prove pre-fix.
-    for suffix in ["_rt_shadows", "_rt_ao", "_rt_gi", "_rt_reflections"] {
+    for suffix in [".rt_shadows", ".rt_ao", ".rt_gi", ".rt_reflections"] {
         set_card(&mut manifest, suffix, false);
     }
-    let orbit = card_value(&manifest, "_orbit");
-    set_card_value(&mut manifest, "_orbit", orbit + 0.9);
+    let orbit = card_value(&manifest, ".orbit");
+    set_card_value(&mut manifest, ".orbit", orbit + 0.9);
 
     // All four comparisons happen at view B. RT on + kernels off must be
     // exactly the raster image, before and after the off→on cycle.
     let (kernels_off, next) = render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "kernels_off");
     f = next + 1;
 
-    set_card(&mut manifest, "_rt_enabled", false);
+    set_card(&mut manifest, ".rt_enabled", false);
     let (raster_ref, next) = render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "raster_ref");
     f = next + 1;
 
-    set_card(&mut manifest, "_rt_enabled", true);
+    set_card(&mut manifest, ".rt_enabled", true);
     let (resurrected, next) = render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "resurrected");
     f = next + 1;
 
-    set_card(&mut manifest, "_rt_enabled", false);
+    set_card(&mut manifest, ".rt_enabled", false);
     let (raster_ref2, _next) = render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "raster_ref2");
 
     let luma_ref = mean_luma(&raster_ref);

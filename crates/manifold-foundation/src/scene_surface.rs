@@ -84,6 +84,7 @@ pub enum ControlGroup {
     Fog,
     RayTracing,
     RenderMode,
+    Animation,
 }
 
 impl ControlGroup {
@@ -116,6 +117,7 @@ impl ControlGroup {
             Self::Fog => "Fog",
             Self::RayTracing => "Ray Tracing",
             Self::RenderMode => "Render Mode",
+            Self::Animation => "Animation",
         }
     }
 }

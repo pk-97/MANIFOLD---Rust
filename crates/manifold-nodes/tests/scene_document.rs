@@ -218,6 +218,7 @@ mod every_param_has_a_row {
                         Reach::Own(r) => item.id.as_str() == owner && r == role,
                         Reach::Scene(r) => owner == "scene" && r == role,
                         Reach::EveryCameraLens => role == "lens",
+                        Reach::Clocks => role == "pose",
                     };
             }
         });

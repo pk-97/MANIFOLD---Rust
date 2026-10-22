@@ -26,7 +26,7 @@ use manifold_core::flatten::flatten_groups;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -133,7 +133,7 @@ fn build_variant(
     h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     strip_normal_map: bool,
 ) -> (PresetRuntime, manifold_gpu::GpuTexture, ParamManifest, usize) {
-    let (def, report) = assemble_import_graph(&fixture()).expect("import must succeed");
+    let (def, report) = compile_model_scene(&fixture()).expect("import must succeed");
     eprintln!("[ntm] import report: {report:?}");
     let mut flat = flatten_groups(&def).expect("flatten_groups must succeed (no-op if already flat)");
 
@@ -230,7 +230,7 @@ fn normal_tangent_mirror_dispatches_rt_on_the_import_path() {
     let (mut off_runtime, off_target, off_params_base, _) = build_variant(h, false);
     let off_params = {
         let mut p = off_params_base;
-        for suffix in ["_rt_enabled", "_rt_reflections"] {
+        for suffix in [".rt_enabled", ".rt_reflections"] {
             let id = p
                 .iter()
                 .find(|q| q.id().ends_with(suffix))

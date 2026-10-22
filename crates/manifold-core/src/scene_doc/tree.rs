@@ -244,18 +244,18 @@ impl SceneDoc {
         });
     }
 
-    /// A copy of `id`'s subtree with every id replaced by one from `fresh`,
+    /// A copy of `id`'s subtree with every id replaced by `fresh(old id)`,
     /// references inside the copy pointing at the copy, and the old-to-new
     /// id map (Add with a source, section 7.2).
     pub fn copy_subtree(
         &self,
         id: &ItemId,
-        mut fresh: impl FnMut() -> ItemId,
+        mut fresh: impl FnMut(&ItemId) -> ItemId,
     ) -> Result<(Item, BTreeMap<ItemId, ItemId>), SceneEditError> {
         let source = self.find(id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
         let mut map = BTreeMap::new();
         source.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| {
-            map.insert(inner.id.clone(), fresh());
+            map.insert(inner.id.clone(), fresh(&inner.id));
         });
         fn remap(item: &Item, map: &BTreeMap<ItemId, ItemId>) -> Item {
             let swap = |id: &ItemId| map.get(id).cloned().unwrap_or_else(|| id.clone());

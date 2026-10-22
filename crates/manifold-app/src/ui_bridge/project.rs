@@ -18,6 +18,8 @@ pub(super) fn dispatch_project(
     ui: &mut UIRoot,
     _selection: &mut SelectionState,
     _active_layer: &mut Option<LayerId>,
+    user_prefs: &mut crate::user_prefs::UserPrefs,
+    dialogs: crate::file_dialogs::DialogHost,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
@@ -421,6 +423,53 @@ pub(super) fn dispatch_project(
                     ),
                 ),
             );
+            DispatchResult::handled()
+        }
+        // "Import Model…": a native file dialog picks a `.glb`/`.gltf`, which
+        // joins the scene as a Group of its parts, one undo step. A file that
+        // cannot be read toasts.
+        ProjectAction::SceneSetupImportModelClicked(layer_id) => {
+            let Some(path) = crate::file_dialogs::pick_file(
+                crate::file_dialogs::DialogAction::ImportModel,
+                dialogs,
+                user_prefs,
+            ) else {
+                return DispatchResult::handled();
+            };
+            match crate::scene_import::add_model_commands(layer_id, &path) {
+                Ok(commands) => project.execute_batch(commands, "Import 3D Model".to_string()),
+                Err(e) => {
+                    log::warn!("[Scene Setup] Import Model… failed for {}: {e}", path.display());
+                    let name = path.file_name().map_or_else(|| "model".into(), |n| n.to_string_lossy().into_owned());
+                    ui.toast.show_with_accent(format!("Couldn't import {name}: {e}"), manifold_ui::color::RED_BASE);
+                }
+            }
+            DispatchResult::handled()
+        }
+        // Model File swap on an imported Group or Object: the picked file
+        // replaces the Source and the parts are reconciled by file node path,
+        // in one undo step. A file that cannot be read, or an item that is no
+        // import, toasts.
+        ProjectAction::SceneSetupSwapModelFile(layer_id, item) => {
+            let Some(path) = crate::file_dialogs::pick_file(
+                crate::file_dialogs::DialogAction::ImportModel,
+                dialogs,
+                user_prefs,
+            ) else {
+                return DispatchResult::handled();
+            };
+            match crate::scene_import::swap_model_file(project, layer_id, item, &path) {
+                Ok(swap) => {
+                    project.execute_batch(swap.commands, "Swap Model File".to_string());
+                    if let Some(toast) = swap.toast {
+                        ui.toast.show(toast);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[Scene Setup] Model File swap failed for {}: {e}", path.display());
+                    ui.toast.show_with_accent(format!("Couldn't swap the model file: {e}"), manifold_ui::color::RED_BASE);
+                }
+            }
             DispatchResult::handled()
         }
         // BUG-184: the automation-lane right-click context menu's two items

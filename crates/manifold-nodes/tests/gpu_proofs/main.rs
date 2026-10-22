@@ -25,8 +25,6 @@ mod gbuffer_velocity;
 mod motion_blur_visibility;
 mod render_scene_pbr_fidelity;
 mod render_scene_subsurface;
-#[path = "catalog/render_scene_material_upgrade.rs"]
-mod render_scene_material_upgrade;
 mod render_legacy_parity;
 mod render_scene_map_set;
 mod physics_boxes;

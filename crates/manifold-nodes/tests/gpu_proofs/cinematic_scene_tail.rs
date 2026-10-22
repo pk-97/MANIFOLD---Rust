@@ -16,7 +16,7 @@
 use manifold_core::flatten::flatten_groups;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -47,7 +47,7 @@ fn build_variant(
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/khronos/DamagedHelmet.glb");
     assert!(glb.exists(), "I1 fixture missing: {glb:?}");
-    let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
+    let (def, report) = compile_model_scene(&glb).expect("import must succeed");
     eprintln!("[cinematic-tail-I1] import report: {report:?}");
 
     let mut flat = flatten_groups(&def).expect("flatten_groups must succeed");
@@ -77,16 +77,14 @@ fn build_variant(
         flat.wires.retain(|w| {
             keep_nodes.contains(&w.from_node) && keep_nodes.contains(&w.to_node)
         });
-        // Rebuild the pre-P1 spine: render_scene → ao → final. The ao group's
-        // outer node id survived (it's a real atom post-flatten — masked_mix,
-        // the group's output side). Re-anchor its `out` to final.
-        let ao_out_id = flat
+        // Rebuild the spine without the tail: the render's own colour output
+        // straight to final.
+        let render_id = flat
             .nodes
             .iter()
-            .find(|n| n.node_id == "ao/mask_mix")
+            .find(|n| n.type_id == "node.render_scene")
             .map(|n| n.id)
-            .or_else(|| flat.nodes.iter().find(|n| n.type_id == "node.masked_mix").map(|n| n.id))
-            .expect("stripped graph keeps the ao group's final mix node");
+            .expect("stripped graph keeps the render");
         let final_id = flat
             .nodes
             .iter()
@@ -94,8 +92,8 @@ fn build_variant(
             .expect("final output node")
             .id;
         flat.wires.push(manifold_core::effect_graph_def::EffectGraphWire {
-            from_node: ao_out_id,
-            from_port: "out".to_string(),
+            from_node: render_id,
+            from_port: "color".to_string(),
             to_node: final_id,
             to_port: "in".to_string(),
         });

@@ -74,7 +74,7 @@ pub static ADD_ENTRIES: [AddEntry; 20] = [
     entry("force.attractor", "Force", "Attractor", ItemKind::Force, "Attractor", || force(ForceType::Attractor)),
     entry("force.explosion", "Force", "Explosion", ItemKind::Force, "Explosion", || force(ForceType::Explosion)),
     entry("object.mesh", "Object", "Mesh from file", ItemKind::Object, "Mesh", || {
-        object(Shape::Mesh { file: String::new(), node_path: String::new() })
+        object(Shape::Mesh { file: String::new(), node_path: String::new(), vertex_count: 0, primitives: Default::default() })
     }),
 ];
 

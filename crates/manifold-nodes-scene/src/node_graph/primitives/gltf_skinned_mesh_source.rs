@@ -60,6 +60,14 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("node_path"),
+            label: "File Node",
+            ty: ParamType::String,
+            default: ParamValue::Float(0.0), // String default supplied by the node param; this slot is never read.
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("material_index"),
             label: "Material Index",
             ty: ParamType::Int,
@@ -123,8 +131,8 @@ manifold_node_engine::primitive! {
     aliases: ["gltf skinned", "skinned mesh source", "rig mesh"],
     boundary_reason: IoBridge,
     extra_fields: {
-        // (path, material_index, vertex_colors) last parsed (or in flight).
-        last_key: (String, i32, bool) = (String::new(), i32::MIN, false),
+        // (path, material_index, vertex_colors, node_path) last parsed (or in flight).
+        last_key: (String, i32, bool, String) = (String::new(), i32::MIN, false, String::new()),
         cached_verts: Vec<MeshVertex> = Vec::new(),
         cached_joints: Vec<[f32; 4]> = Vec::new(),
         cached_weights: Vec<[f32; 4]> = Vec::new(),
@@ -162,7 +170,11 @@ impl Primitive for GltfSkinnedMeshSource {
         };
         let vertex_colors = matches!(ctx.params.get("vertex_colors"), Some(ParamValue::Bool(true)));
 
-        let key = (path.clone(), material_index, vertex_colors);
+        let node_path = match ctx.params.get("node_path") {
+            Some(ParamValue::String(s)) => s.as_str().to_owned(),
+            _ => String::new(),
+        };
+        let key = (path.clone(), material_index, vertex_colors, node_path.clone());
         if key != self.last_key && self.pending_load.is_none() {
             self.last_key = key;
             self.cached_verts.clear();
@@ -186,7 +198,7 @@ impl Primitive for GltfSkinnedMeshSource {
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = load_gltf_skinned_mesh(&path_buf, load_material_index)
+                    let result = load_gltf_skinned_mesh(&path_buf, load_material_index, &node_path)
                         .map(|(verts, joints, weights)| {
                             (apply_vertex_color_compat(verts, vertex_colors), joints, weights)
                         });
@@ -583,7 +595,7 @@ mod gpu_tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/khronos/BoxVertexColors.glb");
         assert!(path.exists(), "required colored fixture missing: {}", path.display());
-        let (authored, _, _) = load_gltf_skinned_mesh(&path, DEFAULT_MATERIAL_SENTINEL)
+        let (authored, _, _) = load_gltf_skinned_mesh(&path, DEFAULT_MATERIAL_SENTINEL, "")
             .expect("load BoxVertexColors.glb through rigid fallback");
         assert!(!authored.is_empty());
         assert!(

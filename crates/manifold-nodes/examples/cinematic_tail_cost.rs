@@ -20,30 +20,26 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::testkit::gpu_harness::{self, ParityHarness};
 use manifold_nodes as _;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 const WARMUP: u64 = 12;
 const STEADY: u64 = 40;
 
 /// Build one variant (tail present or stripped), warm it, then return (max, mean) steady-state frame ms.
 fn measure_tail(h: &ParityHarness, glb: &std::path::Path, strip_tail: bool, w: u32, hh: u32) -> (f64, f64) {
-    let (def, _report) = assemble_import_graph(glb).expect("import must succeed");
+    let (def, _report) = compile_model_scene(glb).expect("import must succeed");
     let mut flat = flatten_groups(&def).expect("flatten_groups must succeed");
     if strip_tail {
         const TAIL_TYPES: [&str; 4] = ["node.coc_from_depth", "node.coc_dilate", "node.bokeh_gather", "node.motion_blur"];
         let keep: Vec<u32> = flat.nodes.iter().filter(|n| !TAIL_TYPES.contains(&n.type_id.as_str())).map(|n| n.id).collect();
         flat.nodes.retain(|n| keep.contains(&n.id));
         flat.wires.retain(|w| keep.contains(&w.from_node) && keep.contains(&w.to_node));
-        let ao_out = flat
-            .nodes
-            .iter()
-            .find(|n| n.node_id == "ao/mask_mix" || n.type_id == "node.masked_mix")
-            .expect("ao output present")
-            .id;
+        // The scene's colour before the tail: the render's own colour output.
+        let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").expect("render present").id;
         let final_id = flat.nodes.iter().find(|n| n.type_id == "system.final_output").expect("final output").id;
         flat.wires.push(EffectGraphWire {
-            from_node: ao_out,
-            from_port: "out".to_string(),
+            from_node: render,
+            from_port: "color".to_string(),
             to_node: final_id,
             to_port: "in".to_string(),
         });

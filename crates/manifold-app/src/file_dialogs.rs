@@ -24,6 +24,7 @@ pub(crate) enum DialogAction {
     ExportFrame,
     ImportVideo,
     ImportMidi,
+    ImportModel,
     ImportPreset,
     ExportPreset,
     ReplaceAudio,
@@ -68,6 +69,7 @@ impl DialogAction {
             Self::ExportFrame => ("Export Frame", &[("PNG Image", &["png"]), ("JPEG Image", &["jpg", "jpeg"])], "MANIFOLD_DialogPath_ExportImage", true, H::Desktop),
             Self::ImportVideo => ("Import Video", &[("Video Files", VIDEO_EXTS)], "MANIFOLD_DialogPath_VideoImport", true, H::Movies),
             Self::ImportMidi => ("Import MIDI File", &[("MIDI Files", &["mid", "midi"])], "MANIFOLD_DialogPath_MidiImport", false, H::None),
+            Self::ImportModel => ("Import Model", &[("glTF", &["glb", "gltf"])], "MANIFOLD_DialogPath_ModelImport", true, H::None),
             Self::ImportPreset => ("Import Preset", &[("MANIFOLD Preset", &["json"])], "MANIFOLD_DialogPath_PresetImport", false, H::None),
             Self::ExportPreset => ("Export Preset", &[("MANIFOLD Preset", &["json"])], "MANIFOLD_DialogPath_PresetExport", false, H::None),
             Self::ReplaceAudio => ("Replace Audio File", &[("Audio", AUDIO_EXTS)], "MANIFOLD_DialogPath_AudioReplace", true, H::Music),
@@ -291,13 +293,14 @@ fn start_dir(
 mod tests {
     use super::*;
 
-    const ALL: [DialogAction; 11] = [
+    const ALL: [DialogAction; 12] = [
         DialogAction::OpenProject,
         DialogAction::SaveProjectAs,
         DialogAction::ExportVideo,
         DialogAction::ExportFrame,
         DialogAction::ImportVideo,
         DialogAction::ImportMidi,
+        DialogAction::ImportModel,
         DialogAction::ImportPreset,
         DialogAction::ExportPreset,
         DialogAction::ReplaceAudio,

@@ -616,14 +616,12 @@ impl Application {
 
     /// Import a dropped `.glb`/`.gltf` model — or `.fbx`/`.obj`/`.dae`,
     /// converted to `.glb` through the user's installed Blender first (see
-    /// `crate::blender_import`; MANIFOLD is glTF-only internally) — as a new
-    /// generator layer whose per-instance graph renders the model, plus a
-    /// default generator clip so it plays immediately — the "drop a model in
-    /// and it renders" gesture.
+    /// `crate::blender_import`; MANIFOLD is glTF-only internally) — as a Group in
+    /// a scene layer (a new one when the project has none) — the "drop a model
+    /// in and it renders" gesture.
     ///
     /// `IMPORT_RESPONSIVENESS_DESIGN.md` D3: this is spawn+enqueue only. The
-    /// blocking work (optional Blender convert, the CPU glTF parse, and
-    /// `validate_def`'s trial build) runs on a background thread
+    /// blocking work (optional Blender convert and the CPU glTF parse) runs on a background thread
     /// (`crate::import_worker::run_import_worker`); this function never
     /// blocks the UI thread. A drop while a worker is already in flight is
     /// queued (`import_queue`), never run in parallel — one worker at a
@@ -660,7 +658,6 @@ impl Application {
     /// the same frame the drop lands, not one frame later.
     pub(crate) fn spawn_import_worker(&mut self, req: crate::import_worker::ImportRequest) {
         self.import_worker_busy = true;
-        let device = self.validation_gpu_device();
         let repo_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let tx = self.import_progress_tx.clone();
         let file_name = req
@@ -685,7 +682,7 @@ impl Application {
             .show(format!("Importing {file_name} — {}…", first_stage.verb()));
         std::thread::Builder::new()
             .name("manifold-import-worker".into())
-            .spawn(move || crate::import_worker::run_import_worker(req, device, repo_root, tx))
+            .spawn(move || crate::import_worker::run_import_worker(req, repo_root, tx))
             .expect("failed to spawn import worker thread");
     }
 
@@ -709,16 +706,16 @@ impl Application {
                 }
                 Ok(crate::import_worker::ImportProgress::Done {
                     path,
-                    graph,
-                    report,
+                    file,
+                    model,
                     conversion_report_line,
                     drop_beat,
                     layer_under_cursor,
                 }) => {
                     self.finish_import_model(
                         &path,
-                        *graph,
-                        report,
+                        &file,
+                        *model,
                         conversion_report_line,
                         drop_beat,
                         layer_under_cursor,
@@ -749,22 +746,21 @@ impl Application {
         }
     }
 
-    /// The UI-thread command-dispatch tail of a successful import — mint the
-    /// embedded-preset id, install the project-preset overlay, and dispatch
-    /// `ImportModelLayerCommand`/`AddClipCommand`. Unchanged from the old
-    /// synchronous `import_model_file`'s second half; now called from
-    /// `drain_import_progress` on `ImportProgress::Done` instead of inline.
+    /// The UI-thread tail of a successful import: add the model to a scene
+    /// layer (SCENE_DOCUMENT_DESIGN.md section 7.7 (Imports)). A scene layer
+    /// under the drop, else the active one, takes the model as one undo step;
+    /// with no scene layer a new one is made holding the base scene's camera,
+    /// sun, sky and world around the model, with a default clip so it plays
+    /// at once. A failure toasts.
     fn finish_import_model(
         &mut self,
         path: &std::path::Path,
-        mut graph: manifold_core::effect_graph_def::EffectGraphDef,
-        report: manifold_nodes_scene::node_graph::gltf_import::ImportReport,
+        file: &std::path::Path,
+        model: manifold_core::scene_doc::ImportedModel,
         conversion_report_line: Option<String>,
         drop_beat: f32,
         layer_under_cursor: Option<usize>,
     ) {
-        use manifold_editing::command::Command;
-
         // A model is a scene element you hold, not a one-shot — default to four
         // 4/4 bars. Trim/extend like any other clip afterwards.
         const DEFAULT_MODEL_DURATION_BEATS: f32 = 16.0;
@@ -774,105 +770,96 @@ impl Application {
         };
         let content_tx = content_tx.clone();
 
-        let Some(meta) = graph.preset_metadata.as_ref() else {
-            log::warn!("[Import] assembled glTF graph carries no preset metadata — aborting");
-            return;
-        };
-        let base_id = meta.id.clone();
-        let display_name = if meta.display_name.is_empty() {
-            path.file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Model".to_string())
-        } else {
-            meta.display_name.clone()
-        };
+        let file_name = path.file_name().map_or_else(|| "model".to_string(), |n| n.to_string_lossy().to_string());
+        let file_str = file.to_string_lossy().into_owned();
+        let group = manifold_core::scene_doc::ItemId::new(manifold_core::math::short_id());
+        let is_scene = |layer: &manifold_core::layer::Layer| layer.gen_params().is_some_and(|fx| fx.scene.is_some());
+        let layers = &self.local_project.timeline.layers;
+        let target = layer_under_cursor
+            .and_then(|i| layers.get(i))
+            .filter(|layer| is_scene(layer))
+            .or_else(|| {
+                self.active_layer_id
+                    .as_ref()
+                    .and_then(|id| self.local_project.timeline.layer_index_for_id(id))
+                    .and_then(|i| layers.get(i))
+                    .filter(|layer| is_scene(layer))
+            })
+            .map(|layer| layer.layer_id.clone());
 
-        // Mint a project-unique id only on collision, so the common case keeps
-        // the clean sanitized stem (`azalea`) and only a genuine clash gets a
-        // `#N` suffix. The model's graph becomes a project-embedded preset the
-        // layer TRACKS (D9) — an id that resolves in no catalog is BUG-016, so
-        // the id must be stamped onto the def, registered, and installed into
-        // the catalog overlay before any frame reads it.
-        let preset_id = if self.local_project.embedded_preset(&base_id).is_some() {
-            self.local_project.mint_embedded_preset_id(base_id.as_str())
-        } else {
-            base_id
-        };
-        if let Some(m) = graph.preset_metadata.as_mut() {
-            m.id = preset_id.clone();
+        match &conversion_report_line {
+            Some(line) => log::warn!("[Import] Added 3D model '{file_name}' ({line})"),
+            None => log::warn!("[Import] Added 3D model '{file_name}'"),
         }
-        let embedded = manifold_core::project::EmbeddedPreset {
-            kind: manifold_core::preset_def::PresetKind::Generator,
-            def: graph,
-            origin: manifold_core::project::EmbeddedOrigin::Saved,
-        };
-        // Register + install the overlay BEFORE creating the layer. The core
-        // preset-definition registry is process-global, so installing here (on
-        // the UI thread) populates it for BOTH threads: the local execute below
-        // and the content thread's later execute of the same command box each
-        // run `new_generator` → `init_defaults`, which reads that global
-        // registry to seed the curated card values. Installing after the local
-        // execute (the doc's tentative option) would leave the two threads'
-        // `param_values` inconsistent — this ordering is the resolved D9
-        // deliverable-3 VERIFY-AT-IMPL.
-        // The layer command below upserts it again on both threads; this
-        // early copy is what the overlay install reads.
+
         let mut local = self.local_project.edit(&mut self.ui_edits, &content_tx);
-        let early = embedded.clone();
-        local.with_sent(|p| (p.upsert_embedded_preset(early), manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::EmbeddedPresets])));
-        crate::project_io::install_project_preset_overlay(&local);
+        if let Some(layer_id) = target {
+            let commands = manifold_editing::commands::scene_doc::import_model_commands(
+                &layer_id,
+                None,
+                usize::MAX,
+                group,
+                &file_str,
+                &model,
+            );
+            local.execute_batch(commands, "Import 3D Model".to_string());
+            return;
+        }
 
         // Insert above the layer under the cursor, or at the top when dropped
-        // outside the tracks area. Generators are full-canvas — unlike images
-        // they need no specific host layer type.
-        let insert_index = layer_under_cursor
-            .unwrap_or(0)
-            .min(local.timeline.layers.len());
+        // outside the tracks area.
+        let insert_index = layer_under_cursor.unwrap_or(0).min(local.timeline.layers.len());
+        let doc = model.scene_doc(&file_str, group.clone());
+        let values = model
+            .placement()
+            .map(|placement| {
+                let [x, y, z] = placement.position;
+                [
+                    ("scale_x", placement.scale),
+                    ("scale_y", placement.scale),
+                    ("scale_z", placement.scale),
+                    ("pos_x", x),
+                    ("pos_y", y),
+                    ("pos_z", z),
+                ]
+                .map(|(property, value)| (manifold_core::scene_doc::param_id(&group, property), value))
+                .to_vec()
+            })
+            .unwrap_or_default();
+        let display_name = model.name.clone();
 
-        // GLB_CONFORMANCE_DESIGN.md D4: import is 1:1 — object_count always
-        // equals material_count, nothing is ever dropped over a cap
-        // (assemble_import_graph errors instead of truncating).
-        match &conversion_report_line {
-            Some(line) => log::warn!(
-                "[Import] Added 3D model '{display_name}' — {} object(s), {} texture(s) ({line})",
-                report.object_count,
-                report.textures_wired,
-            ),
-            None => log::warn!(
-                "[Import] Added 3D model '{display_name}' — {} object(s), {} texture(s)",
-                report.object_count,
-                report.textures_wired,
-            ),
-        }
-
-        // 1. Layer command — execute locally first so the generated LayerId is
-        //    fixed in the command instance, then send that SAME instance to the
-        //    content thread. Both threads then insert the identical layer (id
-        //    included), which lets the clip below target it deterministically.
-        //    This is the sanctioned add-layer dispatch (see the ui_bridge
-        //    ContextAddGeneratorLayer path).
-        let mut layer_cmd =
-            manifold_editing::commands::layer::ImportModelLayerCommand::new(
-                display_name,
-                embedded,
-                insert_index,
-                None,
-            );
+        // Execute the layer command locally first so the generated LayerId is
+        // fixed in the command instance, then send that SAME instance to the
+        // content thread. Both threads then insert the identical layer (id
+        // included), which lets the clip below target it deterministically.
+        use manifold_editing::command::Command;
+        let mut layer_cmd = manifold_editing::commands::layer::ImportModelLayerCommand::new(
+            display_name,
+            doc,
+            values,
+            insert_index,
+            None,
+        );
         let inserted = local.executed_by(|project| {
             layer_cmd.execute(project);
+            if let Some(reason) = layer_cmd.rejection_reason() {
+                log::error!("[Import] {file_name} was refused: {reason}");
+                return None;
+            }
             let layer_id = layer_cmd.inserted_layer_id()?;
             Some((Box::new(layer_cmd) as Box<dyn Command>, layer_id))
         });
         let Some(layer_id) = inserted else {
-            log::error!("[Import] layer command produced no layer id — aborting clip add");
+            self.ws.ui_root.toast.show_with_accent(
+                format!("Couldn't import {file_name}: no scene layer could be made"),
+                manifold_ui::color::RED_BASE,
+            );
             return;
         };
 
-        // 2. A default generator clip on that layer, so the model renders at
-        //    once. The clip is a bare time-span; the layer's graph drives the
-        //    pixels (a generator clip carries no generator of its own). Sent
-        //    after the layer on the same ordered channel, so the layer exists
-        //    on the content thread before the clip targets it.
+        // A default generator clip on that layer, so the model renders at
+        // once. Sent after the layer on the same ordered channel, so the
+        // layer exists on the content thread before the clip targets it.
         let clip = manifold_core::clip::TimelineClip::new_generator(
             manifold_core::Beats::from_f32(drop_beat.max(0.0)),
             manifold_core::Beats::from_f32(DEFAULT_MODEL_DURATION_BEATS),
@@ -910,34 +897,7 @@ impl Application {
     /// Apply a ProjectIOAction returned by ProjectIOService.
     /// Handles all side-effects that require Application-owned state:
     /// engine init, GPU resize, audio loading, selection reset, etc.
-    pub(crate) fn apply_project_io_action(&mut self, mut action: ProjectIOAction) {
-        // Snapshot restore/copy actions bypass ProjectIOService's file-open
-        // migration hook. Upgrade those projects at the common apply seam;
-        // ordinary opens mark the action as already upgraded so their source
-        // assets are parsed only once and notices are not duplicated.
-        if !action.material_upgrade_applied {
-            if let Some(project) = action.apply_project.as_mut() {
-                let material_report = manifold_nodes_scene::node_graph::gltf_import::upgrade_project_materials(project);
-                if material_report.changed_graphs > 0 {
-                    crate::project_io::install_project_preset_overlay(project);
-                    project.load_report.unresolved_preset_templates =
-                        project.reconcile_param_manifests();
-                }
-                if !material_report.notices.is_empty() {
-                    let material_notice = material_report.notices.join("\n");
-                    action.notice = Some(
-                        action
-                            .notice
-                            .take()
-                            .map_or(material_notice.clone(), |existing| {
-                                format!("{existing}\n{material_notice}")
-                            }),
-                    );
-                }
-            }
-            action.material_upgrade_applied = true;
-        }
-
+    pub(crate) fn apply_project_io_action(&mut self, action: ProjectIOAction) {
         // Apply loaded project (replaces host.PrepareForProjectSwitch + ApplyProject + OnProjectOpened)
         if let Some(project) = action.apply_project {
             self.autosave.project_changed();

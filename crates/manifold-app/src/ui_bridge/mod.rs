@@ -209,6 +209,8 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             ctx.ui,
             ctx.selection,
             ctx.active_layer,
+            ctx.user_prefs,
+            ctx.dialogs,
         ),
         PanelAction::Browser(a) => dispatch::browser::dispatch_browser(a, ctx),
         PanelAction::Clip(a) => dispatch::clip::dispatch_clip(a, ctx),

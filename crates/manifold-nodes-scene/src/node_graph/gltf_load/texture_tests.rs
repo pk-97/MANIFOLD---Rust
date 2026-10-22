@@ -117,26 +117,25 @@ fn webp_dimensions_match_runtime_with_absent_or_different_size_fallback() {
         serde_json::json!({"source":0,"extensions":{"EXT_texture_webp":{"source":1}}}),
     ] {
         fixture.write_document(serde_json::json!([texture]), images.clone(), webp.get_ref());
-        let summary = gltf_import_summary(&fixture.path).unwrap();
+        let (document, buffers) = parse_document_and_buffers(Path::new(&fixture.path)).unwrap();
         let (w, h, _) = load_gltf_texture(&fixture.path, 0).unwrap();
         assert_eq!((w, h), (3, 2));
-        assert_eq!(summary.texture_dims, [(w, h)]);
+        assert_eq!(texture_dims(Path::new(&fixture.path), &document, &buffers), [(w, h)]);
     }
 }
 
 #[test]
-fn missing_texture_source_is_reported_by_summary_and_runtime() {
+fn missing_texture_source_is_reported_by_runtime_and_sized_by_fallback() {
     let fixture = TextureFixture::external_png();
     fixture.write_document(
         serde_json::json!([{}]),
         serde_json::json!([{"uri":"map.png"}]),
         &[],
     );
-    let summary = gltf_import_summary(&fixture.path).unwrap();
+    let (document, buffers) = parse_document_and_buffers(Path::new(&fixture.path)).unwrap();
     let error = load_gltf_texture(&fixture.path, 0).unwrap_err();
     assert_eq!(error, "texture 0 has no image source");
-    assert!(summary.extension_report_lines.contains(&error));
-    assert_eq!(summary.texture_dims, [(2, 2)]);
+    assert_eq!(texture_dims(Path::new(&fixture.path), &document, &buffers), [(2, 2)]);
 }
 
 #[test]
@@ -190,11 +189,4 @@ fn malformed_relative_image_uri_reports_error_without_unwinding() {
     let result = std::panic::catch_unwind(|| parse_texture_snapshot(&fixture.path, 0))
         .expect("malformed relative image URI must not panic");
     assert!(result.err().unwrap().contains("invalid resource URI"));
-    let summary = gltf_import_summary(&fixture.path).unwrap();
-    assert!(
-        summary
-            .extension_report_lines
-            .iter()
-            .any(|line| line.contains("invalid resource URI"))
-    );
 }

@@ -80,6 +80,15 @@ pub struct AddSceneItemCommand {
 }
 
 impl AddSceneItemCommand {
+    /// Add `item` and everything under it, as built. An import is added this
+    /// way: its parts are keyed by file node path, so their ids are chosen,
+    /// not made fresh.
+    pub fn with_subtree(layer: LayerId, parent: Option<ItemId>, index: usize, item: Item) -> Self {
+        let kind = item.kind();
+        let id = item.id.clone();
+        Self { layer, kind, parent, index, source: None, id, prepared: Some((item, BTreeMap::new())), step: Step::default() }
+    }
+
     pub fn new(
         layer: LayerId,
         kind: ItemKind,
@@ -96,10 +105,17 @@ impl AddSceneItemCommand {
             let item = Item::new(self.id.clone(), self.kind.default_name(), ItemFields::default_for(self.kind));
             return Ok((item, BTreeMap::new()));
         };
-        let mut first = true;
         let root = self.id.clone();
-        doc.copy_subtree(source, || {
-            if std::mem::take(&mut first) { root.clone() } else { ItemId::new(manifold_core::math::short_id()) }
+        doc.copy_subtree(source, |old| {
+            if old == source {
+                root.clone()
+            } else if let Some(rest) = old.as_str().strip_prefix(source.as_str()).and_then(|r| r.strip_prefix('-'))
+            {
+                // An import's parts stay keyed by file node path under the copy's id.
+                ItemId::new(format!("{root}-{rest}"))
+            } else {
+                ItemId::new(manifold_core::math::short_id())
+            }
         })
     }
 }

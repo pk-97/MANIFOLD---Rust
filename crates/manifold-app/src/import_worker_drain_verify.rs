@@ -45,11 +45,9 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
     let mut app = headless_application();
     let layers_before = app.local_project.timeline.layers.len();
 
-    // A real graph — CPU-only parse, no GPU, no `validate_def` call (the
-    // worker's `Validating` stage is deliberately never reached in this
-    // test; validate_def's own correctness is proven by its own tests).
-    let (graph, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
-        .unwrap_or_else(|e| panic!("assemble_import_graph({}) failed: {e}", path.display()));
+    // A real model — CPU-only parse, no GPU.
+    let model = manifold_nodes_scene::node_graph::gltf_import::import_model(&path)
+        .unwrap_or_else(|e| panic!("import_model({}) failed: {e}", path.display()));
 
     // 1. Hand-feed a `Stage` event, exactly as `run_import_worker` would
     //    before its `Parsing` step, and drain it.
@@ -77,8 +75,8 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
     app.import_progress_tx
         .send(ImportProgress::Done {
             path: path.clone(),
-            graph: Box::new(graph),
-            report,
+            file: path.clone(),
+            model: Box::new(model),
             conversion_report_line: None,
             drop_beat: 0.0,
             layer_under_cursor: None,
@@ -118,7 +116,7 @@ fn failed_event_shows_an_accent_toast_never_silent() {
 fn a_second_drop_while_busy_is_queued_not_run_in_parallel() {
     let mut app = headless_application();
     // Simulate an in-flight worker without actually spawning one (spawning
-    // touches the lazy-fallback GPU device via `validation_gpu_device` —
+    // starts a thread —
     // this test is about the enqueue branch only, which never does).
     app.import_worker_busy = true;
     assert!(app.import_queue.is_empty());

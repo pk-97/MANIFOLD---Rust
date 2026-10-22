@@ -101,6 +101,7 @@ mod modifier_preset;
 pub(crate) mod headless_harness;
 mod import_responsiveness_verify;
 mod import_worker;
+mod scene_import;
 mod import_worker_drain_verify;
 mod input_handler;
 mod input_host;

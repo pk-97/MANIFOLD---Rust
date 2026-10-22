@@ -28,7 +28,7 @@ use manifold_core::{
     cold_touch::{ColdTouchKind, cold_touch_count, reset_cold_touch_counts},
 };
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, linear_to_srgb8};
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 use crate::content_command::ContentCommand;
 use crate::content_state::StateTx;
@@ -46,10 +46,10 @@ const STATIC_FIXTURE: &str = concat!(
 const NESTED_MULTIMATERIAL_V2: &str = manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON;
 
 fn imported_layer(name: &str, layer_id: &str, index: i32, path: &Path) -> Layer {
-    let (graph, report) = assemble_import_graph(path)
+    let (graph, model) = compile_model_scene(path)
         .unwrap_or_else(|error| panic!("{} import failed: {error}", path.display()));
     assert!(
-        report.object_count > 0,
+        !model.roots.is_empty(),
         "{} has no imported objects",
         path.display()
     );
@@ -413,15 +413,15 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
         .expect("journey logger");
     let output_dir = PathBuf::from("target/journey-proofs/f8_playing_photoscan");
     std::fs::create_dir_all(&output_dir).expect("journey artifact directory");
-    let (_, held_out_report) =
-        assemble_import_graph(Path::new(STATIC_FIXTURE)).expect("held-out static scan import");
+    let (_, held_out) =
+        compile_model_scene(Path::new(STATIC_FIXTURE)).expect("held-out static scan import");
     assert!(
-        held_out_report.object_count > 0,
+        !held_out.roots.is_empty(),
         "held-out static scan has no imported objects"
     );
     eprintln!(
         "[f8 journey] held-out static scan import-qualified ({} objects); rendering remains open",
-        held_out_report.object_count
+        held_out.roots.len()
     );
     reset_cold_touch_counts();
     let mut ct = headless_content_thread(journey_project(), 320, 180);
