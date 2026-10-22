@@ -67,7 +67,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 53] = [
+pub static ADD_ENTRIES: [AddEntry; 57] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
@@ -136,6 +136,10 @@ pub static ADD_ENTRIES: [AddEntry; 53] = [
     entry("modifier.wave_shear", "Modifier", "Wave Shear", ItemKind::Modifier, "Wave Shear", || modifier(ModifierType::WaveShear)),
     entry("modifier.cut_out_box", "Modifier", "Cut Out Box", ItemKind::Modifier, "Cut Out Box", || modifier(ModifierType::CutOutBox)),
     entry("modifier.shake", "Modifier", "Shake", ItemKind::Modifier, "Shake", || modifier(ModifierType::Shake)),
+    entry("modifier.copy_wave", "Modifier", "Copy Wave", ItemKind::Modifier, "Copy Wave", || modifier(ModifierType::CopyWave)),
+    entry("modifier.copy_jitter", "Modifier", "Copy Jitter", ItemKind::Modifier, "Copy Jitter", || modifier(ModifierType::CopyJitter)),
+    entry("modifier.copy_noise", "Modifier", "Copy Noise", ItemKind::Modifier, "Copy Noise", || modifier(ModifierType::CopyNoise)),
+    entry("modifier.copy_blend", "Modifier", "Copy Blend", ItemKind::Modifier, "Copy Blend", || modifier(ModifierType::CopyBlend)),
     model_file("object.mesh", "Object", "Mesh from file\u{2026}"),
 ];
 

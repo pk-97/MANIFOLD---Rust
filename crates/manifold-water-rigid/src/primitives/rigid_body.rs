@@ -246,7 +246,7 @@ ParamDef { name: Cow::Borrowed("fragment_parent"), label: "Fragment Parent", ty:
 ParamDef { name: Cow::Borrowed("copy_count"), label: "Count", ty: ParamType::Int, default: ParamValue::Float(100.0), range: Some((0.0, MAX_COPIES as f32)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_size_spacing"), label: "Spacing", ty: ParamType::Float, default: ParamValue::Float(manifold_core::copies_body::SIZE_SPACING_DEFAULT), range: Some(manifold_core::copies_body::SIZE_SPACING_RANGE), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_columns"), label: "Columns", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, 64.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("copy_layout"), label: "Layout", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &manifold_core::copies_body::COPY_LAYOUT_LABELS },
+ParamDef { name: Cow::Borrowed("copy_layout"), label: "Layout", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, (manifold_core::copies_body::COPY_LAYOUT_LABELS.len() - 1) as f32)), enum_values: &manifold_core::copies_body::COPY_LAYOUT_LABELS },
 ParamDef { name: Cow::Borrowed("copy_turn_x"), label: "Copy Turn X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_turn_y"), label: "Copy Turn Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },

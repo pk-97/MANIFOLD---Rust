@@ -32685,7 +32685,7 @@
           "type": "Transform"
         },
         {
-          "capacity": "fixed:4000",
+          "capacity": "fixed:65536",
           "name": "instances_0",
           "type": "Array"
         },
@@ -37550,7 +37550,7 @@
           "name": "copy_count",
           "range": [
             "0",
-            "4000"
+            "65536"
           ],
           "type": "int"
         },
@@ -37580,13 +37580,15 @@
             "Grid",
             "Scatter",
             "Line",
-            "Ring"
+            "Ring",
+            "Spiral",
+            "Random"
           ],
           "label": "Layout",
           "name": "copy_layout",
           "range": [
             "0",
-            "3"
+            "5"
           ],
           "type": "enum"
         },

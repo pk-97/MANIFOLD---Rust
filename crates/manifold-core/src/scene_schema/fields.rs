@@ -209,7 +209,7 @@ fn physics_blocked(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
 /// The Physics row: refused inside a Body, and while the item has none, when
 /// it cannot take a body. None always stays pickable once a setting is on.
 fn physics_disabled(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
-    physics_blocked(doc, item).or_else(|| {
+    physics_blocked(doc, item).or_else(|| super::copies::surface_holds_copies(item)).or_else(|| {
         (item.fields.physics() == crate::scene_doc::PhysicsSetting::None)
             .then(|| super::physics_unavailable(doc, &item.id))
             .flatten()

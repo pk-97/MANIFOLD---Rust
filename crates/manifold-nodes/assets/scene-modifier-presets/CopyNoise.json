@@ -1,0 +1,118 @@
+{
+  "version": 3,
+  "name": "Copy Noise",
+  "presetMetadata": {
+    "id": "CopyNoise",
+    "displayName": "Copy Noise",
+    "category": "Geometry",
+    "oscPrefix": "copy_noise",
+    "available": true,
+    "params": [
+      { "id": "amount", "name": "Amount", "min": -10.0, "max": 10.0, "defaultValue": 0.5 },
+      { "id": "scale", "name": "Scale", "min": 0.0, "max": 64.0, "defaultValue": 4.0 },
+      { "id": "detail", "name": "Detail", "min": 1.0, "max": 12.0, "defaultValue": 1.0, "wholeNumbers": true },
+      { "id": "evolve", "name": "Evolve", "min": -100.0, "max": 100.0, "defaultValue": 0.0 },
+      { "id": "push_x", "name": "Push X", "min": -1.0, "max": 1.0, "defaultValue": 0.0 },
+      { "id": "push_y", "name": "Push Y", "min": -1.0, "max": 1.0, "defaultValue": 1.0 },
+      { "id": "push_z", "name": "Push Z", "min": -1.0, "max": 1.0, "defaultValue": 0.0 },
+      { "id": "enabled", "name": "Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "isToggle": true }
+    ],
+    "bindings": [
+      { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "enabled", "param": "value" } },
+      { "id": "amount", "label": "Amount", "defaultValue": 0.5, "target": { "kind": "node", "nodeId": "push", "param": "amount" } },
+      { "id": "scale", "label": "Scale", "defaultValue": 4.0, "target": { "kind": "node", "nodeId": "noise", "param": "scale" } },
+      { "id": "detail", "label": "Detail", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "noise", "param": "octaves" }, "convert": { "type": "IntRound" } },
+      { "id": "evolve", "label": "Evolve", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "noise", "param": "z" } },
+      { "id": "push_x", "label": "Push X", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "push", "param": "direction_x" } },
+      { "id": "push_y", "label": "Push Y", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "push", "param": "direction_y" } },
+      { "id": "push_z", "label": "Push Z", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "push", "param": "direction_z" } }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "copy_noise_stage",
+          "scope": "eachObject",
+          "inputs": [
+            { "port": "instances", "source": { "previous": { "endpoint": "instances" } } }
+          ],
+          "outputs": [
+            { "port": "instances", "endpoint": "instances" }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "copy_noise_stage",
+      "typeId": "group",
+      "handle": "CopyNoiseStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" }
+          ],
+          "outputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" }
+          ]
+        },
+        "nodes": [
+          { "id": 1, "nodeId": "group_instances", "typeId": "system.group_input", "handle": "instances" },
+          { "id": 10, "nodeId": "group_output", "typeId": "system.group_output", "handle": "output" },
+          {
+            "id": 20,
+            "nodeId": "enabled",
+            "typeId": "node.value",
+            "handle": "enabled",
+            "params": { "value": { "type": "Float", "value": 1.0 } }
+          },
+          {
+            "id": 21,
+            "nodeId": "seeds",
+            "typeId": "node.grid_uv_field",
+            "handle": "seeds",
+            "params": { "grid_size": { "type": "Float", "value": 256.0 } }
+          },
+          {
+            "id": 22,
+            "nodeId": "noise",
+            "typeId": "node.fractal_noise_per_copy",
+            "handle": "noise",
+            "params": {
+              "scale": { "type": "Float", "value": 4.0 },
+              "z": { "type": "Float", "value": 0.0 },
+              "offset_x": { "type": "Float", "value": 0.0 },
+              "offset_y": { "type": "Float", "value": 0.0 },
+              "octaves": { "type": "Float", "value": 1.0 },
+              "lacunarity": { "type": "Float", "value": 1.5 },
+              "gain": { "type": "Float", "value": 0.8 }
+            }
+          },
+          {
+            "id": 23,
+            "nodeId": "push",
+            "typeId": "node.displace_copies",
+            "handle": "push",
+            "params": {
+              "amount": { "type": "Float", "value": 0.5 },
+              "direction_x": { "type": "Float", "value": 0.0 },
+              "direction_y": { "type": "Float", "value": 1.0 },
+              "direction_z": { "type": "Float", "value": 0.0 }
+            }
+          }
+        ],
+        "wires": [
+          { "fromNode": 21, "fromPort": "uv", "toNode": 22, "toPort": "uv" },
+          { "fromNode": 1, "fromPort": "instances", "toNode": 23, "toPort": "instances" },
+          { "fromNode": 22, "fromPort": "out", "toNode": 23, "toPort": "weights" },
+          { "fromNode": 23, "fromPort": "instances", "toNode": 10, "toPort": "instances" }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

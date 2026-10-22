@@ -299,9 +299,19 @@ pub(crate) fn nest_layout(b: &mut Builder<'_>, item: &Item, transform: u32, nest
     b.nests.insert(nest, Some(body));
 }
 
+/// The mesh node of the first Object at or below `item` that compiled one.
+pub(crate) fn first_mesh(b: &Builder<'_>, item: &Item) -> Option<u32> {
+    if matches!(item.fields, ItemFields::Object(_))
+        && let Some(mesh) = b.id(item.id.as_str(), "mesh")
+    {
+        return Some(mesh);
+    }
+    item.children.iter().find_map(|child| first_mesh(b, child))
+}
+
 /// The frame an emit-from item's mesh sits in: an Object's own Transform
 /// inside the frame of the groups around it, a Group's frame.
-fn emit_frame(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
+pub(crate) fn emit_frame(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
     if !matches!(target.fields, ItemFields::Object(_)) {
         return b.group_frames.get(&target.id).copied();
     }

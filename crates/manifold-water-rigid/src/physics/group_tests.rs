@@ -101,8 +101,8 @@ fn the_world_copy_budget_is_shared_and_later_groups_make_what_fits() {
     let scene = RigidSceneInputs {
         bodies: Vec::new(),
         groups: vec![
-            Some(spawner([0.0, 0.0, 0.0], 3_000.0)),
-            Some(spawner([200.0, 0.0, 0.0], 3_000.0)),
+            Some(spawner([0.0, 0.0, 0.0], (MAX_COPIES - 1_000) as f32)),
+            Some(spawner([2_000.0, 0.0, 0.0], 3_000.0)),
             Some(spawner([400.0, 0.0, 0.0], 10.0)),
         ],
         gravity: [0.0; 3],
@@ -113,7 +113,7 @@ fn the_world_copy_budget_is_shared_and_later_groups_make_what_fits() {
     simulation.advance_scene(&scene, PlayedTime::ZERO, 1.0, 0.0).unwrap();
     assert_eq!(
         (simulation.active_copies(0), simulation.active_copies(1), simulation.active_copies(2)),
-        (3_000, MAX_COPIES - 3_000, 0)
+        (MAX_COPIES - 1_000, 1_000, 0)
     );
     assert_eq!(simulation.copies_not_made(), 2_000 + 10);
 }

@@ -14,6 +14,7 @@ use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::deformers::DEFORMER_TYPES;
+use super::copies::COPY_FIELD_TYPES;
 use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, is_on, on_off, parse_on, wrong_value,
 };
@@ -254,7 +255,7 @@ const fn concat<const A: usize, const B: usize, const N: usize>(
 }
 
 /// Every modifier type, in menu order.
-pub static MODIFIER_TYPES: [ModifierTypeEntry; 26] = concat(CORE_TYPES, DEFORMER_TYPES);
+pub static MODIFIER_TYPES: [ModifierTypeEntry; 30] = concat::<26, 4, 30>(concat::<7, 19, 26>(CORE_TYPES, DEFORMER_TYPES), COPY_FIELD_TYPES);
 
 /// The entry of a modifier type.
 pub fn modifier_type(modifier: ModifierType) -> &'static ModifierTypeEntry {

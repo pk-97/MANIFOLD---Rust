@@ -30,9 +30,17 @@ pub const COPY_PARAMS: [&str; 7] = [
 /// size.
 pub const SIZE_SPACING_DEFAULT: f32 = 1.1;
 pub const SIZE_SPACING_RANGE: (f32, f32) = (1.0, 20.0);
-/// The Layout labels, by stored value.
-pub const COPY_LAYOUT_LABELS: [&str; 4] = ["Grid", "Scatter", "Line", "Ring"];
+/// The Layout labels, by stored value. Spiral and Random are
+/// `node.arrange_copies`' arrangements, spaced in copy widths.
+pub const COPY_LAYOUT_LABELS: [&str; 6] = ["Grid", "Scatter", "Line", "Ring", "Spiral", "Random"];
 pub const COPY_LAYOUT_SCATTER: u32 = 1;
+
+/// The most copies one world makes across all its groups. A memory ceiling, not
+/// a frame budget: every copy group's instance buffer is allocated at this size
+/// up front, 2 MiB on the GPU and 2 MiB on the CPU. The copy field recipes
+/// (`CopyJitter`, `CopyNoise`) seed one noise sample per copy from a 256 by 256
+/// grid, and `CopyBlend` lays out this many: they follow it by hand.
+pub const MAX_COPIES: usize = 65_536;
 
 /// Scatter jitters each copy by up to this fraction of its spacing per axis.
 pub const SCATTER_JITTER: f32 = 0.04;

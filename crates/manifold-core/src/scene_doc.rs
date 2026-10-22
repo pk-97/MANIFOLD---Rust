@@ -121,6 +121,15 @@ impl ItemFields {
         }
     }
 
+    /// The item an Object's or Group's copies sit on, while Copies is on.
+    pub fn copies_surface(&self) -> Option<&ItemId> {
+        match self {
+            ItemFields::Group(g) if g.copies => g.copies_surface.as_ref(),
+            ItemFields::Object(o) if o.copies => o.copies_surface.as_ref(),
+            _ => None,
+        }
+    }
+
     /// The physics setting of an Object or Group.
     pub fn physics(&self) -> PhysicsSetting {
         match self {
@@ -148,6 +157,8 @@ pub struct GroupFields {
     pub material: Option<ItemId>,
     pub physics: PhysicsSetting,
     pub copies: bool,
+    /// On Surface: the item the copies sit on; `None` lays them out by Layout.
+    pub copies_surface: Option<ItemId>,
     /// An import: the file this group's children come from (section 7.7).
     pub source: Option<String>,
     pub combine_meshes: bool,
@@ -166,6 +177,8 @@ pub struct ObjectFields {
     pub material: Option<ItemId>,
     pub physics: PhysicsSetting,
     pub copies: bool,
+    /// On Surface: the item the copies sit on; `None` lays them out by Layout.
+    pub copies_surface: Option<ItemId>,
 }
 
 /// An Object's Shape: the built-in solids, Ocean, or a mesh from a file.
@@ -535,6 +548,10 @@ pub enum ModifierType {
     WaveShear,
     CutOutBox,
     Shake,
+    CopyWave,
+    CopyJitter,
+    CopyNoise,
+    CopyBlend,
 }
 
 /// What a modifier card acts on: the whole scene, as one group of

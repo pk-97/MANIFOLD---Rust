@@ -39,7 +39,7 @@ pub use fields::{
     Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, field_rows, is_material,
     is_object_or_group, set_field,
 };
-pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, can_copy, copies_unavailable};
+pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, SURFACE_ROLE, can_copy, copies_unavailable};
 pub use force::{FORCE_ROWS, impulse_unavailable};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;

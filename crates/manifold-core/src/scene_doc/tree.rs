@@ -81,8 +81,14 @@ impl Item {
         let swap = |id: &ItemId| map.get(id).cloned().unwrap_or_else(|| id.clone());
         let mut fields = self.fields.clone();
         match &mut fields {
-            ItemFields::Group(g) => g.material = g.material.as_ref().map(swap),
-            ItemFields::Object(o) => o.material = o.material.as_ref().map(swap),
+            ItemFields::Group(g) => {
+                g.material = g.material.as_ref().map(swap);
+                g.copies_surface = g.copies_surface.as_ref().map(swap);
+            }
+            ItemFields::Object(o) => {
+                o.material = o.material.as_ref().map(swap);
+                o.copies_surface = o.copies_surface.as_ref().map(swap);
+            }
             ItemFields::Water(w) => w.material = w.material.as_ref().map(swap),
             ItemFields::Camera(c) => c.target = c.target.as_ref().map(swap),
             ItemFields::Swarm(s) => {
@@ -264,8 +270,22 @@ impl SceneDoc {
             }
         }
         each(&mut self.items, &mut |fields| match fields {
-            ItemFields::Group(g) if g.material.as_ref().is_some_and(gone) => g.material = None,
-            ItemFields::Object(o) if o.material.as_ref().is_some_and(gone) => o.material = None,
+            ItemFields::Group(g) => {
+                if g.material.as_ref().is_some_and(gone) {
+                    g.material = None;
+                }
+                if g.copies_surface.as_ref().is_some_and(gone) {
+                    g.copies_surface = None;
+                }
+            }
+            ItemFields::Object(o) => {
+                if o.material.as_ref().is_some_and(gone) {
+                    o.material = None;
+                }
+                if o.copies_surface.as_ref().is_some_and(gone) {
+                    o.copies_surface = None;
+                }
+            }
             ItemFields::Water(w) if w.material.as_ref().is_some_and(gone) => w.material = None,
             ItemFields::Swarm(s) => {
                 if s.material.as_ref().is_some_and(gone) {

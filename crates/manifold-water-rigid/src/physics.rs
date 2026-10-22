@@ -107,8 +107,7 @@ impl HeldClock {
 /// the stack each tick. A bigger world gathers them on the heap: this is no
 /// limit, only where a tick stops being allocation-free.
 const STACK_TARGETS: usize = 64;
-/// The most copies one world makes across all its groups: the measured budget.
-pub const MAX_COPIES: usize = 4_000;
+pub use manifold_core::copies_body::MAX_COPIES;
 pub const AUTHORED_HISTORY_CAPACITY: usize = 256;
 /// The hits in flight a world holds before a burst grows its history.
 const IMPULSE_CAPACITY: usize = 256;
@@ -195,10 +194,10 @@ pub struct RigidBody {
     pub spawn: CopySpawn,
 }
 
-/// A copies body's spawner. Layout is 0 Grid, 1 Scatter, 2 Line, 3 Ring;
-/// spacing is a multiple of the copy's box width along the layout axis;
-/// turn is each copy's own rotation inside the layout. A change lays the
-/// copies out again at the next tick start (`physics/copy_layout.rs`).
+/// A copies body's spawner. Layout is 0 Grid, 1 Scatter, 2 Line, 3 Ring, 4
+/// Spiral, 5 Random; spacing is a multiple of the copy's box width along the
+/// layout axis; turn is each copy's own rotation inside the layout. A change
+/// lays the copies out again at the next tick start (`physics/copy_layout.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopySpawn {
