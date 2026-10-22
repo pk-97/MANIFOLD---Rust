@@ -322,8 +322,6 @@ pub struct ScenePanel {
     /// Items whose Scale link is off. The link starts on (section 7.17);
     /// card view state, never saved or mapped.
     scale_unlinked: ahash::AHashSet<ItemId>,
-    /// The Scale drag in flight: the three ids and their values at its start.
-    scale_drag: Option<([manifold_foundation::ParamId; 3], [f32; 3])>,
     /// Fold state for properties sections, keyed by section NAME globally
     /// within the panel. UI-local, never serialized. Missing = expanded.
     section_folded: ahash::AHashMap<String, bool>,
@@ -370,7 +368,6 @@ impl Default for ScenePanel {
             group_toggle_ids: Vec::new(),
             collapsed_groups: std::collections::HashMap::new(),
             scale_unlinked: ahash::AHashSet::new(),
-            scale_drag: None,
             section_folded: ahash::AHashMap::new(),
             material_block: Default::default(),
             modifier_buttons: Vec::new(),
@@ -913,11 +910,9 @@ impl ScenePanel {
         }
     }
 
-    /// A drag's actions after the panel's rewrites: the colour swatch's RGB
-    /// gesture and the Scale link's three-axis gesture.
+    /// A drag's actions after the colour swatch's RGB rewrite.
     fn rewrite_drag_actions(&mut self, actions: Vec<PanelAction>) -> Vec<PanelAction> {
-        let actions = self.rewrite_material_rgb_actions(actions);
-        self.rewrite_scale_link_actions(actions)
+        self.rewrite_material_rgb_actions(actions)
     }
 
     fn owns_node(&self, node_id: NodeId) -> bool {

@@ -98,3 +98,24 @@ fn find_type(node: &EffectGraphNode, type_id: &str) -> Option<u32> {
     }
     node.group.as_deref()?.nodes.iter().find_map(|inner| find_type(inner, type_id))
 }
+
+/// Aim each Look At camera that has a Target item at that item's drawn frame:
+/// a body's solved pose, else its transform. Runs after the tree has emitted
+/// every frame.
+pub(crate) fn aim_all(b: &mut Builder<'_>) {
+    let mut aims = Vec::new();
+    b.doc.walk(|item, _| {
+        if let ItemFields::Camera(camera) = &item.fields
+            && camera.rig == CameraRig::LookAt
+            && let Some(target) = &camera.target
+        {
+            aims.push((item.id.clone(), target.clone()));
+        }
+    });
+    for (camera, target) in aims {
+        let frame = b.id(target.as_str(), "pose_frame").or_else(|| b.id(target.as_str(), "transform"));
+        if let (Some(rig), Some(frame)) = (b.id(camera.as_str(), "rig"), frame) {
+            b.wire(frame, "transform", rig, "target");
+        }
+    }
+}

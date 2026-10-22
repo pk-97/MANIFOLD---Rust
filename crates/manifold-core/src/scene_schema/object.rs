@@ -190,11 +190,10 @@ pub fn modifier_label(kind: MeshModifierKind) -> &'static str {
     MODIFIER_KINDS[MeshModifierKind::ALL.iter().position(|k| *k == kind).unwrap_or(0)].label
 }
 
-fn add_modifier_disabled(_: &SceneDoc, item: &Item) -> Option<&'static str> {
-    match &item.fields {
-        ItemFields::Object(object) => super::modifiers_unavailable(&object.shape),
-        _ => None,
-    }
+/// Only a mesh from a file takes modifiers, so a built-in solid has no Add
+/// Modifier row at all.
+fn takes_modifiers(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Object(object) if super::modifiers_unavailable(&object.shape).is_none())
 }
 
 pub static OBJECT_FIELDS: [FieldRow; 6] = [
@@ -257,8 +256,8 @@ pub static OBJECT_FIELDS: [FieldRow; 6] = [
         label: "Add Modifier",
         section: ControlGroup::Modifier,
         control: FieldControl::Closed(MODIFIER_KINDS),
-        applies: always,
-        disabled: add_modifier_disabled,
+        applies: takes_modifiers,
+        disabled: enabled,
         read: |_| FieldValue::Choice(String::new()),
         write: |fields, value| {
             let (ItemFields::Object(object), FieldValue::Choice(key)) = (&*fields, value) else {

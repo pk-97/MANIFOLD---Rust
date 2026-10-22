@@ -297,6 +297,10 @@ impl MeshPrimitives {
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct CameraFields {
     pub rig: CameraRig,
+    /// The Object or Group a Look At camera aims at, as Blender's Track To
+    /// aims at an object; its Target X/Y/Z then offset from that item's
+    /// origin. `None` aims at the Target X/Y/Z point.
+    pub target: Option<ItemId>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

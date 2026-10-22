@@ -77,7 +77,7 @@ impl super::WaterRuntime<'_> {
             ) || new.node.integrates_time()
             {
                 let old = prior.graph.get_node_mut(old_id).expect("compiled node");
-                std::mem::swap(&mut new.node, &mut old.node);
+                new.adopt_node(old);
             }
         }
         if let (Some(inputs), Some(old_inputs)) = (

@@ -275,7 +275,7 @@ pub(crate) fn problems_of<'a>(def: &EffectGraphDef, runtime: impl IntoIterator<I
 }
 
 /// The first body `now` reports refused that `before` did not, as the toast
-/// says it.
+/// says it: what the world left out, a body or a set of copies, and why.
 pub(crate) fn new_refusal(before: &[SetupFitEntry], now: &[SetupFitEntry]) -> Option<String> {
     now.iter().find_map(|entry| {
         let held = before.iter().find(|old| old.layer == entry.layer && old.node == entry.node);
@@ -283,7 +283,10 @@ pub(crate) fn new_refusal(before: &[SetupFitEntry], now: &[SetupFitEntry]) -> Op
             .refused
             .iter()
             .find(|(input, _)| held.is_none_or(|old| !old.refused.iter().any(|(seen, _)| seen == input)))
-            .map(|(_, reason)| format!("Physics: a body is out of the world: {reason}"))
+            .map(|(input, reason)| {
+                let left_out = if input.starts_with("copies_") { "these copies can't move" } else { "this body can't move" };
+                format!("Physics: {left_out}: {reason}")
+            })
     })
 }
 

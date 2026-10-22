@@ -399,6 +399,11 @@ ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamTy
     refused: Option<Arc<str>> = None,
     // A wired mesh is still loading.
     loading: bool = false,
+    // A mesh has reached this node since it was built. Until one has, an
+    // empty ask means the wired mesh has not arrived (the first replay after
+    // a structural edit runs before the mesh's producer), not that the body
+    // has none.
+    mesh_seen: bool = false,
  },
 }
 
@@ -446,7 +451,8 @@ impl RigidBodyNode {
             asked.path.push_str(path);
             asked.selection = Some(MeshSelection::from_context(ctx));
         }
-        Ok(if loading { Geometry::Loading } else { Geometry::Ready })
+        self.mesh_seen |= !asked.is_empty();
+        Ok(if loading || !self.mesh_seen { Geometry::Loading } else { Geometry::Ready })
     }
 
     /// Start building the asked-for shape when it differs from the current
@@ -479,7 +485,6 @@ impl RigidBodyNode {
         self.want.clone_from(&self.asked);
         self.refused = None;
         if self.want.is_empty() {
-            self.refused = Some(Arc::from("a body needs a mesh"));
             return;
         }
         let want = self.want.clone();

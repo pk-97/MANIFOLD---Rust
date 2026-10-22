@@ -116,9 +116,9 @@ pub fn modifier_param_id(object: &ItemId, key: &str, param: &str) -> String {
     crate::scene_doc::param_id(object, &modifier_property(key, param))
 }
 
-/// Why an Object cannot take a mesh modifier, for the disabled Add control's
-/// hover text. The stock recipes measure the mesh they act on, which only a
-/// mesh from a file can give them.
+/// Why an Object cannot take a mesh modifier: a built-in solid shows no Add
+/// Modifier row, and an add that reaches one is refused. The stock recipes
+/// measure the mesh they act on, which only a mesh from a file can give them.
 pub fn modifiers_unavailable(shape: &crate::scene_doc::Shape) -> Option<&'static str> {
     match shape {
         crate::scene_doc::Shape::Mesh { .. } => None,

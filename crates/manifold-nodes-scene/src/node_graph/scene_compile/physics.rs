@@ -160,7 +160,11 @@ pub(crate) fn join_world(b: &mut Builder<'_>, world: u32) {
     }
     let bodies = std::mem::take(&mut b.physics.bodies);
     let joined = bodies.len().min(RigidImpulseTargets::BODY_CAPACITY);
-    b.set(world, "bodies", SerializedParamValue::Int { value: joined.max(1) as i32 });
+    // The world keeps its default room, so a body added mid-show fills a
+    // free port and joins the running world; the bodies already moving keep
+    // going. Only past that room does the count grow and the world restart.
+    let room = joined.max(manifold_foundation::scene_surface::PHYSICS_WORLD_DEFAULT_BODIES as usize);
+    b.set(world, "bodies", SerializedParamValue::Int { value: room as i32 });
     for (k, body) in bodies.into_iter().take(joined).enumerate() {
         b.wire(body, "body", world, &format!("body_{k}"));
     }

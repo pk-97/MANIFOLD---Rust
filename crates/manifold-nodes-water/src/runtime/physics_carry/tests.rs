@@ -442,8 +442,9 @@ fn rigid_world_moving_speed_and_push_match_at_30_60_120_144_fps_live_and_export(
 }
 
 /// The falling-body graph, plus a second body wired into `body_1` when
-/// `peer`: the edit Enable Physics, Duplicate and Paste make.
-fn runtime_with_peer(peer: bool) -> PresetRuntime {
+/// `peer`: the edit Enable Physics, Duplicate and Paste make. `sized` sizes
+/// the world to exactly the bodies it holds, as a world past its room is.
+fn runtime_with_peer(peer: bool, sized: bool) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
     registry.register("test.pose", || Box::new(PoseObserver(EffectNodeType::new("test.pose"))));
@@ -451,7 +452,11 @@ fn runtime_with_peer(peer: bool) -> PresetRuntime {
         serde_json::json!({"id":0,"nodeId":"input","typeId":"system.generator_input"}),
         serde_json::json!({"id":1,"nodeId":"start","typeId":"test.physics_transform","params":{"pos_y":{"type":"Float","value":5.0}}}),
         serde_json::json!({"id":2,"nodeId":"body","typeId":"test.physics_body"}),
-        serde_json::json!({"id":3,"nodeId":"world","typeId":"node.physics_world"}),
+        if sized {
+            serde_json::json!({"id":3,"nodeId":"world","typeId":"node.physics_world","params":{"bodies":{"type":"Int","value":1 + i32::from(peer)}}})
+        } else {
+            serde_json::json!({"id":3,"nodeId":"world","typeId":"node.physics_world"})
+        },
         serde_json::json!({"id":4,"nodeId":"observe","typeId":"test.pose"}),
         serde_json::json!({"id":5,"nodeId":"source","typeId":"system.source"}),
         serde_json::json!({"id":6,"nodeId":"output","typeId":"system.final_output"}),
@@ -482,18 +487,33 @@ fn runtime_with_peer(peer: bool) -> PresetRuntime {
 /// joins it.
 #[test]
 fn physics_carry_survives_a_body_being_added() {
-    let mut reference = runtime_with_peer(false);
-    let mut edited = runtime_with_peer(false);
+    let mut reference = runtime_with_peer(false, false);
+    let mut edited = runtime_with_peer(false, false);
     for time in [0.0, 0.033, 0.12, 0.24] {
         assert_eq!(frame(&mut reference, time), frame(&mut edited, time));
     }
     let paused = frame(&mut edited, 0.24);
     assert!(paused.pos[1] < 5.0, "fixture must be falling");
-    let mut rebuilt = runtime_with_peer(true);
+    let mut rebuilt = runtime_with_peer(true, false);
     rebuilt.carry_generator_state_from(&mut edited);
     assert_eq!(frame(&mut rebuilt, 0.24), paused, "adding a body reset or stepped the first one");
     assert!(PEER_POSE.get().is_some(), "the added body is in the world");
     for time in [0.273, 0.35, 0.5] {
         assert_eq!(frame(&mut reference, time), frame(&mut rebuilt, time), "trajectory changed at {time}");
     }
+
+    // A world with no free port grows one for the new body. The carried world
+    // takes the new size, so the new body is read and falls instead of
+    // hanging where it was authored.
+    let mut full = runtime_with_peer(false, true);
+    for time in [0.0, 0.033, 0.12] {
+        frame(&mut full, time);
+    }
+    let mut grown = runtime_with_peer(true, true);
+    grown.carry_generator_state_from(&mut full);
+    frame(&mut grown, 0.24);
+    let joined = PEER_POSE.get().expect("the grown world reads the added body");
+    frame(&mut grown, 0.5);
+    let later = PEER_POSE.get().expect("the grown world reads the added body");
+    assert!(later.pos[1] < joined.pos[1], "the added body hangs: {joined:?} then {later:?}");
 }

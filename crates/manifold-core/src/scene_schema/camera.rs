@@ -5,7 +5,7 @@
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Unit};
 
-use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, wrong_value};
+use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::{CameraRig, ItemFields};
 
@@ -22,6 +22,14 @@ const FIELD_OF_VIEW: HardLimit = HardLimit::Between(0.017_453_292, 3.124_139_4);
 /// The vertical field of view of a 50 mm lens on a full-frame sensor
 /// (24 mm tall): 2·atan(12/50).
 const FIFTY_MM: f32 = 0.471_239;
+
+/// The closest an Orbit camera comes to what it orbits: nearer, the lens
+/// sits inside the object at the pivot and the view goes black.
+const CLOSEST: f32 = 1.0;
+
+/// The nearest Focus Distance. The lens reads 0 as "no depth of field", so
+/// a card that reached it would switch the blur off behind the switch.
+const NEAREST_FOCUS: f32 = 0.1;
 
 fn orbit(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Camera(c) if c.rig == CameraRig::Orbit)
@@ -54,7 +62,8 @@ pub static CAMERA_ROWS: [PropertyRow; 39] = [
     row("tilt", RIG, Camera, perform(CardBand::Camera, 1)).default(0.35).when(orbit),
     row("distance", RIG, Camera, perform(CardBand::Camera, 2))
         .unit(Unit::Metres)
-        .limit(AT_LEAST_ZERO)
+        .range(CLOSEST, 100.0)
+        .limit(HardLimit::AtLeast(CLOSEST))
         .default(10.0)
         .when(orbit),
     row("look_y", RIG, Camera, perform(CardBand::Camera, 3)).unit(Unit::Metres).limit(HardLimit::Unlimited).when(orbit),
@@ -72,7 +81,7 @@ pub static CAMERA_ROWS: [PropertyRow; 39] = [
     row("roll", RIG, Camera, setup()).limit(HardLimit::Unlimited).when(free),
     clip("near").when(free),
     clip("far").when(free),
-    // Look At.
+    // Look At. With a Target item picked, Target X/Y/Z offset from its origin.
     row("fov_y", RIG, Camera, perform(CardBand::Camera, 0)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(look_at),
     place("pos_x").when(look_at),
     place("pos_y").when(look_at),
@@ -86,7 +95,9 @@ pub static CAMERA_ROWS: [PropertyRow; 39] = [
     row("focus_distance", LENS, DepthOfField, perform(CardBand::Look, 1))
         .gate(Gate::Dim(Feature::DepthOfField))
         .unit(Unit::Metres)
-        .limit(AT_LEAST_ZERO),
+        .range(NEAREST_FOCUS, 100.0)
+        .limit(HardLimit::AtLeast(NEAREST_FOCUS))
+        .default(10.0),
     row("f_stop", LENS, DepthOfField, perform(CardBand::Look, 2))
         .gate(Gate::Fold(Feature::DepthOfField))
         .limit(HardLimit::AtLeast(0.5)),
@@ -125,7 +136,7 @@ const RIGS: &[Choice] = &[
     Choice { key: "look_at", label: "Look At" },
 ];
 
-pub static CAMERA_FIELDS: [FieldRow; 1] = [FieldRow {
+pub static CAMERA_FIELDS: [FieldRow; 2] = [FieldRow {
     id: "rig",
     label: "Rig",
     section: ControlGroup::Camera,
@@ -154,5 +165,23 @@ pub static CAMERA_FIELDS: [FieldRow; 1] = [FieldRow {
             _ => return Err(wrong_value("rig", value)),
         };
         Ok(())
+    },
+}, FieldRow {
+    id: "target",
+    label: "Target",
+    section: ControlGroup::Camera,
+    control: FieldControl::Item { items: is_object_or_group, none: "Point" },
+    applies: look_at,
+    disabled: enabled,
+    read: |fields| match fields {
+        ItemFields::Camera(c) => FieldValue::Item(c.target.clone()),
+        _ => FieldValue::Item(None),
+    },
+    write: |fields, value| match (fields, value) {
+        (ItemFields::Camera(c), FieldValue::Item(target)) => {
+            c.target = target.clone();
+            Ok(())
+        }
+        _ => Err(wrong_value("target", value)),
     },
 }];

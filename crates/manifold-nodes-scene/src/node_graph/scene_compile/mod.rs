@@ -42,6 +42,7 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     camera::emit_all(&mut b);
     light::emit_all(&mut b);
     group::emit_tree(&mut b);
+    camera::aim_all(&mut b);
     world::emit(&mut b);
     copies::join_world(&mut b);
     forces::emit_all(&mut b)?;

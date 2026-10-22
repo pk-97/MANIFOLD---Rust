@@ -62,7 +62,7 @@ pub static ADD_ENTRIES: [AddEntry; 20] = [
     entry("light.point", "Light", "Point", ItemKind::Light, "Point Light", || light(LightType::Point)),
     entry("light.spot", "Light", "Spot", ItemKind::Light, "Spot Light", || light(LightType::Spot)),
     entry("camera", "Camera", "Camera", ItemKind::Camera, "Camera", || {
-        ItemFields::Camera(CameraFields { rig: CameraRig::Orbit })
+        ItemFields::Camera(CameraFields { rig: CameraRig::Orbit, ..CameraFields::default() })
     }),
     entry("group", "Group", "Group", ItemKind::Group, "Group", || ItemFields::default_for(ItemKind::Group)),
     entry("material", "Material", "Material", ItemKind::Material, "Material", || ItemFields::default_for(ItemKind::Material)),
