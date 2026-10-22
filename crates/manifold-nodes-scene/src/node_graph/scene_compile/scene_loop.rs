@@ -23,7 +23,7 @@
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef};
 use manifold_core::param_lookup::NodeParamMetadata;
-use manifold_core::scene_doc::{CameraRig, ItemFields, param_id};
+use manifold_core::scene_doc::{CameraRig, ItemFields, ItemId, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
 use manifold_core::scene_schema::{self, Exposure, LOOP_CAMERA_ROWS, PropertyRow, modifier_type};
 
@@ -189,12 +189,19 @@ fn camera_spec(
 }
 
 /// The drawn objects the corridor tiles: those drawn once, or (`copies`)
-/// those that already draw many copies.
+/// those that draw many copies of an Object, Group or Swarm with a live
+/// count. A Water's particle draws (foam, spray, bubbles, Physics View dots)
+/// stay out: tiling a whole particle budget in every cell is not the loop.
 fn tiled_objects(b: &mut Builder<'_>, copies: bool) -> Vec<NodeId> {
-    let objects = b.objects.clone();
+    let objects: Vec<(u32, ItemId)> = b.objects.iter().copied().zip(b.object_items.iter().cloned()).collect();
     let mut tiled = Vec::with_capacity(objects.len());
-    for object in objects {
+    for (object, item) in objects {
         if b.node_type(object) != Some("node.scene_object") || b.input(object, "instances").is_some() != copies {
+            continue;
+        }
+        let water = matches!(b.doc.find(&item).map(|item| &item.fields), Some(ItemFields::Water(_)));
+        // Without a live count the stage would nest the whole buffer.
+        if copies && (water || b.input(object, "instance_count").is_none()) {
             continue;
         }
         if let Some(id) = b.node_id_of(object) {
