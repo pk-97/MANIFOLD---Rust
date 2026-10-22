@@ -15,17 +15,38 @@ use std::path::Path;
 
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, SerializedParamValue};
 use manifold_core::scene_doc::{
-    ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, ItemId, LightType, MeshPrimitives,
+    ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, ItemId, LightType, MeshPrimitives, ModelFacts,
 };
 use manifold_core::scene_schema::{FAR_CLIP, NEAR_CLIP};
 
 use super::gltf_load::{self, FileNode, GltfLightKind};
 
+/// A model file read once, on the import worker: its parts, the facts the
+/// compiler reads ([`model_file`]), and what the read could not carry over.
+pub struct ReadModel {
+    pub model: ImportedModel,
+    pub facts: ModelFacts,
+    pub warnings: Vec<String>,
+}
+
+/// Parse `path` once into its parts and its facts. Errors when the file
+/// cannot be read or has no mesh.
+pub fn read_model(path: &Path) -> Result<ReadModel, String> {
+    let (document, buffers) = gltf_load::parse_document_and_buffers(path)?;
+    let model = describe(path, &document, &buffers)?;
+    let (facts, warnings) = model_file::facts_of(path, &document, &buffers);
+    Ok(ReadModel { model, facts: ModelFacts::new(facts), warnings })
+}
+
 /// Parse `path` and describe it as scene parts. Errors when the file cannot
 /// be read or has no mesh.
 pub fn import_model(path: &Path) -> Result<ImportedModel, String> {
     let (document, buffers) = gltf_load::parse_document_and_buffers(path)?;
-    let tree = gltf_load::file_node_tree(&document, &buffers);
+    describe(path, &document, &buffers)
+}
+
+fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Result<ImportedModel, String> {
+    let tree = gltf_load::file_node_tree(document, buffers);
     let mut paths = HashMap::new();
     node_paths(&tree, &mut paths);
     let names: Vec<String> = document
@@ -46,7 +67,7 @@ pub fn import_model(path: &Path) -> Result<ImportedModel, String> {
         .map(|stem| stem.to_string_lossy().into_owned())
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| "Model".to_owned());
-    let bounds = gltf_load::file_bounds(&document, &buffers);
+    let bounds = gltf_load::file_bounds(document, buffers);
     let radius = bounds.map_or(1.0, |(lo, hi)| {
         ((0..3).map(|axis| (hi[axis] - lo[axis]).powi(2)).sum::<f32>().sqrt() * 0.5).max(1e-3)
     });
@@ -55,7 +76,7 @@ pub fn import_model(path: &Path) -> Result<ImportedModel, String> {
         .map(|material| ImportedMaterial { key: material_key(material), name: material_name(material, &names), material })
         .collect();
     let at = |index: usize| paths.get(&index).cloned().unwrap_or_else(|| format!("#{index}"));
-    let lights = gltf_load::collect_punctual_lights(&document)
+    let lights = gltf_load::collect_punctual_lights(document)
         .into_iter()
         .enumerate()
         .map(|(i, light)| {
@@ -63,7 +84,7 @@ pub fn import_model(path: &Path) -> Result<ImportedModel, String> {
             imported_light(light, i, &path, radius)
         })
         .collect();
-    let (cameras, _) = gltf_load::parse_cameras(&document, &gltf_load::build_parent_map(&document));
+    let (cameras, _) = gltf_load::parse_cameras(document, &gltf_load::build_parent_map(document));
     let cameras = cameras
         .into_iter()
         .enumerate()
@@ -156,9 +177,11 @@ fn material_name(material: Option<u32>, names: &[String]) -> String {
 /// file puts them. For the
 /// render and soak tools, which draw a file without a project around it.
 pub fn compile_model_scene(path: &Path) -> Result<(EffectGraphDef, ImportedModel), String> {
-    let model = import_model(path)?;
+    let ReadModel { model, facts, .. } = read_model(path)?;
     let id = ItemId::new("model");
-    let doc = model.scene_doc(&path.to_string_lossy(), id.clone());
+    let file = path.to_string_lossy();
+    let mut doc = model.scene_doc(&file, id.clone());
+    doc.models.insert(file.into_owned(), facts);
     let mut def = manifold_core::scene_doc::compile(&doc)?;
     if let Some(placement) = model.placement() {
         for (property, value) in [
@@ -270,6 +293,7 @@ fn part(
 }
 
 pub(crate) mod model_file;
+pub use model_file::read_facts;
 
 #[cfg(test)]
 mod tests;

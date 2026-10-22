@@ -83,8 +83,8 @@ fn emit_part_in(
     own_centre: bool,
 ) -> Part {
     let owner = item.id.as_str();
-    let model = model_file(file);
-    let facts = model.as_deref().and_then(|model| model.nodes.get(node_path).map(|facts| (model, facts)));
+    let model = model_file(b.doc, file);
+    let facts = model.and_then(|model| model.nodes.get(node_path).map(|facts| (model, facts)));
     // The glTF material the part's primitives use (`None` the default), when
     // one is known: the selection's, else the node's only material.
     let part = facts.and_then(|(_, facts)| facts.part(primitives.material()));
@@ -260,7 +260,7 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
     let owner = group.id.as_str();
     // Nothing draws the shape, so it loads only when a body or copies read it.
     let shape = emit_source(b, owner, file, "", vertices);
-    if let Some(model) = model_file(file) {
+    if let Some(model) = model_file(b.doc, file) {
         b.set(shape, "source_bbox_radius", SerializedParamValue::Float { value: model.radius });
     }
     let transform = b.add(owner, "combined_transform", "node.transform_3d");

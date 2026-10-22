@@ -326,6 +326,21 @@ fn a_second_fill_is_refused_with_its_reason() {
     assert_eq!(set.rejection_reason(), Some(ONE_FILL), "an Inflow cannot become a second Fill");
 }
 
+/// Model facts only arrive: an undo back past their arrival keeps them, so
+/// a model never falls back to a plain mesh.
+#[test]
+fn undo_keeps_model_facts_read_since_the_edit() {
+    let (mut project, layer) = project();
+    let mut undo = UndoRedoManager::new();
+    assert!(undo.execute(Box::new(RenameSceneItemCommand::new(layer, id(CUBE), "Box")), &mut project));
+    let inst = project.timeline.layers[0].gen_params_mut().unwrap();
+    let mut doc = inst.scene.clone().unwrap();
+    doc.models.insert("a.glb".into(), manifold_core::scene_doc::ModelFacts::new(()));
+    inst.scene = Some(doc);
+    assert!(undo.undo(&mut project));
+    assert!(scene(&project).scene.as_ref().unwrap().models.contains("a.glb"), "the undo dropped the facts");
+}
+
 /// A param write changes a value, never the scene's structure.
 #[test]
 fn a_param_write_never_recompiles() {

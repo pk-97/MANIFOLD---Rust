@@ -4,16 +4,16 @@
 //! facts an imported part compiles from. The document names the file and
 //! the node; these facts stay in the file.
 //!
-//! Read once per file on the compiling thread and kept while the file's
-//! length and modified time are unchanged, so a structural edit never
-//! re-parses a model. No image is decoded: texture sizes come from the image
-//! headers.
+//! Read once per file on the import worker ([`read_facts`], or with the
+//! import itself) and carried on the document (`SceneDoc::models`), so no
+//! compile on the UI or content thread opens a file. A file whose facts have
+//! not arrived compiles as plain meshes with the default surface. No image
+//! is decoded: texture sizes come from the image headers.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::rc::Rc;
-use std::time::SystemTime;
+
+use manifold_core::scene_doc::{ModelFacts, SceneDoc};
 
 use crate::node_graph::gltf_load::{
     self, FileNode, FilePart, GltfMaterialInfo, GltfNodeAnimation, GltfSkinInfo,
@@ -93,66 +93,50 @@ impl ModelFile {
     }
 }
 
-type Stamp = (u64, Option<SystemTime>);
-/// Each file read so far, by path: the stamp it was read at and what it read.
-type Models = HashMap<String, (Stamp, Option<Rc<ModelFile>>)>;
-
-thread_local! {
-    static MODELS: RefCell<Models> = RefCell::new(HashMap::new());
+/// The facts of the model at `path` the document carries, if they have
+/// arrived.
+pub(crate) fn model_file<'d>(doc: &'d SceneDoc, path: &str) -> Option<&'d ModelFile> {
+    doc.models.get(path)?.get::<ModelFile>()
 }
 
-/// The facts of the model at `path`, read on first use and again only when
-/// the file changes. `None` when the file is missing or cannot be read; the
-/// parts then compile as plain meshes with the default surface.
-pub(crate) fn model_file(path: &str) -> Option<Rc<ModelFile>> {
-    let meta = std::fs::metadata(path).ok()?;
-    let stamp: Stamp = (meta.len(), meta.modified().ok());
-    MODELS.with(|models| {
-        if let Some((seen, model)) = models.borrow().get(path)
-            && *seen == stamp
-        {
-            return model.clone();
-        }
-        let model = match read(Path::new(path)) {
-            Ok(model) => Some(Rc::new(model)),
-            Err(error) => {
-                log::warn!("[scene] {path}: {error}");
-                None
-            }
-        };
-        models.borrow_mut().insert(path.to_owned(), (stamp, model.clone()));
-        model
-    })
-}
-
-fn read(path: &Path) -> Result<ModelFile, String> {
+/// Read the facts of the model at `path`: on the import worker, never on the
+/// UI or content thread. With them, what the file's materials hold that the
+/// surface cannot draw, for the import warnings.
+pub fn read_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), String> {
     let (document, buffers) = gltf_load::parse_document_and_buffers(path)?;
+    let (facts, warnings) = facts_of(path, &document, &buffers);
+    Ok((ModelFacts::new(facts), warnings))
+}
+
+/// The facts of a parsed model file, and its material report lines.
+pub(crate) fn facts_of(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> (ModelFile, Vec<String>) {
     let mut report = Vec::new();
     let materials = document
         .materials()
         .map(|m| {
             let label = m.name().map_or_else(|| format!("material {}", m.index().unwrap_or(0)), str::to_owned);
-            gltf_load::material_info(&document, &m, &label, &mut report)
+            gltf_load::material_info(document, &m, &label, &mut report)
         })
         .collect();
-    let radius = gltf_load::file_bounds(&document, &buffers).map_or(1e-3, |(lo, hi)| {
+    let radius = gltf_load::file_bounds(document, buffers).map_or(1e-3, |(lo, hi)| {
         let diagonal = (0..3).map(|axis| (hi[axis] - lo[axis]).powi(2)).sum::<f32>().sqrt();
         (diagonal * 0.5).max(1e-3)
     });
-    let animations = gltf_load::parse_animations(&document, &buffers);
+    let animations = gltf_load::parse_animations(document, buffers);
     let by_clip: Vec<BTreeMap<usize, GltfNodeAnimation>> =
         animations.iter().map(|clip| clip.nodes.iter().map(|n| (n.node_index, n.clone())).collect()).collect();
-    let skins = gltf_load::parse_skins(&document, &buffers);
+    let skins = gltf_load::parse_skins(document, buffers);
     let mut nodes = HashMap::new();
-    let tree = gltf_load::file_node_tree(&document, &buffers);
-    collect(&tree, &[], &document, &skins, &by_clip, &mut nodes);
-    Ok(ModelFile {
+    let tree = gltf_load::file_node_tree(document, buffers);
+    collect(&tree, &[], document, &skins, &by_clip, &mut nodes);
+    let facts = ModelFile {
         materials,
         default_material: gltf_load::default_material_info(),
-        texture_dims: gltf_load::texture_dims(path, &document, &buffers),
+        texture_dims: gltf_load::texture_dims(path, document, buffers),
         radius,
         nodes,
-    })
+    };
+    (facts, report)
 }
 
 fn collect(

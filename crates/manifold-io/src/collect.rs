@@ -1796,6 +1796,7 @@ mod tests {
                         ItemFields::Material(MaterialFields { texture: TextureSource::File { path: texture }, ..MaterialFields::default() }),
                     ),
                 ],
+                ..SceneDoc::default()
             };
             let mut scene_layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 3);
             scene_layer.gen_params_mut().unwrap().scene = Some(doc);

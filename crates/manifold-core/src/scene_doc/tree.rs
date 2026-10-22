@@ -525,6 +525,26 @@ impl SceneDoc {
         any
     }
 
+    /// Every model file the compile reads facts from: a Group's source, a
+    /// Mesh shape's file and a Material's model. Empty paths included.
+    pub fn model_files<'a>(&'a self, mut f: impl FnMut(&'a str)) {
+        use super::{Shape, TextureSource};
+        self.walk(|item, _| match &item.fields {
+            ItemFields::Group(group) => group.source.as_deref().into_iter().for_each(&mut f),
+            ItemFields::Object(object) => {
+                if let Shape::Mesh { file, .. } = &object.shape {
+                    f(file);
+                }
+            }
+            ItemFields::Material(material) => {
+                if let TextureSource::Model { file, .. } = &material.texture {
+                    f(file);
+                }
+            }
+            _ => {}
+        });
+    }
+
     /// Every file path the document names, with the family it collects into:
     /// an import's model file (its Group's source, its parts' meshes, its
     /// materials), an Environment's HDRI, a Material's texture file and a

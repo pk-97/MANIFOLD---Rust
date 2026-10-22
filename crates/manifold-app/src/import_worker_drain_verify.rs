@@ -46,8 +46,8 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
     let layers_before = app.local_project.timeline.layers.len();
 
     // A real model — CPU-only parse, no GPU.
-    let model = manifold_nodes_scene::node_graph::gltf_import::import_model(&path)
-        .unwrap_or_else(|e| panic!("import_model({}) failed: {e}", path.display()));
+    let read = manifold_nodes_scene::node_graph::gltf_import::read_model(&path)
+        .unwrap_or_else(|e| panic!("read_model({}) failed: {e}", path.display()));
 
     // 1. Hand-feed a `Stage` event, exactly as `run_import_worker` would
     //    before its `Parsing` step, and drain it.
@@ -76,7 +76,9 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
         .send(ImportProgress::Done {
             path: path.clone(),
             file: path.clone(),
-            model: Box::new(model),
+            model: Box::new(read.model),
+            facts: read.facts,
+            warnings: read.warnings,
             conversion_report_line: None,
             target: crate::import_worker::ImportTarget::Drop { beat: 0.0, under: None },
         })
@@ -89,6 +91,17 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
         "Done must dispatch the new layer exactly once"
     );
     assert!(!app.import_worker_busy, "Done must clear the busy flag");
+    // The worker's facts travel on the new layer's document, so neither
+    // thread's compile opens the file.
+    let file = path.to_string_lossy();
+    let carried = app
+        .local_project
+        .timeline
+        .layers
+        .iter()
+        .filter_map(|layer| layer.gen_params()?.scene.as_ref())
+        .any(|doc| doc.models.contains(&file));
+    assert!(carried, "the new scene layer's document carries the file's facts");
 }
 
 #[test]
@@ -135,8 +148,8 @@ fn a_second_drop_while_busy_is_queued_not_run_in_parallel() {
 #[test]
 fn an_import_whose_layer_went_is_dropped_with_a_toast() {
     let path = small_fixture_path();
-    let model = manifold_nodes_scene::node_graph::gltf_import::import_model(&path)
-        .unwrap_or_else(|e| panic!("import_model({}) failed: {e}", path.display()));
+    let read = manifold_nodes_scene::node_graph::gltf_import::read_model(&path)
+        .unwrap_or_else(|e| panic!("read_model({}) failed: {e}", path.display()));
     let mut app = headless_application();
     let layers_before = app.local_project.timeline.layers.len();
     let gone = manifold_core::LayerId::new("removed-while-parsing");
@@ -146,7 +159,15 @@ fn an_import_whose_layer_went_is_dropped_with_a_toast() {
     ] {
         app.import_worker_busy = true;
         app.import_progress_tx
-            .send(ImportProgress::Done { path: path.clone(), file: path.clone(), model: Box::new(model.clone()), conversion_report_line: None, target })
+            .send(ImportProgress::Done {
+                path: path.clone(),
+                file: path.clone(),
+                model: Box::new(read.model.clone()),
+                facts: read.facts.clone(),
+                warnings: Vec::new(),
+                conversion_report_line: None,
+                target,
+            })
             .unwrap();
         app.drain_import_progress();
         assert_eq!(app.local_project.timeline.layers.len(), layers_before, "the import landed although its layer is gone");

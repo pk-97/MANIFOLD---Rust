@@ -2,7 +2,7 @@
 //! what every new scene holds, as Blender's startup file does. Its values
 //! (camera framing, sun placement, gravity) are the kind tables' defaults.
 
-use super::{
+use super::{SceneModels, 
     CameraFields, EnvironmentSource, Item, ItemFields, ItemId, LightFields, LightType, MaterialFields, ObjectFields,
     SceneDoc, Shape, SkyStyle, WorldFields,
 };
@@ -33,6 +33,7 @@ impl SceneDoc {
                 item(BASE_CUBE, "Cube", ItemFields::Object(cube)),
                 item(BASE_CUBE_MATERIAL, "Material", ItemFields::Material(MaterialFields::default())),
             ],
+            models: SceneModels::default(),
         }
     }
 }

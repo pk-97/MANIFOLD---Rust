@@ -112,7 +112,7 @@ pub(crate) fn paste(project: &Project, layer: &LayerId, clipboard: &SceneItemCli
         .iter()
         .filter_map(|(item, property, value, base)| Some((param_id(map.get(item)?, property), *value, *base)))
         .collect();
-    let mut pasted = SceneDoc { items: materials.into_iter().chain(&clipboard.items).map(|item| item.remapped(&map)).collect() };
+    let mut pasted = SceneDoc { items: materials.into_iter().chain(&clipboard.items).map(|item| item.remapped(&map)).collect(), ..SceneDoc::default() };
     let fresh: BTreeSet<&ItemId> = map.values().collect();
     pasted.retain_references(|id| fresh.contains(id) || (home && doc.find(id).is_some()));
     let select = clipboard.items.first().and_then(|item| map.get(&item.id)).cloned();

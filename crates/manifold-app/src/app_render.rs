@@ -292,6 +292,7 @@ impl Application {
         // IMPORT_RESPONSIVENESS_DESIGN.md D3: drain the background
         // model-import worker's progress channel at the same per-frame site.
         self.drain_import_progress();
+        self.sweep_model_facts();
 
         // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1). Unlike
         // autosave this is NOT parked in perform mode — see the matching

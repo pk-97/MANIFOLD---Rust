@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use manifold_core::scene_doc::ImportedModel;
+use manifold_core::scene_doc::{ImportedModel, ModelFacts};
 
 use crate::blender_import;
 use crate::user_prefs::UserPrefs;
@@ -72,6 +72,10 @@ pub(crate) enum ImportProgress {
         /// converted it to. It is the import Group.s Source.
         file: PathBuf,
         model: Box<ImportedModel>,
+        /// What the compiler reads from the file, from the same parse.
+        facts: ModelFacts,
+        /// What the file's materials hold that the surface cannot draw.
+        warnings: Vec<String>,
         /// Set only when the source needed Blender conversion — folded into
         /// the UI-thread success log line exactly as the old inline code did.
         conversion_report_line: Option<String>,
@@ -80,6 +84,12 @@ pub(crate) enum ImportProgress {
     Failed {
         path: PathBuf,
         message: String,
+    },
+    /// A model file's facts, read for a document that names the file
+    /// without them (`crate::scene_models`), and its material warnings.
+    Facts {
+        path: String,
+        read: Result<(ModelFacts, Vec<String>), String>,
     },
 }
 
@@ -164,8 +174,8 @@ pub(crate) fn run_import_worker(
         path: path.clone(),
         stage: ImportStage::Parsing,
     });
-    let model = match manifold_nodes_scene::node_graph::gltf_import::import_model(&import_path) {
-        Ok(model) => model,
+    let read = match manifold_nodes_scene::node_graph::gltf_import::read_model(&import_path) {
+        Ok(read) => read,
         Err(e) => {
             let _ = progress_tx.send(ImportProgress::Failed {
                 path,
@@ -178,7 +188,9 @@ pub(crate) fn run_import_worker(
     let _ = progress_tx.send(ImportProgress::Done {
         path,
         file: import_path,
-        model: Box::new(model),
+        model: Box::new(read.model),
+        facts: read.facts,
+        warnings: read.warnings,
         conversion_report_line,
         target,
     });

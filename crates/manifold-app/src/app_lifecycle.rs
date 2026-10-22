@@ -171,6 +171,13 @@ pub(crate) fn start_video_import(
     Some(failure_rx)
 }
 
+/// A model file's material warnings, where import warnings go.
+fn log_model_warnings(file: &str, warnings: &[String]) {
+    for warning in warnings {
+        log::warn!("[Import] {file}: {warning}");
+    }
+}
+
 impl Application {
     // ── Project I/O — delegates to ProjectIOService ────────────────────
 
@@ -692,6 +699,32 @@ impl Application {
             .expect("failed to spawn import worker thread");
     }
 
+    /// Put `path`'s facts on the scene documents that need them, on both
+    /// threads (`crate::scene_models::attach`).
+    fn attach_model_facts(&mut self, layer: Option<manifold_core::LayerId>, path: String, facts: manifold_core::scene_doc::ModelFacts) {
+        let Some(content_tx) = self.content_tx.clone() else {
+            return;
+        };
+        self.local_project.edit(&mut self.ui_edits, &content_tx).mutate(manifold_editing::commands::WHOLE_INSTANCES, move |project| {
+            crate::scene_models::attach(project, layer.as_ref(), &path, &facts)
+        });
+    }
+
+    /// Give every scene document the facts of the model files it names,
+    /// when a layer or an instance's structure moved: from the store, or
+    /// read on a worker.
+    pub(crate) fn sweep_model_facts(&mut self) {
+        let Some(sweep) = self.model_store.sweep(&self.local_project, &self.ui_edits.stamps.parts()) else {
+            return;
+        };
+        for (path, facts) in sweep.attach {
+            self.attach_model_facts(None, path, facts);
+        }
+        if !sweep.read.is_empty() {
+            crate::scene_models::read_on_worker(sweep.read, self.import_progress_tx.clone());
+        }
+    }
+
     /// Drain the background-import progress channel — called once per frame
     /// from the same site `tick_import_failures` is (`app_render.rs`).
     /// `Stage` re-shows the toast; `Done` runs the (unchanged) UI-thread
@@ -714,15 +747,29 @@ impl Application {
                     path,
                     file,
                     model,
+                    facts,
+                    warnings,
                     conversion_report_line,
                     target,
                 }) => {
-                    self.finish_import_model(&path, &file, *model, conversion_report_line, target);
+                    let file_str = file.to_string_lossy().into_owned();
+                    log_model_warnings(&file_str, &warnings);
+                    self.model_store.arrived(file_str, facts.clone());
+                    self.finish_import_model(&path, &file, *model, facts, conversion_report_line, target);
                     self.import_worker_busy = false;
                     if let Some(next) = self.import_queue.pop_front() {
                         self.spawn_import_worker(next);
                     }
                 }
+                Ok(crate::import_worker::ImportProgress::Facts { path, read }) => match read {
+                    Ok((facts, warnings)) => {
+                        log_model_warnings(&path, &warnings);
+                        self.model_store.arrived(path.clone(), facts.clone());
+                        self.attach_model_facts(None, path, facts);
+                    }
+                    // The parts keep drawing as plain meshes.
+                    Err(message) => log::warn!("[scene] {path}: {message}"),
+                },
                 Ok(crate::import_worker::ImportProgress::Failed { path, message }) => {
                     let file_name = path
                         .file_name()
@@ -756,6 +803,7 @@ impl Application {
         path: &std::path::Path,
         file: &std::path::Path,
         model: manifold_core::scene_doc::ImportedModel,
+        facts: manifold_core::scene_doc::ModelFacts,
         conversion_report_line: Option<String>,
         target: crate::import_worker::ImportTarget,
     ) {
@@ -782,6 +830,8 @@ impl Application {
 
         let (into, insert_index, drop_beat) = match target {
             ImportTarget::Swap { layer, item } => {
+                // The facts first, so the swap compiles once, with them.
+                self.attach_model_facts(Some(layer.clone()), file_str.clone(), facts);
                 let swapped = crate::scene_import::swap_model_file(&self.local_project, &layer, &item, &file_str, &model);
                 match swapped {
                     Ok(swap) => {
@@ -841,6 +891,7 @@ impl Application {
 
         let group = manifold_core::scene_doc::ItemId::new(manifold_core::math::short_id());
         if let Some((layer_id, parent)) = into {
+            self.attach_model_facts(Some(layer_id.clone()), file_str.clone(), facts);
             let commands =
                 manifold_editing::commands::scene_doc::import_model_commands(&layer_id, parent, usize::MAX, group.clone(), &file_str, &model);
             let command = Box::new(manifold_editing::command::CompositeCommand::new(commands, "Import 3D Model".to_string()));
@@ -855,7 +906,8 @@ impl Application {
         // Insert above the layer under the cursor, or at the top when dropped
         // outside the tracks area.
         let insert_index = insert_index.min(local.timeline.layers.len());
-        let doc = model.scene_doc(&file_str, group.clone());
+        let mut doc = model.scene_doc(&file_str, group.clone());
+        doc.models.insert(file_str.clone(), facts);
         let values = model
             .placement()
             .map(|placement| {

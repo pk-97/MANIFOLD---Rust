@@ -3699,9 +3699,9 @@ pub(crate) fn material_info(
 
 /// The file at `path` as the scene compiler reads it.
 #[cfg(test)]
-fn test_model(path: &std::path::Path) -> std::rc::Rc<crate::node_graph::gltf_import::model_file::ModelFile> {
-    crate::node_graph::gltf_import::model_file::model_file(&path.to_string_lossy())
-        .unwrap_or_else(|| panic!("{} reads as a model", path.display()))
+fn test_model(path: &std::path::Path) -> crate::node_graph::gltf_import::model_file::ModelFile {
+    let (document, buffers) = parse_document_and_buffers(path).unwrap_or_else(|e| panic!("{} reads as a model: {e}", path.display()));
+    crate::node_graph::gltf_import::model_file::facts_of(path, &document, &buffers).0
 }
 
 /// The glTF material named `name` in the file at `path`, as the compiler

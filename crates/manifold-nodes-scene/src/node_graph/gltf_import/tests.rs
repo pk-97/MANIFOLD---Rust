@@ -98,3 +98,21 @@ fn a_model_becomes_parts_keyed_by_file_node_path() {
     assert!(load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/empty".into(), material: -1 }).unwrap().is_empty());
     std::fs::remove_file(path).unwrap();
 }
+
+/// The compile reads a model's facts from the document, never from the
+/// file: without them the parts compile as plain meshes, with them each part
+/// knows the model's size.
+#[test]
+fn a_compile_reads_a_models_facts_from_the_document() {
+    let path = write_rig_glb();
+    let file = path.to_string_lossy().into_owned();
+    let read = super::read_model(&path).unwrap();
+    let mut doc = read.model.scene_doc(&file, ItemId::new("rigid"));
+    let sized = |doc: &manifold_core::scene_doc::SceneDoc| {
+        let def = crate::node_graph::scene_compile::compile(doc).unwrap();
+        def.nodes.iter().filter(|node| node.params.contains_key("source_bbox_radius")).count()
+    };
+    assert_eq!(sized(&doc), 0, "the compile opened the file");
+    doc.models.insert(file, read.facts);
+    assert_eq!(sized(&doc), 2, "both parts read the facts");
+}

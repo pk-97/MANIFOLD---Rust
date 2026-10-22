@@ -103,7 +103,11 @@ pub(crate) fn restore(project: &mut Project, layer: &LayerId, before: Before) {
     let Ok(instance) = scene_instance(project, layer) else {
         return;
     };
-    if let Err(error) = instance.install_scene_document(before.doc) {
+    let mut doc = before.doc;
+    if let Some(current) = &instance.scene {
+        doc.models.keep_from(&current.models);
+    }
+    if let Err(error) = instance.install_scene_document(doc) {
         eprintln!("[manifold-editing] scene undo did not compile: {error}");
     }
     before.instance.restore(instance);
