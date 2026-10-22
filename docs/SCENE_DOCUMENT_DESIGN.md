@@ -678,7 +678,7 @@ Files: `manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` and its 
 Files: `scene_compile/curves.rs` (new), `scene_schema/curves.rs` (new), Shape entries in `scene_doc.rs`. Joins: bounds through L15. Reference: Blender's curve objects (Extrude and Bevel depth) and its Screw modifier.
 1. Shape offers Extrude (`extrude_curve`), Revolve (`revolve_curve`) and Tube (`tube_from_path`).
 2. Each takes a Curve field with built-in curves: Circle, Polygon (Sides), Star, Spiral, Helix, Wave and Lissajous, built from the existing curve nodes (`generate_range`, `array_math`, `pack_curve_xy`, `frequency_ratio`). A curve that needs a node that does not exist is reported, not built.
-3. Every curve row (Sides, Radius, Turns, ratios) and Depth, Thickness and Segments are performance rows: a knob or the beat reshapes the solid live.
+3. Every curve row (Sides, Radius, Turns, ratios) and Depth, Thickness and Segments are performance rows, so the modulation, audio and trigger drawers can drive them. Nothing reacts to the beat on its own.
 4. Each curve shape takes Material, physics, Copies and modifiers like any shape.
 5. Drawing your own curve by hand is not in this lane.
 
