@@ -69,7 +69,7 @@ const fn frame(property: &'static str, param: &'static str) -> PropertyRow {
     row(property, FRAME, Source, Exposure::Automatic(EMIT_FRAME)).param(param)
 }
 
-pub static SWARM_ROWS: [PropertyRow; 74] = [
+pub static SWARM_ROWS: [PropertyRow; 75] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -97,6 +97,7 @@ pub static SWARM_ROWS: [PropertyRow; 74] = [
     row("seed_mode", SEED, Source, Exposure::Automatic("the Emit From field: a Box fills its volume, a Sphere or an item scatters over its surface")).param("mode"),
     row("emit_parts", Reach::Own("emit_parts"), Source, Exposure::Automatic("one part for each object in the group the swarm emits from")).param("parts"),
     row("nest_count", Reach::Own("nest"), Source, Exposure::Automatic("the drawn group's own Copies Count")).param("inner_count"),
+    row("nest_carriers", Reach::Own("nest"), Source, Exposure::Automatic("the swarm's Count")).param("outer_count"),
     row("seed_capacity", SEED, Source, Exposure::Internal("the most particles a swarm holds; Count's ceiling")).param("max_capacity"),
     row("seed_frame", SEED, Source, Exposure::Internal("a swarm seeds once at its start")).param("frame_seed"),
     row("start_size", START, Source, Exposure::Internal("the seed box is four metres; Scale sizes the emitter")).param("size").default(4.0).when(emits_box),

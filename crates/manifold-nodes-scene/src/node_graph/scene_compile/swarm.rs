@@ -181,6 +181,11 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     }
     b.swarms.push(item.id.clone());
     b.rows(item);
+    // Only the live particles carry the drawn layout, so the nest sizes by
+    // Count, not by the seed's capacity.
+    if let (Some(seed), Some(nest)) = (b.id(owner, "seed"), b.id(owner, "nest")) {
+        b.follow(seed, "active_count", nest, "outer_count");
+    }
 }
 
 /// Place each swarm in its frame and read the mesh an item emits from,

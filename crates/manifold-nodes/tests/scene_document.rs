@@ -779,3 +779,36 @@ fn moving_an_item_between_groups_keeps_it_in_place() {
     assert!(undo.execute(Box::new(group), &mut project));
     assert!(same(world(&project), start), "grouping keeps the cube in place");
 }
+
+/// A swarm drawing a group with Copies on nests the layout at its live
+/// particles only: Count drives how many carry it, not the seed's capacity.
+#[test]
+fn a_swarm_nests_a_copied_group_at_its_live_count() {
+    use manifold_core::effect_graph_def::BindingTarget;
+    use manifold_core::scene_doc::{DrawAs, param_id};
+    let (rack, swarm) = (ItemId::new("rack"), ItemId::new("swarm"));
+    let mut doc = SceneDoc::base();
+    let mut group = ItemFields::default_for(ItemKind::Group);
+    if let ItemFields::Group(fields) = &mut group {
+        fields.copies = true;
+    }
+    let mut fields = ItemFields::default_for(ItemKind::Swarm);
+    if let ItemFields::Swarm(s) = &mut fields {
+        s.draw_as = DrawAs::Item(rack.clone());
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(rack.clone(), "Rack", group)).unwrap();
+    doc.reparent(&ItemId::new("cube"), Some(&rack), 0).unwrap();
+    doc.insert(None, end + 1, Item::new(swarm.clone(), "Swarm", fields)).unwrap();
+    let layer = scene_layer(doc);
+    let fx = layer.gen_params().unwrap();
+    let def = flat(fx);
+    let nest = def.nodes.iter().find(|n| n.type_id == "node.nest_copies").expect("the drawn group's layout is nested");
+    let bindings = &fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings;
+    let count = param_id(&swarm, "count");
+    assert!(
+        bindings.iter().any(|binding| binding.id == count
+            && matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id.as_str().ends_with(nest.node_id.as_str()) && param == "outer_count")),
+        "Count drives how many particles carry the layout"
+    );
+}
