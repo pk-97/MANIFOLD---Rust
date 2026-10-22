@@ -761,8 +761,7 @@ mod tests {
         }
     }
 
-    /// The one node source in core's test binary; the `scene_exposure`
-    /// migration tests read their light and transform params from it too.
+    /// The one node source in core's test binary.
     fn test_params(type_id: &str) -> Vec<NodeParamMetadata> {
         fn float_meta(name: &str, label: &str) -> NodeParamMetadata {
             NodeParamMetadata {

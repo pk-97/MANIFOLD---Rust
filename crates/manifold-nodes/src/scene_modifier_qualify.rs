@@ -91,7 +91,7 @@ fn prepare_shatter_host(mushroom_host: &EffectGraphDef) -> Result<EffectGraphDef
         .ok_or_else(|| "mushroom fixture has no nested node.gltf_mesh_source".to_string())?;
     let mut host: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/assets/generator-presets/PhysicsSolids.json"
+        "/tests/fixtures/presets/PhysicsSolids.json"
     )))
     .map_err(|error| format!("PhysicsSolids fixture failed to parse: {error}"))?;
     let mesh = host

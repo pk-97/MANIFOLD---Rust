@@ -12,9 +12,6 @@
 //! `WaterDamBreakParticles.json`. Every node reads the domain's lattice off
 //! its wires, so a Resolution change reaches the running graph; the params
 //! only seed the planned sizes.
-
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 #[cfg(any(test, feature = "testkit"))]
 use manifold_core::effect_graph_def::find_node_mut;
@@ -24,8 +21,6 @@ use serde_json::{Value, json};
 
 use manifold_water_gpu_flip::primitives::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
 use manifold_water_gpu_flip::primitives::gpu_flip_step::FACE_VALID_LAYERS;
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-use manifold_node_engine::load::catalog_source::preset_json as bundled_preset_json;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
@@ -533,7 +528,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
 }
 
 manifold_core::testkit_visible! {
-/// The shipped GPU FLIP Dam Break supplies the authored camera, lights,
+/// The GPU FLIP Dam Break engine scene (`manifold-nodes/tests/fixtures/presets`) supplies the authored camera, lights,
 /// environment, tank and tone map. The family itself is constructed by
 /// the recipe below.
 pub(crate) const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
@@ -541,8 +536,8 @@ pub(crate) const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 fn shipped_preset() -> Value {
-    let json = bundled_preset_json(&PresetTypeId::new(SHIPPED_PRESET)).expect("the GPU FLIP preset is bundled");
-    serde_json::from_str(&json).expect("the GPU FLIP preset parses")
+    let json = include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakGpuFlip.json");
+    serde_json::from_str(json).expect("the GPU FLIP preset parses")
 }
 
 /// The liquid surface group, kept with the solver that feeds it.

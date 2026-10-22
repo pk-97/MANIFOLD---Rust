@@ -130,7 +130,7 @@ fn registry() -> PrimitiveRegistry {
 fn windy_scene() -> String {
     let mut doc: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/assets/generator-presets/PhysicsSolids.json"
+        "/tests/fixtures/presets/PhysicsSolids.json"
     )))
     .unwrap();
     for (offset, (node_id, type_id)) in [("liquid", LIQUID), ("swarm", SWARM)].into_iter().enumerate() {

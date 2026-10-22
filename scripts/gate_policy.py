@@ -128,7 +128,7 @@ BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights", "volume_surface_mesh::
 # CS-rigid and CS-liquid GPU suites (WATER_CRATES_DESIGN.md section 6.3). Every
 # solver implements the liquid seam, so a liquid edit is the broad water run.
 # physics_impulses runs only under gpu-proofs, so it is a GPU row, not a CPU ownership row.
-CS_RIGID_GPU_FILTERS = ["liquid_conformance::liquid_coupled_", "physics_boxes::", "physics_solids::",
+CS_RIGID_GPU_FILTERS = ["liquid_conformance::liquid_coupled_", "physics_solids::",
                         "catalog_tests::physics_impulses::"]
 WATER_BROAD_FILTERS = [
     "liquid_conformance::", "contracts::water::", "face_grid_tests::", "matter_scene::",

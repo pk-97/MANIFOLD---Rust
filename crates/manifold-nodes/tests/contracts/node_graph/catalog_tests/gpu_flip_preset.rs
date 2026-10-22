@@ -357,7 +357,7 @@ use serde_json::{Value, json};
         };
         let registry = PrimitiveRegistry::with_builtin();
         for name in [SHIPPED_PRESET, "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
+            let json = scene_json(&PresetTypeId::new(name)).unwrap();
             let mut preset: Value = serde_json::from_str(&json).unwrap();
             let surface_id = if name == SHIPPED_PRESET { "surface" } else { "liquid_surface" };
             let surface = manifold_nodes_water::testkit::conformance::json_node_mut(&mut preset, surface_id)
@@ -468,7 +468,7 @@ use serde_json::{Value, json};
         use manifold_node_engine::runtime::PresetRuntime;
 
         for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
+            let json = scene_json(&PresetTypeId::new(name)).unwrap();
             let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
             let saved = serde_json::to_string(&def).unwrap();
             let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
@@ -588,7 +588,7 @@ use serde_json::{Value, json};
     /// rewrites it from the builder.
     #[test]
     fn gpu_flip_shipped_preset_is_the_builders_dam_break() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{SHIPPED_PRESET}.json"));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/presets/{SHIPPED_PRESET}.json"));
         let built = serde_json::to_value(render_def(WaterScene::dam_break(64))).expect("serialise");
         if std::env::var("UPDATE_GPU_FLIP_PRESET").is_ok() {
             let mut json = serde_json::to_string_pretty(&built).expect("serialise");
@@ -605,7 +605,7 @@ use serde_json::{Value, json};
     /// first, since this view is built from it.
     #[test]
     fn gpu_flip_particle_view_is_built_from_the_dam_break() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{PARTICLE_VIEW_PRESET}.json"));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/presets/{PARTICLE_VIEW_PRESET}.json"));
         let existing: EffectGraphDef = serde_json::from_str(&std::fs::read_to_string(&path).expect("Particle View reads")).expect("preset parses");
         assert_preset_root(&existing.nodes);
         let def = particle_view_def();
@@ -634,7 +634,7 @@ use serde_json::{Value, json};
             assert!(node.inputs().iter().any(|input| input.name == port), "{type_id} has no {port} input");
         }
         let bundled = |name: &'static str| -> EffectGraphDef {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            let json = scene_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
             serde_json::from_str(&json).expect("the preset parses")
         };
         for (name, def) in [
@@ -669,7 +669,7 @@ use serde_json::{Value, json};
             ("Add Fluid's liquid body", gpu_flip_liquid_body()),
         ];
         for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET, "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            let json = scene_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
             graphs.push((name, serde_json::from_str(&json).expect("the preset parses")));
         }
         for (name, def) in graphs {
@@ -697,7 +697,7 @@ use serde_json::{Value, json};
             ("Add Fluid's liquid body", gpu_flip_liquid_body()),
         ];
         for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            let json = scene_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
             graphs.push((name, serde_json::from_str(&json).expect("the preset parses")));
         }
         for (name, def) in graphs {
@@ -853,10 +853,10 @@ use serde_json::{Value, json};
     }
 
 use manifold_water_gpu_flip::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
-use manifold_nodes::bundled_presets::bundled_preset_json;
+use manifold_nodes::engine_scenes::scene_json;
 use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
 
 fn shipped_preset() -> Value {
-    let json = manifold_nodes::bundled_presets::bundled_preset_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");
+    let json = manifold_nodes::engine_scenes::scene_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");
     serde_json::from_str(&json).expect("the GPU FLIP preset parses")
 }

@@ -2,7 +2,7 @@ use manifold_core::effect_graph_def::*;
     use manifold_core::scene_modifier_preset::SceneTargetSelection;
 
     fn fixture() -> EffectGraphDef {
-        let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/PhysicsSolids.json")))
+        let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")))
         .unwrap();
         owner.version = 3;
         let mesh = owner.nodes.iter_mut().find(|n| n.id == 112).unwrap();

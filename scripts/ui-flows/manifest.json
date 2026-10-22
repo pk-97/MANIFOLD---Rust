@@ -149,10 +149,6 @@
       "scene-fluid-role-lifecycle",
       "scene-forces-controls"
     ],
-    "crates/manifold-core/src/scene_exposure.rs": [
-      "scene-fluid-dam-break-controls",
-      "water-family-preset"
-    ],
     "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": [
       "water-family-preset"
     ],
@@ -447,7 +443,6 @@
     "scene-copy-group": "gltfscene",
     "scene-imported-physics": "gltfscene",
     "gltf-import-card-sections": "gltfscene",
-    "physics-box-count": "physicsboxes",
     "audio-clip-trigger-add": "inspector",
     "rt-dynamic-modifier": "mushroomscene",
     "work-browser-search": "inspector",

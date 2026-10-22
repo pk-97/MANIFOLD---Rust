@@ -196,7 +196,7 @@ type SwarmForce = (&'static str, ForceType, &'static [(&'static str, f32)]);
 /// the push cancels the pull in proportion, so the pull grows with distance
 /// from the centre. The gusts' Air Resistance relaxes every particle toward
 /// the gusts, so the cloud breathes and swirls but never leaves, at stock
-/// World gravity with no still air. Tuned on the CPU twin (`swarm_hold`) for
+/// World gravity with no still air, tuned for
 /// a 60 s clip. Forces that target everything act in the swarm's own frame.
 const SWARM_FORCES: [SwarmForce; 3] = [
     ("Attractor", ForceType::Attractor, &[("strength", 20.0), ("radius", 2.5), ("falloff", 1.0), ("curve", 1.0)]),

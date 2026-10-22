@@ -59,7 +59,7 @@ fn component_params(nodes: [u32; 3], axis: u32) -> ParamValues {
     p
 }
 
-fn run_component<P: Primitive>(
+fn run_component<P: Primitive + 'static>(
     harness: &mut Harness,
     prim: &mut P,
     input: (&'static str, manifold_node_engine::bindings::Slot),

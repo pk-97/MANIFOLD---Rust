@@ -75,7 +75,6 @@ pub mod recording;
 pub mod retired_cpu_flip;
 pub mod scene_doc;
 pub mod scene_schema;
-pub mod scene_exposure;
 pub mod scene_world_controls;
 pub mod scene_index;
 pub mod scene_node;

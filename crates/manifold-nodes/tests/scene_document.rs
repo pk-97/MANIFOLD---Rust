@@ -460,3 +460,185 @@ mod every_param_has_a_row {
         assert!(gaps.is_empty(), "params with no table row:\n{}", gaps.join("\n"));
     }
 }
+
+/// Promise 12 (SCENE_DOCUMENT_DESIGN.md section 10 (Testing)): no kind and no
+/// field choice the panel offers crashes, hangs or loses the user's work.
+/// Every Add menu entry, and every pick of every field row of the item it adds,
+/// is applied to the base scene as the panel applies it. Each case compiles and
+/// installs, ticks 120 frames, saves and loads back as the same scene, then
+/// undoes to the base exactly. Entries and choices come from the tables, so a
+/// new kind or choice is covered without editing this test. A hang is the
+/// nextest `terminate-after` on this test (`.config/nextest.toml`).
+mod every_kind_and_choice_survives {
+    use super::*;
+    use manifold_core::scene_schema::{ADD_ENTRIES, FieldControl, FieldValue, add_refused, applicable_fields, set_field, unique_name};
+    use manifold_editing::command::{Command, CompositeCommand};
+    use manifold_editing::commands::scene_doc::{
+        AddSceneItemCommand, SetSceneItemFieldsCommand, add_modifier, add_object_commands, new_material, new_modifier,
+    };
+
+    struct Case {
+        label: String,
+        commands: Vec<Box<dyn Command>>,
+    }
+
+    fn doc_of(project: &Project) -> SceneDoc {
+        project.timeline.layers[0].gen_params().unwrap().scene.clone().unwrap()
+    }
+
+    /// The commands that add `entry` as the panel does. A Water Source needs the
+    /// Water it sits in first.
+    fn add_commands(project: &Project, key: &str) -> Option<(Vec<Box<dyn Command>>, ItemId)> {
+        let layer = project.timeline.layers[0].layer_id.clone();
+        let doc = doc_of(project);
+        let entry = manifold_core::scene_schema::add_entry(key)?;
+        let fields = entry.fields?;
+        if add_refused(&doc, &fields()).is_some() {
+            return None;
+        }
+        let names: Vec<&str> = doc.ids().iter().filter_map(|id| doc.find(id)).map(|item| item.name.as_str()).collect();
+        let name = unique_name(entry.name, &names);
+        let id = ItemId::new(format!("case-{key}"));
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        let mut parent = None;
+        if entry.kind == ItemKind::WaterSource {
+            let water = ItemId::new("case-water");
+            commands.push(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Water, None, doc.items.len(), None, water.clone())));
+            parent = Some(water);
+        }
+        let index = if parent.is_some() { 0 } else { doc.items.len() };
+        if let ItemFields::Modifier(card) = fields() {
+            let mut item = new_modifier(&doc, id.clone(), card.modifier, &[]);
+            item.name = name;
+            commands.push(Box::new(add_modifier(&layer, &doc, item)));
+        } else if entry.kind == ItemKind::Object {
+            let material = new_material(ItemId::new(format!("case-{key}-material")), "Material");
+            commands.extend(add_object_commands(&layer, None, index, Item::new(id.clone(), name, fields()), material));
+        } else {
+            commands.push(Box::new(AddSceneItemCommand::new(layer.clone(), entry.kind, parent, index, None, id.clone())));
+            commands.push(Box::new(SetSceneItemFieldsCommand::new(layer, id.clone(), fields())));
+        }
+        Some((commands, id))
+    }
+
+    /// Every value a pick of `row` can send, for the item `id` in `doc`.
+    fn picks(doc: &SceneDoc, control: &FieldControl) -> Vec<FieldValue> {
+        let candidates = |passes: fn(&Item) -> bool| {
+            let mut found = Vec::new();
+            doc.walk(|item, _| {
+                if passes(item) {
+                    found.push(item.id.clone());
+                }
+            });
+            found
+        };
+        match control {
+            FieldControl::Closed(choices) | FieldControl::ClosedOrLayer(choices) => {
+                choices.iter().map(|c| FieldValue::Choice(c.key.to_owned())).collect()
+            }
+            FieldControl::ClosedOrItem { closed, items } => closed
+                .iter()
+                .map(|c| FieldValue::Choice(c.key.to_owned()))
+                .chain(candidates(*items).into_iter().map(|id| FieldValue::Item(Some(id))))
+                .collect(),
+            FieldControl::Item { items, .. } => {
+                std::iter::once(FieldValue::Item(None)).chain(candidates(*items).into_iter().map(|id| FieldValue::Item(Some(id)))).collect()
+            }
+            FieldControl::ItemSet { items, .. } => {
+                std::iter::once(FieldValue::Everything).chain(candidates(*items).into_iter().map(|id| FieldValue::Items(vec![id]))).collect()
+            }
+            FieldControl::File { .. } | FieldControl::Listed { .. } => Vec::new(),
+        }
+    }
+
+    fn base_project() -> Project {
+        let mut project = Project::default();
+        project.timeline.layers.push(scene_layer(SceneDoc::base()));
+        project
+    }
+
+    fn apply(project: &mut Project, commands: &mut [Box<dyn Command>]) {
+        for command in commands.iter_mut() {
+            command.execute(project);
+        }
+    }
+
+    type Snapshot = (Option<SceneDoc>, Option<manifold_node_engine::persistence::GraphDocument>, Vec<(String, f32, f32)>);
+
+    /// Everything the undo has to bring back.
+    fn snapshot(project: &Project) -> Snapshot {
+        let fx = project.timeline.layers[0].gen_params().unwrap();
+        (fx.scene.clone(), fx.graph.clone(), values(fx))
+    }
+
+    fn cases() -> Vec<Case> {
+        let base = base_project();
+        let mut cases = Vec::new();
+        for entry in ADD_ENTRIES.iter() {
+            let Some((commands, id)) = add_commands(&base, entry.key) else { continue };
+            cases.push(Case { label: entry.key.to_owned(), commands });
+            // The picks of this item's field rows, on top of the add.
+            let mut with_item = base_project();
+            let (mut setup, _) = add_commands(&with_item, entry.key).expect("added above");
+            apply(&mut with_item, &mut setup);
+            let doc = doc_of(&with_item);
+            let Some(item) = doc.find(&id) else { continue };
+            for row in applicable_fields(&item.fields) {
+                for value in picks(&doc, &row.control) {
+                    let Ok(fields) = set_field(&doc, item, row, &value) else { continue };
+                    let (mut commands, _) = add_commands(&base, entry.key).expect("added above");
+                    let layer = base.timeline.layers[0].layer_id.clone();
+                    commands.push(Box::new(SetSceneItemFieldsCommand::new(layer, id.clone(), fields)));
+                    cases.push(Case { label: format!("{} / {} = {value:?}", entry.key, row.id), commands });
+                }
+            }
+        }
+        cases
+    }
+
+    fn tick_120_frames(fx: &PresetInstance) {
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut runtime = PresetRuntime::from_def_for_render(flat(fx), &registry, Some(&fx.params), false)
+            .expect("the compiled scene builds");
+        runtime.apply_param_values(&fx.params);
+        for k in 0..120 {
+            let seconds = k as f64 / 30.0;
+            runtime.execute_frame(FrameTime { seconds: Seconds(seconds), beats: Beats(seconds * 2.0), delta: Seconds(1.0 / 30.0), frame_count: k });
+        }
+    }
+
+    #[test]
+    fn every_add_entry_and_field_choice() {
+        let mut failures = Vec::new();
+        let all = cases();
+        assert!(all.len() > ADD_ENTRIES.len(), "the table gave {} cases", all.len());
+        for Case { label, mut commands } in all {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut project = base_project();
+                let base = snapshot(&project);
+                apply(&mut project, &mut commands);
+                let fx = project.timeline.layers[0].gen_params().unwrap();
+                tick_120_frames(fx);
+
+                let saved = serde_json::to_string(&project).unwrap();
+                let mut loaded: Project = serde_json::from_str(&saved).unwrap();
+                loaded.on_after_deserialize();
+                loaded.reconcile_param_manifests();
+                let after = snapshot(&project);
+                let reloaded = snapshot(&loaded);
+                assert_eq!(reloaded.0, after.0, "the loaded document differs from the saved one");
+                assert_eq!(reloaded.1, after.1, "the loaded graph differs from the saved one");
+                assert_eq!(reloaded.2, after.2, "the loaded values differ from the saved ones");
+
+                let mut all = CompositeCommand::new(std::mem::take(&mut commands), label.clone());
+                all.undo(&mut project);
+                assert!(snapshot(&project) == base, "undo did not return the base scene exactly");
+            }));
+            if let Err(panic) = outcome {
+                let reason = panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()));
+                failures.push(format!("{label}: {}", reason.unwrap_or_else(|| "panicked".into())));
+            }
+        }
+        assert!(failures.is_empty(), "{} cases failed:\n{}", failures.len(), failures.join("\n"));
+    }
+}

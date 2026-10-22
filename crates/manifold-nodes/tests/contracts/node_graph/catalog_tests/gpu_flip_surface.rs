@@ -6,7 +6,7 @@ use manifold_node_engine::runtime::testkit::prepare_surface as prepare;
     use manifold_node_engine::runtime::PresetRuntime;
 
     fn shipped() -> EffectGraphDef {
-        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakGpuFlip.json"))).unwrap()
+        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/WaterDamBreakGpuFlip.json"))).unwrap()
     }
 
     fn surface(def: &EffectGraphDef) -> &GroupDef {

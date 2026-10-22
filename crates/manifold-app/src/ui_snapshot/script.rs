@@ -235,7 +235,6 @@ fn run_flow(
         || scene == "gltfscene"
         || scene == "mushroomscene"
         || scene == "physicsscene"
-        || scene == "physicsboxes"
         || scene == "newscene"
         // The Scene tab lives in the inspector (SCENE_SURFACES D16).
         || scene == "fluidauthoring"

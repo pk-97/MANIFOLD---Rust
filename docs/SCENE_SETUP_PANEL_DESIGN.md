@@ -4,6 +4,8 @@
 
 > **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** This doc's curated projection + synthesized `scene.{doc}.{param}` id system + resolution funnels are gone: the panel now renders exposed-param manifest rows through the card path (P1/P2 LANDED), and `scene_vm.rs` is slimmed to item-discovery only (P3 LANDED `7ee0a887`). The outliner / selection / structural verbs described here still stand; the per-param addressing, hand metadata tables, and dual write path do not.
 
+> **SUPERSEDED for the scene, card and starter model (2026-10-22) → [`docs/SCENE_DOCUMENT_DESIGN.md`](SCENE_DOCUMENT_DESIGN.md).** Scenes are documents; the old starters are deleted.
+
 **Status: SHIPPED (all phases P1–P5) 2026-07-17 — dock column + discovery + Environment/Fog, Objects, Lights + Camera, Import Model merge, modifier stack; orchestrated overnight. Honest escalations opened, not blocking: BUG-193 (no object/light remove command), BUG-194 (vertex count not computable), BUG-195 (merge scale-sanity proxy), BUG-198 (headless Key Z misses Undo — pre-existing harness gap). REVISED 2026-07-17: D3's group trace, the section 4 (Invariants) "no new port types" invariant, the D4 layout, and the section 9 (Deferred) visibility deferral are superseded by `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md`; D1/D5/D6/D7/D8 doctrine carries forward unchanged. · 2026-07-16 · Fable, design session with Peter**
 
 **Superseded by [SCENE_DOCUMENT_DESIGN.md](SCENE_DOCUMENT_DESIGN.md)** for the scene, card and starter model (2026-10-22). (card, exposure and starter sections only.)

@@ -2155,13 +2155,13 @@ const THUMBNAIL_PRESETS: [&str; 2] = ["WaterDamBreakParticles", "WaterDamBreakMa
 fn liquid_thumbnail_ignores_contention() {
     let device = &shared_device();
     let mut bundled = Vec::new();
-    for id in bundled_preset_type_ids(PresetKind::Generator) {
-        liquid_solvers(&bundled_preset_def(&id).expect("bundled preset").nodes, &mut bundled);
+    for (_, def) in manifold_nodes::engine_scenes::all() {
+        liquid_solvers(&def.nodes, &mut bundled);
     }
     let mut changed = Vec::new();
     let mut covered = Vec::new();
     for id in THUMBNAIL_PRESETS {
-        let def = bundled_preset_def(&manifold_core::PresetTypeId::new(id)).unwrap_or_else(|| panic!("{id} is not a bundled preset"));
+        let def = manifold_nodes::engine_scenes::scene_def(&manifold_core::PresetTypeId::new(id)).unwrap_or_else(|| panic!("{id} is not an engine scene"));
         liquid_solvers(&def.nodes, &mut covered);
         let render = || {
             render_preset_thumbnail(device, PresetKind::Generator, def.as_ref(), THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, false)

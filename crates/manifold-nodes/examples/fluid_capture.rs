@@ -1596,23 +1596,23 @@ mod tests {
     #[test]
     fn every_liquid_on_the_seam_is_found_by_its_frame() {
         let matter = preset_settings(include_str!(
-            "../assets/generator-presets/WaterDamBreakMatter.json"
+            "../tests/fixtures/presets/WaterDamBreakMatter.json"
         ), None)
         .unwrap();
         assert_eq!((matter.solver, matter.frame_node.as_str()), (Solver::Gpu, "matter_frame"));
         assert_eq!((matter.resolution, matter.domain_size, matter.points_per_cell), (64, 4.0, 8));
         let gpu_flip = preset_settings(include_str!(
-            "../assets/generator-presets/WaterDamBreakGpuFlip.json"
+            "../tests/fixtures/presets/WaterDamBreakGpuFlip.json"
         ), None)
         .unwrap();
         assert_eq!((gpu_flip.solver, gpu_flip.frame_node.as_str()), (Solver::Gpu, "frame"));
         assert_eq!((gpu_flip.resolution, gpu_flip.domain_size, gpu_flip.speed), (64, 4.0, 1.0));
         let sea_wall = preset_settings(include_str!(
-            "../assets/generator-presets/WaterSeaWallGpuFlip.json"
+            "../tests/fixtures/presets/WaterSeaWallGpuFlip.json"
         ), None)
         .unwrap();
         assert_eq!(sea_wall.speed, 0.5);
-        let ocean = preset_settings(include_str!("../assets/generator-presets/Ocean.json"), None).unwrap();
+        let ocean = preset_settings(include_str!("../tests/fixtures/presets/Ocean.json"), None).unwrap();
         assert_eq!((ocean.solver, ocean.frame_node.as_str()), (Solver::None, ""));
     }
 

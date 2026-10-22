@@ -30,7 +30,7 @@ struct Timings {
 
 fn run_preset(replay: bool, frames: u32) -> Timings {
     let h = gpu_harness::shared();
-    let json = manifold_nodes::bundled_presets::bundled_preset_json(&PresetTypeId::new(DAM_BREAK)).expect("bundled preset");
+    let json = manifold_nodes::engine_scenes::scene_json(&PresetTypeId::new(DAM_BREAK)).expect("bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("preset parses");
     let manifest = ParamManifest::from_params(
         def.preset_metadata.as_ref().map(|m| m.params.iter().cloned().map(Param::bundled).collect()).unwrap_or_default(),

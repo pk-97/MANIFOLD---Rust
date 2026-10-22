@@ -75,7 +75,7 @@ fn catalog_for_kind(kind: PresetKind) -> &'static ArcSwap<PresetCatalog> {
 /// Parse one catalog entry and apply the migration policy for its kind.
 /// Effects and generators get their camera plumbing prepared; scene modifier
 /// recipes use their own vocabulary and skip it.
-fn parse_bundled_preset(kind: PresetKind, id: &str, json: &str) -> EffectGraphDef {
+pub(crate) fn parse_bundled_preset(kind: PresetKind, id: &str, json: &str) -> EffectGraphDef {
     let mut def: EffectGraphDef = serde_json::from_str(json)
         .unwrap_or_else(|e| panic!("bundled {kind:?} preset {id}: parse failed: {e}"));
     if !kind.is_scene_modifier()
@@ -290,6 +290,11 @@ mod tests {
             .find(|m| m.id.as_str() == "Scene")
             .expect("Scene is a bundled generator");
         assert!(scene.available, "the generator browser lists only available presets");
+        let scene_ids: Vec<_> = bundled_preset_type_ids(PresetKind::Generator)
+            .filter(|id| bundled_preset_def(id).is_some_and(|def| def.nodes.iter().any(|node| node.type_id == "node.render_scene")))
+            .map(|id| id.as_str().to_owned())
+            .collect();
+        assert_eq!(scene_ids, ["Scene"], "only the base Scene ships; engine scenes live in tests/fixtures/presets");
     }
 
     #[test]
