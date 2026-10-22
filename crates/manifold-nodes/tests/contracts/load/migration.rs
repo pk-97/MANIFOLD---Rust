@@ -22,8 +22,6 @@ fn migration_order_matches_table() {
     assert_eq!(
         resolved,
         [
-            (BeforeFlatten, 200, "migrate_gltf_anim_v2"),
-            (BeforeFlatten, 210, "migrate_gltf_ao_mask"),
             (AfterFlatten, 300, "wire_liquid_intervals"),
             (AfterFlatten, 310, "wire_gpu_flip_grid"),
             (AfterFlatten, 320, "wire_liquid_frame_cursor"),

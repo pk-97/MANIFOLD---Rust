@@ -54,7 +54,8 @@ pub fn scene_def(id: &manifold_core::PresetTypeId) -> Option<Arc<EffectGraphDef>
 /// Make every engine scene resolve by type id, for a project that plays one
 /// (a layer of type `WaterDamBreakGpuFlip`). They join the catalog as a
 /// project overlay, so the generator browser still lists only the base Scene.
-/// Process-global; call before the layer is created. Later calls do nothing.
+/// It fills the existing project overlay slot, so a project load replaces it.
+/// Call before the layer is created; later calls do nothing.
 pub fn install() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {

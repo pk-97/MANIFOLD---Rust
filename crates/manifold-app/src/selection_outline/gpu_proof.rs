@@ -267,7 +267,7 @@ fn overlay(mode: manifold_core::scene_surface::GizmoDrawMode, layer: &manifold_c
     crate::gizmo_overlay::GizmoOverlay {
         mode,
         scene_layer: Some(layer.clone()),
-        output: Some((layer.clone(), crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[], &[], None))),
+        output: Some((layer.clone(), crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[], None))),
         viewport: None,
     }
 }

@@ -114,6 +114,12 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let ocean = fields.shape == Shape::Ocean;
     let group_copies = frame.and_then(|frame| frame.copies).or_else(|| b.swarm_draws.get(&item.id).copied()).filter(|_| !ocean);
     let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
+    // A swarm drawing this object with Copies on carries its layout to every
+    // particle, as it does a Group's (`swarm::nest_layout`).
+    let nested = fields.copies
+        && can_copy(&fields.shape)
+        && frame.and_then(|frame| frame.copies).is_none()
+        && group_copies.is_some_and(|nest| b.nests.contains_key(&nest));
     let mut center = None;
     let rest;
     let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
@@ -174,7 +180,7 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         }
         // A body's transform is its start, and its own copies' layout
         // centre; the draw reads the solved poses instead.
-        if (pose.is_some() || own_copies) && w.to_port == "transform" {
+        if (pose.is_some() || own_copies || nested) && w.to_port == "transform" {
             continue;
         }
         b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
@@ -196,6 +202,13 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         }
         if own_copies {
             copies::emit_object(b, item, mesh, transform, object, fields.physics);
+        } else if let Some(nest) = group_copies.filter(|_| nested) {
+            super::swarm::nest_layout(b, item, transform, nest);
+            // The layout body sizes its spacing by the object's solid.
+            if let Some(Some(layout)) = b.nests.get(&nest).copied() {
+                b.wire(mesh, "source", layout, "source");
+            }
+            copies::draw_instances(b, nest, object, false);
         } else if let Some(body) = group_copies {
             if can_copy(&fields.shape) {
                 copies::add_part(b, body, mesh, transform);

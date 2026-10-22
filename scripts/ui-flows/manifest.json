@@ -440,7 +440,6 @@
     "scene-value-box-fits": "physicsscene",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-switch": "gltfscene",
-    "scene-copy-group": "gltfscene",
     "scene-imported-physics": "gltfscene",
     "gltf-import-card-sections": "gltfscene",
     "audio-clip-trigger-add": "inspector",

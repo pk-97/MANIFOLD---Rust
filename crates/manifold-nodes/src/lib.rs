@@ -16,6 +16,7 @@ inventory::submit!(preset_loader::PresetAssetsRoot {
 pub mod bundled_generator_presets;
 pub mod registry;
 pub mod bundled_presets;
+#[cfg(any(test, feature = "engine-scenes"))]
 pub mod engine_scenes;
 pub mod catalog_gen;
 pub mod scene_modifier_qualify;

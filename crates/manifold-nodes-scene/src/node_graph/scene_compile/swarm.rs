@@ -154,16 +154,21 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         }
         None => {
             if let DrawAs::Item(prototype) = &fields.draw_as {
-                // A Group with Copies on keeps them: its whole layout rides
-                // every particle ([`nest_layout`] wires the layout in).
-                let draws = match b.doc.find(prototype).map(|item| &item.fields) {
-                    Some(ItemFields::Group(group)) if group.copies => {
-                        let nest = b.add(owner, "nest", "node.nest_copies");
-                        b.wire(copies, "copies", nest, "outer");
-                        b.nests.insert(nest, None);
-                        nest
-                    }
-                    _ => copies,
+                // A Group or Object with Copies on keeps them: its whole
+                // layout rides every particle ([`nest_layout`] wires the
+                // layout in).
+                let keeps_copies = match b.doc.find(prototype).map(|item| &item.fields) {
+                    Some(ItemFields::Group(group)) => group.copies,
+                    Some(ItemFields::Object(object)) => object.copies && manifold_core::scene_schema::can_copy(&object.shape),
+                    _ => false,
+                };
+                let draws = if keeps_copies {
+                    let nest = b.add(owner, "nest", "node.nest_copies");
+                    b.wire(copies, "copies", nest, "outer");
+                    b.nests.insert(nest, None);
+                    nest
+                } else {
+                    copies
                 };
                 b.swarm_draws.insert(prototype.clone(), draws);
                 b.swarm_frames.insert(draws, transform);

@@ -210,6 +210,21 @@ fn a_drawn_group_keeps_its_copies() {
     let mut doc = SceneDoc::base();
     group(&mut doc, "row", true);
     object(&mut doc, "row", "block");
+    keeps_three_copies_a_particle(doc);
+}
+
+/// An Object with its own Copies keeps them under a swarm as a Group does.
+#[test]
+fn a_drawn_object_keeps_its_copies() {
+    let mut doc = SceneDoc::base();
+    let ItemFields::Object(mut fields) = ItemFields::default_for(ItemKind::Object) else { unreachable!() };
+    fields.copies = true;
+    add(&mut doc, None, "row", ItemFields::Object(fields));
+    keeps_three_copies_a_particle(doc);
+}
+
+/// `doc`'s swarm draws the item `row` (Copies on) at every particle.
+fn keeps_three_copies_a_particle(mut doc: SceneDoc) {
     swarm(&mut doc, EmitFrom::Box, DrawAs::Item(ItemId::new("row")));
     let values = [NO_CUBE, ("row.count", 3.0), ("swarm.count", 400.0), ("swarm.size", 0.15)];
     let mut run = Run::new(doc, &values, &["swarm:copies", "swarm:nest"]);

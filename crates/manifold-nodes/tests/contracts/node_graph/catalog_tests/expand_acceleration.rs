@@ -40,3 +40,22 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
         assert_eq!(recipients, vec![(NodeId::new("matter_domain"), ImpulseTarget::Fluid)]);
     }
 
+
+    /// A compiled swarm's object takes scene forces on its forces node's
+    /// port, so a Force item reaches the particles, not the drawn mesh.
+    #[test]
+    fn a_compiled_swarm_takes_forces_on_its_forces_node() {
+        use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, SceneDoc};
+        let mut doc = SceneDoc::base();
+        let at = doc.items.len();
+        doc.insert(None, at, Item::new(ItemId::new("swarm"), "swarm", ItemFields::default_for(ItemKind::Swarm))).unwrap();
+        let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::from_string("Scene".into()), 0);
+        layer.gen_params_mut().unwrap().install_scene_document(doc).unwrap();
+        let def = layer.gen_params().unwrap().graph.clone().unwrap();
+        let registry = PrimitiveRegistry::with_builtin();
+        let index = FlatSceneIndex::build(&def).unwrap();
+        assert_eq!(
+            recipient_key(&index, &top("swarm:object"), &registry).unwrap(),
+            Some((top("swarm:forces"), "acceleration_field".to_string()))
+        );
+    }

@@ -842,7 +842,6 @@ fn write_png(ct: &mut crate::content_thread::ContentThread, path: &str) {
 }
 
 pub fn run(args: &[String]) -> ! {
-    manifold_nodes::engine_scenes::install();
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).try_init();
     let args = parse(args);
     match probe(&args) {
