@@ -360,7 +360,7 @@ mod tests {
             fields: ItemFields::Group(GroupFields { physics: PhysicsSetting::Body, ..GroupFields::default() }),
             children: vec![part.clone()],
         };
-        let doc = SceneDoc { items: vec![group] };
+        let doc = SceneDoc { items: vec![group], ..SceneDoc::default() };
         let none = FieldValue::Choice("none".into());
         let fields = set_field(&doc, &part, &PHYSICS, &none).expect("None is pickable");
         assert_eq!(fields.physics(), PhysicsSetting::None);
