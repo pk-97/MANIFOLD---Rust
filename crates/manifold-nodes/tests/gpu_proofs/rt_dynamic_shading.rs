@@ -76,7 +76,7 @@ fn rewrite_shared<T: Copy>(buf: &GpuBuffer, data: &[T]) {
 }
 
 fn flat_object(vb: &GpuBuffer, triangle_count: u32) -> RtObjectGeometry<'_> {
-    RtObjectGeometry { material_attributes: Default::default(),
+    RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: vb,
         vertex_stride: VERTEX_STRIDE,
         vertex_offset: 0,
@@ -696,7 +696,7 @@ fn rt_dynamic_coverage_and_attributes() {
         assert!(w0 >= 0.05 && bary[0] >= 0.05 && bary[1] >= 0.05,
             "bary {bary:?} clears A0's 0.05 edge exclusion");
     }
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         appearance_weights: Some(&weights_buf),
         appearance_gain: 1.0,
         base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -711,7 +711,7 @@ fn rt_dynamic_coverage_and_attributes() {
     let mut report_lines: Vec<String> = Vec::new();
 
     let mut run_case = |gain: f32, bary: [f32; 2], n: usize, seed_base: u32| {
-        let objects = [RtObjectGeometry { material_attributes: Default::default(),
+        let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             appearance_weights: Some(&weights_buf),
             appearance_gain: gain,
             base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -834,7 +834,7 @@ fn rt_dynamic_coverage_and_attributes() {
             std::slice::from_raw_parts(tex_px.as_ptr().cast::<u8>(), std::mem::size_of_val(&tex_px))
         });
         let ones_buf = write_shared(device, &[1.0f32, 1.0, 1.0]);
-        let mk_objects = |gain: f32| [RtObjectGeometry { material_attributes: Default::default(),
+        let mk_objects = |gain: f32| [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             appearance_weights: Some(&ones_buf),
             appearance_gain: gain,
             base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -942,7 +942,7 @@ fn rt_dynamic_coverage_and_attributes() {
         let two_tris = [triangle_at(0.0, 1.0), triangle_at(4.0, 1.0)].concat();
         let vb2 = write_shared(device, &two_tris);
         let short_weights = write_shared(device, &[1.0f32, 1.0]); // 4 floats, mesh has 6 vertices
-        let bad = [RtObjectGeometry { material_attributes: Default::default(),
+        let bad = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             appearance_weights: Some(&short_weights),
             ..flat_object(&vb2, 2)
         }];
@@ -954,7 +954,7 @@ fn rt_dynamic_coverage_and_attributes() {
             other => panic!("a short weights buffer must fail plan_accel with InvalidGeometry, got {:?}", other.map(|_| ())),
         }
         let nan_weights = write_shared(device, &[f32::NAN, 0.5, 1.0]);
-        let nan_objects = [RtObjectGeometry { material_attributes: Default::default(),
+        let nan_objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             appearance_weights: Some(&nan_weights),
         appearance_gain: 1.0,
         base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -978,7 +978,7 @@ fn rt_dynamic_coverage_and_attributes() {
     {
         let em_weights = write_shared(device, &[0.25f32, 0.5, 0.75]);
         let evb = write_shared(device, &triangle_at(0.0, 1.0));
-        let objects = [RtObjectGeometry { material_attributes: Default::default(),
+        let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             appearance_weights: Some(&em_weights),
         appearance_gain: 1.0,
         base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -1050,7 +1050,7 @@ fn rt_dynamic_coverage_and_attributes() {
     ) -> (Vec<f32>, Vec<f32>) {
         let objects = [
             flat_object(floor_vb, 2),
-            RtObjectGeometry { material_attributes: Default::default(),
+            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
                 appearance_weights: ceil_weights,
                 appearance_gain: ceil_gain,
                 base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],

@@ -245,23 +245,34 @@ impl RenderScene {
                 t.rot_euler
             };
             let local_model = model_matrix(t.pos, rot_euler, t.scale);
-            let model = object.parent_transform.map_or(local_model, |parent| {
+            let parent_model = object.parent_transform.map(|parent| {
                 let parent_rot = if parent.billboard {
                     parent.billboard_rot_euler(cam.pos)
                 } else {
                     parent.rot_euler
                 };
-                mat4_mul(model_matrix(parent.pos, parent_rot, parent.scale), local_model)
+                model_matrix(parent.pos, parent_rot, parent.scale)
             });
+            let (model, instance_inner) = instance_space_pair(
+                parent_model,
+                local_model,
+                object.instances_space,
+                object.instances.is_some(),
+            );
             // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
             // yet — a brand-new node, or the slot right after a rebuild)
             // seeds prev = current, giving THIS object exactly-zero
             // first-frame velocity. Stored immediately after reading (not
             // gated on `velocity_wired`) — see the `prev_view_proj` comment
             // above for why continuous tracking is the correct default.
-            let prev_model_n = self.prev_model.get(n).copied().flatten().unwrap_or(model);
+            let [prev_model_n, prev_inner_n] = self
+                .prev_model
+                .get(n)
+                .copied()
+                .flatten()
+                .unwrap_or([model, instance_inner]);
             if let Some(slot) = self.prev_model.get_mut(n) {
-                *slot = Some(model);
+                *slot = Some([model, instance_inner]);
             }
             let mut uniforms = build_uniforms(
                 *view_proj,
@@ -277,6 +288,8 @@ impl RenderScene {
                 weights.is_some(),
                 render_mode.point_size,
             );
+            uniforms.instance_inner = instance_inner;
+            uniforms.prev_instance_inner = prev_inner_n;
             if single_object.is_some() {
                 uniforms.appearance[2] = (1u32
                     | if legacy_roughness_map.is_some() { 2 } else { 0 }

@@ -40507,6 +40507,20 @@
             "4"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Object",
+            "Group"
+          ],
+          "label": "Instances Space",
+          "name": "instances_space",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
         }
       ],
       "purpose": "Binds one scene object's mesh vertices, transform, material, nineteen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / diffuse transmission / diffuse transmission colour / volume thickness), instances, and an optional live instance count into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
@@ -57310,6 +57324,13 @@
         },
         {
           "default": "0",
+          "id": "11_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "8_render_mode",
           "max": "3",
           "min": "0",
@@ -63005,6 +63026,13 @@
         },
         {
           "default": "0",
+          "id": "13_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "14_mode",
           "max": "2",
           "min": "0",
@@ -65673,6 +65701,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "442_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "1",
           "id": "475_enabled",
           "max": "1",
@@ -67878,6 +67913,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "478_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "480_color_r",
           "max": "1",
@@ -69976,6 +70018,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "481_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0.95",
@@ -72085,6 +72134,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "484_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "503_color_r",
           "max": "1",
@@ -74190,6 +74246,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "504_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -76458,6 +76521,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "1013_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -79260,6 +79330,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "2011_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "6.6",
           "id": "2012_pos_x",
           "max": "100",
@@ -79356,6 +79433,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "2014_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "3",
@@ -79468,6 +79552,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "2017_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "3",
@@ -79652,6 +79743,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "2021_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "3",
           "id": "2022_role",
           "max": "3",
@@ -79762,6 +79860,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "2024_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "3",
@@ -82817,6 +82922,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "104_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "1",
           "id": "121_shape",
           "max": "4",
@@ -85057,6 +85169,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "124_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "-4",
           "id": "140_pos_x",
           "max": "100",
@@ -87276,6 +87395,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "144_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "4",
           "id": "160_pos_x",
           "max": "100",
@@ -89493,6 +89619,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "164_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "100",
@@ -92396,6 +92529,13 @@
         },
         {
           "default": "0",
+          "id": "104_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "111_shape",
           "max": "4",
           "min": "0",
@@ -94612,6 +94752,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "114_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "1",
@@ -96833,6 +96980,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "124_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "2",
           "id": "131_shape",
           "max": "4",
@@ -99050,6 +99204,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "134_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "3",
@@ -101271,6 +101432,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "144_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "4",
           "id": "151_shape",
           "max": "4",
@@ -103488,6 +103656,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "154_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "12",
@@ -106338,6 +106513,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "104_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "1",
           "id": "121_shape",
           "max": "4",
@@ -108555,6 +108737,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "124_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-2.5",
@@ -110776,6 +110965,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "144_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "5",
           "id": "160_pos_x",
           "max": "100",
@@ -112993,6 +113189,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "164_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "20",
@@ -115536,6 +115739,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "22_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -118751,6 +118961,13 @@
           "name": "Global Illumination"
         },
         {
+          "default": "0",
+          "id": "41_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "9",
           "id": "52_focus_distance",
           "max": "100",
@@ -121677,6 +121894,13 @@
           "max": "1",
           "min": "0",
           "name": "Global Illumination"
+        },
+        {
+          "default": "0",
+          "id": "41_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "10",
@@ -124630,6 +124854,13 @@
         },
         {
           "default": "0",
+          "id": "449_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "451_pos_x",
           "max": "100",
           "min": "-100",
@@ -124725,6 +124956,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "452_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-2.04",
@@ -124825,6 +125063,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "455_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "2.04",
           "id": "457_pos_x",
           "max": "100",
@@ -124921,6 +125166,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "458_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -127541,6 +127793,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "19_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "22_color_r",
           "max": "1",
@@ -129639,6 +129898,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "23_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0.95",
@@ -131741,6 +132007,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "28_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "32_color_r",
           "max": "1",
@@ -133834,6 +134107,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "33_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.37254903",
           "id": "39_color_r",
           "max": "1",
@@ -134091,6 +134371,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "42_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "9.35",
@@ -136422,6 +136709,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "478_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         }
       ]
     },
@@ -139003,6 +139297,13 @@
         },
         {
           "default": "0",
+          "id": "16_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "18_pos_x",
           "max": "100",
           "min": "-100",
@@ -139098,6 +139399,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "19_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-2.04",
@@ -139198,6 +139506,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "22_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "2.04",
           "id": "24_pos_x",
           "max": "100",
@@ -139294,6 +139609,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "25_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -141662,6 +141984,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "37_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "8",
           "id": "1_grid_budget_mcells",
           "max": "512",
@@ -143858,6 +144187,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "62_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-1.25",
@@ -146343,6 +146679,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "68_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         }
       ]
     },
@@ -148938,6 +149281,13 @@
         },
         {
           "default": "0",
+          "id": "449_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "451_pos_x",
           "max": "100",
           "min": "-100",
@@ -149033,6 +149383,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "452_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-2.04",
@@ -149133,6 +149490,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "455_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "2.04",
           "id": "457_pos_x",
           "max": "100",
@@ -149229,6 +149593,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "458_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -151849,6 +152220,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "19_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "22_color_r",
           "max": "1",
@@ -153947,6 +154325,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "23_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0.95",
@@ -156049,6 +156434,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "28_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "32_color_r",
           "max": "1",
@@ -158140,6 +158532,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "33_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "9.35",
@@ -160471,6 +160870,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "478_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         }
       ]
     },
@@ -163059,6 +163465,13 @@
         },
         {
           "default": "0",
+          "id": "16_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "18_pos_x",
           "max": "100",
           "min": "-100",
@@ -163154,6 +163567,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "19_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-2.04",
@@ -163254,6 +163674,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "22_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "2.04",
           "id": "24_pos_x",
           "max": "100",
@@ -163350,6 +163777,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "25_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -165718,6 +166152,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "37_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "8",
           "id": "1_grid_budget_mcells",
           "max": "512",
@@ -167914,6 +168355,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "62_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -170168,6 +170616,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "75_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "9.35",
@@ -172889,6 +173344,13 @@
         },
         {
           "default": "0",
+          "id": "449_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "451_pos_x",
           "max": "100",
           "min": "-100",
@@ -172984,6 +173446,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "452_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-2.04",
@@ -173084,6 +173553,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "455_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "2.04",
           "id": "457_pos_x",
           "max": "100",
@@ -173180,6 +173656,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "458_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -175800,6 +176283,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "19_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "22_color_r",
           "max": "1",
@@ -177898,6 +178388,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "23_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0.95",
@@ -180000,6 +180497,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "28_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "32_color_r",
           "max": "1",
@@ -182093,6 +182597,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "33_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.37254903",
           "id": "39_color_r",
           "max": "1",
@@ -182350,6 +182861,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "42_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "9.35",
@@ -184527,6 +185045,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "479_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0.35",
@@ -187233,6 +187758,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "442_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.035",
           "id": "447_color_r",
           "max": "1",
@@ -189411,6 +189943,13 @@
         },
         {
           "default": "0",
+          "id": "449_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "451_pos_x",
           "max": "100",
           "min": "-100",
@@ -189506,6 +190045,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "452_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-4.04",
@@ -189606,6 +190152,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "455_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "4.04",
           "id": "457_pos_x",
           "max": "100",
@@ -189702,6 +190255,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "458_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -192098,6 +192658,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "478_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "480_color_r",
           "max": "1",
@@ -194196,6 +194763,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "481_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0.95",
@@ -196305,6 +196879,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "484_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "0.95",
           "id": "503_color_r",
           "max": "1",
@@ -198410,6 +198991,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "504_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -201105,6 +201693,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "516_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         }
       ]
     },
@@ -203686,6 +204281,13 @@
         },
         {
           "default": "0",
+          "id": "16_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
+          "default": "0",
           "id": "18_pos_x",
           "max": "100",
           "min": "-100",
@@ -203781,6 +204383,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "19_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "-2.04",
@@ -203881,6 +204490,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "22_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "2.04",
           "id": "24_pos_x",
           "max": "100",
@@ -203977,6 +204593,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "25_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "0",
@@ -206345,6 +206968,13 @@
           "name": "Level"
         },
         {
+          "default": "0",
+          "id": "37_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
+        },
+        {
           "default": "8",
           "id": "1_grid_budget_mcells",
           "max": "512",
@@ -208541,6 +209171,13 @@
           "max": "4",
           "min": "0",
           "name": "Level"
+        },
+        {
+          "default": "0",
+          "id": "62_instances_space",
+          "max": "1",
+          "min": "0",
+          "name": "Instances Space"
         },
         {
           "default": "9.35",

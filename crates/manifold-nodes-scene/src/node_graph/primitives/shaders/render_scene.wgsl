@@ -223,6 +223,10 @@ struct Uniforms {
     render_mode: vec4<f32>,
     volume_optics: vec4<f32>,
     volume_scattering_color: vec4<f32>,
+    // The instance space: world = model · T_instance · instance_inner.
+    // Identity in Object space; the object's own transform in Group space.
+    instance_inner: mat4x4<f32>,
+    prev_instance_inner: mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -891,8 +895,11 @@ struct VsOut {
     @location(9) @interpolate(flat) instance_scale: f32,
 };
 
-// Instance TRS applies FIRST, the object group's `model` (transform_n)
-// SECOND — world = model_n · T_instance (D11). An identity instance
+// world = model · T_instance · instance_inner. Object space passes an
+// identity `instance_inner`, so the instance TRS applies first and the
+// object's `model` second (D11); Group space passes the part's own
+// transform as `instance_inner`, so each instance places the whole group.
+// An identity `instance_inner` reproduces every input exactly. An identity instance
 // (unwired instances_n) collapses `rot` to the identity matrix and
 // `inst_pos`/`inst_normal` to `v.position`/`v.normal` unchanged, so this
 // is byte-identical to the pre-P8 vertex shader for every unwired object.
@@ -922,9 +929,22 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
         select(1.0, -1.0, marker == 2u),
         select(1.0, -1.0, marker == 3u),
     );
-    let inst_pos = rot * ((v.position * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
+    let inner = u.instance_inner;
+    let inner_cofactor = mat3x3<f32>(
+        cross(inner[1].xyz, inner[2].xyz),
+        cross(inner[2].xyz, inner[0].xyz),
+        cross(inner[0].xyz, inner[1].xyz),
+    );
+    let inner_sign = select(1.0, -1.0, dot(inner[0].xyz, inner_cofactor[0]) < 0.0);
+    let local_pos = (inner * vec4<f32>(v.position, 1.0)).xyz;
+    let local_normal = inner_cofactor * v.normal * inner_sign;
+    let local_tangent = (inner * vec4<f32>(v.tangent.xyz, 0.0)).xyz;
+    let inst_pos = rot * ((local_pos * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
+    // Read only by the velocity variant's GBUFFER_VS_VELOCITY_BODY.
+    let prev_local_pos = (u.prev_instance_inner * vec4<f32>(v.position, 1.0)).xyz;
+    let prev_inst_pos = rot * ((prev_local_pos * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
     let scale_sign = select(1.0, -1.0, inst.pos_scale.w < 0.0);
-    let inst_normal = rot * (v.normal * msign * scale_sign);
+    let inst_normal = rot * (local_normal * msign * scale_sign);
 
     var out: VsOut;
     let world = u.model * vec4<f32>(inst_pos, 1.0);
@@ -959,8 +979,8 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     // through unscaled; w == 0 (no authored tangent) passes the zero
     // sentinel through — normalize() of a zero vector would be NaN, so the
     // direction is selected, not branched (uniform control flow).
-    let t_world = normalize((u.model * vec4<f32>(rot * (v.tangent.xyz * msign * scale_sign), 0.0)).xyz);
-    let handedness = model_sign * msign.x * msign.y * msign.z * scale_sign;
+    let t_world = normalize((u.model * vec4<f32>(rot * (local_tangent * msign * scale_sign), 0.0)).xyz);
+    let handedness = model_sign * inner_sign * msign.x * msign.y * msign.z * scale_sign;
     out.world_tangent = vec4<f32>(select(t_world, vec3<f32>(0.0), v.tangent.w == 0.0), v.tangent.w * handedness);
     if u.appearance.y > 0.5 {
         out.appearance_weight = weights[vid];
@@ -1423,7 +1443,11 @@ fn transmission_diffuse(
         length(u.model[0].xyz),
         length(u.model[1].xyz),
         length(u.model[2].xyz),
-    ) * instance_scale;
+    ) * instance_scale * vec3<f32>(
+        length(u.instance_inner[0].xyz),
+        length(u.instance_inner[1].xyz),
+        length(u.instance_inner[2].xyz),
+    );
     if u.volume_optics.x > 0.5 { model_scale = vec3<f32>(1.0); }
 
     let max_mip = f32(textureNumLevels(opaque_scene_color) - 1u);

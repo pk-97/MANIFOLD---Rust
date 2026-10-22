@@ -3179,7 +3179,7 @@ mod tests {
     fn blas_opacity_tracks_nonopaque_property() {
         let device = GpuDevice::new();
         let verts = device.create_buffer(3 * 12);
-        let base = RtObjectGeometry {
+        let base = RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER,
             vertex_buffer: &verts,
             vertex_stride: 12,
             vertex_offset: 0,

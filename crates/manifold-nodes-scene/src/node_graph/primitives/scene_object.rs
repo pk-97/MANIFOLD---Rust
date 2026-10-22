@@ -31,7 +31,7 @@ use manifold_node_engine::mesh::{InstanceTransform, MeshVertex, Vec4Vertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::scene_object::SceneObject;
+use manifold_node_engine::scene::scene_object::{InstanceSpace, SceneObject};
 
 manifold_node_engine::primitive! {
     name: SceneObjectNode,
@@ -121,6 +121,14 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 4.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("instances_space"),
+            label: "Instances Space",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Object", "Group"],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
@@ -170,6 +178,10 @@ impl Primitive for SceneObjectNode {
             .inputs
             .scalar("instance_count")
             .and_then(|value| value.as_scalar());
+        let instances_space = match ctx.params.get("instances_space") {
+            Some(ParamValue::Enum(index)) => InstanceSpace::from_index(*index),
+            _ => InstanceSpace::Object,
+        };
 
         let object = SceneObject {
             visible: visible && parent_visible,
@@ -202,6 +214,7 @@ impl Primitive for SceneObjectNode {
             volume_thickness_map,
             instances,
             instance_count,
+            instances_space,
             emission_strength,
             gain,
         };

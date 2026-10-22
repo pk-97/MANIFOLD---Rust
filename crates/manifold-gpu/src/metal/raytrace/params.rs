@@ -565,9 +565,16 @@ pub struct RtNormalSource {
     /// the remaining eleven follow the authored raster-index order, followed
     /// by AO's canonical raster index 3.
     pub extra_tex_indices: [u32; 15],
+    /// Upper-left 3x3 of the instance-space inner matrix, applied to
+    /// local directions before the instance fold (identity in Object
+    /// space). Normals take its cofactor, computed in the kernel.
+    pub inner_matrix: [[f32; 3]; 3],
+    /// Keeps the 8-byte struct alignment the MSL mirror rounds to.
+    pub _pad_inner: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 1024);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 1064);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, inner_matrix) == 1024);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, material_attributes) == 276);
 const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 688);
 const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, sampling) == 8);
@@ -646,8 +653,9 @@ const _: () = assert!(
 /// descriptor-build kernel. Layout notes (mirrored field-for-field in the
 /// MSL): `model` fills the first 64 bytes, `instances_addr` lands at 64
 /// (8-aligned), the three `u32`s pack to 84, and the explicit pad brings
-/// the stride to 96 — MSL rounds the same struct to 96 (its `float2` pad
-/// requires 8-byte alignment, landing at 88). Asserted, not hand-counted.
+/// the first block to 96 — MSL rounds that block to 96 (its `float2` pad
+/// requires 8-byte alignment, landing at 88); `inner` follows at 96 for a
+/// 160-byte stride. Asserted, not hand-counted.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct RtInstanceBuildObj {
@@ -656,10 +664,15 @@ pub(crate) struct RtInstanceBuildObj {
     slot_base: u32,
     slot_count: u32,
     cast_shadows: u32,
-    _pad: [f32; 2],
+    /// Three words, not two: MSL places its `float2 _pad` at 88, so the
+    /// 16-aligned `inner` starts at 96 on both sides.
+    _pad: [f32; 3],
+    /// The instance-space inner matrix: slot world = model · T · inner.
+    inner: [[f32; 4]; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<RtInstanceBuildObj>() == 96);
+const _: () = assert!(std::mem::size_of::<RtInstanceBuildObj>() == 160);
+const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, inner) == 96);
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, instances_addr) == 64);
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_base) == 72);
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_count) == 76);
@@ -695,7 +708,8 @@ pub(crate) fn write_instance_obj_params(ptr: *mut u8, objects: &[RtObjectGeometr
             slot_base: base,
             slot_count: slots,
             cast_shadows: obj.cast_shadows as u32,
-            _pad: [0.0; 2],
+            _pad: [0.0; 3],
+            inner: obj.instance_inner,
         };
         // SAFETY: `ptr` is the buffer's mapped base, sized
         // `objects.len() * stride` by the caller; per-element unaligned

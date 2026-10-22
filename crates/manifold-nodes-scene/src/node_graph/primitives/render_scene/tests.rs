@@ -193,6 +193,73 @@
         assert!((point[2] - 2.0).abs() < 1e-6);
     }
 
+    /// The vertex path every consumer runs: world = A · T_instance · B · p.
+    fn instance_space_world(pair: ([[f32; 4]; 4], [[f32; 4]; 4]), instance: [[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
+        let apply = |m: [[f32; 4]; 4], v: [f32; 3]| {
+            let mut out = [0.0f32; 3];
+            for (row, slot) in out.iter_mut().enumerate() {
+                *slot = m[0][row] * v[0] + m[1][row] * v[1] + m[2][row] * v[2] + m[3][row];
+            }
+            out
+        };
+        apply(pair.0, apply(instance, apply(pair.1, p)))
+    }
+
+    /// Copies of a two-part group: every copy draws both parts at
+    /// instance · part. The expected points come from trigonometry, not
+    /// from the matrix chain under test.
+    #[test]
+    fn group_space_draws_every_part_at_instance_times_part() {
+        use manifold_node_engine::scene::scene_object::InstanceSpace;
+        let parent = model_matrix([0.0, 1.0, 0.0], [0.0; 3], [1.0; 3]);
+        let parts = [([1.0f32, 0.0, 0.0], 0.5f32), ([-1.0, 0.0, 0.0], 1.0)];
+        let radius = 4.0f32;
+        for copy in 0..3 {
+            let yaw = copy as f32 * std::f32::consts::TAU / 3.0;
+            let ring = [radius * yaw.cos(), 0.0, -radius * yaw.sin()];
+            let instance = model_matrix(ring, [0.0, yaw, 0.0], [1.0; 3]);
+            for (offset, scale) in parts {
+                let local = model_matrix(offset, [0.0; 3], [scale; 3]);
+                let pair = instance_space_pair(Some(parent), local, InstanceSpace::Group, true);
+                let world = instance_space_world(pair, instance, [0.0, 0.0, 1.0]);
+                // Part-local (0,0,1) scales, then shifts by the part offset,
+                // then the copy's yaw turns it and the ring places it.
+                let q = [offset[0], offset[1], offset[2] + scale];
+                let (c, s) = (yaw.cos(), yaw.sin());
+                let expected = [ring[0] + c * q[0] + s * q[2], 1.0 + ring[1] + q[1], ring[2] - s * q[0] + c * q[2]];
+                for axis in 0..3 {
+                    assert!((world[axis] - expected[axis]).abs() < 1e-5, "copy {copy} part {offset:?}: {world:?} vs {expected:?}");
+                }
+            }
+        }
+    }
+
+    /// Object space keeps today's rule exactly: A = parent · local, B = I,
+    /// so echoes, scatter and swarms on a turned object do not move. A
+    /// draw without instances folds to the same pair in either space.
+    #[test]
+    fn object_space_and_uninstanced_draws_keep_the_existing_matrix() {
+        use manifold_node_engine::scene::scene_object::InstanceSpace;
+        let parent = model_matrix([3.0, -1.0, 2.0], [0.2, 0.0, 1.1], [2.0, 1.0, 1.0]);
+        let local = model_matrix([1.0, 2.0, 0.0], [0.0, 0.7, 0.0], [1.5, 1.5, 1.5]);
+        let existing = mat4_mul(parent, local);
+        for (space, instanced) in [
+            (InstanceSpace::Object, true),
+            (InstanceSpace::Object, false),
+            (InstanceSpace::Group, false),
+        ] {
+            assert_eq!(instance_space_pair(Some(parent), local, space, instanced), (existing, IDENTITY_M4));
+        }
+        assert_eq!(instance_space_pair(None, local, InstanceSpace::Object, true), (local, IDENTITY_M4));
+        // Object space: the instance lives inside the object's own space.
+        let instance = model_matrix([0.0, 0.0, 2.0], [0.0, 0.5, 0.0], [1.0; 3]);
+        let object = instance_space_world(instance_space_pair(Some(parent), local, InstanceSpace::Object, true), instance, [1.0, 0.0, 0.0]);
+        let group = instance_space_world(instance_space_pair(Some(parent), local, InstanceSpace::Group, true), instance, [1.0, 0.0, 0.0]);
+        let direct = instance_space_world((existing, IDENTITY_M4), instance, [1.0, 0.0, 0.0]);
+        assert_eq!(object, direct);
+        assert!((0..3).any(|axis| (object[axis] - group[axis]).abs() > 0.1), "the two spaces differ for a turned object");
+    }
+
     /// BUG-wfxe: the scene kernel must naga-parse — a WGSL syntax break
     /// here is otherwise only caught by GPU pipeline creation. Also pins
     /// the tangent seam: the Vertex struct carries it, the vertex shader

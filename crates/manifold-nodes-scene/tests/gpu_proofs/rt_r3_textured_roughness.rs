@@ -234,7 +234,7 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
 
     let vsize = std::mem::size_of::<PackedVertexNUV>() as u32;
     let objects = [
-        RtObjectGeometry { material_attributes: Default::default(),
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &floor_vertex_buffer,
             vertex_stride: vsize,
             vertex_offset: 0,
@@ -266,7 +266,7 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         },
-        RtObjectGeometry { material_attributes: config.emitter_attributes,
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: config.emitter_attributes,
             vertex_buffer: &emitter_vertex_buffer,
             vertex_stride: std::mem::size_of::<VertexWithUv1>() as u32,
             vertex_offset: 0,

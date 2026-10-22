@@ -279,6 +279,10 @@ pub struct RtObjectGeometry<'a> {
     pub index_buffer: Option<&'a GpuBuffer>,
     pub triangle_count: u32,
     pub transform: [[f32; 4]; 4],
+    /// The renderer's instance space: every slot's world matrix is
+    /// `transform · T_instance · instance_inner` (an unwired object's T is
+    /// the identity). [`RtObjectGeometry::NO_INNER`] in Object space.
+    pub instance_inner: [[f32; 4]; 4],
     /// RT-T1-B: byte offset of the per-vertex NORMAL field within one
     /// `vertex_stride`-sized vertex record in `vertex_buffer` — no separate
     /// normal allocation; `MeshVertex` (render_scene.rs's production vertex
@@ -422,6 +426,23 @@ pub struct RtObjectGeometry<'a> {
     /// handedness). `u32::MAX` means the mesh has no authored tangent.
     pub tangent_offset: u32,
     pub material_attributes: super::params::RtMaterialAttributes,
+}
+
+impl RtObjectGeometry<'_> {
+    /// The Object-space `instance_inner`: the identity.
+    pub const NO_INNER: [[f32; 4]; 4] =
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+}
+
+/// Column-major `a · b`.
+fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let mut out = [[0.0f32; 4]; 4];
+    for (c, column) in out.iter_mut().enumerate() {
+        for (r, value) in column.iter_mut().enumerate() {
+            *value = (0..4).map(|k| a[k][r] * b[c][k]).sum();
+        }
+    }
+    out
 }
 
 pub(crate) fn validate_instance_source_address(instances_addr: u64, source_address: Option<u64>) -> Result<(), &'static str> {
@@ -917,6 +938,7 @@ pub(crate) fn tlas_probe_structure(
 ) -> ProbeBlas {
     let verts = device.create_buffer(3 * 12);
     let obj = RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
         vertex_buffer: &verts,
         vertex_stride: 12,
         vertex_offset: 0,
@@ -1405,7 +1427,7 @@ pub(crate) fn encode_accel_update(
         for (i, obj) in objects.iter().enumerate() {
             unsafe {
                 let field_ptr = scratch.add(i * stride) as *mut MTLPackedFloat4x3;
-                field_ptr.write_unaligned(to_packed_4x3(obj.transform));
+                field_ptr.write_unaligned(to_packed_4x3(mat4_mul(obj.transform, obj.instance_inner)));
                 let mask_ptr = scratch.add(i * stride + mask_offset) as *mut u32;
                 mask_ptr.write_unaligned(instance_mask(obj.cast_shadows));
             }
@@ -1851,6 +1873,8 @@ pub fn ensure_normal_sources<'a>(
             model_handedness: model_handedness(obj.transform),
             material_attributes: obj.material_attributes,
             extra_tex_indices,
+            inner_matrix: model_matrix_from_transform(obj.instance_inner),
+            _pad_inner: 0,
         };
         // D11: canonical row at [0, N).
         unsafe {

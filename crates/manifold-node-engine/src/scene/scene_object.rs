@@ -109,12 +109,35 @@ pub struct SceneObject {
     /// the existing capacity-based behavior; wired values are clamped by the
     /// renderer to the backing buffer's capacity.
     pub instance_count: Option<f32>,
+    /// Where `instances` place this object. See [`InstanceSpace`].
+    pub instances_space: InstanceSpace,
     /// Per-object emissive-map strength multiplier. Lives on the object, not
     /// the material, so a skin driving `emissive_map` can be dimmed without
     /// touching the underlying material emission factor. Default 1.0.
     pub emission_strength: f32,
     /// Per-object appearance gain. Default 1.0.
     pub gain: f32,
+}
+
+/// The space an object's instances live in. Nested group transforms are
+/// composed on the CPU, so the renderer sees one parent matrix per draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InstanceSpace {
+    /// world = parent · local · instance. Echoes, scatter, scene loop and
+    /// swarms: the copies live in the object's own space.
+    #[default]
+    Object,
+    /// world = parent · instance · local. Copies of a group: each instance
+    /// places the whole group and the object's transform puts the part
+    /// inside every copy.
+    Group,
+}
+
+impl InstanceSpace {
+    /// The `instances_space` enum param index (Object 0, Group 1).
+    pub fn from_index(index: u32) -> Self {
+        if index == 1 { Self::Group } else { Self::Object }
+    }
 }
 
 // Invariant (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md section 4): `SceneObject` stays
@@ -234,6 +257,7 @@ mod tests {
             volume_thickness_map: None,
             instances: None,
             instance_count: None,
+            instances_space: InstanceSpace::Object,
             emission_strength: 1.0,
             gain: 1.0,
         };

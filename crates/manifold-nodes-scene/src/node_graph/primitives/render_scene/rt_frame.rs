@@ -116,6 +116,7 @@ impl RenderScene {
             let topo_key = hasher.finish();
             for (o, d) in objects.iter().zip(opaque_draws.clone()) {
                 hasher.write(bytemuck::bytes_of(&o.transform));
+                hasher.write(bytemuck::bytes_of(&o.instance_inner));
                 // Per-object cast_shadows toggle rewrites only the instance
                 // mask (see `refit_accel`), same cheap path as a transform
                 // change — folded into the SAME key so a toggle with no
@@ -361,6 +362,7 @@ impl RenderScene {
                     index_buffer: d.indices,
                     triangle_count: d.vertex_count / 3,
                     transform: d.uniforms.model,
+                    instance_inner: d.uniforms.instance_inner,
                     // RT-T1-B: `MeshVertex`'s normal field offset (position
                     // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
                     // `MeshVertex` layout.

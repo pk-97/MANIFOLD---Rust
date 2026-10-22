@@ -113,7 +113,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     let index_buffer = write_shared_buffer(device, &indices);
 
     let tracer = MetalShadowRayTracer::new(device);
-    let objects = [RtObjectGeometry { material_attributes: Default::default(),
+    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
         vertex_offset: 0,
@@ -394,7 +394,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
 
     let tracer = MetalShadowRayTracer::new(device);
     let objects = [
-        RtObjectGeometry { material_attributes: Default::default(),
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &ground_vertex_buffer,
             vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
             vertex_offset: 0,
@@ -430,7 +430,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         },
-        RtObjectGeometry { material_attributes: Default::default(),
+        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &occ_vertex_buffer,
             vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
             vertex_offset: 0,

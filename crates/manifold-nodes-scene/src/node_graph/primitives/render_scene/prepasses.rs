@@ -409,7 +409,8 @@ impl RenderScene {
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
-/// `light_view_proj · model · position` and writes only depth. 192 bytes.
+/// `light_view_proj · model · T_instance · instance_inner · position` and
+/// writes only depth. 256 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct ShadowUniforms {
@@ -420,8 +421,10 @@ pub(super) struct ShadowUniforms {
     pub(super) alpha: [f32; 4],
     pub(super) uv_m: [f32; 4],
     pub(super) uv_t: [f32; 4],
+    /// The draw's instance-space inner matrix (`RenderSceneUniforms::instance_inner`).
+    pub(super) instance_inner: [[f32; 4]; 4],
 }
-const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 192);
+const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 256);
 
 impl ShadowUniforms {
     pub(super) fn for_draw(view_proj: [[f32; 4]; 4], draw: &ObjectDraw<'_>) -> Self {
@@ -433,6 +436,7 @@ impl ShadowUniforms {
                 draw.uniforms.base_color[3], draw.uniforms.texture_flags[2]],
             uv_m: draw.uniforms.base_color_uv_m,
             uv_t: draw.map_uniforms[0].offset_set,
+            instance_inner: draw.uniforms.instance_inner,
         }
     }
 }
