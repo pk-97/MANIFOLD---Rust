@@ -3,8 +3,8 @@
 //! Pure CPU pass-through (no GPU dispatch): takes a `Transform` in, adds a
 //! stateless summed-sine noise offset, and emits a `Transform` out. The
 //! noise is a function of `time × frequency` only — no stored phase, no
-//! RNG state. Rotational jitter is dominant; positional jitter is the same
-//! noise vector at a fixed 0.25 ratio. The response curve is `amount²`, so
+//! RNG state. Position and rotation each scale the same noise vector by
+//! their own strength (defaults: rotation 1, position 0.25). The response curve is `amount²`, so
 //! the default amount of 0 is a byte-identical passthrough and small values
 //! ramp smoothly from silence.
 
@@ -27,14 +27,21 @@ const NOISE_FREQS: [f32; 4] = [1.0, 2.7182817, 4.6692016, 7.389056];
 /// Normalisation so the sum sits roughly in [-1, 1].
 const NOISE_SCALE: f32 = 0.25;
 
+/// Defaults that keep the look from before the strengths were params:
+/// rotation at full, position at a quarter of it.
+const DEFAULT_ROTATION_STRENGTH: f32 = 1.0;
+const DEFAULT_POSITION_STRENGTH: f32 = 0.25;
+
 manifold_node_engine::primitive! {
     name: TransformShake,
     type_id: "node.transform_shake",
-    purpose: "Stateless camera/object shake on a Transform wire. Adds a summed-sine noise offset (rotational dominant, positional at 0.25 ratio) driven by time × frequency. amount² response means amount = 0 is a byte-identical passthrough.",
+    purpose: "Stateless camera/object shake on a Transform wire. Adds a summed-sine noise offset (rotation and position each scaled by their own strength) driven by time × frequency. amount² response means amount = 0 is a byte-identical passthrough.",
     inputs: {
         transform: Transform required,
         amount: ScalarF32 optional,
         frequency: ScalarF32 optional,
+        position_strength: ScalarF32 optional,
+        rotation_strength: ScalarF32 optional,
         time: ScalarF32 optional,
     },
     outputs: {
@@ -58,6 +65,22 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("position_strength"),
+            label: "Position Strength",
+            ty: ParamType::Float,
+            default: ParamValue::Float(DEFAULT_POSITION_STRENGTH),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("rotation_strength"),
+            label: "Rotation Strength",
+            ty: ParamType::Float,
+            default: ParamValue::Float(DEFAULT_ROTATION_STRENGTH),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("time"),
             label: "Time",
             ty: ParamType::Float,
@@ -70,7 +93,7 @@ manifold_node_engine::primitive! {
     composition_notes: "Insert between node.transform_3d and node.scene_object (or node.render_scene's transform_n) to add physical weight — a kick drum on amount, a subtle idle shimmer at low values. Drive time from a beat ramp or leave it unwired for continuous playback-clock animation. No state: reconnecting the wire or reloading the project produces identical output for the same time.",
     examples: [],
     picker: { label: "Shake", category: Atom },
-    summary: "Stateless shake on a Transform wire — rotational jitter dominant, positional at a quarter ratio, driven by time and frequency.",
+    summary: "Stateless shake on a Transform wire: position and rotation jitter, each with its own strength, driven by time and frequency.",
     category: Geometry3D,
     role: Filter,
     aliases: ["shake", "jitter", "camera shake", "transform shake", "vibrate"],
@@ -85,7 +108,14 @@ impl Primitive for TransformShake {
 
         let amount = ctx.scalar_or_param("amount", 0.0);
         let frequency = ctx.scalar_or_param("frequency", 1.0);
-        let time = ctx.scalar_or_param("time", 0.0);
+        let rotation_strength = ctx.scalar_or_param("rotation_strength", DEFAULT_ROTATION_STRENGTH);
+        let position_strength = ctx.scalar_or_param("position_strength", DEFAULT_POSITION_STRENGTH);
+        // A wired time replaces the clock; unwired, the playback clock runs and
+        // the param is an offset on it.
+        let time = match ctx.inputs.scalar("time") {
+            Some(ParamValue::Float(t)) => t,
+            _ => ctx.time.seconds.0 as f32 + ctx.param_f32("time", 0.0),
+        };
 
         let scaled_time = time * frequency;
         let mut noise = [0.0f32; 3];
@@ -98,12 +128,10 @@ impl Primitive for TransformShake {
         }
 
         let amount_sq = amount * amount;
-        let rot_offset = [noise[0] * amount_sq, noise[1] * amount_sq, noise[2] * amount_sq];
-        let pos_offset = [
-            rot_offset[0] * 0.25,
-            rot_offset[1] * 0.25,
-            rot_offset[2] * 0.25,
-        ];
+        let rot_gain = amount_sq * rotation_strength;
+        let pos_gain = amount_sq * position_strength;
+        let rot_offset = [noise[0] * rot_gain, noise[1] * rot_gain, noise[2] * rot_gain];
+        let pos_offset = [noise[0] * pos_gain, noise[1] * pos_gain, noise[2] * pos_gain];
 
         ctx.outputs.set_transform(
             "out",
@@ -169,6 +197,8 @@ mod tests {
         let defaults: &[(&str, f32)] = &[
             ("amount", 0.0),
             ("frequency", 1.0),
+            ("position_strength", DEFAULT_POSITION_STRENGTH),
+            ("rotation_strength", DEFAULT_ROTATION_STRENGTH),
             ("time", 0.0),
         ];
 

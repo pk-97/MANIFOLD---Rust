@@ -1,6 +1,6 @@
 //! Camera: its rig, its lens, and the depth of field and motion blur that
 //! follow the active camera. Look band order: depth of field rows 0..10,
-//! motion blur rows from 10; each switch leads the rows it controls.
+//! motion blur rows from 10; the Shake section is its own group; each switch leads the rows it controls.
 
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Unit};
@@ -14,7 +14,9 @@ const LENS: Reach = Reach::Own("lens");
 const COC: Reach = Reach::Own("coc");
 const BOKEH: Reach = Reach::Own("bokeh");
 const BLUR: Reach = Reach::Own("motion_blur");
-use ControlGroup::{Camera, DepthOfField, MotionBlur};
+use ControlGroup::{Camera, DepthOfField, MotionBlur, Shake};
+const SHAKE: Reach = Reach::Own("shake");
+const SHAKE_FRAME: Reach = Reach::Own("shake_frame");
 
 /// Field of view, 1° to 179°, in radians.
 const FIELD_OF_VIEW: HardLimit = HardLimit::Between(0.017_453_292, 3.124_139_4);
@@ -47,15 +49,24 @@ const fn metres(property: &'static str, order: u8) -> PropertyRow {
     row(property, RIG, Camera, perform(CardBand::Camera, order)).unit(Unit::Metres).limit(HardLimit::Unlimited)
 }
 
-const fn clip(property: &'static str) -> PropertyRow {
-    row(property, RIG, Camera, setup()).unit(Unit::Metres).limit(AT_LEAST_ZERO)
+/// Near stays above 0 and at most 5 m; Far stays at least 10 m. The two ranges
+/// do not overlap, so Near is always below Far whichever row moves.
+const NEAR_CLIP: HardLimit = HardLimit::Between(0.001, 5.0);
+const FAR_CLIP: HardLimit = HardLimit::AtLeast(10.0);
+
+const fn clip(property: &'static str, limit: HardLimit) -> PropertyRow {
+    row(property, RIG, Camera, setup()).unit(Unit::Metres).limit(limit)
+}
+
+const fn shake_frame(property: &'static str, param: &'static str) -> PropertyRow {
+    row(property, SHAKE_FRAME, Shake, Exposure::Automatic("an identity frame the shake moves")).param(param)
 }
 
 const fn place(property: &'static str) -> PropertyRow {
     row(property, RIG, Camera, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited)
 }
 
-pub static CAMERA_ROWS: [PropertyRow; 39] = [
+pub static CAMERA_ROWS: [PropertyRow; 54] = [
     // Orbit: a three-quarter view of the origin through a 50 mm lens, framed
     // as the old base scene framed its cube.
     row("orbit", RIG, Camera, perform(CardBand::Camera, 0)).limit(HardLimit::Unlimited).default(0.7).when(orbit),
@@ -69,8 +80,8 @@ pub static CAMERA_ROWS: [PropertyRow; 39] = [
     row("look_y", RIG, Camera, perform(CardBand::Camera, 3)).unit(Unit::Metres).limit(HardLimit::Unlimited).when(orbit),
     row("fov_y", RIG, Camera, perform(CardBand::Camera, 4)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(orbit),
     row("roll", RIG, Camera, setup()).limit(HardLimit::Unlimited).when(orbit),
-    clip("near").when(orbit),
-    clip("far").when(orbit),
+    clip("near", NEAR_CLIP).when(orbit),
+    clip("far", FAR_CLIP).when(orbit),
     // Free.
     row("yaw", RIG, Camera, perform(CardBand::Camera, 0)).limit(HardLimit::Unlimited).when(free),
     row("pitch", RIG, Camera, perform(CardBand::Camera, 1)).when(free),
@@ -79,8 +90,8 @@ pub static CAMERA_ROWS: [PropertyRow; 39] = [
     metres("pos_z", 4).when(free),
     row("fov_y", RIG, Camera, perform(CardBand::Camera, 5)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(free),
     row("roll", RIG, Camera, setup()).limit(HardLimit::Unlimited).when(free),
-    clip("near").when(free),
-    clip("far").when(free),
+    clip("near", NEAR_CLIP).when(free),
+    clip("far", FAR_CLIP).when(free),
     // Look At. With a Target item picked, Target X/Y/Z offset from its origin.
     row("fov_y", RIG, Camera, perform(CardBand::Camera, 0)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(look_at),
     place("pos_x").when(look_at),
@@ -89,8 +100,8 @@ pub static CAMERA_ROWS: [PropertyRow; 39] = [
     place("target_x").when(look_at),
     place("target_y").when(look_at),
     place("target_z").when(look_at),
-    clip("near").when(look_at),
-    clip("far").when(look_at),
+    clip("near", NEAR_CLIP).when(look_at),
+    clip("far", FAR_CLIP).when(look_at),
     // Lens.
     row("focus_distance", LENS, DepthOfField, perform(CardBand::Look, 1))
         .gate(Gate::Dim(Feature::DepthOfField))
@@ -128,6 +139,23 @@ pub static CAMERA_ROWS: [PropertyRow; 39] = [
         .gate(Gate::Fold(Feature::MotionBlur))
         .unit(Unit::Pixels)
         .limit(AT_LEAST_ZERO),
+    // Shake: nothing moves on its own, Amount 0 leaves the camera still.
+    row("shake_amount", SHAKE, Shake, perform(CardBand::Camera, 20)).param("amount").default(0.0),
+    row("shake_speed", SHAKE, Shake, perform(CardBand::Camera, 21)).param("frequency").name("Speed").default(1.0),
+    row("shake_position", SHAKE, Shake, perform(CardBand::Camera, 22)).param("position_strength").default(0.25),
+    row("shake_rotation", SHAKE, Shake, perform(CardBand::Camera, 23)).param("rotation_strength").default(1.0),
+    row("shake_time", SHAKE, Shake, Exposure::Automatic("the playback clock")).param("time"),
+    // The identity frame the shake moves; a group the camera sits in joins it later.
+    shake_frame("shake_frame_pos_x", "pos_x"),
+    shake_frame("shake_frame_pos_y", "pos_y"),
+    shake_frame("shake_frame_pos_z", "pos_z"),
+    shake_frame("shake_frame_rot_x", "rot_x"),
+    shake_frame("shake_frame_rot_y", "rot_y"),
+    shake_frame("shake_frame_rot_z", "rot_z"),
+    shake_frame("shake_frame_scale_x", "scale_x"),
+    shake_frame("shake_frame_scale_y", "scale_y"),
+    shake_frame("shake_frame_scale_z", "scale_z"),
+    shake_frame("shake_frame_billboard", "billboard"),
 ];
 
 const RIGS: &[Choice] = &[

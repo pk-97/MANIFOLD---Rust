@@ -259,7 +259,7 @@ _Generated from the node registry. Do not hand-edit. 395 nodes registered, group
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
 | Transform 3D | `node.transform_3d` | Source | Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live. |
 | Transform Mesh Patches | `node.transform_mesh_patches` | Filter | Moves textured mesh patches with periodic full-angle poses and weighted translations using a reference triangle stream. |
-| Shake | `node.transform_shake` | Filter | Stateless shake on a Transform wire — rotational jitter dominant, positional at a quarter ratio, driven by time and frequency. |
+| Shake | `node.transform_shake` | Filter | Stateless shake on a Transform wire: position and rotation jitter, each with its own strength, driven by time and frequency. |
 | Tube From Path | `node.tube_from_path` | Source | Sweeps a tube of adjustable thickness along a path — the way you'd build a vine, cable, or ribbon from a center-line curve. Thickness and lift can vary per poi… |
 | Twist Mesh | `node.twist_mesh` | Filter | Twists a mesh around its own length, like wringing out a cloth or spinning a vine. Position and lighting normals both rotate exactly, so continuous saw-LFO spi… |
 | Volume Surface Mesh | `node.volume_surface_mesh` | Filter | Builds the triangle mesh of a liquid's surface from its density field, ready to render with any material. |

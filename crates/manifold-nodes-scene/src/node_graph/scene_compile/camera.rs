@@ -50,6 +50,12 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     };
     let rig = b.add(owner, "rig", rig_type);
     let lens = b.add(owner, "lens", "node.camera_lens");
+    // Shake rides the rig's parent frame: an identity transform, shaken, then
+    // the rig is placed in it. Amount 0 passes the identity through.
+    let frame = b.add(owner, "shake_frame", "node.transform_3d");
+    let shake = b.add(owner, "shake", "node.transform_shake");
+    b.wire(frame, "transform", shake, "transform");
+    b.wire(shake, "out", rig, "parent");
     b.wire(rig, "out", lens, "camera");
     b.lenses.push(lens);
 }

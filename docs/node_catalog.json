@@ -46606,6 +46606,16 @@
           "type": "f32"
         },
         {
+          "name": "position_strength",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "rotation_strength",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "time",
           "required": false,
           "type": "f32"
@@ -46640,16 +46650,36 @@
           "type": "float"
         },
         {
+          "default": "0.25",
+          "label": "Position Strength",
+          "name": "position_strength",
+          "range": [
+            "0",
+            "4"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Rotation Strength",
+          "name": "rotation_strength",
+          "range": [
+            "0",
+            "4"
+          ],
+          "type": "float"
+        },
+        {
           "default": "0",
           "label": "Time",
           "name": "time",
           "type": "float"
         }
       ],
-      "purpose": "Stateless camera/object shake on a Transform wire. Adds a summed-sine noise offset (rotational dominant, positional at 0.25 ratio) driven by time × frequency. amount² response means amount = 0 is a byte-identical passthrough.",
+      "purpose": "Stateless camera/object shake on a Transform wire. Adds a summed-sine noise offset (rotation and position each scaled by their own strength) driven by time × frequency. amount² response means amount = 0 is a byte-identical passthrough.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Stateless shake on a Transform wire — rotational jitter dominant, positional at a quarter ratio, driven by time and frequency.",
+      "summary": "Stateless shake on a Transform wire: position and rotation jitter, each with its own strength, driven by time and frequency.",
       "type_id": "node.transform_shake"
     },
     {
