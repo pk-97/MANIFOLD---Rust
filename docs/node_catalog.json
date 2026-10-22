@@ -25761,7 +25761,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Place every inner copy at every outer copy: copy i*M + j (M = inner_count, port-shadowed, at most the inner array's length) is inner copy j carried by outer copy i < N (N = outer_count, port-shadowed, at most the outer array's length; negative is all of it), so position = P + s1*R1*p2, rotation = R1*R2 (Euler XYZ as the renderer composes it) and scale = s1*s2. A zero-scale copy on either side stays a hole; a mirror marker is not carried. `count` publishes N × M. The output is storage the node keeps, sized by the live N × M and grown by at least doubling when it rises, never shrunk, so a live count never rebuilds the graph.",
+      "purpose": "Place every inner copy at every outer copy: copy i*M + j (M = inner_count, port-shadowed, at most the inner array's length) is inner copy j carried by outer copy i < N (N = outer_count, port-shadowed, at most the outer array's length; negative is all of it), so position = P + s1*R1*p2, rotation = R1*R2 (Euler XYZ as the renderer composes it) and scale = s1*s2. A zero-scale copy on either side stays a hole; an inner copy's mirror marker (rot_pad.w) is kept when its outer copy has none, so mirrored copies stay mirrored inside every outer copy. `count` publishes N × M. The output is storage the node keeps, sized by the live N × M and grown by at least doubling when it rises, never shrunk, so a live count never rebuilds the graph.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Puts a whole set of copies at every copy of another set: copies of copies.",

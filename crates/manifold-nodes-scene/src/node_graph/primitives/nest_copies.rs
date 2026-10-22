@@ -31,7 +31,7 @@ struct NestUniforms {
 manifold_node_engine::primitive! {
     name: NestCopies,
     type_id: "node.nest_copies",
-    purpose: "Place every inner copy at every outer copy: copy i*M + j (M = inner_count, port-shadowed, at most the inner array's length) is inner copy j carried by outer copy i < N (N = outer_count, port-shadowed, at most the outer array's length; negative is all of it), so position = P + s1*R1*p2, rotation = R1*R2 (Euler XYZ as the renderer composes it) and scale = s1*s2. A zero-scale copy on either side stays a hole; a mirror marker is not carried. `count` publishes N × M. The output is storage the node keeps, sized by the live N × M and grown by at least doubling when it rises, never shrunk, so a live count never rebuilds the graph.",
+    purpose: "Place every inner copy at every outer copy: copy i*M + j (M = inner_count, port-shadowed, at most the inner array's length) is inner copy j carried by outer copy i < N (N = outer_count, port-shadowed, at most the outer array's length; negative is all of it), so position = P + s1*R1*p2, rotation = R1*R2 (Euler XYZ as the renderer composes it) and scale = s1*s2. A zero-scale copy on either side stays a hole; an inner copy's mirror marker (rot_pad.w) is kept when its outer copy has none, so mirrored copies stay mirrored inside every outer copy. `count` publishes N × M. The output is storage the node keeps, sized by the live N × M and grown by at least doubling when it rises, never shrunk, so a live count never rebuilds the graph.",
     inputs: {
         outer: Array(InstanceTransform) required,
         inner: Array(InstanceTransform) required,
@@ -229,7 +229,9 @@ mod gpu_tests {
     fn every_inner_copy_rides_every_outer_copy() {
         let mut h = Harness::new();
         let outer = [copy([1.0, 2.0, 3.0], 2.0, [0.0, 0.0, 0.0]), copy([-4.0, 0.0, 1.0], 0.5, [0.3, -0.6, 1.0]), copy([9.0; 3], 0.0, [0.0; 3])];
-        let inner = [copy([1.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0]), copy([0.0, 1.0, -2.0], 3.0, [0.2, 0.4, -0.1]), copy([5.0; 3], 1.0, [0.0; 3])];
+        let mut inner = [copy([1.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0]), copy([0.0, 1.0, -2.0], 3.0, [0.2, 0.4, -0.1]), copy([5.0; 3], 1.0, [0.0; 3])];
+        // The second inner copy is a Scene Mirror reflection across Y.
+        inner[1].rot_pad[3] = 2.0;
         let (outer_slot, _) = h.array(&outer, outer.len());
         let (inner_slot, _) = h.array(&inner, inner.len());
         let (out, _) = h.array::<InstanceTransform>(&[], 1);
@@ -255,6 +257,7 @@ mod gpu_tests {
             let have = transform_point(&trs(*got), probe);
             assert!((0..3).all(|d| (want[d] - have[d]).abs() < 1e-4), "copy {k}: {have:?} want {want:?}");
             assert!((got.pos_scale[3] - scale).abs() < 1e-6);
+            assert_eq!(got.rot_pad[3], b.rot_pad[3], "copy {k} keeps its mirror marker");
         }
         // The rotation helper the shader mirrors round-trips the renderer's matrix.
         let r = trs_matrix([0.0; 3], [0.2, 0.4, -0.1], [1.0; 3]);

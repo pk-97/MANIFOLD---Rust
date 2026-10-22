@@ -61,7 +61,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
             continue;
         };
         match card.modifier {
-            // The corridor is the first instance stage (`scene_loop.rs`).
+            // The corridor has its own emitter (`scene_loop.rs`).
             ModifierType::SceneLoop => {}
             ModifierType::SceneMirror => super::scene_mirror::emit(b, item, card)?,
             _ => emit(b, item, card, &lineage, &mut shattered)?,

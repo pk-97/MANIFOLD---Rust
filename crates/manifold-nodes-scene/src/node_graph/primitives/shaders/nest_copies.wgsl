@@ -1,7 +1,10 @@
 // node.nest_copies — copy k = i * inner_count + j places inner copy j at
 // outer copy i: position P + s1 * R1 * p2, rotation R1 * R2 (back to the
 // renderer's Euler XYZ, R = Rz * Ry * Rx), scale s1 * s2. A zero-scale copy
-// on either side stays a hole.
+// on either side stays a hole. An inner copy's mirror marker (rot_pad.w, the
+// plane the renderer flips each vertex across before the rotation) rides
+// through an unmirrored outer copy: P + s1*R1*(R2*(M*v)*s2 + p2) is still
+// that flip, then the composed rotation. A mirrored outer copy drops it.
 
 struct Params {
     inner_count: u32,
@@ -67,5 +70,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let ra = euler_xyz(a.rot_pad.xyz);
     let position = a.pos_scale.xyz + a.pos_scale.w * (ra * b.pos_scale.xyz);
     let rotation = xyz_euler(ra * euler_xyz(b.rot_pad.xyz));
-    nested[k] = Inst(vec4<f32>(position, scale), vec4<f32>(rotation, 0.0));
+    let marker = select(0.0, b.rot_pad.w, a.rot_pad.w == 0.0);
+    nested[k] = Inst(vec4<f32>(position, scale), vec4<f32>(rotation, marker));
 }
