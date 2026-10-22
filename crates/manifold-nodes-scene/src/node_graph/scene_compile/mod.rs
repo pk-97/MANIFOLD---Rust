@@ -11,7 +11,7 @@
 //! its node param; the (kind, property) table in `manifold_core::scene_schema`
 //! decides which rows exist.
 //!
-//! The Ocean shape compiles to nothing yet (L16). Water and its sources
+//! An Ocean shape is the starter sea's chain (`ocean.rs`). Water and its sources
 //! splice the water family template (`water.rs`). Forces (`forces.rs`) and
 //! Modifier cards (`modifiers.rs`, in chain order) compile to scene modifier
 //! instances; Copies emit a copies body per item (`copies.rs`); physics
@@ -28,6 +28,7 @@ mod mesh;
 mod model_material;
 mod modifiers;
 mod object;
+mod ocean;
 mod physics;
 mod swarm;
 mod water;

@@ -310,6 +310,17 @@ mod every_param_has_a_row {
         let fields = manifold_core::scene_doc::ObjectFields { shape: mesh, ..Default::default() };
         let at = doc.items.len();
         doc.insert(None, at, Item::new(ItemId::new("mesh"), "Mesh", manifold_core::scene_doc::ItemFields::Object(fields))).unwrap();
+        // The Ocean surface's chain, and the Environment under a Sea Horizon.
+        let fields = manifold_core::scene_doc::ObjectFields { shape: manifold_core::scene_doc::Shape::Ocean, ..Default::default() };
+        let at = doc.items.len();
+        doc.insert(None, at, Item::new(ItemId::new("ocean"), "Ocean", manifold_core::scene_doc::ItemFields::Object(fields))).unwrap();
+        for item in doc.items.iter_mut() {
+            if let manifold_core::scene_doc::ItemFields::Light(light) = &mut item.fields
+                && let manifold_core::scene_doc::LightType::Environment { source } = &mut light.light
+            {
+                *source = manifold_core::scene_doc::EnvironmentSource::SeaHorizon { file: "sky.exr".into() };
+            }
+        }
         doc
     }
 
@@ -329,7 +340,7 @@ mod every_param_has_a_row {
         };
         let mut found = false;
         doc.walk(|item, _| {
-            for row in scene_schema::rows(item.kind()) {
+            for row in scene_schema::declared_rows(item.kind()) {
                 found |= row.param == param
                     && match row.reach {
                         Reach::Own(r) => item.id.as_str() == owner && r == role,
