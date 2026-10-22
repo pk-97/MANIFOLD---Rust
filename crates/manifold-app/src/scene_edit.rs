@@ -209,17 +209,34 @@ pub(crate) fn remove(project: &Project, layer: &LayerId, item: &ItemId) -> Resul
     Ok(SceneEdit { command: Box::new(RemoveSceneItemCommand::new(layer.clone(), item.clone())), select: None })
 }
 
-/// Duplicate an item and everything under it, right after the original.
-pub(crate) fn duplicate(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
+/// Duplicate each of `items` and everything under it, right after its
+/// original, in one undo step (Cmd+D). An item inside another duplicated
+/// item comes with it. The last item's copy is selected.
+pub(crate) fn duplicate(project: &Project, layer: &LayerId, items: &[ItemId]) -> Result<SceneEdit, String> {
     let doc = doc(project, layer)?;
-    let found = doc.find(item).ok_or("That item is no longer in the scene")?;
-    if found.kind() == ItemKind::World {
-        return Err("The World cannot be duplicated".to_owned());
+    let mut copies = Vec::new();
+    doc.walk(|item, ancestors| {
+        if items.contains(&item.id) && item.kind() != ItemKind::World && !ancestors.iter().any(|a| items.contains(&a.id)) {
+            copies.push(item);
+        }
+    });
+    if copies.is_empty() {
+        return Err(if items.is_empty() { "Select the items to duplicate first" } else { "The World cannot be duplicated" }.to_owned());
     }
-    let (parent, index) = doc.locate(item).ok_or("That item is no longer in the scene")?;
-    let id = new_id();
-    let command = AddSceneItemCommand::new(layer.clone(), found.kind(), parent, index + 1, Some(item.clone()), id.clone());
-    Ok(SceneEdit { command: Box::new(command), select: Some(id) })
+    let mut placed: Vec<(Option<ItemId>, usize, &Item, ItemId)> = copies
+        .into_iter()
+        .filter_map(|item| doc.locate(&item.id).map(|(parent, index)| (parent, index, item, new_id())))
+        .collect();
+    let select = items.iter().rev().find_map(|id| placed.iter().find(|(_, _, item, _)| item.id == *id)).map(|(.., copy)| copy.clone());
+    // Later siblings first, so each copy lands right after its own original.
+    placed.sort_by(|a, b| b.1.cmp(&a.1));
+    let commands: Vec<Box<dyn Command>> = placed
+        .into_iter()
+        .map(|(parent, index, item, id)| {
+            Box::new(AddSceneItemCommand::new(layer.clone(), item.kind(), parent, index + 1, Some(item.id.clone()), id)) as Box<dyn Command>
+        })
+        .collect();
+    Ok(batch(commands, "Duplicate", select))
 }
 
 pub(crate) fn group(project: &Project, layer: &LayerId, items: &[ItemId]) -> Result<SceneEdit, String> {
@@ -610,14 +627,6 @@ pub(crate) fn nudge(project: &Project, layer: &LayerId, item: &ItemId, delta: i3
         return Ok(None);
     }
     Ok(Some(SceneEdit { command: Box::new(ReparentSceneItemCommand::new(layer.clone(), item.clone(), parent, target)), select: None }))
-}
-
-/// Items copied with Cmd+C in the Scene tab. A paste into the same scene
-/// duplicates them; the document has no cross-scene paste yet.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct SceneItemClipboard {
-    pub layer: LayerId,
-    pub items: Vec<ItemId>,
 }
 
 /// Move the Modifier card `card` to place `to` in the chain: one undo step.

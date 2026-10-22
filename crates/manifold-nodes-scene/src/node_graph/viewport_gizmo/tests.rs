@@ -1040,15 +1040,6 @@ fn every_declared_shape_is_picked_by_its_own_edges() {
     assert_eq!(object.outline, ShapeOutline::None, "an object's box is its transform, not its mesh: picked at its origin");
 }
 
-#[test]
-fn a_click_selects_one_and_shift_adds_or_removes() {
-    let (a, b, c) = (object_id(1), object_id(2), object_id(3));
-    assert_eq!(toggle_pick(&[a.clone(), b.clone()], c.clone(), false), std::slice::from_ref(&c), "a plain click selects only what it hits");
-    assert_eq!(toggle_pick(&[a.clone(), b.clone()], c.clone(), true), [a.clone(), b.clone(), c.clone()], "Shift adds, last");
-    assert_eq!(toggle_pick(&[a.clone(), b.clone(), c.clone()], b.clone(), true), [a.clone(), c.clone()], "Shift on a selected one removes it");
-    assert!(toggle_pick(std::slice::from_ref(&a), a.clone(), true).is_empty());
-}
-
 /// Every pickable helper draws faint; the selected ones draw bright, and
 /// only the selection has handles.
 #[test]

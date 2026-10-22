@@ -1223,12 +1223,6 @@ impl Application {
             .map(|graph| (*graph).clone())
     }
 
-    /// The scene the viewport gizmos read, at the layer's card values.
-    /// This is a disposable projection, never a project edit or runtime result.
-    pub(crate) fn viewport_scene(&self) -> Option<manifold_nodes_scene::node_graph::scene_vm::SceneVm> {
-        crate::scene_gizmo::scene_vm_of(&self.local_project, self.watched_graph_target.as_ref()?)
-    }
-
     /// Resolve the canvas's current selection into copy-ready data: the selected
     /// def nodes plus the wires whose BOTH endpoints are selected (internal
     /// connectivity only). `None` when nothing is watched or selected. Backs
@@ -1714,10 +1708,15 @@ impl Application {
                 info.has_image = show_image;
                 info.diagnostic = session.displayed.as_ref().map_or(Some("Waiting for the scene to render…"), |frame| frame.diagnostic());
             }
-            // The selected shape's outline slots and pick targets over the
-            // authored scene. The handle lines are the content thread's, built
-            // from the scene it renders (`gizmo_overlay.rs`).
-            let drawn = crate::viewport_selection::ViewportSelection::refresh(&mut ws.viewport_selection, viewport_def.scene.as_ref(), &ws.viewport_selected);
+            // The Scene panel's selection over the authored scene: the outline
+            // slots, and the handles a press grabs. The handle lines are the
+            // content thread's, built from the scene it renders
+            // (`gizmo_overlay.rs`).
+            let items = match self.watched_graph_target.as_ref() {
+                Some(manifold_core::GraphTarget::Generator(layer)) => self.ws.ui_root.scene_setup_panel.selected_of(layer),
+                _ => &[],
+            };
+            let drawn = crate::viewport_selection::ViewportSelection::refresh(&mut ws.viewport_selection, viewport_def.scene.as_ref(), items);
             if let Some(drawn) = drawn {
                 drawn.outline(&mut ws.viewport_outline);
             }

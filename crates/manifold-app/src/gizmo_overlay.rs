@@ -16,56 +16,30 @@ use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
 use manifold_core::scene_surface::GizmoDrawMode;
 use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
-use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, GizmoMode, GizmoSelection, GizmoTargetId, GizmoView, compose_lines};
+use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoChrome, GizmoMode, GizmoSelection, GizmoView, compose_lines};
 use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
 use manifold_ui::panels::scene_setup_panel::SceneSelection;
 
 use crate::physics_overlay::{NO_SELECTION, SharedDomains, effect_follows};
 use crate::scene_viewport::ViewportHost;
 
-/// What is selected, as the host that owns the handles knows it.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum GizmoPicks {
-    /// The Scene panel's selected items, and the shapes picked on the
-    /// preview among them.
-    Panel { items: Arc<[SceneSelection]>, picked: Arc<[GizmoTargetId]> },
-    /// The graph editor viewport's picked shapes.
-    Ids(Arc<[GizmoTargetId]>),
-}
-
-/// The handles one host wants over its scene.
+/// The handles one host wants over its scene: the Scene panel's selected
+/// items there, the one selection store every host reads.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GizmoRequest {
     pub mode: GizmoMode,
-    pub picks: GizmoPicks,
+    pub items: Arc<[SceneSelection]>,
 }
 
 impl GizmoRequest {
-    /// The Scene panel's selection. Slices equal to `kept`'s are shared with
+    /// The Scene panel's selection. A slice equal to `kept`'s is shared with
     /// it, so a steady frame allocates nothing and compares by content.
-    pub fn panel(mode: GizmoMode, items: &[SceneSelection], picked: &[GizmoTargetId], kept: Option<&Self>) -> Self {
-        let (kept_items, kept_picked) = match kept.map(|kept| &kept.picks) {
-            Some(GizmoPicks::Panel { items, picked }) => (Some(items), Some(picked)),
-            _ => (None, None),
+    pub fn panel(mode: GizmoMode, items: &[SceneSelection], kept: Option<&Self>) -> Self {
+        let items = match kept {
+            Some(kept) if kept.items.as_ref() == items => Arc::clone(&kept.items),
+            _ => Arc::from(items),
         };
-        Self { mode, picks: GizmoPicks::Panel { items: share(kept_items, items), picked: share(kept_picked, picked) } }
-    }
-
-    /// The graph editor viewport's picked shapes.
-    pub fn ids(mode: GizmoMode, ids: &[GizmoTargetId], kept: Option<&Self>) -> Self {
-        let kept_ids = match kept.map(|kept| &kept.picks) {
-            Some(GizmoPicks::Ids(ids)) => Some(ids),
-            _ => None,
-        };
-        Self { mode, picks: GizmoPicks::Ids(share(kept_ids, ids)) }
-    }
-}
-
-/// `items` as a shared slice, the same one as `kept` when nothing moved.
-fn share<T: Clone + PartialEq>(kept: Option<&Arc<[T]>>, items: &[T]) -> Arc<[T]> {
-    match kept {
-        Some(kept) if kept.as_ref() == items => Arc::clone(kept),
-        _ => Arc::from(items),
+        Self { mode, items }
     }
 }
 
@@ -117,13 +91,16 @@ pub(crate) struct SceneLines {
 impl SceneLines {
     /// The chrome of `target`'s scene and the handles of `request`, over the
     /// scene as `project` holds it now and the frame's own reports. Rebuilds
-    /// the scene and the targets only when what they read moved.
+    /// the scene and the targets only when what they read moved. With
+    /// `chain_fades`, an effect that moves the picture off the scene fades
+    /// the handles.
     pub fn compose(
         &mut self,
         project: &Project,
         stamps: &PartStamps,
         target: &GraphTarget,
         request: &GizmoRequest,
+        chain_fades: bool,
         frame: FrameChrome<'_>,
     ) -> &[WorldLine] {
         let scene = self.scene.viewport_def(project, Some(target), stamps).scene;
@@ -135,13 +112,8 @@ impl SceneLines {
         };
         if stale {
             self.chosen = scene.clone().map(|scene| {
-                let (selection, fade) = match &request.picks {
-                    GizmoPicks::Panel { items, picked } => {
-                        let fade = matches!(target, GraphTarget::Generator(layer) if effect_follows(project, layer));
-                        (GizmoSelection::new(&scene, crate::scene_gizmo::selected_targets(&scene, items, picked)), fade)
-                    }
-                    GizmoPicks::Ids(ids) => (GizmoSelection::of_ids(&scene, ids), false),
-                };
+                let fade = chain_fades && matches!(target, GraphTarget::Generator(layer) if effect_follows(project, layer));
+                let selection = GizmoSelection::new(&scene, crate::scene_gizmo::selected_targets(&scene, &request.items));
                 Chosen { scene, request: request.clone(), chain, selection, fade }
             });
         }
@@ -286,6 +258,7 @@ mod capture {
                 stamps,
                 target,
                 request,
+                true,
                 FrameChrome {
                     view: GizmoView::new(frame.camera, size.0, size.1),
                     lights: &frame.lights,
@@ -322,7 +295,7 @@ mod capture {
                 }
                 ViewportHost::GraphEditor => FrameChrome { view, lights: &[], domains: &frame.domains, live_columns: &frame.live_columns, physics: &[] },
             };
-            self.viewport.compose(project, stamps, &scene.target, request, chrome);
+            self.viewport.compose(project, stamps, &scene.target, request, scene.host == ViewportHost::OutputPreview, chrome);
             self.viewport_ready = true;
         }
 
@@ -377,12 +350,19 @@ impl crate::app::Application {
         let panel = &self.ws.ui_root.scene_setup_panel;
         let (mode, scene_layer) = (panel.gizmo_draw_mode(), panel.live_layer_id().cloned());
         let kept = &self.ws.gizmo_sent;
-        let preview = self.ws.preview_gizmo.shown().map(|frame| (frame.layer.clone(), self.ws.preview_gizmo.request(panel, kept.output.as_ref().map(|(_, request)| request))));
+        let preview = self.ws.preview_gizmo.shown().filter(|_| panel.gizmo_layer().is_some()).map(|frame| (frame.layer.clone(), self.ws.preview_gizmo.request(panel, kept.output.as_ref().map(|(_, request)| request))));
         let (output, viewport) = if self.ws.preview_navigation.active() {
             (None, preview.map(|(_, request)| (ViewportHost::OutputPreview, request)))
         } else {
-            let editor = self.graph_editor.as_ref().filter(|ed| ed.viewport_session.is_some());
-            let editor = editor.map(|ed| (ViewportHost::GraphEditor, GizmoRequest::ids(ed.viewport_gizmo_mode, &ed.viewport_selected, kept.viewport.as_ref().map(|(_, request)| request))));
+            let editor_layer = match self.watched_graph_target.as_ref() {
+                Some(GraphTarget::Generator(layer)) => Some(layer),
+                _ => None,
+            };
+            let editor = self.graph_editor.as_ref().filter(|ed| ed.viewport_session.is_some()).zip(editor_layer);
+            let editor = editor.map(|(ed, layer)| {
+                let kept = kept.viewport.as_ref().map(|(_, request)| request);
+                (ViewportHost::GraphEditor, GizmoRequest::panel(ed.viewport_gizmo_mode, panel.selected_of(layer), kept))
+            });
             (preview, editor)
         };
         let overlay = GizmoOverlay { mode, scene_layer, output, viewport };

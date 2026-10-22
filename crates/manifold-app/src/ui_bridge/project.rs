@@ -255,7 +255,7 @@ pub(super) fn dispatch_project(
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneDuplicate(layer_id, item) => {
-            let built = crate::scene_edit::duplicate(project, layer_id, item).map(Some);
+            let built = crate::scene_edit::duplicate(project, layer_id, std::slice::from_ref(item)).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneGroup(layer_id, items) => {
@@ -433,7 +433,7 @@ pub(super) fn remove_parameter_automation(
 
 /// Send a built Scene tab edit to the content thread, selecting the item it
 /// added; a refusal surfaces as a toast.
-pub(super) fn send_scene_edit(
+pub(crate) fn send_scene_edit(
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     layer_id: &LayerId,
     built: Result<Option<crate::scene_edit::SceneEdit>, String>,

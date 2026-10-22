@@ -646,6 +646,8 @@ pub struct ContentPipeline {
     scene_viewport: scene_viewport_capture::SceneViewportCapture,
     physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
     setup_fits: crate::setup_check::SetupFitObservations,
+    /// Clicks on a scene picture waiting for the item drawn there.
+    scene_picks: crate::scene_pick::ScenePicks,
     /// The selection outline's requests and mask bridges (D-102).
     #[cfg(target_os = "macos")]
     outline: crate::selection_outline::OutlineCapture,
@@ -827,6 +829,7 @@ impl ContentPipeline {
             scene_viewport: Default::default(),
             physics_overlay: Default::default(),
             setup_fits: Default::default(),
+            scene_picks: Default::default(),
             #[cfg(target_os = "macos")]
             outline: Default::default(),
             #[cfg(target_os = "macos")]
@@ -2206,6 +2209,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         });
                         gen_renderer.set_scene_viewport_request(scene_request,
                             self.scene_viewport.request.as_ref().and_then(|request| request.modifier.clone()));
+                        self.scene_picks.send(gen_renderer);
                         #[cfg(target_os = "macos")]
                         self.outline.apply(gen_renderer, self.physics_overlay.layer(), self.scene_viewport.generator_layer());
                         #[cfg(target_os = "macos")]
@@ -2220,6 +2224,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             &self.render_skip_scratch,
                             project_tempo.as_ref(),
                         );
+                        self.scene_picks.collect(gen_renderer);
                         break;
                     }
                 }

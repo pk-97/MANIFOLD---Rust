@@ -8,7 +8,7 @@ use manifold_node_engine::scene::transform::rotation_to_render_scene_euler;
 
 use super::{
     GizmoAxis, GizmoHandle, GizmoMode, GizmoTarget, GizmoTargetId, HandleWrite, IDENTITY_AXES, ShapeOutline, cross3, dot3,
-    gizmo_target_for, gizmo_targets, model_matrix, normalized, rotate_about, sub3,
+    gizmo_targets, model_matrix, normalized, rotate_about, sub3,
 };
 use crate::node_graph::scene_vm::{SceneVm, ShapeParamVm};
 
@@ -35,34 +35,9 @@ impl GizmoSelection {
         Self { targets: gizmo_targets(scene).collect(), selected, handles }
     }
 
-    /// The selection of the shapes `ids` names in `scene`; an id whose
-    /// shape is gone is dropped.
-    pub fn of_ids(scene: &SceneVm, ids: &[GizmoTargetId]) -> Self {
-        Self::new(scene, ids.iter().filter_map(|id| gizmo_target_for(scene, id)).collect())
-    }
-
     pub fn is_selected(&self, id: &GizmoTargetId) -> bool {
         self.selected.iter().any(|target| &target.id == id)
     }
-
-    /// The selected shapes' ids, in selection order.
-    pub fn ids(&self) -> Vec<GizmoTargetId> {
-        self.selected.iter().map(|target| target.id.clone()).collect()
-    }
-}
-
-/// The selection after a click picks `id` over `current`: `id` alone, or,
-/// with `extend` (Shift), `current` with `id` added last or taken out when
-/// it was in it.
-pub fn toggle_pick(current: &[GizmoTargetId], id: GizmoTargetId, extend: bool) -> Vec<GizmoTargetId> {
-    if !extend {
-        return vec![id];
-    }
-    let mut next: Vec<_> = current.iter().filter(|other| **other != id).cloned().collect();
-    if next.len() == current.len() {
-        next.push(id);
-    }
-    next
 }
 
 impl GizmoTarget {

@@ -28,7 +28,7 @@ impl RunnerGizmo {
     /// The Scene panel's gizmo report, as the content thread records one
     /// per rendered frame (D7a).
     pub(super) fn report(&mut self, ui: &UIRoot, data: &mut SceneData) {
-        let gizmo_layer = ui.scene_setup_panel.gizmo_layer().cloned();
+        let gizmo_layer = ui.scene_setup_panel.live_layer_id().cloned();
         self.overlay.set_layer(gizmo_layer.clone());
         if gizmo_layer.is_some() {
             self.overlay_frame += 1;

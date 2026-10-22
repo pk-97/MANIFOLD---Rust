@@ -839,6 +839,11 @@ impl ContentThread {
         if let Some(id) = self.content_pipeline.take_issued_present() {
             self.issued_presents.record(id, self.frame_deadline);
         }
+        for picked in self.content_pipeline.take_scene_picks(self.engine.project()) {
+            let sequence = self.edit_selection_update.as_ref().map_or(1, |update| update.sequence.wrapping_add(1));
+            let selection = crate::edit_selection::EditSelection::Picked(picked);
+            self.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
+        }
         self.physics_metrics = self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
         self.content_pipeline.set_last_render_work_ms(render_work_ms);

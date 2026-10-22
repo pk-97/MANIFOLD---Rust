@@ -14,6 +14,17 @@ impl ContentPipeline {
         &self.physics_overlay.frames
     }
 
+    /// A click on a scene picture, answered a couple of frames later by
+    /// [`Self::take_scene_picks`].
+    pub fn push_scene_pick(&mut self, pick: crate::scene_pick::ScenePick) {
+        self.scene_picks.push(pick);
+    }
+
+    /// The clicks answered since the last call, with the item drawn at each.
+    pub fn take_scene_picks(&mut self, project: Option<&manifold_core::project::Project>) -> Vec<crate::scene_pick::PickedItem> {
+        self.scene_picks.take_answered(project)
+    }
+
     /// What the solvers capped, clipped or refused on the layers that
     /// rendered, for the cards; recorded whatever Show gizmos says.
     pub fn setup_fits(&self) -> &crate::setup_check::SetupFitReport {

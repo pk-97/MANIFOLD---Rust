@@ -76,6 +76,9 @@ pub struct AddSceneItemCommand {
     id: ItemId,
     /// The item as first added, so a redo brings back the same ids.
     prepared: Option<(Item, BTreeMap<ItemId, ItemId>)>,
+    /// Param values written once the item is in: `(param id, value, base)`.
+    /// A paste carries its copied items' values this way.
+    values: Vec<(String, f32, f32)>,
     step: Step,
 }
 
@@ -86,7 +89,14 @@ impl AddSceneItemCommand {
     pub fn with_subtree(layer: LayerId, parent: Option<ItemId>, index: usize, item: Item) -> Self {
         let kind = item.kind();
         let id = item.id.clone();
-        Self { layer, kind, parent, index, source: None, id, prepared: Some((item, BTreeMap::new())), step: Step::default() }
+        Self { layer, kind, parent, index, source: None, id, prepared: Some((item, BTreeMap::new())), values: Vec::new(), step: Step::default() }
+    }
+
+    /// Also write these param values `(param id, value, base)` once the item
+    /// is in, in the same undo step.
+    pub fn with_values(mut self, values: Vec<(String, f32, f32)>) -> Self {
+        self.values = values;
+        self
     }
 
     pub fn new(
@@ -97,7 +107,7 @@ impl AddSceneItemCommand {
         source: Option<ItemId>,
         id: ItemId,
     ) -> Self {
-        Self { layer, kind, parent, index, source, id, prepared: None, step: Step::default() }
+        Self { layer, kind, parent, index, source, id, prepared: None, values: Vec::new(), step: Step::default() }
     }
 
     fn prepare(&self, doc: &SceneDoc) -> Result<(Item, BTreeMap<ItemId, ItemId>), SceneEditError> {
@@ -138,6 +148,7 @@ impl Command for AddSceneItemCommand {
         let (parent, index) = (self.parent.clone(), self.index);
         if self.step.run(project, &self.layer, |doc| doc.insert(parent.as_ref(), index, item)) {
             copy_values(project, &self.layer, &map);
+            write_values(project, &self.layer, &self.values);
         }
     }
 
@@ -170,6 +181,19 @@ fn copy_values(project: &mut Project, layer: &LayerId, map: &BTreeMap<ItemId, It
         if let Some(p) = instance.params.get_mut(&id) {
             p.value = value;
             p.base = base;
+        }
+    }
+}
+
+/// Write `values` `(param id, value, base)` into the layer's params that hold them.
+fn write_values(project: &mut Project, layer: &LayerId, values: &[(String, f32, f32)]) {
+    let Ok(instance) = scene_instance(project, layer) else {
+        return;
+    };
+    for (id, value, base) in values {
+        if let Some(p) = instance.params.get_mut(id) {
+            p.value = *value;
+            p.base = *base;
         }
     }
 }

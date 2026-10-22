@@ -11,6 +11,7 @@
 
 use manifold_nodes as _;
 mod scene_viewport_session;
+mod scene_pick;
 mod glb_conformance;
 
 mod alpha_contract;

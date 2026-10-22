@@ -4,6 +4,8 @@
 
 use manifold_gpu::GpuTexture;
 
+use crate::scene::pick::{PickHit, PickRequest};
+
 use super::PresetRuntime;
 
 impl PresetRuntime {
@@ -40,6 +42,34 @@ impl PresetRuntime {
     /// The second view's mask for its latest frame.
     pub fn scene_viewport_selection_mask(&self) -> Option<&GpuTexture> {
         self.executor.scene_viewport_selection_mask()
+    }
+
+    /// Pick the item drawn at a point of the picture this runtime renders
+    /// (SCENE_DOCUMENT_DESIGN.md section 7.14), answered by [`Self::take_pick`]
+    /// a render later. A rebuilt graph drops a pick in flight; the host gives
+    /// up on it.
+    pub fn request_pick(&mut self, pick: PickRequest) {
+        let Some(slot) = self.effect_nodes.first() else { return };
+        for (_, instance) in &slot.node_map {
+            if let Some(node) = self.graph.get_node_mut(*instance) {
+                node.node.request_pick(pick);
+            }
+        }
+    }
+
+    /// The answer to the last [`Self::request_pick`], once read back.
+    pub fn take_pick(&mut self) -> Option<PickHit> {
+        let slot = self.effect_nodes.first()?;
+        slot.node_map.iter().find_map(|(_, instance)| self.graph.get_node_mut(*instance)?.node.take_pick())
+    }
+
+    /// [`Self::request_pick`] in the second view ([`Self::set_scene_viewport`]).
+    pub fn request_scene_viewport_pick(&mut self, pick: PickRequest) {
+        self.executor.request_scene_viewport_pick(pick);
+    }
+
+    pub fn take_scene_viewport_pick(&mut self) -> Option<PickHit> {
+        self.executor.take_scene_viewport_pick()
     }
 }
 

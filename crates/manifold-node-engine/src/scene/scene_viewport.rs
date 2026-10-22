@@ -100,4 +100,11 @@ pub trait ViewportPass: Send {
     fn gizmo_depth(&self) -> Option<&GpuTexture> {
         None
     }
+    /// A pixel pick, as on the scene node
+    /// ([`crate::exec::effect_node::EffectNode::request_pick`]), through this
+    /// view's camera.
+    fn request_pick(&mut self, _pick: crate::scene::pick::PickRequest) {}
+    fn take_pick(&mut self) -> Option<crate::scene::pick::PickHit> {
+        None
+    }
 }

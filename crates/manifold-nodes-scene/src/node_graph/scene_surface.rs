@@ -59,6 +59,28 @@ pub static INITIAL_FILL_SHAPES: [SceneShapeDecl; 1] = [transform_box(false)];
 /// A swarm's emitter box: any size above zero is valid.
 pub static SWARM_SHAPES: [SceneShapeDecl; 1] = [transform_box(false)];
 
+const fn point(center: ParamTriple, radius: &'static str) -> SceneShapeDecl {
+    SceneShapeDecl { shape: SceneShape::PointRadius { center, radius: id(radius) }, via: None, extent_limit: None, uniform_scale: false }
+}
+
+/// A Sun, Point or Spot light: it draws no pixels, so its handle is how it
+/// is clicked. Moved by its position, its reach scaled by its range.
+pub static LAMP_SHAPES: [SceneShapeDecl; 1] = [point(POS, "range")];
+
+const CENTRE: ParamTriple = [id("center_x"), id("center_y"), id("center_z")];
+
+/// A force about a centre (Radial, Vortex, Attractor, Explosion): moved by
+/// its centre, its reach scaled by its radius.
+pub static CENTRED_FORCE_SHAPES: [SceneShapeDecl; 1] = [point(CENTRE, "radius")];
+
+/// A force along a direction (Uniform, Wind): turned by its direction.
+pub static DIRECTED_FORCE_SHAPES: [SceneShapeDecl; 1] = [SceneShapeDecl {
+    shape: SceneShape::Axis { origin: None, direction: [id("direction_x"), id("direction_y"), id("direction_z")], radius: None },
+    via: None,
+    extent_limit: None,
+    uniform_scale: false,
+}];
+
 #[cfg(test)]
 mod tests {
     use super::*;
