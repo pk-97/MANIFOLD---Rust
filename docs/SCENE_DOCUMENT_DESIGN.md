@@ -319,7 +319,7 @@ One table keyed by (kind, property), one file per kind under `manifold-core/src/
 | Camera | Rig (Orbit, Free, Look At; Loop, which rides the scene's Scene Loop, from L21); the rig's rows (section 7.13); Use this view; Depth of Field (with Aperture Shape); Motion Blur; Shake (Amount, Speed, Position strength, Rotation strength; L8) |
 | Lighting (one card) | Environment source (Sky, HDRI File, None, and Sea Horizon from L16); in HDRI mode: File picker (always present), Rotation (L13), Intensity, Background (Blur, Brightness), Aim Sun at HDRI; in Sky mode: Gradient or Softbox rows; Exposure; then every light |
 | Light | Type, Colour, Intensity, Position, Target, Range, Size, Shadows (rows by type) |
-| Object | Shape (built-in solids; Ocean from L16); Model File (a single imported Object only); Transform (with the Scale link toggle); Material (inline: look, colour and surface rows, used by N, Make Unique); Look (Visible, Cast Shadows, Emission); Physics; Copies |
+| Object | Shape (built-in solids; Ocean from L16; Extrude, Revolve and Tube from L20); Model File (a single imported Object only); Transform (with the Scale link toggle); Material (inline: look, colour and surface rows, used by N, Make Unique); Look (Visible, Cast Shadows, Emission); Physics; Copies |
 | Group | Transform (with the Scale link toggle); Visible; Material (applies to children with none); Physics (Body here is one compound body); Copies; when Source is a file: Model File, Combine Meshes, Clip, Rate, Loop Mode, Retrigger |
 | Material | Look; Type (L17); surface rows; features; texture source (None, file, model, layer; a layer feeds Base Colour or Emission); used by N; Make Unique |
 | Swarm | Emit From; Draw As; Count; Size; Air Drag; Material; Look; Transform places the emitter |
@@ -358,7 +358,8 @@ Short statements a performer can check, one by one. Each names the one lane that
 **Object**
 - A new Object has its own Material, and its colour is editable on its card. [F1]
 - Its name follows its shape (Cube, Sphere, Icosahedron) until the user renames it. [F1]
-- Shape offers Cube, Sphere, Plane, Tetrahedron, Octahedron, Icosahedron, Dodecahedron. [F1] Ocean [L16] joins when it draws.
+- Shape offers Cube, Sphere, Plane, Tetrahedron, Octahedron, Icosahedron, Dodecahedron. [F1] Ocean [L16] and Extrude, Revolve and Tube [L20] join when they draw.
+- An Extrude, Revolve or Tube shape changes live when its curve's rows move, with no recompile. [L20]
 - Changing Shape keeps the item's transform, material, physics and copies, and every Force and Modifier aimed at it. [L11]
 - Visible off hides the item from the output, from picking and from shadows. [L11]
 - Body makes it fall on play at once, whatever was set before; nothing else needs toggling. [F2]
@@ -532,7 +533,7 @@ Branch `wave/scene-document`. Land once, after L11.
 | Lead | Merge F1, F2, L6 and `lane/scene-doc-glb-sweep` (3d5849b57). Peter tests the build |
 | A | L12, L13, L14, L17 |
 | B | L15 (after L12), L7, L8 |
-| C | L9 (after L7), L16, L18, L19 (each after L15) |
+| C | L9 (after L7), L16, L18, L19, L20 (each after L15) |
 | D | L21 (after L15 and L8), L10 (after L6, L7, L9, L12, L16) |
 | E | L11 |
 
@@ -673,6 +674,14 @@ Files: `manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` and its 
 6. Cmd+C and Cmd+V copy and paste items within a scene and into another scene layer; Cmd+D duplicates.
 7. Promise 13's GPU proof passes.
 
+**L20 (Opus): curve shapes.**
+Files: `scene_compile/curves.rs` (new), `scene_schema/curves.rs` (new), Shape entries in `scene_doc.rs`. Joins: bounds through L15. Reference: Blender's curve objects (Extrude and Bevel depth) and its Screw modifier.
+1. Shape offers Extrude (`extrude_curve`), Revolve (`revolve_curve`) and Tube (`tube_from_path`).
+2. Each takes a Curve field with built-in curves: Circle, Polygon (Sides), Star, Spiral, Helix, Wave and Lissajous, built from the existing curve nodes (`generate_range`, `array_math`, `pack_curve_xy`, `frequency_ratio`). A curve that needs a node that does not exist is reported, not built.
+3. Every curve row (Sides, Radius, Turns, ratios) and Depth, Thickness and Segments are performance rows: a knob or the beat reshapes the solid live.
+4. Each curve shape takes Material, physics, Copies and modifiers like any shape.
+5. Drawing your own curve by hand is not in this lane.
+
 **L16 (Sonnet): Ocean.**
 Files: `scene_compile/ocean.rs` (new), `scene_schema/ocean.rs` (new), the Shape entry, the Sea Horizon environment source in `scene_compile/light.rs`. Joins: bounds through L15.
 1. Shape offers Ocean, and it draws the ocean surface from main's Ocean starter nodes.
@@ -780,7 +789,7 @@ Every scene feature a performer could use on main (origin/main), its state on th
 | Sphere | Swarm Draw As only | Missing as an Object shape | Object Shape | F1 |
 | Ocean surface (`projected_grid`, `ocean_spectrum`, `inverse_fft_2d`, `ocean_displace`) | Ocean and Ocean Cliff starters | Offered in Shape, draws nothing | Object Shape Ocean | L16 |
 | Procedural geometry: grid, hypercube, polytope edges, nested cubes, triangulated grid | Their own line generators (Wireframe, Tesseract, Nested Cubes, Blossom Wire, Lissajous) | Unchanged | Not a scene feature | none |
-| Curve geometry: extrude curve, revolve curve, tube from path | Hand-wired | Missing | No kind holds a curve | Section 15.3 |
+| Curve geometry: extrude curve, revolve curve, tube from path | Hand-wired | Missing | Object Shapes Extrude, Revolve, Tube | L20 |
 | Wireframe lines (`render_lines`) | Their own line generators | Unchanged | Not a scene feature | none |
 | Groups, nesting, visibility | Graph groups | Works | Group | built |
 | Shake on objects (`transform_shake`) | Hand-wired | Missing | Modifier type for Objects and Groups | L18 |
@@ -855,7 +864,7 @@ The twenty scene modifier presets main shipped in `crates/manifold-nodes/assets/
 ### 15.3 For Peter
 
 Features that fit no kind:
-- **Curve geometry** (extrude curve, revolve curve, tube from path). No kind holds a curve. Default: deferred to geometry node assets (section 14), pending Peter.
+- **Drawing a curve by hand** (point editing in the viewport). L20 ships built-in curves only; a hand-drawn curve needs its own design pass.
 
 Calls built as defaults, pending Peter:
 - Every new Object gets its own Material.
