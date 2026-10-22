@@ -253,7 +253,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 - Camera is a repeatable kind. Rig: Orbit, Free, Look At, or Loop (structural). Loop rides the scene's Scene Loop modifier (ruling 21, section 7.19) and arrives with L21.
   - Orbit: Orbit, Tilt, Distance (minimum above 0), the height it looks at, Field of View, Roll, Clipping.
   - Free: Yaw, Pitch, Position, Field of View, Roll, Clipping.
-  - Look At: Position, Target (an Object or Group pick, a structural field; the camera follows the item as it moves) (default, pending Peter), Field of View, Clipping.
+  - Look At: Position, Target (an Object or Group pick, a structural field; the camera follows the item as it moves; Target X, Y and Z offset from it) (default, pending Peter), Field of View, Clipping. Focus Distance starts at 10 m, never below 0.1 m.
   - Every rig has "Use this view".
   - Depth of Field: On, Focus, f-stop, Max Blur, Aperture Shape (default, pending Peter), Quality.
   - Motion Blur: On, Shutter, Max Blur. It shows whenever the camera or an object moves.
