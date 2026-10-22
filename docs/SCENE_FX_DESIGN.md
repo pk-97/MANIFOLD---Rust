@@ -377,7 +377,7 @@ were too wide for one lane session.
 - **Deliverables:** Skin row per scene object (source dropdown of layer names from
   the project snapshot + target-map dropdown, manifest params only, visibly
   clickable chrome); insert command routing through EditingService; missing-layer
-  chip; `scripts/ui-flows/scene-skin.json`.
+  chip; `scene-skin.json` (deleted).
 - **Gate:** `cargo nextest run -p manifold-nodes -p manifold-ui -p manifold-editing`
   green; L3 flow green end-to-end INCLUDING save → reload → still bound.
 - **Demo:** the L3 flow IS the demo (L3); final step kills the source clip and
