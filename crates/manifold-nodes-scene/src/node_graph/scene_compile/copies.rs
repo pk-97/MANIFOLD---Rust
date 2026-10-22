@@ -13,10 +13,16 @@
 //! them fixed, a Body drops them as moving bodies. A copy group needs the
 //! world even when nothing has physics, because the world is what places the
 //! copies.
+//!
+//! On Surface replaces the layout: a `node.scatter_on_mesh` over the surface
+//! item's mesh places the copies in that item's frame, and the body only counts
+//! them (its Count drives the scatter's). Physics does not move copies on a
+//! surface, so their body stays disabled.
 
 use manifold_core::effect_graph_def::SerializedParamValue;
+use manifold_core::copies_body::MAX_COPIES;
 use manifold_core::scene_doc::{Item, PhysicsSetting};
-use manifold_core::scene_schema::{BODY_ROLE, COPIES_ROLE, MAX_GROUP_PARTS};
+use manifold_core::scene_schema::{BODY_ROLE, COPIES_ROLE, COPIES_ROWS, MAX_GROUP_PARTS, Reach, SURFACE_ROLE};
 
 use super::builder::{Builder, SCENE};
 
@@ -27,6 +33,7 @@ const FIXED: u32 = 0;
 const MOVING: u32 = 1;
 
 fn add_body(b: &mut Builder<'_>, item: &Item, transform: u32, physics: PhysicsSetting) -> u32 {
+    let physics = if item.fields.copies_surface().is_some() { PhysicsSetting::None } else { physics };
     let owner = item.id.as_str();
     let body = b.add(owner, COPIES_ROLE, "node.rigid_body");
     b.wire(transform, "transform", body, "transform");
@@ -96,6 +103,7 @@ pub(crate) fn draw_instances(b: &mut Builder<'_>, body: u32, object: u32, group_
 /// Wire every copies body into the Physics World as its own copy group, in
 /// emission order, and size the world's copy-group family to match.
 pub(crate) fn join_world(b: &mut Builder<'_>) {
+    place_on_surfaces(b);
     if b.copy_bodies.is_empty() {
         return;
     }
@@ -116,4 +124,79 @@ pub(crate) fn join_world(b: &mut Builder<'_>) {
         b.wire(*body, "body", world, &format!("copies_{group}"));
     }
     b.set_number(world, "copy_groups", bodies.len() as f32);
+}
+
+/// Sit the copies of every item with On Surface set on that item's surface:
+/// a scatter over the surface's mesh places them in the surface's frame, in
+/// place of the body's layout. A surface with no mesh leaves the copies to
+/// their Layout.
+fn place_on_surfaces(b: &mut Builder<'_>) {
+    let doc = b.doc;
+    let mut on_surface = Vec::new();
+    doc.walk(|item, _| {
+        if let Some(surface) = item.fields.copies_surface() {
+            on_surface.push((item, surface));
+        }
+    });
+    for (item, surface) in on_surface {
+        let owner = item.id.as_str();
+        let (Some(body), Some(target)) = (b.id(owner, COPIES_ROLE), doc.find(surface)) else {
+            continue;
+        };
+        let Some(mesh) = super::swarm::first_mesh(b, target) else {
+            continue;
+        };
+        let Some(frame) = super::swarm::emit_frame(b, owner, target) else {
+            continue;
+        };
+        let draws = draws_of(b, item, body);
+        let scatter = b.add(owner, SURFACE_ROLE, "node.scatter_on_mesh");
+        b.wire(mesh, "vertices", scatter, "vertices");
+        b.set_number(scatter, "max_capacity", MAX_COPIES as f32);
+        b.follow(body, "copy_count", scatter, "count");
+        b.apply_rows(item, COPIES_ROWS.iter().filter(|row| row.reach == Reach::Own(SURFACE_ROLE) && (row.applies)(&item.fields)));
+        b.splice(body, "instances", scatter, "instances");
+        // Each copy is the surface's frame, then its point on the surface,
+        // then the copied item's own transform.
+        let own = b.id(owner, "transform");
+        for object in draws {
+            b.set(object, "instances_space", SerializedParamValue::Enum { value: GROUP_SPACE });
+            b.wire(frame, "transform", object, "parent_transform");
+            match b.input(object, "transform") {
+                // A part inside a copied group: the group's transform leads
+                // its chain.
+                Some((first, _)) => {
+                    let mut root = first;
+                    while let Some((above, _)) = b.input(root, "parent") {
+                        root = above;
+                    }
+                    if let Some(own) = own.filter(|own| *own != root) {
+                        b.wire(own, "transform", root, "parent");
+                    }
+                }
+                // A copied Object, which draws no transform of its own.
+                None => {
+                    if let Some(own) = own {
+                        b.wire(own, "transform", object, "transform");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The objects that draw `body`'s copies: the copied Object, or every part
+/// of the copied Group.
+fn draws_of(b: &Builder<'_>, item: &Item, body: u32) -> Vec<u32> {
+    let mut draws = Vec::new();
+    let mut visit = vec![item];
+    while let Some(next) = visit.pop() {
+        if let Some(object) = b.id(next.id.as_str(), "object")
+            && b.input(object, "instances").is_some_and(|(from, port)| from == body && port == "instances")
+        {
+            draws.push(object);
+        }
+        visit.extend(next.children.iter());
+    }
+    draws
 }

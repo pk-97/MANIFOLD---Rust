@@ -62,7 +62,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("direction_z"), label: "Direction Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-100.0, 100.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Both array capacities must match; the planner returns no output capacity for unequal inputs so an invalid graph fails explicitly. The displacement uses the current position only and preserves scale plus all rotation/marker data. A zero-scale source is an inactive hole and is copied byte-for-byte, which keeps source liveness intact. Pair with node.copy_positions → node.wave_field_3d for a reusable wave-driven copy field.",
+    composition_notes: "The weights must cover every copy (a longer weight array is fine: copy i reads weight i); the planner returns no output capacity when weights are shorter, so an invalid graph fails explicitly. The displacement uses the current position only and preserves scale plus all rotation/marker data. A zero-scale source is an inactive hole and is copied byte-for-byte, which keeps source liveness intact. Pair with node.copy_positions → node.wave_field_3d for a reusable wave-driven copy field.",
     examples: [],
     picker: { label: "Displace Copies", category: Atom },
     summary: "Moves copies along a chosen direction according to a scalar field while preserving their transform metadata.",
@@ -91,7 +91,8 @@ impl Primitive for DisplaceCopies {
             .iter()
             .find(|(name, _)| *name == "weights")
             .map(|(_, n)| *n)?;
-        (instances == weights).then_some(instances)
+        // A longer weight field is fine: copy i reads weight i.
+        (weights >= instances).then_some(instances)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {

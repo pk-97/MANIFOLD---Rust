@@ -1,0 +1,111 @@
+{
+  "version": 3,
+  "name": "Copy Blend",
+  "presetMetadata": {
+    "id": "CopyBlend",
+    "displayName": "Copy Blend",
+    "category": "Geometry",
+    "oscPrefix": "copy_blend",
+    "available": true,
+    "params": [
+      { "id": "mix", "name": "Mix", "min": 0.0, "max": 1.0, "defaultValue": 0.5 },
+      { "id": "layout", "name": "Layout", "min": 0.0, "max": 3.0, "defaultValue": 1.0, "wholeNumbers": true, "valueLabels": ["Grid", "Ring", "Spiral", "Random"] },
+      { "id": "count", "name": "Count", "min": 1.0, "max": 65536.0, "defaultValue": 64.0, "wholeNumbers": true },
+      { "id": "width", "name": "Width", "min": 0.0, "max": 100.0, "defaultValue": 8.0 },
+      { "id": "height", "name": "Height", "min": 0.0, "max": 100.0, "defaultValue": 4.0 },
+      { "id": "depth", "name": "Depth", "min": 0.0, "max": 100.0, "defaultValue": 8.0 },
+      { "id": "size", "name": "Copy Size", "min": 0.0, "max": 10.0, "defaultValue": 1.0 },
+      { "id": "seed", "name": "Seed", "min": 0.0, "max": 1000.0, "defaultValue": 0.0, "wholeNumbers": true },
+      { "id": "enabled", "name": "Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "isToggle": true }
+    ],
+    "bindings": [
+      { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "enabled", "param": "value" } },
+      { "id": "mix", "label": "Mix", "defaultValue": 0.5, "target": { "kind": "node", "nodeId": "blend", "param": "t" } },
+      { "id": "layout", "label": "Layout", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "other", "param": "layout" }, "convert": { "type": "EnumRound" } },
+      { "id": "count", "label": "Count", "defaultValue": 64.0, "target": { "kind": "node", "nodeId": "other", "param": "active_count" }, "convert": { "type": "IntRound" } },
+      { "id": "width", "label": "Width", "defaultValue": 8.0, "target": { "kind": "node", "nodeId": "other", "param": "extent_x" } },
+      { "id": "height", "label": "Height", "defaultValue": 4.0, "target": { "kind": "node", "nodeId": "other", "param": "extent_y" } },
+      { "id": "depth", "label": "Depth", "defaultValue": 8.0, "target": { "kind": "node", "nodeId": "other", "param": "extent_z" } },
+      { "id": "size", "label": "Copy Size", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "other", "param": "base_scale" } },
+      { "id": "seed", "label": "Seed", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "other", "param": "seed" }, "convert": { "type": "IntRound" } }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "copy_blend_stage",
+          "scope": "eachObject",
+          "inputs": [
+            { "port": "instances", "source": { "previous": { "endpoint": "instances" } } }
+          ],
+          "outputs": [
+            { "port": "instances", "endpoint": "instances" }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "copy_blend_stage",
+      "typeId": "group",
+      "handle": "CopyBlendStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" }
+          ],
+          "outputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" }
+          ]
+        },
+        "nodes": [
+          { "id": 1, "nodeId": "group_instances", "typeId": "system.group_input", "handle": "instances" },
+          { "id": 10, "nodeId": "group_output", "typeId": "system.group_output", "handle": "output" },
+          {
+            "id": 20,
+            "nodeId": "enabled",
+            "typeId": "node.value",
+            "handle": "enabled",
+            "params": { "value": { "type": "Float", "value": 1.0 } }
+          },
+          {
+            "id": 21,
+            "nodeId": "other",
+            "typeId": "node.arrange_copies",
+            "handle": "other",
+            "params": {
+              "max_capacity": { "type": "Float", "value": 65536.0 },
+              "active_count": { "type": "Float", "value": 64.0 },
+              "layout": { "type": "Enum", "value": 1 },
+              "seed": { "type": "Float", "value": 0.0 },
+              "extent_x": { "type": "Float", "value": 8.0 },
+              "extent_y": { "type": "Float", "value": 4.0 },
+              "extent_z": { "type": "Float", "value": 8.0 },
+              "base_scale": { "type": "Float", "value": 1.0 },
+              "rot_x": { "type": "Float", "value": 0.0 },
+              "rot_y": { "type": "Float", "value": 0.0 },
+              "rot_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 22,
+            "nodeId": "blend",
+            "typeId": "node.blend_copies",
+            "handle": "blend",
+            "params": { "t": { "type": "Float", "value": 0.5 } }
+          }
+        ],
+        "wires": [
+          { "fromNode": 1, "fromPort": "instances", "toNode": 22, "toPort": "a" },
+          { "fromNode": 21, "fromPort": "instances", "toNode": 22, "toPort": "b" },
+          { "fromNode": 22, "fromPort": "out", "toNode": 10, "toPort": "instances" }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

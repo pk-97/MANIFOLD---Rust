@@ -103,7 +103,7 @@ fn a_bound_turn_and_a_wired_turn_follow_onto_copy_turn() {
     );
     assert!(!def.wires.iter().any(|w| w.to_node == 120 && w.to_port.starts_with("rot_")));
     let layout = def.preset_metadata.as_ref().unwrap().params.iter().find(|p| p.id == "40_copy_layout").unwrap();
-    assert_eq!((layout.max, layout.value_labels.clone()), (3.0, COPY_LAYOUT_LABELS.map(String::from).to_vec()));
+    assert_eq!((layout.max, layout.value_labels.clone()), ((COPY_LAYOUT_LABELS.len() - 1) as f32, COPY_LAYOUT_LABELS.map(String::from).to_vec()));
 }
 
 #[test]

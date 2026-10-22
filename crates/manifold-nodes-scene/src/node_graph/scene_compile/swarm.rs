@@ -199,7 +199,7 @@ fn nearest_group(doc: &manifold_core::scene_doc::SceneDoc, id: &ItemId) -> Optio
 }
 
 /// The mesh node of the first Object at or below `item` that compiled one.
-fn first_mesh(b: &Builder<'_>, item: &Item) -> Option<u32> {
+pub(crate) fn first_mesh(b: &Builder<'_>, item: &Item) -> Option<u32> {
     if matches!(item.fields, ItemFields::Object(_))
         && let Some(mesh) = b.id(item.id.as_str(), "mesh")
     {
@@ -210,7 +210,7 @@ fn first_mesh(b: &Builder<'_>, item: &Item) -> Option<u32> {
 
 /// The frame an emit-from item's mesh sits in: an Object's own Transform
 /// inside the frame of the groups around it, a Group's frame.
-fn emit_frame(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
+pub(crate) fn emit_frame(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
     if !matches!(target.fields, ItemFields::Object(_)) {
         return b.group_frames.get(&target.id).copied();
     }

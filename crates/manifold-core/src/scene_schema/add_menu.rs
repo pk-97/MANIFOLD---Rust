@@ -67,7 +67,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 34] = [
+pub static ADD_ENTRIES: [AddEntry; 38] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
@@ -109,6 +109,10 @@ pub static ADD_ENTRIES: [AddEntry; 34] = [
         modifier(ModifierType::VortexFragments)
     }),
     entry("modifier.shatter", "Modifier", "Shatter", ItemKind::Modifier, "Shatter", || modifier(ModifierType::Shatter)),
+    entry("modifier.copy_wave", "Modifier", "Copy Wave", ItemKind::Modifier, "Copy Wave", || modifier(ModifierType::CopyWave)),
+    entry("modifier.copy_jitter", "Modifier", "Copy Jitter", ItemKind::Modifier, "Copy Jitter", || modifier(ModifierType::CopyJitter)),
+    entry("modifier.copy_noise", "Modifier", "Copy Noise", ItemKind::Modifier, "Copy Noise", || modifier(ModifierType::CopyNoise)),
+    entry("modifier.copy_blend", "Modifier", "Copy Blend", ItemKind::Modifier, "Copy Blend", || modifier(ModifierType::CopyBlend)),
     model_file("object.mesh", "Object", "Mesh from file\u{2026}"),
 ];
 

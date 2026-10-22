@@ -57,7 +57,7 @@ fn clip_names(fields: &ItemFields) -> &[String] {
     }
 }
 
-pub static GROUP_FIELDS: [FieldRow; 6] = [
+pub static GROUP_FIELDS: [FieldRow; 7] = [
     FieldRow {
         id: "model_file",
         label: "Model File",
@@ -122,4 +122,5 @@ pub static GROUP_FIELDS: [FieldRow; 6] = [
     MATERIAL_BINDING,
     PHYSICS,
     COPIES,
+    super::copies::COPIES_SURFACE,
 ];

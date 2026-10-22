@@ -117,8 +117,7 @@ pub(crate) const MAX_BODY_ROWS: usize = MAX_BODIES + MAX_WALL_BODIES;
 pub const MAX_COPY_GROUPS: usize = RigidImpulseTargets::GROUP_CAPACITY;
 /// A field or hit target is a body slot, then a copy group.
 pub(crate) const MAX_TARGETS: usize = MAX_BODY_ROWS + MAX_COPY_GROUPS;
-/// The most copies one world makes across all its groups: the measured budget.
-pub const MAX_COPIES: usize = 4_000;
+pub use manifold_core::copies_body::MAX_COPIES;
 pub const AUTHORED_HISTORY_CAPACITY: usize = 256;
 const IMPULSE_CAPACITY: usize = 256;
 const FIXED_TICK: Seconds = Seconds(1.0 / 60.0);
@@ -195,10 +194,10 @@ pub struct RigidBody {
     pub spawn: CopySpawn,
 }
 
-/// A copies body's spawner. Layout is 0 Grid, 1 Scatter, 2 Line, 3 Ring;
-/// spacing is a multiple of the copy's box width along the layout axis;
-/// turn is each copy's own rotation inside the layout. A change lays the
-/// copies out again at the next tick start (`physics/copy_layout.rs`).
+/// A copies body's spawner. Layout is 0 Grid, 1 Scatter, 2 Line, 3 Ring, 4
+/// Spiral, 5 Random; spacing is a multiple of the copy's box width along the
+/// layout axis; turn is each copy's own rotation inside the layout. A change
+/// lays the copies out again at the next tick start (`physics/copy_layout.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopySpawn {

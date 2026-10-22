@@ -263,7 +263,7 @@ fn part_of_import(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     inside.then_some("This part comes from its group's Model File; swap it there")
 }
 
-pub static OBJECT_FIELDS: [FieldRow; 6] = [
+pub static OBJECT_FIELDS: [FieldRow; 7] = [
     FieldRow {
         id: "shape",
         label: "Shape",
@@ -306,4 +306,5 @@ pub static OBJECT_FIELDS: [FieldRow; 6] = [
     MATERIAL_BINDING,
     PHYSICS,
     COPIES,
+    super::copies::COPIES_SURFACE,
 ];
