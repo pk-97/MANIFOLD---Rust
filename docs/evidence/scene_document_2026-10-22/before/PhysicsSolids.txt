@@ -1,0 +1,364 @@
+# PhysicsSolids
+items: ['Camera', 'Lighting', 'Ground', 'Tetrahedron', 'Cube', 'Octahedron', 'Icosahedron', 'Dodecahedron', 'Physics', 'World']
+
+## Camera  (PhysicsSolids__00_Camera.png)
+Camera  Use this view
+▾  Camera
+Orbit  17°  T    A
+Tilt  17°  T    A
+Distance  12.00 m  T    A
+Field of View  52°  T    A
+Target Height  1.50 m  T    A
+Roll  0°  T    A
+Near Clip  0.05 m  T    A
+Far Clip  200.00 m  T    A
+▾  Depth of Field
+Depth of Field  OFF
+Focus Distance  12.00 m  T    A
+F-Stop  32.00  T    A
+Max Blur  24.00 px  T    A
+Aperture Shape  T    A  Circle
+Quality  T    A  Medium
+▾  Motion Blur
+Motion Blur  OFF
+Shutter Angle  180.00  T    A
+Max Blur  32.00 px  T    A
+Q:  OFF  FPS:  60 FPS
+
+## Lighting  (PhysicsSolids__01_Lighting.png)
+Lighting
+▾  Environment
+Mode  T    A  Softbox
+Width  512  T    A
+Height  256  T    A
+Intensity  1.00  T    A
+Emitter Count  3  T    A
+Emitter Intensity  6.00  T    A
+Emitter Elevation  0.15  T    A
+Emitter Width  0.05  T    A
+Sun Disc Intensity  0.00  T    A
+Sun Disc Size  0.00  T    A
+Fill Light  0.30  T    A
+▾  Exposure
+Exposure  0.00 EV  T    A
+Sun  Light  ✕
+Type  T    A  Sun
+Position X  0.00 m  T    A
+Position Y  7.00 m  T    A
+Position Z  7.00 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.00 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #FFFFFF
+Intensity  1.00  T    A
+Q:  OFF  FPS:  60 FPS
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  ON
+Shadow Softness  T    A  Soft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+Fill Light  Light  ✕
+Type  T    A  Point
+Position X  -4.00 m  T    A
+Position Y  2.00 m  T    A
+Position Z  -3.00 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.00 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #BFD1FF
+Intensity  0.35  T    A
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  OFF
+Shadow Softness  T    A  Soft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+
+## Ground  (PhysicsSolids__02_Ground.png)
+Ground  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  -0.14 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  12.00  T    A
+Scale Y  0.25  T    A
+Scale Z  8.00  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #262B38
+Metallic  0.05  T    A
+Roughness  0.65  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+Q:  OFF  FPS:  60 FPS
+▾  Body
+Shape  T    A  Cube
+Body Type  T    A  Fixed
+Mass  600.00 kg  T    A
+Friction  0.55  T    A
+Bounce  0.20  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Disable
+Copies
+Make Copies needs one scale on all three axes
+
+## Tetrahedron  (PhysicsSolids__03_Tetrahedron.png)
+Tetrahedron  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  -3.00 m  T    A
+Position Y  3.80 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  11°  T    A
+Rotation Y  9°  T    A
+Rotation Z  17°  T    A
+Scale X  0.65  T    A
+Scale Y  0.65  T    A
+Scale Z  0.65  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #F23821
+Metallic  0.30  T    A
+Roughness  0.32  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+Q:  OFF  FPS:  60 FPS
+▾  Body
+Shape  T    A  Tetrahedron
+Body Type  T    A  Moving
+Mass  600.00 kg  T    A
+Friction  0.55  T    A
+Bounce  0.20  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Disable
+Copies  Make Copies
+
+## Cube  (PhysicsSolids__04_Cube.png)
+Cube  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  -1.50 m  T    A
+Position Y  4.60 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  23°  T    A
+Rotation Y  17°  T    A
+Rotation Z  34°  T    A
+Scale X  0.65  T    A
+Scale Y  0.65  T    A
+Scale Z  0.65  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #217AF2
+Metallic  0.30  T    A
+Roughness  0.32  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+Q:  OFF  FPS:  60 FPS
+▾  Body
+Shape  T    A  Cube
+Body Type  T    A  Moving
+Mass  600.00 kg  T    A
+Friction  0.55  T    A
+Bounce  0.20  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Disable
+Copies  Make Copies
+
+## Octahedron  (PhysicsSolids__05_Octahedron.png)
+Octahedron  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  3.00 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  34°  T    A
+Rotation Y  26°  T    A
+Rotation Z  52°  T    A
+Scale X  0.65  T    A
+Scale Y  0.65  T    A
+Scale Z  0.65  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #FAAD1A
+Metallic  0.30  T    A
+Roughness  0.32  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+Q:  OFF  FPS:  60 FPS
+▾  Body
+Shape  T    A  Octahedron
+Body Type  T    A  Moving
+Mass  600.00 kg  T    A
+Friction  0.55  T    A
+Bounce  0.20  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Disable
+Copies  Make Copies
+
+## Icosahedron  (PhysicsSolids__06_Icosahedron.png)
+Icosahedron  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  1.50 m  T    A
+Position Y  3.80 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  46°  T    A
+Rotation Y  34°  T    A
+Rotation Z  69°  T    A
+Scale X  0.65  T    A
+Scale Y  0.65  T    A
+Scale Z  0.65  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #8C38D9
+Metallic  0.30  T    A
+Roughness  0.32  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+Q:  OFF  FPS:  60 FPS
+▾  Body
+Shape  T    A  Icosahedron
+Body Type  T    A  Moving
+Mass  600.00 kg  T    A
+Friction  0.55  T    A
+Bounce  0.20  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Disable
+Copies  Make Copies
+
+## Dodecahedron  (PhysicsSolids__07_Dodecahedron.png)
+Dodecahedron  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  3.00 m  T    A
+Position Y  4.60 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  57°  T    A
+Rotation Y  43°  T    A
+Rotation Z  86°  T    A
+Scale X  0.65  T    A
+Scale Y  0.65  T    A
+Scale Z  0.65  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #1ABF9E
+Metallic  0.30  T    A
+Roughness  0.32  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+Q:  OFF  FPS:  60 FPS
+▾  Body
+Shape  T    A  Dodecahedron
+Body Type  T    A  Moving
+Mass  600.00 kg  T    A
+Friction  0.55  T    A
+Bounce  0.20  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Disable
+Copies  Make Copies
+
+## Physics  (PhysicsSolids__08_Physics.png)
+Physics
+▾  Physics
+Gravity X  0.00 m/s²  T    A
+Gravity Y  -9.81 m/s²  T    A
+Gravity Z  0.00 m/s²  T    A
+Speed  1.00  T    A
+Reset  ▶  A
+Air Drag  1.00  T    A
+Air Resistance  0.00 /s  T    A
+Q:  OFF  FPS:  60 FPS
+
+## World  (PhysicsSolids__09_World.png)
+World
+▾  Fog
+Fog Color R  0.50  T    A
+Fog Color G  0.55  T    A
+Fog Color B  0.65  T    A
+Fog Density  0.01  T    A
+Height Falloff  0.30  T    A
+Ambient Tint R  1.00  T    A
+Ambient Tint G  1.00  T    A
+Ambient Tint B  1.00  T    A
+Shaft Intensity  0.00  T    A
+Shaft Anisotropy  0.60  T    A
+Shaft Quality  T    A  Med
+▾  Ray Tracing
+Ray Tracing  OFF
+Temporal Upscale  OFF
+Reflections  ON
+Shadows  ON
+Ambient Occlusion  ON
+Global Illumination  ON
+Q:  OFF  FPS:  60 FPS

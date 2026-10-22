@@ -1,0 +1,100 @@
+# Ocean
+items: ['Camera', 'Lighting', 'Object 0', 'World']
+
+## Camera  (Ocean__00_Camera.png)
+Camera  Use this view
+▾  Camera
+Position X  0.00 m  T    A
+Position Y  4.00 m  T    A
+Position Z  0.00 m  T    A
+Pan  -117°  T    A
+Tilt  -2°  T    A
+Roll  0°  T    A
+Field of View  34°  T    A
+Near Clip  0.30 m  T    A
+Far Clip  30000 m  T    A
+▾  Depth of Field
+Depth of Field  ON
+Focus Distance  300.00 m  T    A
+F-Stop  16.00  T    A
+Max Blur  24.00 px  T    A
+Aperture Shape  T    A  Circle
+Quality  T    A  Medium
+▾  Motion Blur
+Motion Blur  ON
+Shutter Angle  180.00  T    A
+Max Blur  32.00 px  T    A
+Q:  OFF  FPS:  60 FPS
+
+## Lighting  (Ocean__01_Lighting.png)
+Lighting
+Environment: Custom (edit in graph)
+▾  Exposure
+Exposure  0.00 EV  T    A
+Light 1  Light  ✕
+Type  T    A  Sun
+Position X  80.86 m  T    A
+Position Y  3.60 m  T    A
+Position Z  58.73 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.00 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #FF8C40
+Intensity  2.00  T    A
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  OFF
+Shadow Softness  T    A  Soft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+Q:  OFF  FPS:  60 FPS
+
+## Object 0  (Ocean__02_Object_0.png)
+Object 0  Object  Frame  ⧉  ✕
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  0.22  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Enable Physics requires an authored transform
+Copies
+Enable Physics requires an authored transform
+Q:  OFF  FPS:  60 FPS
+
+## World  (Ocean__03_World.png)
+World
+▾  Fog
+Fog Color R  0.62  T    A
+Fog Color G  0.66  T    A
+Fog Color B  0.74  T    A
+Fog Density  0.00  T    A
+Height Falloff  0.00  T    A
+Ambient Tint R  1.00  T    A
+Ambient Tint G  1.00  T    A
+Ambient Tint B  1.00  T    A
+Shaft Intensity  0.00  T    A
+Shaft Anisotropy  0.60  T    A
+Shaft Quality  T    A  Med
+▾  Ray Tracing
+Ray Tracing  OFF
+Temporal Upscale  OFF
+Reflections  ON
+Shadows  ON
+Ambient Occlusion  ON
+Global Illumination  ON
+Q:  OFF  FPS:  60 FPS

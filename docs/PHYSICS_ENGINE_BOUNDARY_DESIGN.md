@@ -1,6 +1,9 @@
 # Physics engine boundary — concrete engines, shared authoring
 
 **Status:** IN PROGRESS · 2026-10-20 · P1, P2 and P3 built; later phases pending.
+
+**Superseded by [SCENE_DOCUMENT_DESIGN.md](SCENE_DOCUMENT_DESIGN.md)** for the scene, card and starter model (2026-10-22). (sections 5.2 and 5.5 only.)
+
 **Prerequisites:** none for P1 or G1a; later phase entries name their dependencies. Water F1b/F2 shipped.
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. P1 implementation is authorized by the post-T1 cleanup campaign; later phases retain their entry conditions.
 

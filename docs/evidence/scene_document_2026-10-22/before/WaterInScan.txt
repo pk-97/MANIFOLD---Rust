@@ -1,0 +1,356 @@
+# WaterInScan
+items: ['Camera', 'Lighting', 'Water', 'Scan Object', 'Basin Floor', 'Basin Rear Wall', 'Basin Left Wall', 'Basin Right Wall', 'World']
+
+## Camera  (WaterInScan__00_Camera.png)
+Camera  Use this view
+▾  Camera
+Orbit  57°  T    A
+Tilt  20°  T    A
+Distance  9.35 m  T    A
+Field of View  37°  T    A
+Target Height  1.20 m  T    A
+Roll  0°  T    A
+Near Clip  0.05 m  T    A
+Far Clip  2000.0 m  T    A
+▾  Depth of Field
+Depth of Field  OFF
+Focus Distance  9.35 m  T    A
+F-Stop  32.00  T    A
+Max Blur  24.00 px  T    A
+Aperture Shape  T    A  Circle
+Quality  T    A  Medium
+▾  Motion Blur
+Motion Blur  OFF
+Shutter Angle  180.00  T    A
+Max Blur  32.00 px  T    A
+Q:  OFF  FPS:  60 FPS
+
+## Lighting  (WaterInScan__01_Lighting.png)
+Lighting
+HDRI File: (empty)
+▾  Environment
+Mode  T    A  Softbox
+Width  1024  T    A
+Height  512  T    A
+Intensity  0.70  T    A
+Emitter Count  1  T    A
+Emitter Intensity  1.40  T    A
+Emitter Elevation  0.55  T    A
+Emitter Width  0.19  T    A
+Sun Disc Intensity  0.00  T    A
+Sun Disc Size  0.00  T    A
+Fill Light  0.07  T    A
+▾  Exposure
+Exposure  0.00 EV  T    A
+Light  ✕
+Type  T    A  Sun
+Position X  -2.00 m  T    A
+Position Y  6.00 m  T    A
+Position Z  -2.50 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.00 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #FFE6CC  Q:  OFF  FPS:  60 FPS
+Intensity  1.40  T    A
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  ON
+Shadow Softness  T    A  VerySoft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+Rim Light  Light  ✕
+Type  T    A  Sun
+Position X  4.00 m  T    A
+Position Y  3.00 m  T    A
+Position Z  2.50 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.40 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #91C7FF
+Intensity  0.65  T    A
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  OFF
+Shadow Softness  T    A  Soft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+
+## Water  (WaterInScan__02_Water.png)
+Water  Frame  ✕
+▾  Transform
+Visible  ON
+Physics View  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #5FBAFF
+Metallic  0.00  T    A
+Roughness  0.55  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Simulation
+Resolution  64  T    A
+Coarse Solve  0  T    A
+Max Iterations  900  T    A
+Sheet Fill Rate  0.00  T    A
+Speed  1.00  T    A
+Reset  ▶  A
+Q:  OFF  FPS:  60 FPS  Domain Size  4.00 m  T    A
+Fill Height  0.16 m  T    A
+Gravity X  0.00 m/s²  T    A
+Gravity Y  -9.81 m/s²  T    A
+Gravity Z  0.00 m/s²  T    A
+Air Drag  1.00  T    A
+Left Wall  ON
+Right Wall  ON
+Floor  ON
+Ceiling  ON
+Back Wall  ON
+Front Wall  ON
+▾  Whitewater
+Whitewater Budget  100000  T    A
+Whitewater  ON
+Whitewater Amount  1.00  T    A
+Dust Emission  OFF
+Boundary Dust  OFF
+Inside Emission  ON
+▸  Advanced · Whitewater  (9)
+▾  Look
+Surface Detail  0  T    A
+Surface Particle Scale  3.00  T    A
+Smoothing Value  0.50  T    A
+Smoothing Iterations  2  T    A
+Stretch  1.00  T    A
+Centre Smoothing  0.00  T    A
+Fill Pits  0.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Lattice 64 × 64 × 64 · 6.2 cm cells · 262144 cells
+
+## Scan Object  (WaterInScan__03_Scan_Object.png)
+Scan Object  Model  Frame  ⧉  ✕
+▾  Transform
+Position X  0.35 m  T    A
+Position Y  0.47 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  90°  T    A
+Rotation Z  0°  T    A
+Scale X  0.09  T    A
+Scale Y  0.09  T    A
+Scale Z  0.09  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  1.00  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Q:  OFF  FPS:  60 FPS
+Skin  Source: None  Map: Emissive
+▾  Source
+Role  T    A  Collider
+Enabled  ON
+Velocity X  0.00 m/s  T    A
+Velocity Y  0.00 m/s  T    A
+Velocity Z  0.00 m/s  T    A
+Inherit Motion  0.00  T    A
+Friction  0.00  T    A
+Geometry  T    A  Exact Mesh
+Shell Thickness  0.12 m  T    A
+Builtin Shape  T    A  Cube
+Radius  1.00 m  T    A
+Collider Detail  32  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Remove this object's Fluid Role before enabling Physics; physics bodies interact with
+water automatically
+Copies
+Remove this object's Fluid Role before enabling Physics; physics bodies interact with
+water automatically
+Scan Collider
+Target: Water  ×
++ Fluid Role
+
+## Basin Floor  (WaterInScan__04_Basin_Floor.png)
+Basin Floor  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  -0.05 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  4.16  T    A
+Scale Y  0.22  T    A
+Scale Z  4.16  T    A
+Billboard  OFF
+Material
+Shared · 4 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #090C0E
+Metallic  0.10  T    A
+Roughness  0.36  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Q:  OFF  FPS:  60 FPS
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## Basin Rear Wall  (WaterInScan__05_Basin_Rear_Wall.png)
+Basin Rear Wall  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  0.40 m  T    A
+Position Z  -2.04 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  4.16  T    A
+Scale Y  0.95  T    A
+Scale Z  0.14  T    A
+Billboard  OFF
+Material
+Shared · 4 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #090C0E
+Metallic  0.10  T    A
+Roughness  0.36  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Q:  OFF  FPS:  60 FPS
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## Basin Left Wall  (WaterInScan__06_Basin_Left_Wall.png)
+Basin Left Wall  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  -2.04 m  T    A
+Position Y  0.40 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  0.14  T    A
+Scale Y  0.95  T    A
+Scale Z  4.16  T    A
+Billboard  OFF
+Material
+Shared · 4 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #090C0E
+Metallic  0.10  T    A
+Roughness  0.36  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Q:  OFF  FPS:  60 FPS
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## Basin Right Wall  (WaterInScan__07_Basin_Right_Wall.png)
+Basin Right Wall  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  2.04 m  T    A
+Position Y  0.40 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  0.14  T    A
+Scale Y  0.95  T    A
+Scale Z  4.16  T    A
+Billboard  OFF
+Material
+Shared · 4 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #090C0E
+Metallic  0.10  T    A
+Roughness  0.36  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Q:  OFF  FPS:  60 FPS
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## World  (WaterInScan__08_World.png)
+World
+▾  Ray Tracing
+Ray Tracing  OFF
+Temporal Upscale  OFF
+Reflections  ON
+Shadows  ON
+Ambient Occlusion  ON
+Global Illumination  ON
+Fog: None
++ Add Fog
+Q:  OFF  FPS:  60 FPS

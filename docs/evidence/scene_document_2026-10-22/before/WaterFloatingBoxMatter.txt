@@ -1,0 +1,384 @@
+# WaterFloatingBoxMatter
+items: ['Camera', 'Lighting', 'Water', 'Basin Floor', 'Basin Rear Wall', 'Basin Left Wall', 'Basin Right Wall', 'Studio Floor', 'Box', 'Physics', 'World']
+
+## Camera  (WaterFloatingBoxMatter__00_Camera.png)
+Camera  Use this view
+▾  Camera
+Orbit  57°  T    A
+Tilt  20°  T    A
+Distance  9.35 m  T    A
+Field of View  37°  T    A
+Target Height  1.20 m  T    A
+Roll  0°  T    A
+Near Clip  0.05 m  T    A
+Far Clip  2000.0 m  T    A
+▾  Depth of Field
+Depth of Field  OFF
+Focus Distance  9.35 m  T    A
+F-Stop  32.00  T    A
+Max Blur  24.00 px  T    A
+Aperture Shape  T    A  Circle
+Quality  T    A  Medium
+▾  Motion Blur
+Motion Blur  OFF
+Shutter Angle  180.00  T    A
+Max Blur  32.00 px  T    A
+Q:  OFF  FPS:  60 FPS
+
+## Lighting  (WaterFloatingBoxMatter__01_Lighting.png)
+Lighting
+HDRI File: (empty)
+▾  Environment
+Mode  T    A  Softbox
+Width  1024  T    A
+Height  512  T    A
+Intensity  0.70  T    A
+Emitter Count  1  T    A
+Emitter Intensity  1.40  T    A
+Emitter Elevation  0.55  T    A
+Emitter Width  0.19  T    A
+Sun Disc Intensity  0.00  T    A
+Sun Disc Size  0.00  T    A
+Fill Light  0.07  T    A
+▾  Exposure
+Exposure  0.00 EV  T    A
+Light  ✕
+Type  T    A  Sun
+Position X  -2.00 m  T    A
+Position Y  6.00 m  T    A
+Position Z  -2.50 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.00 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #FFE6CC  Q:  OFF  FPS:  60 FPS
+Intensity  1.40  T    A
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  ON
+Shadow Softness  T    A  VerySoft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+Rim Light  Light  ✕
+Type  T    A  Sun
+Position X  4.00 m  T    A
+Position Y  3.00 m  T    A
+Position Z  2.50 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.40 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #91C7FF
+Intensity  0.65  T    A
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  OFF
+Shadow Softness  T    A  Soft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+
+## Water  (WaterFloatingBoxMatter__02_Water.png)
+Water  Frame  ⧉  ✕
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #FAFCFF
+Metallic  0.00  T    A
+Roughness  0.02  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Simulation
+Resolution  64  T    A
+Reset  ▶  A
+Stiffness  1.00  T    A
+Cohesion  0.00  T    A
+FLIP Ratio  0.00  T    A
+Particles per Cell  0  T    A
+Seed  0  T    A
+Grid Budget  8 M cells  T    A
+Domain Size  4.00 m  T    A
+Q:  OFF  FPS:  60 FPS
+Left Wall  ON
+Right Wall  ON
+Floor  ON
+Ceiling  ON
+Back Wall  ON
+Front Wall  ON
+Fill Height  0.50 m  T    A
+Gravity X  0.00 m/s²  T    A
+Gravity Y  -9.81 m/s²  T    A
+Gravity Z  0.00 m/s²  T    A
+Air Drag  1.00  T    A
+▾  Look
+Stretch  1.00  T    A
+Centre Smoothing  0.00  T    A
+Fill Pits  0.00  T    A
+Surface Detail  0  T    A
+Surface Particle Scale  3.00  T    A
+Smoothing Value  0.50  T    A
+Smoothing Iterations  2  T    A
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Lattice 64 × 64 × 64 · 6.2 cm cells · 262144 cells
+
+## Basin Floor  (WaterFloatingBoxMatter__03_Basin_Floor.png)
+Basin Floor  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  -0.05 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  4.16  T    A
+Scale Y  0.22  T    A
+Scale Z  4.16  T    A
+Billboard  OFF
+Material
+Shared · 4 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #090C0E
+Metallic  0.10  T    A
+Roughness  0.36  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Q:  OFF  FPS:  60 FPS
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## Basin Rear Wall  (WaterFloatingBoxMatter__04_Basin_Rear_Wall.png)
+Basin Rear Wall  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  0.40 m  T    A
+Position Z  -2.04 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  4.16  T    A
+Scale Y  0.95  T    A
+Scale Z  0.14  T    A
+Billboard  OFF
+Material
+Shared · 4 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #090C0E
+Metallic  0.10  T    A
+Roughness  0.36  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Q:  OFF  FPS:  60 FPS
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## Basin Left Wall  (WaterFloatingBoxMatter__05_Basin_Left_Wall.png)
+Basin Left Wall  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  -2.04 m  T    A
+Position Y  0.40 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  0.14  T    A
+Scale Y  0.95  T    A
+Scale Z  4.16  T    A
+Billboard  OFF
+Material
+Shared · 4 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #090C0E
+Metallic  0.10  T    A
+Roughness  0.36  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Q:  OFF  FPS:  60 FPS
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## Basin Right Wall  (WaterFloatingBoxMatter__06_Basin_Right_Wall.png)
+Basin Right Wall  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  2.04 m  T    A
+Position Y  0.40 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  0.14  T    A
+Scale Y  0.95  T    A
+Scale Z  4.16  T    A
+Billboard  OFF
+Material
+Shared · 4 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #090C0E
+Metallic  0.10  T    A
+Roughness  0.36  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Q:  OFF  FPS:  60 FPS
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## Studio Floor  (WaterFloatingBoxMatter__07_Studio_Floor.png)
+Studio Floor  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  -0.28 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  2000.00  T    A
+Scale Y  0.20  T    A
+Scale Z  2000.00  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #010102
+Metallic  0.00  T    A
+Roughness  0.65  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Q:  OFF  FPS:  60 FPS
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies
+Make Copies needs one scale on all three axes
+
+## Box  (WaterFloatingBoxMatter__08_Box.png)
+Box  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.20 m  T    A
+Position Y  1.30 m  T    A
+Position Z  0.10 m  T    A
+Rotation X  12°  T    A
+Rotation Y  20°  T    A
+Rotation Z  7°  T    A
+Scale X  0.43  T    A
+Scale Y  0.43  T    A
+Scale Z  0.43  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #6B421F
+Metallic  0.00  T    A
+Roughness  0.62  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Q:  OFF  FPS:  60 FPS
+Skin  Source: None  Map: Emissive
+▾  Body
+Box Mass  62.50 kg  T    A
+Shape  T    A  Cube
+Body Type  T    A  Moving
+Friction  0.40  T    A
+Bounce  0.10  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Physics  Disable
+Copies  Make Copies
+
+## Physics  (WaterFloatingBoxMatter__09_Physics.png)
+Physics
+▾  Physics
+Speed  1.00  T    A
+Gravity X  0.00 m/s²  T    A
+Gravity Y  -9.81 m/s²  T    A
+Gravity Z  0.00 m/s²  T    A
+Reset  ▶  A
+Air Drag  1.00  T    A
+Air Resistance  0.00 /s  T    A
+Q:  OFF  FPS:  60 FPS
+
+## World  (WaterFloatingBoxMatter__10_World.png)
+World
+▾  Ray Tracing
+Ray Tracing  OFF
+Temporal Upscale  OFF
+Reflections  ON
+Shadows  ON
+Ambient Occlusion  ON
+Global Illumination  ON
+Fog: None
++ Add Fog
+Q:  OFF  FPS:  60 FPS

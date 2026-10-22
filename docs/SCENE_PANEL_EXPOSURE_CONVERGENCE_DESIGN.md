@@ -2,6 +2,9 @@
 
 **Status: APPROVED — section 5 (Decisions) RESOLVED by Peter 2026-07-19. P1 (exposure stamping) + P2 (unified properties card; funnels/hand-tables deleted) LANDED on main 2026-07-21 together with BUG-295 (live manifest refresh). P3 (outliner/discovery slimming: `scene_vm.rs` param-transcription fields deleted, `scene_vm::is_param_driven` the sole driven-state source, `TransformVm` kept for the gizmo) LANDED 2026-07-21. P4 supersession sweep COMPLETE — the four prior scene design docs point here. Flow sweep 15/15 scene-setup flows green; VD-035 (modifier-stack flow) CLOSED via queryable `param_row.<id>` rows + the harness ScrollTo. BUG-291 (exposure-binding fan-out misattribution) and BUG-292 (scene rows writing via active layer) FIXED. Landing report: `docs/landings/2026-07-21-scene-convergence-p3-p4.md`.**
 
+**Superseded by [SCENE_DOCUMENT_DESIGN.md](SCENE_DOCUMENT_DESIGN.md)** for the scene, card and starter model (2026-10-22).
+
+
 **Companion docs:** `docs/SCENE_SETUP_PANEL_DESIGN.md` (v1, SHIPPED), `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (SHIPPED), `docs/SCENE_PANEL_UX_DESIGN.md` (SHIPPED, D2/D3 superseded), `docs/SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md` (SHIPPED 2026-07-18).
 
 Peter, 2026-07-19: the scene setup panel "has been a huge mess … so many bugs, broken features, ugly UI, incorrect semantics, and intent. The goal was a 'Blender like' scene config panel that just routes 1:1 to the graph and nodes like the effect and generator cards — all one unified system. I think sometimes the scene panel hard-codes expected things in the graph." He asked for a full audit of the scene infra, UI, and UX, then discussion. This doc is that audit + the agreed direction.

@@ -1,0 +1,108 @@
+# Scene
+items: ['Camera', 'Lighting', 'Cube', 'World']
+
+## Camera  (Scene__00_Camera.png)
+Camera  Use this view
+▾  Camera
+Orbit  40°  T    A
+Tilt  20°  T    A
+Distance  5.00 m  T    A
+Field of View  52°  T    A
+Target Height  0.50 m  T    A
+Roll  0°  T    A
+Near Clip  0.05 m  T    A
+Far Clip  200.00 m  T    A
+▾  Depth of Field
+Depth of Field  OFF
+Focus Distance  5.00 m  T    A
+F-Stop  32.00  T    A
+Max Blur  24.00 px  T    A
+Aperture Shape  T    A  Circle
+Quality  T    A  Medium
+▾  Motion Blur
+Motion Blur  OFF
+Shutter Angle  180.00  T    A
+Max Blur  32.00 px  T    A
+Q:  OFF  FPS:  60 FPS
+
+## Lighting  (Scene__01_Lighting.png)
+Lighting
+▾  Environment
+Mode  T    A  Softbox
+Width  512  T    A
+Height  256  T    A
+Intensity  1.00  T    A
+Emitter Count  3  T    A
+Emitter Intensity  6.00  T    A
+Emitter Elevation  0.15  T    A
+Emitter Width  0.05  T    A
+Sun Disc Intensity  0.00  T    A
+Sun Disc Size  0.00  T    A
+Fill Light  0.30  T    A
+▾  Exposure
+Exposure  0.00 EV  T    A
+Sun  Light  ✕
+Type  T    A  Sun
+Position X  0.00 m  T    A
+Position Y  7.00 m  T    A
+Position Z  7.00 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.00 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #FFFFFF
+Intensity  1.00  T    A
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  ON
+Q:  OFF  FPS:  60 FPS  Shadow Softness  T    A  Soft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+
+## Cube  (Scene__02_Cube.png)
+Cube  Model  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  0.60 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  1.00  T    A
+Scale Y  1.00  T    A
+Scale Z  1.00  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #D9594D
+Metallic  0.00  T    A
+Roughness  0.70  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Q:  OFF  FPS:  60 FPS  Level  1.00  T    A
++ Add Modifier
+Physics  Enable
+Copies  Make Copies
++ Fluid Role
+
+## World  (Scene__03_World.png)
+World
+▾  Ray Tracing
+Ray Tracing  OFF
+Temporal Upscale  OFF
+Reflections  ON
+Shadows  ON
+Ambient Occlusion  ON
+Global Illumination  ON
+Fog: None
++ Add Fog
+Q:  OFF  FPS:  60 FPS

@@ -1,0 +1,556 @@
+# OceanCliff
+items: ['Camera', 'Lighting', 'Object 0', 'Object 1', 'Object 2', 'Object 3', 'Object 4', 'Object 5', 'Water', 'Foam Object', 'Bubble Object', 'Spray Object', 'Dust Object', 'World']
+
+## Camera  (OceanCliff__00_Camera.png)
+  World
+Camera  Use this view
+▾  Camera
+Position X  2.50 m  T    A
+Position Y  2.80 m  T    A
+Position Z  9.50 m  T    A
+Pan  19°  T    A
+Tilt  -11°  T    A
+Roll  0°  T    A
+Field of View  49°  T    A
+Near Clip  0.30 m  T    A
+Far Clip  30000 m  T    A
+▾  Depth of Field
+Depth of Field  ON
+Focus Distance  9.19 m  T    A
+F-Stop  11.00  T    A
+Max Blur  24.00 px  T    A
+Aperture Shape  T    A  Circle
+Quality  T    A  Medium
+▾  Motion Blur
+Motion Blur  ON
+Shutter Angle  180.00  T    A
+Max Blur  32.00 px  T    A  Q:  OFF  FPS:  60 FPS
+
+## Lighting  (OceanCliff__01_Lighting.png)
+  World
+Lighting
+Environment: Custom (edit in graph)
+▾  Exposure
+Exposure  0.00 EV  T    A
+Light 1  Light  ✕
+Type  T    A  Sun
+Position X  80.86 m  T    A
+Position Y  3.60 m  T    A
+Position Z  58.73 m  T    A
+Target X  0.00 m  T    A
+Target Y  0.00 m  T    A
+Target Z  0.00 m  T    A
+▸  Colour  #FF8C40
+Intensity  2.00  T    A
+Range  30.00 m  T    A
+Size  1.00 m  T    A
+Cast Shadows  OFF
+Shadow Softness  T    A  Soft
+Shadow Bias  0.00  T    A
+Shadow Resolution  2048  T    A
+Q:  OFF  FPS:  60 FPS
+
+## Object 0  (OceanCliff__02_Object_0.png)
+  World
+Object 0  Object  Frame  ⧉  ✕
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  0.22  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Enable Physics requires an authored transform
+Copies
+Q:  OFF  FPS:  60 FPS
+Enable Physics requires an authored transform
+
+## Object 1  (OceanCliff__03_Object_1.png)
+  World
+Object 1  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  0.00 m  T    A
+Position Y  -1.50 m  T    A
+Position Z  0.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  1.00  T    A
+Scale Y  1.00  T    A
+Scale Z  1.00  T    A
+Billboard  OFF
+Material
+Shared · 5 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  1.00  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Q:  OFF  FPS:  60 FPS
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Remove this object's Fluid Role before enabling Physics; physics bodies interact with
+water automatically
+Copies
+Make Copies works on objects added from the Add menu or imported
+
+## Object 2  (OceanCliff__04_Object_2.png)
+  World
+Object 2  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  6.60 m  T    A
+Position Y  -1.50 m  T    A
+Position Z  -10.00 m  T    A
+Rotation X  0°  T    A
+Rotation Y  -90°  T    A
+Rotation Z  0°  T    A
+Scale X  1.00  T    A
+Collider is outside the domain; it does nothing
+Scale Y  1.00  T    A
+Scale Z  1.00  T    A
+Billboard  OFF
+Material
+Shared · 5 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  1.00  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Q:  OFF  FPS:  60 FPS
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Remove this object's Fluid Role before enabling Physics; physics bodies interact with
+water automatically
+Copies
+Make Copies works on objects added from the Add menu or imported
+
+## Object 3  (OceanCliff__05_Object_3.png)
+  World
+Object 3  Object  Frame  ⧉  ✕
+Material
+Shared · 5 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  1.00  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Remove this object's Fluid Role before enabling Physics; physics bodies interact with
+Q:  OFF  FPS:  60 FPS
+water automatically
+Copies
+Make Copies works on objects added from the Add menu or imported
+
+## Object 4  (OceanCliff__06_Object_4.png)
+  World
+Object 4  Object  Frame  ⧉  ✕
+▾  Transform
+Position X  -5.67 m  T    A
+Position Y  -1.50 m  T    A
+Position Z  -5.90 m  T    A
+Rotation X  0°  T    A
+Rotation Y  90°  T    A
+Rotation Z  0°  T    A
+Scale X  1.00  T    A
+Collider is outside the domain; it does nothing
+Scale Y  1.00  T    A
+Scale Z  1.00  T    A
+Billboard  OFF
+Material
+Shared · 5 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  1.00  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Q:  OFF  FPS:  60 FPS
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Remove this object's Fluid Role before enabling Physics; physics bodies interact with
+water automatically
+Copies
+Make Copies works on objects added from the Add menu or imported
+
+## Object 5  (OceanCliff__07_Object_5.png)
+  World
+Object 5  Object  Frame  ⧉  ✕
+Material
+Shared · 5 objects
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  1.00  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Solid
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Remove this object's Fluid Role before enabling Physics; physics bodies interact with
+Q:  OFF  FPS:  60 FPS
+water automatically
+Copies
+Make Copies works on objects added from the Add menu or imported
+
+## Water  (OceanCliff__08_Water.png)
+  World
+Water  Frame  ⧉  ✕
+▾  Transform
+Surface Detail  0  T    A
+Surface Particle Scale  1.00  T    A
+Smoothing Value  0.50  T    A
+Whitewater Budget  250000  T    A
+Smoothing Iterations  2  T    A
+Stretch  6.00  T    A
+Centre Smoothing  0.62  T    A
+Fill Pits  0.62  T    A
+Position X  0.00 m  T    A
+Position Y  1.35 m  T    A
+Position Z  4.35 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  9.20  T    A
+Scale Y  5.90  T    A
+Scale Z  9.50  T    A
+Billboard  OFF
+Position X  0.00 m  T    A
+Q:  OFF  FPS:  60 FPS
+Position Y  0.85 m  T    A
+Rotation X  0°  T    A
+Rotation Y  0°  T    A
+Rotation Z  0°  T    A
+Scale X  9.60  T    A
+Scale Y  5.90  T    A
+Scale Z  3.00  T    A
+Billboard  OFF
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #FFFFFF
+Metallic  0.00  T    A
+Roughness  0.08  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Simulation
+Resolution  112  T    A
+Coarse Solve  0  T    A
+Max Iterations  900  T    A
+Sheet Fill Rate  1.00  T    A
+Speed  1.00  T    A
+Reset  ▶  A
+Domain Size  4.00 m  T    A
+Fill Height  1.25 m  T    A
+Gravity X  0.00 m/s²  T    A
+Gravity Y  -9.81 m/s²  T    A
+Gravity Z  0.00 m/s²  T    A
+Air Drag  1.00  T    A
+Left Wall  ON
+Right Wall  ON
+Floor  ON
+Ceiling  OFF
+Back Wall  ON
+Front Wall  ON
+▾  Whitewater
+Whitewater  ON
+Whitewater Amount  1.00  T    A
+Dust Emission  OFF
+Boundary Dust  OFF
+Inside Emission  ON
+▸  Advanced · Whitewater  (9)
+▾  Source
+Role  T    A  Collider
+Role  T    A  Collider
+Role  T    A  Collider
+Role  T    A  Collider
+Role  T    A  Collider
+Role  T    A  Collider
+Role  T    A  Collider
+Enabled  ON
+Velocity X  0.00 m/s  T    A
+Velocity Y  0.00 m/s  T    A
+Velocity Z  0.00 m/s  T    A
+Inherit Motion  0.00  T    A
+Friction  0.00  T    A
+Geometry  T    A  Collision Proxy
+Shell Thickness  0.05 m  T    A
+Builtin Shape  T    A  Cube
+Radius  1.00 m  T    A
+Enabled  ON
+Velocity X  0.00 m/s  T    A
+Velocity Y  0.00 m/s  T    A
+Velocity Z  0.00 m/s  T    A
+Inherit Motion  0.00  T    A
+Friction  0.00  T    A
+Geometry  T    A  Collision Proxy
+Shell Thickness  0.05 m  T    A
+Builtin Shape  T    A  Cube
+Radius  1.00 m  T    A
+Enabled  ON
+Velocity X  0.00 m/s  T    A
+Velocity Y  0.00 m/s  T    A
+Velocity Z  0.00 m/s  T    A
+Inherit Motion  0.00  T    A
+Friction  0.00  T    A
+Geometry  T    A  Collision Proxy
+Shell Thickness  0.05 m  T    A
+Builtin Shape  T    A  Cube
+Radius  0.87 m  T    A
+Enabled  ON
+Velocity X  0.00 m/s  T    A
+Velocity Y  0.00 m/s  T    A
+Velocity Z  0.00 m/s  T    A
+Inherit Motion  0.00  T    A
+Friction  0.00  T    A
+Geometry  T    A  Collision Proxy
+Shell Thickness  0.05 m  T    A
+Builtin Shape  T    A  Cube
+Radius  1.00 m  T    A
+Enabled  ON
+Velocity X  0.00 m/s  T    A
+Velocity Y  0.00 m/s  T    A
+Velocity Z  0.00 m/s  T    A
+Inherit Motion  0.00  T    A
+Friction  0.00  T    A
+Geometry  T    A  Collision Proxy
+Shell Thickness  0.05 m  T    A
+Builtin Shape  T    A  Cube
+Radius  1.00 m  T    A
+Enabled  ON
+Velocity X  0.00 m/s  T    A
+Velocity Y  0.00 m/s  T    A
+Velocity Z  0.00 m/s  T    A
+Inherit Motion  0.00  T    A
+Friction  0.00  T    A
+Geometry  T    A  Collision Proxy
+Shell Thickness  0.05 m  T    A
+Builtin Shape  T    A  Cube
+Radius  1.00 m  T    A
+Enabled  ON
+Velocity X  0.00 m/s  T    A
+Velocity Y  0.00 m/s  T    A
+Velocity Z  0.00 m/s  T    A
+Inherit Motion  0.00  T    A
+Friction  0.00  T    A
+Geometry  T    A  Collision Proxy
+Shell Thickness  0.05 m  T    A
+Builtin Shape  T    A  Cube
+Radius  1.00 m  T    A
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  ON
+Level  1.00  T    A
++ Add Modifier
+Lattice 109 × 70 × 112 · 8.5 cm cells · 854560 cells
+
+## Foam Object  (OceanCliff__09_Foam_Object.png)
+  World
+Foam Object  Object  Frame  ⧉  ✕
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #F2FAFF
+Metallic  0.00  T    A
+Roughness  0.55  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Enable Physics requires an authored transform
+Copies
+Q:  OFF  FPS:  60 FPS
+Enable Physics requires an authored transform
+
+## Bubble Object  (OceanCliff__10_Bubble_Object.png)
+  World
+Bubble Object  Object  Frame  ⧉  ✕
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #F2FAFF
+Metallic  0.00  T    A
+Roughness  0.30  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Enable Physics requires an authored transform
+Copies
+Q:  OFF  FPS:  60 FPS
+Enable Physics requires an authored transform
+
+## Spray Object  (OceanCliff__11_Spray_Object.png)
+  World
+Spray Object  Object  Frame  ⧉  ✕
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #F2FAFF
+Metallic  0.00  T    A
+Roughness  0.12  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Enable Physics requires an authored transform
+Copies
+Q:  OFF  FPS:  60 FPS
+Enable Physics requires an authored transform
+
+## Dust Object  (OceanCliff__12_Dust_Object.png)
+  World
+Dust Object  Object  Frame  ⧉  ✕
+Material
+Preset  Default
+▾  Surface
+▸  Base Colour  #F2FAFF
+Metallic  0.00  T    A
+Roughness  0.55  T    A
+▾  Opacity & Cutout
+Opacity  1.00  T    A
+Alpha Mode  T    A  Opaque
+Alpha Cutoff  0.50  T    A
+▸  Advanced  (186)
++ Add feature
+Textures
+Skin  Source: None  Map: Emissive
+▾  Look
+Visible  1.00  T    A
+Cast Shadows  OFF
+Level  1.00  T    A
++ Add Modifier
+Physics
+Enable Physics requires an authored transform
+Copies
+Q:  OFF  FPS:  60 FPS
+Enable Physics requires an authored transform
+
+## World  (OceanCliff__13_World.png)
+World
+▾  Fog
+Fog Color R  0.62  T    A
+Fog Color G  0.66  T    A
+Fog Color B  0.74  T    A
+Fog Density  0.00  T    A
+Height Falloff  0.00  T    A
+Ambient Tint R  1.00  T    A
+Ambient Tint G  1.00  T    A
+Ambient Tint B  1.00  T    A
+Shaft Intensity  0.00  T    A
+Shaft Anisotropy  0.60  T    A
+Shaft Quality  T    A  Med
+▾  Ray Tracing
+Ray Tracing  OFF
+Temporal Upscale  OFF
+Reflections  ON
+Shadows  ON
+Ambient Occlusion  ON
+Global Illumination  ON
+Q:  OFF  FPS:  60 FPS

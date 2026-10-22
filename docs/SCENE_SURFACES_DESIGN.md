@@ -1,6 +1,9 @@
 # Scene Surfaces — the scene card and the Scene tab as one system
 
 **Status:** SHIPPED · 2026-10-14 · all phases P0–P10 on main; kept as the contract for the param lookup (D2, D22–D24), the scene table and D15. Owed: BUG-tly4a (slider range popover).
+
+**Superseded by [SCENE_DOCUMENT_DESIGN.md](SCENE_DOCUMENT_DESIGN.md)** for the scene, card and starter model (2026-10-22). (card, exposure and starter sections only.)
+
 **Lifecycle: contract**
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) through section 6 (Seam briefs) before starting any phase.
