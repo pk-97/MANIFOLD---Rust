@@ -223,7 +223,6 @@ Where we deliberately differ, and why:
 - Node ids derive from (item id, role). A recompile after a structural edit keeps every unchanged node's id, so the runtime keeps what it keeps today for node-id-matched state.
 - It compiles the whole graph per structural edit, on the content thread, and at load. A param write never recompiles. Editing today already clones the whole graph per transaction (`scene_transaction.rs:164`); the cost is the same order.
 - Forces compile to today's `scene_modifiers` instances and the `load/expand` passes. Bodies ride `physics_members`. Nothing below the loader changes.
-- The compiler's allowed node vocabulary is named in one list and tested: a compiled graph containing a node type outside it fails the compile test.
 - A scene layer has no editable graph and no inspection view in this cut.
 
 ### 7.4 Stage versus setup
@@ -377,7 +376,7 @@ The tree is the item hierarchy: Camera and Lighting, World pinned at the top as 
 
 Kill-pass on A:
 - Strongest case against: the compile seam loses runtime state on recompile (a physics world restarting when a light is added). Cheapest check: L1's fundamental 5 test adds a light to a compiled scene with a running physics world and requires the tick count to continue. Carry is by node id and CPU-only today; ruling 3 allows a structural edit to restart that item's simulation, but an unrelated light must not restart the body.
-- Second: compile time on a large import (a 300-node kit) makes structural edits stutter. Check in L3 with Peter's largest file; the compile is linear in items and the importer already builds a graph of the same size.
+- Second: compile time on a large import (a 300-node kit) makes structural edits stutter. The compile is linear in items and the importer already builds a graph of the same size. No timing test: Peter would see a stutter in the app.
 - Third: two scene paths. There are none by design: the old path is deleted in the same branch (ruling 2). The cost is that between wave 2 and wave 3 the branch has no Swarm, Water or Ocean items, and the old water and swarm starters do not load. Wave 3 rebuilds them.
 
 ## 10. Testing
@@ -416,7 +415,7 @@ The task beads for G1 (renderer instance space) and G2a (transform chains) stay 
 ### Wave 1
 
 **L1 (Opus; BUG-elwvu.1): the document, ids, table, commands, and the first compiler.**
-- Does: merge G1 and G2a; `SceneDoc`, `ItemId`, the closed ten-kind enum and fields, the (kind, property) table for Group, Object, Camera, Light, Material, World; the five commands plus Group and Ungroup composites; the compiler for Group, Object (including Shape Plane with a layer-sourced Material), Camera, Light (all four types), Material (nearest-wins binding; texture source None, file or layer), World (Gravity, Speed with clamp, Reset, Air Resistance, Fog, Render); `PresetInstance` gains the document; the allowed-vocabulary list; the base scene as a file in code. Physics emits as None for now.
+- Does: merge G1 and G2a; `SceneDoc`, `ItemId`, the closed ten-kind enum and fields, the (kind, property) table for Group, Object, Camera, Light, Material, World; the five commands plus Group and Ungroup composites; the compiler for Group, Object (including Shape Plane with a layer-sourced Material), Camera, Light (all four types), Material (nearest-wins binding; texture source None, file or layer), World (Gravity, Speed with clamp, Reset, Air Resistance, Fog, Render); `PresetInstance` gains the document; the base scene as a file in code. Physics emits as None for now.
 - Files: `manifold-core/src/scene_doc.rs` (new), `manifold-core/src/scene_schema/` (new, one file per kind), `manifold-editing/src/commands/scene_doc/` (new), `manifold-nodes-scene/src/node_graph/scene_compile/` (new, moving `object_group` and `light_template` from `scene_templates.rs`), `manifold-core/src/effects/instance.rs`.
 - Deletes: nothing. G2a merges whole; its old-path UI half (outliner group rows, `scene_object_model.rs` nesting, scene_vm group rows) goes with the old path in L2. The old path stays compiling until L2 so the branch builds.
 - Tests: fundamentals 1, 2, 3, 5 and 6 (section 10), extending existing tests where they already prove part of it.
