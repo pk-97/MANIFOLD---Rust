@@ -172,3 +172,71 @@ impl Primitive for CurveSolidSource {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::polygon_curve::outline_point;
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Edges no other triangle shares: zero for a closed solid. Corners weld
+    /// at 0.1 mm, so a seam that only nearly meets still counts as closed.
+    fn open_edges(vertices: &[manifold_node_engine::mesh::MeshVertex]) -> usize {
+        let key = |p: [f32; 3]| p.map(|v| (v * 1e4).round() as i64);
+        let mut edges: HashMap<([i64; 3], [i64; 3]), i32> = HashMap::new();
+        for tri in vertices.chunks(3) {
+            for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+                let (a, b) = (key(tri[a].position), key(tri[b].position));
+                *edges.entry(if a < b { (a, b) } else { (b, a) }).or_default() += 1;
+            }
+        }
+        edges.values().filter(|&&uses| uses != 2).count()
+    }
+
+    fn bounds(vertices: &[manifold_node_engine::mesh::MeshVertex]) -> ([f32; 3], [f32; 3]) {
+        vertices.iter().fold(([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]), |(lo, hi), v| {
+            (std::array::from_fn(|k| lo[k].min(v.position[k])), std::array::from_fn(|k| hi[k].max(v.position[k])))
+        })
+    }
+
+    fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+        (0..3).all(|k| (a[k] - b[k]).abs() < 1e-3)
+    }
+
+    /// The solid a rigid body or a copy layout gets from each sweep of a
+    /// Polygon Curve hexagon is closed, and its hull is the shape drawn:
+    /// the hexagon pushed to its depth, spun into a ring, or a tube along an
+    /// arc with its ends capped.
+    #[test]
+    fn each_sweep_of_a_polygon_is_a_closed_solid_with_its_hull() {
+        let (count, radius) = (241, 0.5);
+        let hexagon: Vec<[f32; 2]> = (0..count).map(|i| outline_point(i, count, 6.0, radius, 0.0)).collect();
+        // Flat sides at x = ±r cos 30°, corners at y = ±r.
+        let half_width = radius * (std::f32::consts::PI / 6.0).cos();
+        let extrude = SweptCurve {
+            points: hexagon.clone(),
+            lift: Vec::new(),
+            sweep: Sweep::Extrude { depth: 2.0, steps: 3, close: false, symmetric: false, caps: true },
+        };
+        // The hexagon one and a half metres off the axis, spun a full turn.
+        let profile: Vec<[f32; 2]> = hexagon.iter().map(|[x, y]| [x + 1.5, *y]).collect();
+        let revolve = SweptCurve { points: profile, lift: Vec::new(), sweep: Sweep::Revolve { segments: 48, sweep: TAU } };
+        let arc: Vec<[f32; 2]> = (0..17).map(|i| (std::f32::consts::PI * i as f32 / 16.0).sin_cos()).map(|(s, c)| [2.0 * c, 2.0 * s]).collect();
+        let tube = SweptCurve { points: arc, lift: Vec::new(), sweep: Sweep::Tube { radius: 0.25, sides: 12, caps: true } };
+        let outer = 1.5 + half_width;
+        // An end ring faces along the arc's first chord, tilted by half a
+        // step (pi / 32), so it reaches a little past the arc's end plane.
+        let tilt = std::f32::consts::PI / 32.0;
+        let (end_x, end_z) = (2.0 + 0.25 * tilt.cos(), -0.25 * tilt.sin());
+        for (swept, lo, hi) in [
+            (&extrude, [-half_width, -radius, 0.0], [half_width, radius, 2.0]),
+            (&revolve, [-outer, -radius, -outer], [outer, radius, outer]),
+            (&tube, [-end_x, -0.25, end_z], [end_x, 0.25, 2.25]),
+        ] {
+            let vertices = swept.load_vertices().expect("the sweep has area");
+            assert_eq!(open_edges(&vertices), 0, "{:?} leaves a hole", swept.sweep);
+            let (got_lo, got_hi) = bounds(&vertices);
+            assert!(near(got_lo, lo) && near(got_hi, hi), "{:?}: hull {got_lo:?}..{got_hi:?}, want {lo:?}..{hi:?}", swept.sweep);
+        }
+    }
+}

@@ -267,6 +267,11 @@ impl Primitive for GltfSkinnedMeshSource {
         let capacity = dst_verts.size / std::mem::size_of::<MeshVertex>() as u64;
 
         if self.cached_verts.is_empty() {
+            // Nothing parsed yet (or the path is empty or failed): the
+            // buffers are allocation, not content. Pending holds every
+            // consumer (the skin, a swarm's merged seed mesh, the render)
+            // until the mesh lands, as node.gltf_mesh_source does.
+            ctx.mark_outputs_pending();
             return;
         }
 
@@ -458,6 +463,21 @@ mod gpu_tests {
         params: &ParamValues,
         time: FrameTime,
     ) -> bool {
+        run_frame(prim, backend, device, verts_slot, joints_slot, weights_slot, params, time).0
+    }
+
+    /// One run: whether it declared its outputs unchanged, and pending.
+    #[allow(clippy::too_many_arguments)]
+    fn run_frame(
+        prim: &mut GltfSkinnedMeshSource,
+        backend: &MetalBackend,
+        device: &TestDevice,
+        verts_slot: Slot,
+        joints_slot: Slot,
+        weights_slot: Slot,
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> (bool, bool) {
         let output_scratch: Vec<(&'static str, Slot)> =
             vec![("vertices", verts_slot), ("joints", joints_slot), ("weights", weights_slot)];
         let mut scalar_ws = Vec::new();
@@ -483,16 +503,37 @@ mod gpu_tests {
             &mut object_ws,
         );
         let mut native_enc = device.create_encoder("gltf-skinned-mesh-source-test");
-        let unchanged;
+        let ran;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
             let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
                 .with_outputs_retained(true);
             prim.run(&mut ctx);
-            unchanged = ctx.outputs_unchanged;
+            ran = (ctx.outputs_unchanged, ctx.outputs_pending);
         }
         native_enc.commit_and_wait_completed();
-        unchanged
+        ran
+    }
+
+    /// While the file parses, the outputs are pending, so nothing downstream
+    /// (the skin, a swarm seeding from a merged group, the render) reads the
+    /// unwritten buffers; once it lands they are content.
+    #[test]
+    fn outputs_are_pending_until_the_mesh_lands() {
+        let path = cesium_man_fixture_path();
+        assert!(path.exists(), "fixture missing at {}", path.display());
+        let device = manifold_gpu::testkit::test_device();
+        let (backend, vs, js, ws) = make_buffer_backend(&device);
+        let params = params_at(path.to_str().unwrap(), 0.0);
+        let mut prim = GltfSkinnedMeshSource::new();
+        let (_, pending) = run_frame(&mut prim, &backend, &device, vs, js, ws, &params, frame_time_at(0.0));
+        assert!(pending || !prim.cached_verts.is_empty(), "a frame with nothing parsed is pending");
+        settle(&mut prim, &backend, &device, vs, js, ws, &params);
+        let (_, pending) = run_frame(&mut prim, &backend, &device, vs, js, ws, &params, frame_time_at(0.0));
+        assert!(!pending, "a landed mesh is content");
+        let mut missing = GltfSkinnedMeshSource::new();
+        let (_, pending) = run_frame(&mut missing, &backend, &device, vs, js, ws, &params_at("", 0.0), frame_time_at(0.0));
+        assert!(pending, "no file is no content");
     }
 
     fn readback(backend: &MetalBackend, slot: Slot) -> Vec<u8> {
