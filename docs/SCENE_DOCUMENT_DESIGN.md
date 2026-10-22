@@ -40,7 +40,7 @@ These decide the design. Where a source note disagrees, the ruling wins.
 15. **Base:** the branch carries G1 (renderer instance space) and G2a (transform parent chain). Their task beads stay open until the branch lands.
 16. **Plan:** one branch, the lanes in section 11, at most four parallel builds (disk). Peter tests a branch build after each fix round, with the exact launch command.
 17. **Silence means Blender.** Where this doc is silent, an item behaves as it does in Blender (Unity for the default scene and components). The lane names each such call in its report.
-18. **One writer per graph.** A scene layer's graph is written only by the scene compiler. The graph editor never opens or edits a scene layer's graph, and the Scene panel never edits a graph directly. Effect and generator graphs outside scene layers are written only by the graph editor. No hand-wired scene graphs: every scene capability is an item kind, a field, a modifier or a World setting. Node trees may later attach to items as assets (section 14), never replacing the scene.
+18. **One writer per region.** The scene compiler writes the scene. On a scene layer's graph the scene is one sealed Scene node, read-only in the graph editor, with outputs for colour and the render's other passes (depth, normals, item id). Everything around that node is the user's: the graph editor opens a scene layer's graph so post-processing is wired after the Scene node, and a recompile never touches it (Blender's compositor Render Layers node). The Scene panel never edits a graph directly. Effect and generator graphs outside scene layers are written only by the graph editor. No hand-wired scene graphs: every scene capability is an item kind, a field, a modifier or a World setting. Node trees may later attach to items as assets (section 14), never replacing the scene.
 19. **Nothing main had is dropped without Peter's yes.** Every scene feature a performer could use on main has a home and an owning lane in section 15. One that fits no kind is listed in section 15.3 for Peter.
 20. **Modifiers are a kind, and forces are not modifiers.** A Modifier item is one card in the scene's single ordered chain, shown in its own section of the tree, like a layer's effect cards: drag to reorder, an on/off toggle per card, the type swappable. Order in the section is the order of application. Each card names its targets: one or more Objects or Groups, or the whole scene. No Object or Group holds a modifier list. Forces stay their own kind in their own section of the tree; they add up, so they are not a chain. Every mesh modifier works on any Object shape (built-in solids, planes, imported parts, Ocean) and on Groups, in any scene. Each item supplies its own rest-pose bounds, centre and vertex count, and every recipe reads them the same way. A built-in shape gets enough mesh detail automatically while a deforming modifier targets it. A Group target bends all its parts in one shared frame, as main did for scans. No modifier refuses a shape. Every modifier row is a performance row. Every modifier and force main shipped comes back as a Modifier, a Force or a World setting (section 15.2).
 21. **Scene-wide modifiers.** Scene Loop, Math View and Scene Mirror are Modifier types that act on the whole scene. Scene Loop is the corridor loop, and every camera sees it; a camera's Loop rig rides it, and a camera cut keeps the tiling. A scene holds at most one Scene Loop and one Math View. Neither is on the World card. Scene Fog is removed: fog is World Fog, its Density a performance row.
@@ -67,7 +67,7 @@ What the deletion proof (section 10) still finds at df95dd7ce, and who removes i
 | `stamp_scene_node_exposures` | Callers: `manifold-io/src/migrations/scene_cinematic_tail_v1130.rs` and the catalog test `runtime_bound_param_survives_rebuild.rs` (L12); `manifold-nodes-water/src/presets/gpu_flip.rs` (L7). The definition in `manifold-core/src/scene_exposure.rs` goes last | L12, L7, then L10 |
 | Fluid role wiring and the off-menu Collider role kept as a stopgap in `role_kind` | `fluid_role` in 34 files | L7 |
 | Two comments naming `SceneVm::from_def` | `gltf_mesh_source.rs:222`, `gltf_skinned_mesh_source.rs:107` | L12 |
-| The sixteen `render_scene` generator presets (the old starters, Lantern included) | `crates/manifold-nodes/assets/generator-presets/` | L10 |
+| The fifteen old `render_scene` starters (Lantern included; Scene.json is the base Scene and stays) | `crates/manifold-nodes/assets/generator-presets/` | L10 |
 
 ## 4. Refusals, hiding and toasts
 
@@ -134,7 +134,7 @@ Where we deliberately differ, and why:
 
 - `SceneDoc` lives on a scene layer's generator instance (`PresetInstance`, `manifold-core/src/effects/instance.rs`), beside `params`. For a scene layer the graph is never saved; it is compiled.
 - `SceneDoc` is a tree of `Item { id, name, kind, fields, children }`. `kind` is the closed enum of eleven (ruling 4). `fields` are the structural properties of that kind, a closed set per kind, listed in section 7.4.
-- References between items (a material binding, Draw As, Emit From, force and modifier targets, a Look At target, a Material's source layer, the World's default camera) are fields, set by `Set`. Material binding inherits down the tree, nearest wins.
+- References between items (a material binding, Draw As, Emit From, force and modifier targets, a Look At target, a Material's source layer) are fields, set by `Set`. Material binding inherits down the tree, nearest wins.
 - The file format is closed: `deny_unknown_fields` everywhere. No preset-declared param, section, label, `cardVisible` or string binding exists in a scene layer. `presetMetadata.params`, `bindings`, `stringParams`, `stringBindings` are not part of a scene layer.
 - Every live property is a param in the layer's manifest, id `<item id>.<property>`, created by the compiler from the kind's table. Structural fields are never params (section 7.4).
 - Ownership: content thread. Mutation: `EditingService` commands only, each one undo step. Serialization: the document plus the manifest, as JSON inside the project. The UI reads the document from its `Arc<Project>` snapshot through one seam, `scene_of(project, layer) -> Arc<SceneVm>`; every host (project bridge, projection, gizmo, edit selection, setup check) uses it. There is no second constructor.
@@ -162,7 +162,7 @@ Where we deliberately differ, and why:
 - It compiles the whole graph per structural edit, on the content thread, and at load. A param write never recompiles.
 - Force and Modifier items compile to `scene_modifiers` instances and the `load/expand` passes, addressed by node id (ruling 8). Modifiers compile in chain order. Bodies ride `physics_members`.
 - Every mesh source the compiler emits (built-in solids, Sphere, Plane, imported parts, Ocean, procedural shapes, a Group as the union of its parts, the whole scene as the union of everything) supplies its rest-pose bounds, centre and vertex count, and every modifier recipe reads them the same way (ruling 20). A recipe never takes its scale from the largest import in the scene.
-- A scene layer has no editable graph and no inspection view in this cut. The graph editor never opens one (ruling 18).
+- A scene layer's graph opens in the graph editor with the scene as one sealed Scene node; the user wires post-processing around it (ruling 18). [L12b]
 
 ### 7.4 Stage versus setup
 
@@ -215,7 +215,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 - **The shape comes from the mesh automatically**, from one `CollisionShape` service in `manifold-physics` that takes an item's mesh and world scale and returns what each solver asks for:
   - Static collider in Box3D: the exact triangle mesh (`manifold-physics/native/box3d/bridge.c`, `b3CreateMesh`).
   - Body in Box3D: a spatial split into hulls with automatic detail chosen from size and triangle count, with a 0.1% shell for open scans and the 64-hull cap (`MAX_BODY_HULLS`, `manifold-physics/src/lib.rs`).
-  - Water (GPU FLIP, MPM): a signed distance lattice for a closed mesh, unsigned with a shell for an open one (`manifold-physics/src/sdf.rs`). Shell thickness is automatic: one water cell, or 0.1% of the mesh, whichever is larger. The built code uses at least two cells; L7 settles which is right and makes this line match.
+  - Water (GPU FLIP, MPM): a signed distance lattice for a closed mesh, unsigned with a shell for an open one (`manifold-physics/src/sdf.rs`). Shell thickness is automatic: one water cell on each side of the surface (two cells through), or 0.1% of the mesh, whichever is larger.
   - Swarms: none in this cut (section 14).
 - **Cache key** includes the mesh content, the item's scale and the water cell size. A late-arriving mesh (an async load) must flip the key: the key hashes a content-ready signal, not size and transform alone.
 - **Water reads it directly.** Every Collider and every Body in the water's World whose bounds touch the water domain is a solid in the water; Bodies couple two ways as rigid bodies do. No fluid role on an object, no per-solver shape path.
@@ -246,7 +246,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 ### 7.12 Forces
 
 - Force is a kind: its recipe type (Radial, Uniform, Vortex, Wind, Drag, Attractor, Explosion), the recipe's rows, Targets (everything with physics, or chosen items), Impulse. Forces compile to scene modifier instances and the `load/expand` passes. Drag compiles as the Wind recipe with speed and gusts at 0.
-- A force is an item a user adds, with `Add`. A scene holds at most 16 forces; the seventeenth Add is disabled with that reason.
+- A force is an item a user adds, with `Add`. A scene holds any number of forces (ruling 23).
 - Forces are not modifiers and not a chain: they add up, so their order changes nothing. Force items sit at the top of the scene, in their own section of the tree.
 
 ### 7.13 Cameras
@@ -260,7 +260,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
   - Motion Blur: On, Shutter, Max Blur. It shows whenever the camera or an object moves.
   - Shake: Amount, Speed, Position strength, Rotation strength, every one a performance row. It compiles to `node.transform_shake` on the camera's own transform, after the rig. Amount 0 leaves the camera still.
 - A camera inside a group follows the group's transform.
-- Each output or display picks its own camera; that pick is live and mappable and never recompiles, so cuts land on a beat and multi-display rigs show different views. World's default camera is what an output shows until it picks one (ruling 11).
+- The World card's Camera row picks the camera the layer renders; it is live and mappable and never recompiles, so a mapped cut lands on its frame (ruling 11). Each camera keeps its own depth of field and motion blur; only the picked camera's run. [L8b]
 
 ### 7.14 Pixel clicking and selection
 
@@ -271,7 +271,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 ### 7.15 Saved scenes
 
 - A saved scene is a file saved from the app (document plus manifest values), in the closed format.
-- No starters ship: only the base Scene. The sixteen old `render_scene` presets are deleted, Lantern included.
+- No starters ship: only the base Scene. The fifteen old `render_scene` starters leave the browser: six are deleted (Lantern, Swarm, Swarm Cloud and others), and the nine water, physics and ocean scenes move to test fixtures because the engine proofs load them.
 - Changing a layer's generator always works, as in Resolume and Ableton: the old scene goes with the old generator, one undo step; one undo brings both back. BUG-vis7l (Scene preset hidden) and BUG-hkshf (generator change refused) are fixed by design.
 
 ### 7.16 Not changed
@@ -328,7 +328,7 @@ One table keyed by (kind, property), one file per kind under `manifold-core/src/
 | Water Source | Role (header); Shape; Transform; Inflow speed |
 | Force | Its type's rows; Targets; Impulse |
 | Modifier | Header: Type (swappable) and the on/off toggle; Targets (one or more Objects or Groups, or the whole scene; not on a scene-wide type); the type's rows, with a Mask section (Centre, Width, Feather in radius units) on each masked type (section 7.19) |
-| World | Physics (Gravity, Speed, Reset, Air Resistance); Fog (Density a performance row); Render (render mode and its colours (L13), ray tracing, temporal upscale, Ambient Occlusion (L13)); default camera |
+| World | Physics (Gravity, Speed, Reset, Air Resistance); Fog (Density a performance row); Render (render mode and its colours (L13), ray tracing, temporal upscale, Ambient Occlusion (L13)); Camera (the live pick, L8b) |
 
 The tree: Camera and Lighting, World pinned at the top; then the item hierarchy, every item in its place with a kind icon, nested groups shown as a real tree; then the Forces section; then the Modifiers section, its cards in the order they apply.
 
@@ -402,8 +402,9 @@ Short statements a performer can check, one by one. Each names the one lane that
 - Motion blur shows while the camera orbits. [F2]
 - The Camera card has a Shake section (Amount, Speed, Position strength, Rotation strength); every row is a performance row, so a shake mapped to a kick lands on the kick; Amount 0 leaves the camera still. [L8]
 - A camera inside a group follows the group. [L11]
-- Each output picks its own camera; a cut mapped to a beat lands on that beat. [L8]
-- Removing the camera an output shows falls back to the World's default camera, in the same undo step. [L8]
+- The World's Camera row cuts between cameras; a mapped cut lands on its frame, with no rebuild. [L8b]
+- Removing the camera on show falls back to the first camera, in the same undo step; adding or moving cameras keeps the shot. [L8b]
+- Shake wobbles the camera about its own position, like a handheld camera; Amount 0 is still. [L8b]
 
 **Light and Environment**
 - A new light lights the scene at once. [L11]
@@ -534,7 +535,7 @@ Branch `wave/scene-document`. Land once, after L11.
 | Lead | Merge F1, F2, L6 and `lane/scene-doc-glb-sweep` (3d5849b57). Peter tests the build |
 | A | L12, L13, L14, L17 |
 | B | L15 (after L12), L7, L8 |
-| C | L9 (after L7), L16, L18, L19, L20 (each after L15) |
+| C | L9 (after L7), L16, L18, L19, L20, L12b (each after L15) |
 | D | L21 (after L15 and L8), L10 (after L6, L7, L9, L12, L16) |
 | E | L22 (after every other lane) |
 | F | L11 |
@@ -677,6 +678,14 @@ Files: `manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` and its 
 6. Cmd+C and Cmd+V copy and paste items within a scene and into another scene layer; Cmd+D duplicates.
 7. Promise 13's GPU proof passes.
 
+**L12b (Opus): the sealed Scene node.**
+Files: `manifold-node-engine` (a sealed node the compiler owns), the install seam (`install_scene_document`), the graph editor's open path and its read-only node view. Joins: after L15. Reference: Blender's compositor Render Layers node. Search the graph engine for an existing group or sealed-node mechanism first and extend it.
+1. A scene layer's graph opens in the graph editor. The compiled scene shows as one sealed Scene node: it can be moved, not opened, edited, deleted or rewired inside.
+2. Its outputs are Colour plus whatever passes the render already produces (depth, normals, item id); a pass that does not exist yet is reported, not built.
+3. Nodes wired between the Scene node and the layer output survive every recompile (any Scene panel edit), save and load.
+4. Undo of a Scene panel edit never undoes a graph editor edit, and the reverse.
+5. L12's refusal toast is gone; nothing writes inside the Scene node but the compiler.
+
 **L20 (Opus): curve shapes.**
 Files: `scene_compile/curves.rs` (new), `scene_schema/curves.rs` (new), Shape entries in `scene_doc.rs`. Joins: bounds through L15. Reference: Blender's curve objects (Extrude and Bevel depth) and its Screw modifier.
 1. Shape offers Extrude (`extrude_curve`), Revolve (`revolve_curve`) and Tube (`tube_from_path`).
@@ -721,7 +730,7 @@ Files: `scene_compile/scene_loop.rs`, `math_view.rs` and `scene_mirror.rs` (new)
 **L10 (Sonnet; BUG-elwvu.10): the crash test, deletions, docs.**
 Files: `crates/manifold-nodes/tests/`, `crates/manifold-nodes/assets/generator-presets/` (deletions), `manifold-core/src/scene_exposure.rs` (deletion), `docs/`.
 1. The scene crash test of section 10 exists and passes.
-2. The sixteen `render_scene` generator presets are deleted, Lantern, Swarm and Swarm Cloud included, with the tests that read them.
+2. The fifteen old `render_scene` starters leave the browser: those no proof reads are deleted with their tests, and the water, physics and ocean scenes the engine proofs load move to test fixtures. Scene.json stays.
 3. `scene_exposure.rs` is deleted.
 4. The deletion proof returns zero.
 5. Superseded docs are marked, the maps updated, the node catalog and docs index regenerated.
@@ -744,7 +753,7 @@ Files: the whole branch diff against main. Runs alone, after every other lane.
 ## 12. Forbidden moves
 
 - A second scene path, fallback, stopgap, shim or migration. Old scenes may break (D-119, no old-show compatibility).
-- A second writer of any graph: the graph editor or the Scene panel writing a scene layer's graph, anything but the graph editor writing an effect or generator graph, or a hand-wired scene graph anywhere.
+- A second writer of any region: the graph editor writing inside the Scene node, the Scene panel writing any graph, anything but the graph editor writing an effect or generator graph, or a hand-wired scene graph anywhere.
 - Dropping a feature main had without Peter's yes, or leaving one with no owning lane.
 - A preset-only param, section, label, `cardVisible` or string binding on a scene layer.
 - A row the (kind, property) table does not declare, or a bespoke row, slider or drawer (the param surface recipe named in ruling 12).
@@ -778,14 +787,14 @@ Files: the whole branch diff against main. Runs alone, after every other lane.
 - **Water reads every Collider and Body in its World whose bounds touch the domain.** A collider that should not touch the water must be kept out of the domain; there are no collision groups in this cut.
 - **Automatic collision detail** may miss on hard scans, and there are no manual overrides. The better method is a follow-up (section 14).
 - **The input gate refuses bad physics input** instead of simulating it. A scene with a NaN scale shows a refusal on its card and that item stays out of the solver.
-- **No graph view of a scene layer.** Power users lose free graph editing of a whole scene and any inspection of the compiled graph.
+- **The scene is sealed in the graph editor.** A scene layer's graph shows the scene as one node with post-processing wired around it (ruling 18). Nodes inside the scene are edited only in the Scene panel and cannot be inspected.
 
 ## 14. Deferred
 
 Each has a trigger; none is built in this work.
 - **Convex decomposition by CoACD** (Wei et al., SIGGRAPH 2022) or V-HACD for bodies. Trigger: the automatic spatial split misses on a real scan. Ported code needs file-header credit and `THIRD_PARTY_NOTICES.md`.
 - **Swarm collisions** using the water's distance lattice. Trigger: after the swarm lane lands and Peter asks.
-- **Material and geometry node assets** (Material source = graph asset, a geometry graph on an Object, a sky graph on an Environment), attached to items, never replacing the scene. The curve-based geometry of section 15.3 would arrive this way. Trigger: a node feature for materials or geometry exists, or Peter asks for curves.
+- **Material and geometry node assets** (Material source = graph asset, a geometry graph on an Object, a sky graph on an Environment), attached to items, never replacing the scene. Hand-drawn curves for Extrude, Revolve and Tube would arrive this way; the built-in curves ship now (L20). Trigger: a node feature for materials or geometry exists, or Peter asks for hand-drawn curves.
 - **A read-only view of the compiled graph.** Trigger: a debugging need the logs cannot meet.
 - **Hover preview of a structural edit's effect** (keep, install, restart item, restart world) before the click. Trigger: Peter loses a simulation to a structural click on stage.
 - **Water collision groups** and a "Water collision: off" switch. Trigger: a collider that must stay out of the water but sits in its domain.
@@ -835,7 +844,7 @@ Every scene feature a performer could use on main (origin/main), its state on th
 | Water sources: Fill, Inflow, Drain | Add inside a Water | Fields only | Water Source | L7 |
 | Physics View | Water card | Missing | Render menu mode | L7 |
 | Camera rigs: Orbit, Free, Look At | Camera card | Works; Look At target is three numbers | Camera Rig | built; Look At target F2 |
-| Camera switching | Hand-wired; Scene Loop | World default camera is a setup field; no per-output pick | Per-output live pick | L8 |
+| Camera switching | Hand-wired; Scene Loop | World Camera row, live cut | Per-layer live pick; per-display pick is BUG-lz538 (per-display camera pick) | L8b |
 | Depth of field with Aperture Shape | Camera card | Works | Camera | built |
 | Motion blur | Camera card | Rows work; invisible while orbiting in Peter's test | Camera | F2 |
 | Exposure | Lighting card | Works | Environment | built |
@@ -848,7 +857,7 @@ Every scene feature a performer could use on main (origin/main), its state on th
 | Ray tracing (reflections, shadows, ambient occlusion, global illumination), temporal upscale | World card | Works | World Render | built |
 | Fog | Scene Fog preset; World | Works as World Fog; Density is Setup role | World Fog, Density a performance row | L13 |
 | Bloom, chromatic aberration, grain, 2D depth of field | Layer effects | Unchanged; not scene features | Layer effects | none |
-| The sixteen `render_scene` starters | Browser | Play as plain graphs with an empty Scene panel | Deleted; scenes are built in the panel and saved | L10 |
+| The fifteen old `render_scene` starters | Browser | Play as plain graphs with an empty Scene panel | Gone from the browser (engine-proof scenes kept as test fixtures); scenes are built in the panel and saved | L10 |
 | Graph scenes in saved projects | Load | Play as plain graphs with an empty Scene panel | No migration (D-119) | none |
 
 ### 15.2 Modifier restore
