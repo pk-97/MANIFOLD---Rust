@@ -451,7 +451,14 @@ The task beads for G1 (renderer instance space) and G2a (transform chains) stay 
 - Tests: fundamental 8, extending the existing impulse delivery test if it already covers this.
 - Depends on: L1.
 
-Peter tests a branch build after wave 2 (base scene, objects, lights, groups, imports, physics, copies, forces). The lead gives the exact launch command with the worktree binary path.
+**L2i (Opus; child 12 of BUG-elwvu (scene document epic)): wave-2 integration.** Added by the lead because four parallel lanes leave joins none of them can make alone.
+- Does: physics per copy (L4's emitter on L5's copies); the Modifiers section on the Object card (L5 adds mesh modifiers as an ordered `modifiers` field on Object, since no lane owned them); disabled reasons on field rows that need another lane's knowledge (bad physics input, force targets that cannot resolve, an Impulse that cannot fire); lights and cameras inside a group follow the group's transform (L1 compiles them unparented: `node.light` and the camera nodes take no parent transform).
+- Structural field rows: L2 adds a `FieldRow` list per kind in `scene_schema/` (field, section, choices, applies, disabled reason) and renders them generically, so L3, L4 and L5 add no panel UI.
+- Depends on: L2, L3, L4, L5.
+
+As built in L1: World Fog on or off and the Environment's Sky style are structural fields; Exposure is on the Environment and reaches every camera's lens; there is one Environment per scene.
+
+Peter tests a branch build after wave 2 and L2i (base scene, objects, lights, groups, imports, physics, copies, forces). The lead gives the exact launch command with the worktree binary path.
 
 ### Wave 3
 
