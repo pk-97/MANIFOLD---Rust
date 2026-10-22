@@ -8,7 +8,7 @@
 //! and material, and reads what the file holds through [`model_file`].
 //!
 //! No graph is built here. The parse is the one the mesh loader uses
-//! ([`gltf_load::parse_document_and_buffers`]).
+//! (`gltf_load::parse_document_and_buffers`).
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;

@@ -9,7 +9,7 @@
 //!
 //! The strip is surgical: flatten the assembled def, drop the `dof` group node
 //! (its inner coc/coc_dilate/bokeh atoms ride with it) and the top-level
-//! `motion_blur` node plus every wire touching either, then rewire `ao.out ->
+//! `motion_blur` node plus every wire touching either, then rewire `ao_mask.out ->
 //! final.in` — the exact pre-P1 spine. Everything else (camera, lens, ao,
 //! render_scene) is untouched, so a difference can only come from the tail.
 
@@ -77,14 +77,14 @@ fn build_variant(
         flat.wires.retain(|w| {
             keep_nodes.contains(&w.from_node) && keep_nodes.contains(&w.to_node)
         });
-        // Rebuild the spine without the tail: the render's own colour output
-        // straight to final.
-        let render_id = flat
+        // Rebuild the spine without the tail: the contact-shadow masked mix
+        // (`ao_mask`, the pre-P1 SSAO spine) straight to final.
+        let ao_id = flat
             .nodes
             .iter()
-            .find(|n| n.type_id == "node.render_scene")
+            .find(|n| n.node_id.as_str().ends_with("ao_mask"))
             .map(|n| n.id)
-            .expect("stripped graph keeps the render");
+            .expect("stripped graph keeps the contact shadows");
         let final_id = flat
             .nodes
             .iter()
@@ -92,8 +92,8 @@ fn build_variant(
             .expect("final output node")
             .id;
         flat.wires.push(manifold_core::effect_graph_def::EffectGraphWire {
-            from_node: render_id,
-            from_port: "color".to_string(),
+            from_node: ao_id,
+            from_port: "out".to_string(),
             to_node: final_id,
             to_port: "in".to_string(),
         });

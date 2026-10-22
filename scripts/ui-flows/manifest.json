@@ -20,33 +20,15 @@
     "crates/manifold-app/src/scene_gizmo.rs": [
       "scene-preview-gizmo-drag"
     ],
-    "crates/manifold-app/src/setup_check.rs": [
-      "scene-setup-check"
-    ],
-    "crates/manifold-nodes-scene/src/node_graph/scene_vm/setup_check.rs": [
-      "scene-setup-check"
-    ],
-    "crates/manifold-core/src/liquid_setup.rs": [
-      "scene-setup-check"
-    ],
     "crates/manifold-ui/src/chrome/diff.rs": [
       "rack-bypass",
       "rack-wet-dry"
     ],
     "crates/manifold-app/src/ui_bridge/dispatch/params.rs": [
-      "trigger-lane-assignment",
-      "scene-slider-range"
+      "trigger-lane-assignment"
     ],
     "crates/manifold-app/src/ui_root/dropdowns.rs": [
-      "trigger-lane-assignment",
-      "water-family-controls",
-      "scene-pin-roundtrip",
-      "scene-slider-range"
-    ],
-    "crates/manifold-app/src/ui_root/card_pin.rs": [
-      "scene-pin-roundtrip",
-      "scene-card-to-tab",
-      "scene-slider-range"
+      "trigger-lane-assignment"
     ],
     "crates/manifold-app/src/ui_bridge/projection/trigger_routing.rs": [
       "trigger-lane-assignment"
@@ -58,7 +40,6 @@
       "automation-lane-management",
       "automation-placeholder-first-click",
       "automation-resize-lane",
-      "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
       "drag-automation-point",
@@ -71,7 +52,6 @@
       "automation-lane-management",
       "automation-placeholder-first-click",
       "automation-resize-lane",
-      "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
       "drag-automation-point"
@@ -83,7 +63,6 @@
       "automation-lane-management",
       "automation-placeholder-first-click",
       "automation-resize-lane",
-      "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
       "drag-automation-point",
@@ -96,119 +75,58 @@
       "automation-lane-management",
       "automation-placeholder-first-click",
       "automation-resize-lane",
-      "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
       "drag-automation-point",
       "toggle-lanes"
     ],
-    "crates/manifold-app/src/scene_view_copy.rs": [
-      "scene-use-this-view"
-    ],
-    "crates/manifold-ui/src/panels/scene_setup_panel/item_header.rs": [
-      "scene-use-this-view"
-    ],
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
-      "scene-setup-add-object",
-      "scene-two-panes",
-      "scene-swarm-add",
-      "scene-setup-light-intensity-drag",
-      "scene-setup-add-fog-drag",
-      "scene-setup-modifier-stack",
-      "scene-setup-heldout-merge-snapshot",
       "scene-setup-empty-states",
-      "scene-skin",
-      "material-inspector-colour",
-      "scene-fluid-role-lifecycle",
       "scene-forces-controls"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel/material_": [
-      "material-inspector-colour",
-      "material-inspector-features",
-      "material-inspector-groups",
-      "material-inspector-looks",
-      "material-inspector-textures",
-      "material-preset-menu",
-      "material-add-feature-menu",
-      "scene-colour-row-hex"
+      "material-inspector-textures"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel/panes.rs": [
-      "scene-two-panes",
       "scene-header-draw-modes"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
-      "scene-setup-add-object",
-      "scene-two-panes",
-      "scene-setup-light-intensity-drag",
-      "scene-setup-add-fog-drag",
-      "scene-setup-modifier-stack",
-      "scene-setup-heldout-merge-snapshot",
       "scene-setup-empty-states",
-      "scene-skin",
-      "material-inspector-colour",
-      "scene-fluid-role-lifecycle",
       "scene-forces-controls"
     ],
-    "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": [
-      "water-family-preset"
-    ],
     "crates/manifold-app/src/ui_bridge/projection/scene_card.rs": [
-      "scene-card-bands",
       "scene-card-new-empty",
-      "scene-card-free-camera",
-      "scene-card-dof-switch",
-      "scene-naming",
-      "scene-pin-roundtrip",
-      "scene-card-to-tab"
-    ],
-    "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
-      "scene-setup-add-object",
-      "scene-fluid-role-lifecycle",
-      "scene-fluid-dam-break-controls",
-      "water-family-controls"
+      "scene-naming"
     ],
     "crates/manifold-app/src/ui_bridge/projection/cards.rs": [
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
-      "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
+      "param-step-action"
     ],
     "crates/manifold-app/src/ui_bridge/projection/inspector.rs": [
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
-      "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
-    ],
-    "crates/manifold-app/src/edit_selection.rs": [
-      "water-family-preset"
+      "param-step-action"
     ],
     "crates/manifold-app/src/ui_bridge/state_sync.rs": [
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
-      "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
+      "param-step-action"
     ],
     "crates/manifold-app/src/ui_translate.rs": [
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
-      "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
+      "param-step-action"
     ],
     "crates/manifold-ui/src/panels/param_card/": [
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
-      "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
+      "param-step-action"
     ],
     "crates/manifold-ui/src/panels/param_slider_shared/": [
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
-      "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
-    ],
-    "crates/manifold-ui/src/panels/param_slider_shared/colour_row.rs": [
-      "scene-colour-row-hex",
-      "scene-light-swatch"
+      "param-step-action"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
       "effect-browser-open"
@@ -220,7 +138,6 @@
       "automation-lane-management",
       "automation-placeholder-first-click",
       "automation-resize-lane",
-      "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
       "drag-automation-point",
@@ -259,21 +176,9 @@
       "rt-quality-panel-demo"
     ],
     "crates/manifold-app/src/ui_bridge/projection/material.rs": [
-      "material-inspector-colour",
-      "scene-colour-row-hex",
-      "material-inspector-features",
-      "material-inspector-groups",
-      "material-inspector-looks",
-      "material-preset-menu",
-      "material-add-feature-menu",
       "material-inspector-textures"
     ],
     "crates/manifold-app/src/ui_bridge/material_colour.rs": [
-      "material-inspector-colour",
-      "scene-colour-row-hex",
-      "material-inspector-features",
-      "material-inspector-groups",
-      "material-inspector-looks",
       "material-inspector-textures"
     ],
     "crates/manifold-app/src/editor_frame.rs": [
@@ -344,18 +249,13 @@
     "work-drawer-tween": "envmod",
     "work-modulated-step": "inspector",
     "work-fold-toggle": "inspector",
-    "water-family-controls": "scene-setup",
-    "scene-fluid-dam-break-controls": "waterdambreak",
-    "scene-liquid-forces": "waterdambreakmatter",
     "automation-clipboard-shapes": "automation",
     "automation-time-selection": "automation",
     "automation-lane-management": "automation",
     "automation-show-parameter": "inspector",
-    "automation-scene-camera-click": "gltfscene",
     "automation-clear-parameter": "inspector",
     "automation-coincident-points": "automation",
     "automation-resize-lane": "automation",
-    "scene-photoscan-modifiers": "gltfscene",
     "frame-align-lfo": "inspector",
     "audio-setup-hygiene": "audiosends",
     "audio-new-source-starts-on-none": "audiosendsnone",
@@ -370,24 +270,14 @@
     "led-inspector-preview": "dmxcard",
     "envelope-modulation": "envmod",
     "t-drawer-step": "envmod",
-    "gltf-clip-scrub-retrigger": "gltfanimscene",
     "inspector-card-drag-reorder": "inspector",
     "inspector-blob-mask": "inspector",
     "inspector-modifier-group": "modifiergroup",
     "rack-bypass": "modifiergroup",
     "rack-wet-dry": "modifiergroup",
     "audio-visualizer-source": "audiovisualizers",
-    "scene-setup-add-object": "gltfscene",
-    "scene-swarm-add": "gltfscene",
     "scene-setup-empty-states": "audiovisualizers",
-    "scene-setup-heldout-merge-snapshot": "gltfscene",
-    "scene-setup-light-intensity-drag": "gltfscene",
-    "scene-setup-modifier-stack": "gltfscene",
-    "scene-submesh-controls": "gltfscene",
-    "scene-setup-modifier": "gltfscene",
-    "scene-setup-modifier-trigger": "gltfscene",
     "scene-preview-gizmo-drag": "gltfscene",
-    "scene-skin": "gltfscene",
     "scene-header-draw-modes": "gltfscene",
     "select-and-inspect": "inspector",
     "set-param-layer-opacity": "inspector",
@@ -398,58 +288,20 @@
     "calibrated-param-card-reads-manifest": "inspector",
     "drag-clip-release-over-inspector": "timeline",
     "effect-browser-open": "inspector",
-    "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
-    "scene-card-bands": "physicsscene",
     "scene-card-new-empty": "newscene",
-    "scene-card-free-camera": "oceanscene",
-    "scene-card-dof-switch": "gltfscene",
     "scene-naming": "gltfscene",
     "rt-quality-panel-demo": "rtquality",
-    "scene-modifier-preset": "mushroomscene",
-    "material-inspector-groups": "gltfscene",
-    "material-inspector-colour": "gltfscene",
-    "material-inspector-features": "gltfscene",
-    "material-inspector-looks": "gltfscene",
     "material-inspector-textures": "gltfscene",
-    "material-preset-menu": "gltfscene",
-    "material-add-feature-menu": "gltfscene",
-    "scene-setup-add-fog-drag": "gltfscene",
-    "scene-fluid-role-lifecycle": "fluidauthoring",
-    "water-family-preset": "scene-setup",
-    "scene-surfaces-clickthrough": "gltfscene",
-    "scene-surfaces-clickthrough-physics": "physicsscene",
-    "scene-panel-tree": "gltfscene",
-    "scene-panel-tree-physics": "physicsscene",
-    "scene-pin-roundtrip": "gltfscene",
-    "scene-card-to-tab": "gltfscene",
-    "scene-slider-range": "gltfscene",
-    "scene-use-this-view": "gltfscene",
-    "scene-light-swatch": "gltfscene",
-    "scene-colour-row-hex": "gltfscene",
-    "scene-two-panes": "gltfscene",
     "work-editor-open": "paramsteps",
     "work-editor-idle": "paramsteps",
     "work-node-param-drag": "paramsteps",
     "work-mapping-drawer": "paramsteps",
     "work-perform-idle": "timeline",
-    "scene-fluid-authoring": "fluidauthoring",
-    "scene-setup-check": "fluidauthoring",
-    "scene-water-domain-size": "fluidauthoring",
-    "scene-physics-template": "fluidauthoring",
-    "scene-physics-controls": "physicsscene",
-    "scene-value-box-fits": "physicsscene",
-    "scene-physics-duplicate-paused": "physicsscene",
-    "scene-physics-switch": "gltfscene",
-    "scene-imported-physics": "gltfscene",
-    "gltf-import-card-sections": "gltfscene",
     "audio-clip-trigger-add": "inspector",
-    "rt-dynamic-modifier": "mushroomscene",
     "work-browser-search": "inspector",
     "work-perform-exit": "timeline",
     "trigger-lane-sibling": "envmod",
-    "trigger-lane-assignment": "envmod",
-    "card-collapse-all": "gltfscene",
-    "scene-physics-shared-cards": "gltfscene"
+    "trigger-lane-assignment": "envmod"
   },
   "expected_fail": {
     "scene-forces-controls": {

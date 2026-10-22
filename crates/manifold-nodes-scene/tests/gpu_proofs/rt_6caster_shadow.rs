@@ -136,7 +136,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32, usize) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -246,7 +246,7 @@ fn caster_contract_live_rt_and_shadow_toggles() {
     let registry = PrimitiveRegistry::with_builtin();
     let json = caster_scene(0xff, (1u16 << 7) | (1u16 << 8), true, true);
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &json,
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(&json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -320,7 +320,7 @@ fn trace_ms_2vs6_caster_delta_reported_as_number() {
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime = PresetRuntime::from_json_str_with_device(
-            json,
+            &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
             &registry,
             std::sync::Arc::clone(&h.device),
             h.width,

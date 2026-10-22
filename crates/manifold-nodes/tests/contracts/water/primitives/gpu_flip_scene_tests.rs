@@ -1521,9 +1521,9 @@ fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
     let default_off = digest(None);
     eprintln!("DAM BREAK DIGEST 32 x4: {default_off:016x}");
     // The whole step's pin: only a commit that changes the step on purpose
-    // re-records it, and says why. Last re-recorded for the tank walls matching
+    // re-records it, and says why. Last re-recorded for the Dam Break losing its box (a scene Collider now), after the tank walls matching
     // the native engine; sheeting with walls and no pressure template gives it too.
-    assert_eq!(default_off, 0xb915_115e_7604_78dd, "sheeting off changed the Dam Break");
+    assert_eq!(default_off, 0xd73f_a72f_e5d9_5fbb, "sheeting off changed the Dam Break");
     assert_eq!(digest(Some(0.0)), default_off, "rate 0 changed the step");
 }
 
@@ -1578,7 +1578,7 @@ fn inflow_ticks(drain: bool, fill_slots: Option<i32>, seconds: usize) -> Vec<[u3
             "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
         })));
         def.nodes.push(node(source, format!("source_{k}"), "node.fluid_role_source", serde_json::json!({
-            "role": {"type": "Enum", "value": role}, "shape": {"type": "Enum", "value": 1}, "radius": float(0.866_025_4),
+            "role": {"type": "Enum", "value": role},
             "velocity_x": float(velocity[0]), "velocity_y": float(velocity[1]), "velocity_z": float(velocity[2]),
         })));
         let wire = |from_node: u32, from_port: &str, to_node: u32, to_port: String| manifold_core::effect_graph_def::EffectGraphWire {

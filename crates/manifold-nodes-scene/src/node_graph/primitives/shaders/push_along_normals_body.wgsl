@@ -1,6 +1,6 @@
 // node.push_along_normals — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT `in` + COINCIDENT optional `weights` + OPTIONAL TEXTURE `field`.
-// pos += normal * amount * w * f. Matches push_along_normals.wgsl.
+// pos += normal * amount * w * f.
 //
 // ABI: e_in = buf_in[idx], e_weights = buf_weights[idx] (both coincident
 // pre-reads by the wrapper). `weights_len` is a DERIVED uniform — run() packs

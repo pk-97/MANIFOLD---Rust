@@ -693,6 +693,7 @@
                 light_view_proj: identity,
                 model: identity,
                 appearance: [1.0, 1.0, 0.0, 0.0],
+                instance_inner: identity,
                 ..bytemuck::Zeroable::zeroed()
             };
             let bindings = [
@@ -852,6 +853,8 @@
             [0.0, 0.0, 0.0, 1.0],
         ];
         uniforms.model = uniforms.view_proj;
+        uniforms.instance_inner = uniforms.model;
+        uniforms.prev_instance_inner = uniforms.model;
         uniforms.base_color = [0.8, 0.6, 0.4, 1.0];
         uniforms.texture_flags[2] = 1.0;
         uniforms.base_color_uv_m = [1.0, 0.0, 0.0, 1.0];
@@ -1001,6 +1004,8 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
         let mut uniforms = RenderSceneUniforms::zeroed();
         uniforms.view_proj = identity;
         uniforms.model = identity;
+        uniforms.instance_inner = identity;
+        uniforms.prev_instance_inner = identity;
         uniforms.appearance = [1.0, 0.0, 0.0, 0.0];
         let instance = InstanceTransform {
             pos_scale: [0.0, 0.0, 0.0, 1.0],

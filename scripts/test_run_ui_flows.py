@@ -343,22 +343,15 @@ class PathTriggerTests(unittest.TestCase):
         ):
             self.assertEqual(self.select(path), [], path)
 
-    def test_scene_setup_panel_selects_exactly_the_eleven(self):
-        eleven = sorted([
-            "scene-setup-add-object", "scene-setup-light-intensity-drag",
-            "scene-setup-add-fog-drag", "scene-setup-modifier-stack",
-            "scene-setup-heldout-merge-snapshot", "scene-setup-empty-states",
-            "scene-skin", "material-inspector-colour", "scene-fluid-role-lifecycle",
-            "scene-forces-controls", "scene-two-panes"])
-        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel.rs"), eleven)
-        # The panel directory also runs the swarm add flow.
-        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel/x.rs"), sorted(eleven + ["scene-swarm-add"]))
+    def test_scene_setup_panel_selects_exactly_its_two_flows(self):
+        two = sorted(["scene-setup-empty-states", "scene-forces-controls"])
+        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel.rs"), two)
+        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel/x.rs"), two)
 
-    def test_shared_surfaces_select_exactly_the_four_sentinels(self):
+    def test_shared_surfaces_select_exactly_the_three_sentinels(self):
         four = sorted([
             "set-param-layer-opacity", "calibrated-param-card-reads-manifest",
-            "param-step-action",
-            "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"])
+            "param-step-action"])
         for path in (
             "crates/manifold-ui/src/panels/param_card/x.rs",
             "crates/manifold-ui/src/panels/param_slider_shared/x.rs",
@@ -374,20 +367,15 @@ class PathTriggerTests(unittest.TestCase):
         # 17 flows, seven of them material, colour-row and pane flows.
         panel = "crates/manifold-ui/src/panels/scene_setup_panel/"
         scene_ten = set(self.select(panel + "x.rs"))
-        material = {"material-inspector-colour", "material-inspector-features",
-                    "material-inspector-groups", "material-inspector-looks",
-                    "material-inspector-textures", "material-preset-menu",
-                    "material-add-feature-menu", "scene-colour-row-hex"}
+        material = {"material-inspector-textures"}
         for name in ("forces.rs", "outliner.rs", "value_sync.rs"):
             self.assertEqual(set(self.select(panel + name)), scene_ten, name)
         for name in ("material_inspector.rs", "material_menus.rs"):
             self.assertEqual(set(self.select(panel + name)), scene_ten | material, name)
-        self.assertEqual(set(self.select(panel + "panes.rs")), scene_ten | {"scene-two-panes", "scene-header-draw-modes"})
+        self.assertEqual(set(self.select(panel + "panes.rs")), scene_ten | {"scene-header-draw-modes"})
         shared = "crates/manifold-ui/src/panels/param_slider_shared/"
         four = set(self.select(shared + "row_host.rs"))
-        self.assertEqual(len(four), 4)
-        self.assertEqual(set(self.select(shared + "colour_row.rs")),
-                         four | {"scene-colour-row-hex", "scene-light-swatch"})
+        self.assertEqual(len(four), 3)
 
     def test_protected_drag_flows_stay_selected_by_their_old_rows(self):
         for path in (

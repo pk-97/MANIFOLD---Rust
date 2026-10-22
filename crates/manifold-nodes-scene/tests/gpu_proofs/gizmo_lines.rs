@@ -37,7 +37,7 @@ fn render(scene: &str, gizmo_depth: bool) -> Frame {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        scene,
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(scene),
         &registry,
         std::sync::Arc::clone(&h.device),
         W,
