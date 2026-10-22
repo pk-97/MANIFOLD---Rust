@@ -698,7 +698,7 @@ Files: `scene_compile/curves.rs` (new), `scene_schema/curves.rs` (new), Shape en
 Files: `scene_compile/ocean.rs` (new), `scene_schema/ocean.rs` (new), the Shape entry, the Sea Horizon environment source in `scene_compile/light.rs`. Joins: bounds through L15.
 1. Shape offers Ocean, and it draws the ocean surface from main's Ocean starter nodes.
 2. The Ocean rows show on the Object card when Shape is Ocean.
-3. Modifiers and Copies work on an Ocean.
+3. Modifiers and Copies on an Ocean: changed, pending Peter. An endless camera-projected sea has no bounds for a modifier frame or a copy layout, so both refuse an Ocean with that reason on the card and in the Targets picker, and scene-wide modifiers skip it.
 4. Environment offers Sea Horizon.
 
 **L18 (Sonnet): deformers.**
