@@ -478,6 +478,12 @@
                 "value": 2
               }
             }
+          },
+          {
+            "id": 40,
+            "nodeId": "smooth",
+            "typeId": "node.smooth_normals",
+            "handle": "smooth"
           }
         ],
         "wires": [
@@ -540,6 +546,18 @@
             "fromPort": "out",
             "toNode": 10,
             "toPort": "vertices"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "current",
+            "toNode": 40,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 40,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "direction"
           }
         ]
       }

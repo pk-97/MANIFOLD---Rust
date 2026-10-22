@@ -6,15 +6,18 @@
 //! A card's targets decide its frames (ruling 20): each Object target bends
 //! in its own frame, each Group target bends all its parts in one shared
 //! frame, and the whole scene bends as one group of everything. A frame is
-//! the rest-pose box of its parts (`Builder::drawn`): every part's source
-//! offset is its place in that box, from the box's centre, and the radius is
-//! half the box's diagonal, so a recipe reads every shape the same way and a
-//! modifier's scale follows its own target. In a Group's or the scene's
-//! frame each part's offset is also measured live (`place`), from the part's
-//! transform to the frame's rest centre, so the group bends as one piece
-//! wherever its parts sit and as they move. A skinned, animated or morphing
-//! part bends its posed result. One instance per frame, all driven by the
-//! card's one set of manifest params, `<card id>.<param>`.
+//! the box of its parts' rest poses, each at its place in the frame: its own
+//! position plus every group's between it and the frame's root, as the
+//! compiler starts them (translation only). Every part's source offset is
+//! its place from the box's centre, and the radius is half the box's
+//! diagonal, so a recipe reads every shape the same way and a modifier's
+//! scale follows its own target. In a Group's or the scene's frame each
+//! part's offset is also measured live (`place`), from the part's transform
+//! to the frame's rest centre, so the group bends as one piece wherever its
+//! parts sit and as they move (Blender's deform about an origin object). A
+//! skinned, animated or morphing part bends its posed result. One instance
+//! per frame, all driven by the card's one set of manifest params,
+//! `<card id>.<param>`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,7 +29,7 @@ use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTarget
 use manifold_core::scene_schema::modifier_type;
 use manifold_node_engine::load::expand::TargetPlacement;
 
-use super::builder::{Builder, Drawn, FramePlan, SCENE, rest_box};
+use super::builder::{Builder, Drawn, FramePlan, SCENE};
 use super::forces::{bindings, node, recipe_card};
 
 /// The most objects one instance targets (`frames::selected_objects`); a
@@ -110,7 +113,8 @@ fn emit(
     }
     let held = [("fragments", pieces as f32)];
     let held: &[(&str, f32)] = if card.modifier == ModifierType::Shatter { &held } else { &[] };
-    let (graph, specs) = recipe_card(entry.recipe, &lookup, &host_id, held)?;
+    let (mut graph, specs) = recipe_card(entry.recipe, &lookup, &host_id, held)?;
+    super::deformers::tune(&mut graph, card);
     // The card keeps its params with nothing to act on, so its values,
     // mappings and modulation survive a toggle or an emptied target list.
     b.push_params(specs.iter().map(|(spec, _)| spec.clone()));
@@ -153,10 +157,12 @@ enum Scope {
     Scene,
 }
 
-/// One frame of a card: its role in node ids, what it belongs to, its parts.
+/// One frame of a card: its role in node ids, what it belongs to, its root
+/// item (`None`: the whole scene), its parts.
 struct CardFrame {
     role: String,
     scope: Scope,
+    root: Option<ItemId>,
     members: Vec<Drawn>,
 }
 
@@ -165,7 +171,9 @@ struct CardFrame {
 /// once, in the first one's frame.
 fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Vec<CardFrame> {
     match &card.targets {
-        ModifierTargets::Scene => vec![CardFrame { role: "scene".to_owned(), scope: Scope::Scene, members: b.drawn.clone() }],
+        ModifierTargets::Scene => {
+            vec![CardFrame { role: "scene".to_owned(), scope: Scope::Scene, root: None, members: b.drawn.clone() }]
+        }
         ModifierTargets::Items(ids) => {
             let mut claimed = BTreeSet::new();
             ids.iter()
@@ -181,7 +189,7 @@ fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec
                         .collect();
                     let own = b.doc.find(target).is_some_and(|item| item.kind() == ItemKind::Object);
                     let scope = if own { Scope::Own } else { Scope::Group(target.clone()) };
-                    CardFrame { role: target.to_string(), scope, members }
+                    CardFrame { role: target.to_string(), scope, root: Some(target.clone()), members }
                 })
                 .collect()
         }
@@ -228,6 +236,29 @@ fn bodies(b: &Builder<'_>, members: &[Drawn]) -> BTreeMap<u32, usize> {
     counts
 }
 
+/// Where `drawn` sits in the frame of `root` (the whole scene when `None`):
+/// its own position plus every group's between it and the root, as the
+/// compiler starts them. An Object target is its own frame, so it sits at
+/// its own origin.
+fn placement(b: &mut Builder<'_>, drawn: &Drawn, root: Option<&ItemId>, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> [f64; 3] {
+    if root == Some(&drawn.item) {
+        return [0.0; 3];
+    }
+    let ancestors = lineage.get(&drawn.item).map_or(&[][..], Vec::as_slice);
+    let below = match root {
+        None => ancestors,
+        Some(root) => ancestors.iter().position(|above| above == root).map_or(&[][..], |at| &ancestors[at + 1..]),
+    };
+    let mut at = [0.0; 3];
+    for item in below.iter().chain(std::iter::once(&drawn.item)) {
+        let transform = b.id(item.as_str(), "transform");
+        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
+            at[axis] += transform.and_then(|node| b.started(node, param)).map_or(0.0, f64::from);
+        }
+    }
+    at
+}
+
 /// A frame's placements: each part's source offset from the frame's rest
 /// centre, and the frame's radius. A part that shares a Group's or the
 /// scene's frame also reads its offset live, so it bends wherever it sits
@@ -241,10 +272,22 @@ fn plan(
     shatter: bool,
 ) -> FramePlan {
     let members = &frame.members;
-    let (lo, hi) = rest_box(members.iter().map(|drawn| &drawn.rest)).unwrap_or(([0.0; 3], [0.0; 3]));
-    let centre: [f64; 3] = std::array::from_fn(|axis| (f64::from(lo[axis]) + f64::from(hi[axis])) * 0.5);
+    let placed: Vec<[f64; 3]> = members.iter().map(|drawn| placement(b, drawn, frame.root.as_ref(), lineage)).collect();
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for (drawn, at) in members.iter().zip(&placed) {
+        for axis in 0..3 {
+            lo[axis] = lo[axis].min(at[axis] + f64::from(drawn.rest.lo[axis]));
+            hi[axis] = hi[axis].max(at[axis] + f64::from(drawn.rest.hi[axis]));
+        }
+    }
+    if !(0..3).all(|axis| lo[axis].is_finite() && hi[axis].is_finite()) {
+        lo = [0.0; 3];
+        hi = [0.0; 3];
+    }
+    let centre: [f64; 3] = std::array::from_fn(|axis| (lo[axis] + hi[axis]) * 0.5);
     let radius = (0..3)
-        .map(|axis| (f64::from(hi[axis]) - f64::from(lo[axis])) * 0.5)
+        .map(|axis| (hi[axis] - lo[axis]) * 0.5)
         .map(|half| half * half)
         .sum::<f64>()
         .sqrt()
@@ -259,7 +302,7 @@ fn plan(
         Scope::Scene => Some(frame_centre(b, card, &frame.role, centre, None)),
     };
     let mut placements = Vec::with_capacity(members.len());
-    for drawn in members {
+    for (drawn, at) in members.iter().zip(&placed) {
         let Some(target) = b.node_id_of(drawn.object) else {
             continue;
         };
@@ -271,7 +314,7 @@ fn plan(
                 source.and_then(|source| b.started(source, param)).map_or(0.0, f64::from)
             })
         } else {
-            std::array::from_fn(|axis| f64::from(drawn.rest.offset[axis]) - centre[axis])
+            std::array::from_fn(|axis| at[axis] - centre[axis])
         };
         placements.push(TargetPlacement { target, offset, live });
     }

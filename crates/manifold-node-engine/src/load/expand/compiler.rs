@@ -19,6 +19,12 @@ use manifold_core::scene_index::FlatSceneIndex;
 
 use {super::SceneModifierExpandError, super::bindings, super::frames, super::namespace, crate::load::expand::routes, super::routes::PreparedSceneModifierGraph};
 
+/// The key of a context value node: one per (instance, target, value), with
+/// the target only for a per-object value.
+fn context_key(instance: &str, target: Option<&NodeId>, value: SceneContextValue) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&(instance, target, value))
+}
+
 manifold_core::testkit_visible! {
 #[doc(hidden)]
 pub(crate) type PortAddress = (u32, String);
@@ -1170,12 +1176,8 @@ impl Builder<'_> {
         {
             return Ok((self.index.node(live)?.id, axis.into()));
         }
-        let key = serde_json::to_string(&(
-            instance.id.as_str(),
-            if per_object { target } else { None },
-            value,
-        ))
-        .map_err(|error| invalid(instance.id.to_string(), error.to_string()))?;
+        let key = context_key(instance.id.as_str(), if per_object { target } else { None }, value)
+            .map_err(|error| invalid(instance.id.to_string(), error.to_string()))?;
         if let Some(address) = self.contexts.get(&key) {
             return Ok(address.clone());
         }

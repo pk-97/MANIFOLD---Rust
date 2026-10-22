@@ -505,6 +505,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "smooth_normals.rs",
+        rust_struct: "SmoothUniforms",
+        shader: "shaders/smooth_normals.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "pad_distance_lattice.rs",
         rust_struct: "PadUniforms",
         shader: "shaders/pad_distance_lattice.wgsl",

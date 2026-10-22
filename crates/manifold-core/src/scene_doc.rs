@@ -528,8 +528,8 @@ pub enum ForceTargets {
 
 /// One card of the scene's modifier chain (SCENE_DOCUMENT_DESIGN.md section
 /// 7.19 (Modifiers)). The chain is the scene's Modifier items in tree order,
-/// which is the order they apply. Type, On, Targets, Pieces and the place in
-/// the chain are structural; every other row is a live param.
+/// which is the order they apply. Type, On, Targets, Pieces, Texture and the
+/// place in the chain are structural; every other row is a live param.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct ModifierFields {
@@ -540,6 +540,26 @@ pub struct ModifierFields {
     /// How many pieces Shatter breaks a body into. Setup: it decides which
     /// bodies exist.
     pub pieces: u32,
+    /// The image Displace by Texture reads. Setup: it picks the source node.
+    #[serde(skip_serializing_if = "is_noise")]
+    pub texture: ModifierTexture,
+}
+
+/// The image a displacing modifier reads, like a Material's texture source.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModifierTexture {
+    /// The built-in noise.
+    #[default]
+    Noise,
+    #[serde(rename_all = "camelCase")]
+    File { path: String },
+    #[serde(rename_all = "camelCase")]
+    Layer { layer: crate::LayerId },
+}
+
+fn is_noise(texture: &ModifierTexture) -> bool {
+    *texture == ModifierTexture::Noise
 }
 
 /// Shatter's Pieces when a card is new.
@@ -547,7 +567,13 @@ pub const DEFAULT_PIECES: u32 = 16;
 
 impl Default for ModifierFields {
     fn default() -> Self {
-        Self { modifier: ModifierType::default(), on: true, targets: ModifierTargets::default(), pieces: DEFAULT_PIECES }
+        Self {
+            modifier: ModifierType::default(),
+            on: true,
+            targets: ModifierTargets::default(),
+            pieces: DEFAULT_PIECES,
+            texture: ModifierTexture::Noise,
+        }
     }
 }
 

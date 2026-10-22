@@ -464,7 +464,7 @@ mod custom {
         // Swarms (manifold-nodes-physics) add move_swarm and swarm_to_copies,
         // generated layouts proven by uniform_layout_proof.
         assert_eq!(
-            scalar_count, 127,
+            scalar_count, 131,
             "buffer-family census changed: a generated layout's dispatch_count mirror is proven by uniform_layout_proof; a hand kernel's struct needs a custom ABI case here and must not name its count dispatch_count"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");

@@ -1,15 +1,16 @@
 // node.twist_mesh — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT `in` + COINCIDENT optional `weights`. Per-vertex twist about
 // `axis` itself: rotates BOTH position and normal by the SAME local
-// rotation (D4 exact). Matches twist_mesh.wgsl.
+// rotation (D4 exact).
 //
-// theta(v) = angle * (coord(v) - center) * w (w = weights[idx] or 1.0 past
+// The twist runs in a shifted frame: p = position + source_offset, so the
+// twist axis passes through the frame's origin and a group twists as one.
+// theta(v) = angle * (p_axis - center) * w (w = weights[idx] or 1.0 past
 // weights_len, D2 degrade-to-1.0). Standard right-handed per-axis rotation,
 // cyclic: axis=X rotates (y,z), axis=Y rotates (z,x), axis=Z rotates (x,y).
-// No pivot subtraction on the rotated pair — the axis passes through
-// local-space origin; `center` only shifts where along `axis` theta is
-// zero. `angle` is UNBOUNDED at the param level (BUG-039 class) — sin/cos
-// here absorb any multiple of 2*pi with no discontinuity.
+// `center` only shifts where along `axis` theta is zero. `angle` is
+// UNBOUNDED at the param level (BUG-039 class) — sin/cos here absorb any
+// multiple of 2*pi with no discontinuity.
 fn body(
     idx: u32,
     count: u32,
@@ -18,23 +19,27 @@ fn body(
     axis: u32,
     angle: f32,
     center: f32,
+    source_offset_x: f32,
+    source_offset_y: f32,
+    source_offset_z: f32,
     weights_len: u32,
 ) -> Element {
     let w = select(1.0, e_weights, idx < weights_len);
+    let offset = vec3<f32>(source_offset_x, source_offset_y, source_offset_z);
 
+    var pos = e_in.position + offset;
     var coord: f32;
     if axis == 0u {
-        coord = e_in.position.x;
+        coord = pos.x;
     } else if axis == 1u {
-        coord = e_in.position.y;
+        coord = pos.y;
     } else {
-        coord = e_in.position.z;
+        coord = pos.z;
     }
     let theta = angle * (coord - center) * w;
     let c = cos(theta);
     let sn = sin(theta);
 
-    var pos = e_in.position;
     var nrm = e_in.normal;
     if axis == 0u {
         let py = pos.y;
@@ -65,5 +70,5 @@ fn body(
         nrm.y = nx * sn + ny * c;
     }
 
-    return Element(pos, nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
+    return Element(pos - offset, nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

@@ -21,6 +21,7 @@ mod builder;
 mod camera;
 mod copies;
 mod curves;
+mod deformers;
 mod forces;
 mod group;
 mod light;

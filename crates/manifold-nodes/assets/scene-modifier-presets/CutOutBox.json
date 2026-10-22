@@ -437,6 +437,12 @@
                 "value": 2
               }
             }
+          },
+          {
+            "id": 40,
+            "nodeId": "drop",
+            "typeId": "node.drop_hidden_triangles",
+            "handle": "drop"
           }
         ],
         "wires": [
@@ -568,6 +574,12 @@
           },
           {
             "fromNode": 21,
+            "fromPort": "out",
+            "toNode": 40,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 40,
             "fromPort": "out",
             "toNode": 10,
             "toPort": "vertices"

@@ -27,18 +27,25 @@ const FOLD_AXES: &[&str] = &["X", "Y", "Z"];
 struct FoldUniforms {
     axis: u32,
     amount: f32,
+    source_offset_x: f32,
+    source_offset_y: f32,
+    source_offset_z: f32,
     weights_len: u32,
     dispatch_count: u32,
+    _pad0: u32,
 }
 
 manifold_node_engine::primitive! {
     name: FoldMesh,
     type_id: "node.fold_mesh",
-    purpose: "Single-axis mirror fold of an Array<MeshVertex>. pos = mix(pos, reflect(pos), amount), where reflect flips the coordinate along the chosen axis (mirror across the plane through the origin whose normal is the axis). The normal is reflected by the same amount so the mirrored half lights correctly. `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0).",
+    purpose: "Single-axis mirror fold of an Array<MeshVertex>. pos = mix(pos, reflect(pos), amount), where reflect flips the coordinate along the chosen axis (mirror across the plane through the origin whose normal is the axis). The normal is reflected by the same amount so the mirrored half lights correctly. `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). source_offset_x/y/z shift the frame: the vertex is deformed at position + source_offset and shifted back, so the parts of a group, each offset by its place in the group, deform as one piece about the frame's origin (all zero = the mesh's own origin).",
     inputs: {
         in: Array(MeshVertex) required,
         weights: Array(f32) optional,
         amount: ScalarF32 optional,
+        source_offset_x: ScalarF32 optional,
+        source_offset_y: ScalarF32 optional,
+        source_offset_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(MeshVertex),
@@ -58,6 +65,30 @@ manifold_node_engine::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_x"),
+            label: "Source Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_y"),
+            label: "Source Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_z"),
+            label: "Source Offset Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -112,6 +143,9 @@ impl Primitive for FoldMesh {
             _ => 1,
         };
         let amount = ctx.scalar_or_param("amount", 0.0);
+        let source_offset_x = ctx.scalar_or_param("source_offset_x", 0.0);
+        let source_offset_y = ctx.scalar_or_param("source_offset_y", 0.0);
+        let source_offset_z = ctx.scalar_or_param("source_offset_z", 0.0);
 
         let Some(src) = ctx.inputs.array("in") else {
             return;
@@ -137,8 +171,12 @@ impl Primitive for FoldMesh {
         let uniforms = FoldUniforms {
             axis,
             amount,
+            source_offset_x,
+            source_offset_y,
+            source_offset_z,
             weights_len,
             dispatch_count: count,
+            _pad0: 0,
         };
 
         gpu.native_enc.dispatch_compute(

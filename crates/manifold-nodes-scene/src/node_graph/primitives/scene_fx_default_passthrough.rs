@@ -152,16 +152,18 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let src = make_vertices();
         let filler = make_filler_weights(&device, &src);
+        let filler_mesh = device.create_buffer_shared(std::mem::size_of_val(src.as_slice()) as u64);
         let dummy_field = make_dummy_field(&device);
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
         let count = src.len() as u32;
 
         let mut failures: Vec<String> = Vec::new();
 
-        // bend_mesh: axis(u32)=0, angle=0, center=0, weights_len=0, dispatch_count=N, pad x3.
+        // bend_mesh: axis(u32)=0, angle=0, center=0, source_offset=0 x3, weights_len=0,
+        // dispatch_count=N.
         {
             let wgsl = standalone_for_spec::<BendMesh>().expect("bend_mesh codegen");
-            let uniforms = &[0u32, u(0.0), u(0.0), 0u32, count, 0u32, 0u32, 0u32];
+            let uniforms = &[0u32, u(0.0), u(0.0), u(0.0), u(0.0), u(0.0), 0u32, count];
             let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
             let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -173,7 +175,7 @@ mod gpu_tests {
         // twist_mesh: same layout as bend_mesh.
         {
             let wgsl = standalone_for_spec::<TwistMesh>().expect("twist_mesh codegen");
-            let uniforms = &[0u32, u(0.0), u(0.0), 0u32, count, 0u32, 0u32, 0u32];
+            let uniforms = &[0u32, u(0.0), u(0.0), u(0.0), u(0.0), u(0.0), 0u32, count];
             let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
             let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -182,12 +184,12 @@ mod gpu_tests {
             .map_err(|_| failures.push("node.twist_mesh".into()));
         }
 
-        // taper_mesh: axis=0, taper=1 (identity), center=0, taper_length=1, weights_len=0,
-        // dispatch_count=N, pad x2.
+        // taper_mesh: axis=0, taper=1 (identity), center=0, taper_length=1,
+        // source_offset=0 x3, weights_len=0, dispatch_count=N, pad x3.
         {
             let wgsl = standalone_for_spec::<TaperMesh>().expect("taper_mesh codegen");
             let uniforms = &[
-                0u32, u(1.0), u(0.0), u(1.0), 0u32, count, 0u32, 0u32,
+                0u32, u(1.0), u(0.0), u(1.0), u(0.0), u(0.0), u(0.0), 0u32, count, 0u32, 0u32, 0u32,
             ];
             let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
             let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
@@ -216,29 +218,32 @@ mod gpu_tests {
             .map_err(|_| failures.push("node.morph_mesh".into()));
         }
 
-        // push_along_normals: amount=0, field_bias=0.5, weights_len=0, use_field=0,
-        // dispatch_count=N, pad x3. Bind dummy field at 3/4.
+        // push_along_normals: amount=0, field_bias=0.5, weights_len=0,
+        // direction_len=0, use_field=0, dispatch_count=N, pad x2. Filler
+        // direction at 3, dummy field at 4/5.
         {
             let wgsl = standalone_for_spec::<PushAlongNormals>().expect("push_along_normals codegen");
             let uniforms = &[
-                u(0.0), u(0.5), 0u32, 0u32, count, 0u32, 0u32, 0u32,
+                u(0.0), u(0.5), 0u32, 0u32, 0u32, count, 0u32, 0u32,
             ];
             let extra = vec![
                 GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 },
-                GpuBinding::Texture { binding: 3, texture: &dummy_field },
-                GpuBinding::Sampler { binding: 4, sampler: &sampler },
+                GpuBinding::Buffer { binding: 3, buffer: &filler_mesh, offset: 0 },
+                GpuBinding::Texture { binding: 4, texture: &dummy_field },
+                GpuBinding::Sampler { binding: 5, sampler: &sampler },
             ];
-            let out = dispatch(&device, &wgsl, &src, uniforms, extra, 5);
+            let out = dispatch(&device, &wgsl, &src, uniforms, extra, 6);
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 assert_position_identity("node.push_along_normals", &src, &out)
             }))
             .map_err(|_| failures.push("node.push_along_normals".into()));
         }
 
-        // voxelize_mesh: amount=0, cell_size=1, weights_len=0, dispatch_count=N.
+        // voxelize_mesh: amount=0, cell_size=1, source_offset=0 x3, weights_len=0,
+        // dispatch_count=N, pad x1.
         {
             let wgsl = standalone_for_spec::<VoxelizeMesh>().expect("voxelize_mesh codegen");
-            let uniforms = &[u(0.0), u(1.0), 0u32, count];
+            let uniforms = &[u(0.0), u(1.0), u(0.0), u(0.0), u(0.0), 0u32, count, 0u32];
             let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
             let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -317,10 +322,11 @@ mod gpu_tests {
             .map_err(|_| failures.push("node.ripple_mesh".into()));
         }
 
-        // fold_mesh: axis=1, amount=0, weights_len=0, dispatch_count=N.
+        // fold_mesh: axis=1, amount=0, source_offset=0 x3, weights_len=0,
+        // dispatch_count=N, pad x1.
         {
             let wgsl = standalone_for_spec::<FoldMesh>().expect("fold_mesh codegen");
-            let uniforms = &[1u32, u(0.0), 0u32, count];
+            let uniforms = &[1u32, u(0.0), u(0.0), u(0.0), u(0.0), 0u32, count, 0u32];
             let extra = vec![GpuBinding::Buffer { binding: 2, buffer: &filler, offset: 0 }];
             let out = dispatch(&device, &wgsl, &src, uniforms, extra, 3);
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
