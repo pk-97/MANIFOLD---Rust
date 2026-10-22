@@ -466,12 +466,17 @@ mod every_param_has_a_row {
 /// Every Add menu entry, and every pick of every field row of the item it adds,
 /// is applied to the base scene as the panel applies it. Each case compiles and
 /// installs, ticks 120 frames, saves and loads back as the same scene, then
-/// undoes to the base exactly. Entries and choices come from the tables, so a
-/// new kind or choice is covered without editing this test. A hang is the
-/// nextest `terminate-after` on this test (`.config/nextest.toml`).
+/// undoes to the base exactly. A choice the panel offers enabled that is then
+/// refused, by the row's write or at compile or install, fails here: to the
+/// user it is a dead button. Only a choice drawn disabled with its reason is
+/// exempt. Entries and choices come from the tables, so a new kind or choice
+/// is covered without editing this test. A hang is the nextest
+/// `terminate-after` on this test (`.config/nextest.toml`).
 mod every_kind_and_choice_survives {
     use super::*;
-    use manifold_core::scene_schema::{ADD_ENTRIES, FieldControl, FieldValue, add_refused, applicable_fields, set_field, unique_name};
+    use manifold_core::scene_schema::{
+        ADD_ENTRIES, FieldControl, FieldValue, add_refused, applicable_fields, choice_disabled, set_field, unique_name,
+    };
     use manifold_editing::command::{Command, CompositeCommand};
     use manifold_editing::commands::scene_doc::{
         AddSceneItemCommand, SetSceneItemFieldsCommand, add_modifier, add_object_commands, new_material, new_modifier,
@@ -479,7 +484,8 @@ mod every_kind_and_choice_survives {
 
     struct Case {
         label: String,
-        commands: Vec<Box<dyn Command>>,
+        /// The panel's commands, or why the row's write refused an enabled pick.
+        commands: Result<Vec<Box<dyn Command>>, String>,
     }
 
     fn doc_of(project: &Project) -> SceneDoc {
@@ -521,13 +527,14 @@ mod every_kind_and_choice_survives {
         Some((commands, id))
     }
 
-    /// Every value a pick of `row` can send, for the item `id` in `doc`.
-    fn picks(doc: &SceneDoc, control: &FieldControl) -> Vec<FieldValue> {
+    /// Every value a pick of `row` can send for `item`, as the panel lists
+    /// them: an item never offers itself.
+    fn picks(doc: &SceneDoc, item: &Item, control: &FieldControl) -> Vec<FieldValue> {
         let candidates = |passes: fn(&Item) -> bool| {
             let mut found = Vec::new();
-            doc.walk(|item, _| {
-                if passes(item) {
-                    found.push(item.id.clone());
+            doc.walk(|other, _| {
+                if other.id != item.id && passes(other) {
+                    found.push(other.id.clone());
                 }
             });
             found
@@ -551,16 +558,27 @@ mod every_kind_and_choice_survives {
         }
     }
 
+    /// The base scene on a layer with a fixed id, so commands built against
+    /// one base project apply to another.
     fn base_project() -> Project {
         let mut project = Project::default();
-        project.timeline.layers.push(scene_layer(SceneDoc::base()));
+        let mut layer = scene_layer(SceneDoc::base());
+        layer.layer_id = manifold_core::LayerId::new("scene");
+        project.timeline.layers.push(layer);
         project
     }
 
-    fn apply(project: &mut Project, commands: &mut [Box<dyn Command>]) {
+    /// Run the panel's commands in order. A command the editor refuses is a
+    /// failure: the user clicked an enabled choice and nothing happened.
+    fn apply(project: &mut Project, commands: &mut [Box<dyn Command>]) -> Result<(), String> {
         for command in commands.iter_mut() {
             command.execute(project);
+            if !command.was_applied() {
+                let reason = command.rejection_reason().unwrap_or("no reason given");
+                return Err(format!("{} was refused: {reason}", command.description()));
+            }
         }
+        Ok(())
     }
 
     type Snapshot = (Option<SceneDoc>, Option<manifold_node_engine::persistence::GraphDocument>, Vec<(String, f32, f32)>);
@@ -576,19 +594,32 @@ mod every_kind_and_choice_survives {
         let mut cases = Vec::new();
         for entry in ADD_ENTRIES.iter() {
             let Some((commands, id)) = add_commands(&base, entry.key) else { continue };
-            cases.push(Case { label: entry.key.to_owned(), commands });
-            // The picks of this item's field rows, on top of the add.
+            cases.push(Case { label: entry.key.to_owned(), commands: Ok(commands) });
+            // The picks of this item's field rows, on top of the add. A
+            // refused add is already a failing case above.
             let mut with_item = base_project();
             let (mut setup, _) = add_commands(&with_item, entry.key).expect("added above");
-            apply(&mut with_item, &mut setup);
+            if apply(&mut with_item, &mut setup).is_err() {
+                continue;
+            }
             let doc = doc_of(&with_item);
             let Some(item) = doc.find(&id) else { continue };
             for row in applicable_fields(&item.fields) {
-                for value in picks(&doc, &row.control) {
-                    let Ok(fields) = set_field(&doc, item, row, &value) else { continue };
-                    let (mut commands, _) = add_commands(&base, entry.key).expect("added above");
-                    let layer = base.timeline.layers[0].layer_id.clone();
-                    commands.push(Box::new(SetSceneItemFieldsCommand::new(layer, id.clone(), fields)));
+                if (row.disabled)(&doc, item).is_some() {
+                    continue;
+                }
+                for value in picks(&doc, item, &row.control) {
+                    if let FieldValue::Choice(key) = &value
+                        && choice_disabled(&doc, item, row.id, key).is_some()
+                    {
+                        continue;
+                    }
+                    let commands = set_field(&doc, item, row, &value).map(|fields| {
+                        let (mut commands, _) = add_commands(&base, entry.key).expect("added above");
+                        let layer = base.timeline.layers[0].layer_id.clone();
+                        commands.push(Box::new(SetSceneItemFieldsCommand::new(layer, id.clone(), fields)) as Box<dyn Command>);
+                        commands
+                    });
                     cases.push(Case { label: format!("{} / {} = {value:?}", entry.key, row.id), commands });
                 }
             }
@@ -596,14 +627,29 @@ mod every_kind_and_choice_survives {
         cases
     }
 
+    /// What a CPU test cannot run: a GPU node asks for the encoder.
+    const NEEDS_GPU: &str = "EffectNodeContext::gpu_encoder called without a GpuEncoder bound";
+
+    /// Build the runtime from the layer graph as the app does, then tick 120
+    /// frames. A scene with a GPU node (Water) builds but stops ticking at
+    /// its first frame: this test has no device.
     fn tick_120_frames(fx: &PresetInstance) {
         let registry = PrimitiveRegistry::with_builtin();
-        let mut runtime = PresetRuntime::from_def_for_render(flat(fx), &registry, Some(&fx.params), false)
-            .expect("the compiled scene builds");
+        let def = fx.graph.clone().expect("a scene layer has a graph");
+        let mut runtime =
+            PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).expect("the compiled scene builds");
         runtime.apply_param_values(&fx.params);
-        for k in 0..120 {
-            let seconds = k as f64 / 30.0;
-            runtime.execute_frame(FrameTime { seconds: Seconds(seconds), beats: Beats(seconds * 2.0), delta: Seconds(1.0 / 30.0), frame_count: k });
+        let ticked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for k in 0..120 {
+                let seconds = k as f64 / 30.0;
+                runtime.execute_frame(FrameTime { seconds: Seconds(seconds), beats: Beats(seconds * 2.0), delta: Seconds(1.0 / 30.0), frame_count: k });
+            }
+        }));
+        if let Err(panic) = ticked
+            && panic.downcast_ref::<&str>().is_none_or(|message| *message != NEEDS_GPU)
+            && panic.downcast_ref::<String>().is_none_or(|message| message != NEEDS_GPU)
+        {
+            std::panic::resume_unwind(panic);
         }
     }
 
@@ -612,11 +658,20 @@ mod every_kind_and_choice_survives {
         let mut failures = Vec::new();
         let all = cases();
         assert!(all.len() > ADD_ENTRIES.len(), "the table gave {} cases", all.len());
-        for Case { label, mut commands } in all {
+        for Case { label, commands } in all {
+            let mut commands = match commands {
+                Ok(commands) => commands,
+                Err(reason) => {
+                    failures.push(format!("{label}: the row refused an enabled pick: {reason}"));
+                    continue;
+                }
+            };
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut project = base_project();
                 let base = snapshot(&project);
-                apply(&mut project, &mut commands);
+                if let Err(refused) = apply(&mut project, &mut commands) {
+                    panic!("{refused}");
+                }
                 let fx = project.timeline.layers[0].gen_params().unwrap();
                 tick_120_frames(fx);
 

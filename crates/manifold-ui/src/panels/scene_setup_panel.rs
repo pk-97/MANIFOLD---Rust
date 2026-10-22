@@ -437,11 +437,6 @@ impl ScenePanel {
         }
     }
 
-    /// The live scene's view model.
-    pub fn live_vm(&self) -> Option<&SceneSetupVm> {
-        self.state.as_live()
-    }
-
     /// How the panel's gizmos meet scene depth; export reads it too.
     pub fn gizmo_draw_mode(&self) -> GizmoDrawMode {
         self.gizmo_draw_mode
@@ -480,11 +475,6 @@ impl ScenePanel {
         }
     }
 
-    /// The active item of the scene this panel shows: the one whose card
-    /// shows.
-    pub fn live_selection(&self) -> Option<&SceneSelection> {
-        self.selection.get(self.live_layer_id()?)
-    }
 
     /// Every selected item of the scene this panel shows, in selection
     /// order, the active one last when it is selected.

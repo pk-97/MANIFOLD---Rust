@@ -122,13 +122,6 @@ impl SceneVm {
             site.check(&self.shapes, value, problems, anchors);
         }
     }
-
-    /// Every param the setup check reads, with whether a change to it
-    /// changes the scene model's form (needs a rebuild) rather than only a
-    /// value [`SceneVm::recheck_setup`] takes.
-    pub fn setup_params(&self) -> impl Iterator<Item = (&ParamAddr, bool)> {
-        self.setup_sites.iter().flat_map(|site| site.params(&self.shapes))
-    }
 }
 
 fn family(item: &Item) -> Vec<ItemId> {

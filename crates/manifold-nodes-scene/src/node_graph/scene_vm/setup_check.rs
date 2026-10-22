@@ -536,9 +536,6 @@ pub struct SetupSite {
     pub(super) fill: ParamAddr,
     pub(super) fill_authored: Option<f32>,
     pub(super) sources: Vec<(FluidRole, usize)>,
-    /// Params the site's form depends on (the domain transform's billboard,
-    /// each source's role): a change to one needs a rebuild, not a re-check.
-    pub(super) structure: Vec<ParamAddr>,
 }
 
 /// Where a value lookup overrides the authored value of a param, else the
@@ -601,29 +598,6 @@ impl SetupSite {
             }
         }
     }
-
-    /// Every param the check reads, with whether a change to it needs a
-    /// rebuild rather than a re-check.
-    pub(super) fn params<'a>(&'a self, shapes: &'a [SceneShapeVm]) -> impl Iterator<Item = (&'a ParamAddr, bool)> + 'a {
-        let t = self.layout.transform.as_ref();
-        let layout = [
-            &self.layout.resolution.0, &t.pos_addr.0, &t.pos_addr.1, &t.pos_addr.2, &t.rot_addr.0, &t.rot_addr.1, &t.rot_addr.2,
-            &t.scale_addr.0, &t.scale_addr.1, &t.scale_addr.2,
-        ];
-        let shape_params = self.box_shape.into_iter().chain(self.column).chain(self.sources.iter().map(|&(_, i)| i)).flat_map(move |i| {
-            shapes[i].params.iter().filter_map(|param| match &param.write {
-                ShapeWrite::Node(addr) => Some(addr),
-                ShapeWrite::Card { .. } | ShapeWrite::Unplaced => None,
-            })
-        });
-        self.fill_authored
-            .map(|_| &self.fill)
-            .into_iter()
-            .chain(layout)
-            .chain(shape_params)
-            .map(|addr| (addr, false))
-            .chain(self.structure.iter().map(|addr| (addr, true)))
-    }
 }
 
 /// Every Water's setup site, its domain box and its sources' boxes pushed
@@ -683,7 +657,6 @@ pub(super) fn water_sites(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>, 
             fill: card("fill_height"),
             fill_authored: None,
             sources,
-            structure: Vec::new(),
         });
     });
     sites

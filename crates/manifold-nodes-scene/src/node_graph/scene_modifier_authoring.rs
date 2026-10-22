@@ -56,21 +56,6 @@ pub fn validate_new_scene_modifier(
     validate_modifier_attachment(owner, instance, &SCENE_MODIFIER_REGISTRY)
 }
 
-/// Prepare and check one force a scene template brings, the way the Forces
-/// menu attaches one. This is the preparer template insertion takes
-/// (`manifold_core::scene_template::PrepareForce`).
-pub fn prepare_template_force(
-    owner: &EffectGraphDef,
-    recipe: &EffectGraphDef,
-    id: NodeId,
-    scene: NodeId,
-    targets: SceneTargetSelection,
-) -> Result<SceneModifierInstanceDef, String> {
-    let instance = prepare_new_scene_modifier(owner, recipe, id, scene, targets).map_err(|error| error.to_string())?;
-    validate_new_scene_modifier(owner, &instance).map_err(|error| error.to_string())?;
-    Ok(instance)
-}
-
 /// `owner` with `instance` appended and one host card param per live recipe
 /// param, bound to the instance by node id. Pure: it builds a graph value for
 /// the compiler, the preset checker and tests; it never writes a project.

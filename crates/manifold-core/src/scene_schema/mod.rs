@@ -269,11 +269,6 @@ impl PropertyRow {
         }
         self
     }
-
-    /// Whether this row is a card row.
-    pub fn is_card(&self) -> bool {
-        matches!(self.exposure, Exposure::Card(_))
-    }
 }
 
 const AT_LEAST_ZERO: HardLimit = HardLimit::AtLeast(0.0);

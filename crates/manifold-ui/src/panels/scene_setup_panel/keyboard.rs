@@ -70,11 +70,6 @@ impl ScenePanel {
         Some(PanelAction::Project(ProjectAction::SceneRemove(item.layer_id, item.item)))
     }
 
-    pub fn duplicate_selection_action(&self) -> Option<PanelAction> {
-        let item = self.selected_scene_item().filter(|item| item.removable)?;
-        Some(PanelAction::Project(ProjectAction::SceneDuplicate(item.layer_id, item.item)))
-    }
-
     /// Cmd+G: wrap the selected items in a new Group.
     pub fn group_selection_action(&self) -> Option<PanelAction> {
         let vm = self.state.as_live()?;
