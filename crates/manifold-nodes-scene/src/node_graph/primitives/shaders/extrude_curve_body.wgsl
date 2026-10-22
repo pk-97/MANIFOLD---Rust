@@ -12,7 +12,8 @@
 //
 // Normals are exact, oriented as make_triangles' finite differences orient
 // them (cross(along rows, along columns)): the side faces across the outline,
-// a cap along Z. Wire node.make_triangles with Keep Normals downstream.
+// a cap along Z. A closed outline faces out of the solid (see `reversed`
+// below). Wire node.make_triangles with Keep Normals downstream.
 //
 // ABI: `outline` is a BUFFER GATHER input — the body indexes `buf_outline`
 // directly. `outline_len` is the derived element count.
@@ -57,6 +58,18 @@ fn ec_sign(v: f32) -> f32 {
     return 1.0;
 }
 
+// Twice the signed area the outline encloses (shoelace), positive when it
+// turns counter-clockwise about +Z. Summed in the CPU mirror's order.
+fn ec_area2(p_len: i32) -> f32 {
+    var area = 0.0;
+    for (var i = 0; i < p_len; i = i + 1) {
+        let a = ec_point(i);
+        let b = ec_point((i + 1) % p_len);
+        area = area + (a.x * b.y - b.x * a.y);
+    }
+    return area;
+}
+
 fn body(idx: u32, count: u32, depth: f32, steps: i32, close: u32, symmetric: u32, caps: u32, outline_len: u32) -> Element2 {
     let p_len = max(i32(outline_len), 1);
     let is_closed = close != 0u;
@@ -93,9 +106,20 @@ fn body(idx: u32, count: u32, depth: f32, steps: i32, close: u32, symmetric: u32
         }
     }
 
-    let outline_col = col % p_len;
+    // Read forwards, a counter-clockwise loop pushed along +Z (or a
+    // clockwise one along -Z) faces in, so it is read backwards: winding and
+    // normals then face out. An open outline keeps its order.
+    let looped = is_closed || ec_ends_meet(p_len);
+    let reversed = looped && ec_area2(p_len) * ec_sign(depth) > 0.0;
+    var outline_col = col % p_len;
+    if reversed {
+        outline_col = (cols - 1 - col) % p_len;
+    }
     let pt = ec_point(outline_col);
-    let t = ec_tangent(outline_col, p_len, is_closed || ec_ends_meet(p_len));
+    var t = ec_tangent(outline_col, p_len, looped);
+    if reversed {
+        t = -t;
+    }
 
     let row_denom = max(f32(steps), 1.0);
     let col_denom = max(f32(cols - 1), 1.0);

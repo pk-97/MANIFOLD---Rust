@@ -264,7 +264,7 @@ pub static MATERIAL_FIELDS: [FieldRow; 5] = [
         id: "texture_file",
         label: "Texture File",
         section: Material,
-        control: FieldControl::File { extensions: &["png", "jpg", "jpeg", "tga", "bmp", "exr", "hdr"] },
+        control: FieldControl::File { extensions: crate::file_loader::PICTURE_EXTENSIONS },
         applies: file,
         disabled: enabled,
         read: |fields| match fields {

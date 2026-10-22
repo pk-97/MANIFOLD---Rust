@@ -45,6 +45,9 @@ fn body(
     rot_x: f32,
     rot_y: f32,
     rot_z: f32,
+    origin_x: f32,
+    origin_y: f32,
+    origin_z: f32,
 ) -> Element {
     let ac = u32(active_count);
     if idx >= ac {
@@ -88,5 +91,5 @@ fn body(
         pos = vec3<f32>((h0 - 0.5) * extent_x, (h1 - 0.5) * extent_y, (h2 - 0.5) * extent_z);
     }
 
-    return Element(vec4<f32>(pos, scale), vec4<f32>(rot, 0.0));
+    return Element(vec4<f32>(pos + vec3<f32>(origin_x, origin_y, origin_z), scale), vec4<f32>(rot, 0.0));
 }

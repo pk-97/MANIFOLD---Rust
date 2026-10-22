@@ -9,11 +9,14 @@
 //! Output capacity is FIXED at 2x the input capacity at plan
 //! pre-allocation — `axis` / `plane_offset` / `enabled` are live card
 //! writes and never trigger a rebuild (the BUG-757c capacity rule, applied
-//! up front). Slots [0, cap) are the originals, masked to zero-scale where
-//! the source slot is dead; slots [cap, 2cap) are the mirrored copies,
-//! existing iff the source slot has nonzero scale and the gate is on.
-//! The D11 draw reads the whole buffer and zero-scale slots rasterize
-//! nothing.
+//! up front). With `n` live input slots (`live_count`, clamped to the input
+//! capacity), slots [0, n) are the originals, masked to zero-scale where the
+//! source slot is dead; slots [n, 2n) are the mirrored copies, existing iff
+//! the source slot has nonzero scale and the gate is on; the rest are zero.
+//! The object draws 2n instances (the recipe carries the count on), so a
+//! Copies count of n draws its mirrors too. Unwired, `live_count` reads
+//! every slot: n = cap, the draw reads the whole buffer, and zero-scale
+//! slots rasterize nothing.
 //!
 //! `rot_pad.w` carries the mirror marker in-band (D5): 0 = original slot,
 //! plane component + 1 (1 = x, 2 = y, 3 = z) = mirrored slot. The plane is
@@ -46,16 +49,18 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
 /// Generated-codegen uniform layout. Params in PARAMS order:
-/// axis (Enum→u32), plane_offset (f32), enabled (f32), then the
-/// codegen-injected dispatch_count (= the OUTPUT capacity = 2x input
-/// capacity). 4 words = 16 bytes, no pad.
+/// axis (Enum→u32), plane_offset (f32), enabled (f32), live_count (f32),
+/// then the codegen-injected dispatch_count (= the OUTPUT capacity = 2x
+/// input capacity). 5 words, padded to 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ReflectUniforms {
     axis: u32,
     plane_offset: f32,
     enabled: f32,
+    live_count: f32,
     dispatch_count: u32,
+    _pad: [u32; 3],
 }
 
 /// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
@@ -71,6 +76,7 @@ pub struct ReflectStasisKey {
     pub axis: u32,
     pub plane_offset: f32,
     pub enabled: f32,
+    pub live_count: f32,
     pub in_content: Option<ContentVersion>,
     pub out_identity: usize,
     pub rebuild_epoch: u64,
@@ -79,9 +85,10 @@ pub struct ReflectStasisKey {
 manifold_node_engine::primitive! {
     name: ReflectArray,
     type_id: "node.reflect_array",
-    purpose: "Reflect an Array<InstanceTransform> across an axis-aligned plane: slots [0, cap) pass the input through (live slots only), slots [cap, 2cap) are the planar reflections (live sources only, gate on). pos' = M(pos - d a) + d a with M = I - 2 a a^T; rotation stored as the proper conjugation R' = M R M (sign map on the Euler triple); scale kept positive (the mirror flip rides on the vertex in render_scene.wgsl, not on the scale); rot_pad.w carries the mirror marker — 0 = original, k > 0 = mirrored across the plane perpendicular to component k-1. Output capacity is fixed at 2x the input capacity so axis/plane_offset/enabled are live writes, never a rebuild. The scene-mirror atom (SCENE_MIRROR D3/D4/D5) — pair upstream with node.scene_array; unwired in = one identity instance.",
+    purpose: "Reflect an Array<InstanceTransform> across an axis-aligned plane: with n = live_count clamped to the input capacity, slots [0, n) pass the input through (live slots only), slots [n, 2n) are the planar reflections (live sources only, gate on) and the rest are zero, so an object drawing 2n instances draws every mirror. pos' = M(pos - d a) + d a with M = I - 2 a a^T; rotation stored as the proper conjugation R' = M R M (sign map on the Euler triple); scale kept positive (the mirror flip rides on the vertex in render_scene.wgsl, not on the scale); rot_pad.w carries the mirror marker — 0 = original, k > 0 = mirrored across the plane perpendicular to component k-1. Output capacity is fixed at 2x the input capacity so axis/plane_offset/enabled are live writes, never a rebuild. The scene-mirror atom (SCENE_MIRROR D3/D4/D5) — pair upstream with node.scene_array; unwired in = one identity instance.",
     inputs: {
         in: Array(InstanceTransform) optional,
+        live_count: ScalarF32 optional,
     },
     outputs: {
         out: Array(InstanceTransform),
@@ -111,9 +118,19 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
+        // The largest number reads every input slot: a count past the
+        // input's capacity is clamped to it, as the draw clamps its own.
+        ParamDef {
+            name: Cow::Borrowed("live_count"),
+            label: "Live Count",
+            ty: ParamType::Float,
+            default: ParamValue::Float(f32::MAX),
+            range: Some((0.0, f32::MAX)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "Output capacity is fixed at 2x the input capacity (D4): the output buffer is sized at plan pre-allocation and axis/plane_offset/enabled writes apply in place — the BUG-757c rule. Liveness is read in-band: a source slot with pos_scale.w == 0 (scene_array's surplus mask) gets no mirrored copy and its original slot is zeroed (INV-MR5). enabled == 0 zeroes only the mirrored half — originals pass through byte-identical (INV-MR1, off is free). Marker contract (INV-MR3, P1-amended): rot_pad.w in {0,1,2,3} — 0 = original slot, k > 0 = mirrored across the plane perpendicular to component k-1; only this atom writes nonzero, and render_scene.wgsl's vertex stage is the sole consumer. Mirrored scale stays positive: the flip rides on the vertex in the shader (exactness R'(w M v) + t' = M R (w v) + t'), a negated uniform scale would be a central inversion, not a reflection. FUSION (BUG-orm4): the gathered `in` wire stays external (bound `src_<slot>`) and the atom declares FusedOutputCapacity::MultipleOf { input: \"in\", factor: 2 } — a region it heads composes its count to 2 × the input slot's length, so the fused kernel dispatches the mirrored half too (the fresh dst is sized by the matching // @fused_output_capacity: marker). The fused-vs-unfused numerical proof lives in the gpu_tests module. Unwired in = one identity instance at the origin.",
+    composition_notes: "live_count is how many leading input slots are live (a Copies count); the scene modifier compiler wires the object's instance count into it and carries 2 x that count on to the draw. Unwired it reads every slot. Output capacity is fixed at 2x the input capacity (D4): the output buffer is sized at plan pre-allocation and axis/plane_offset/enabled writes apply in place — the BUG-757c rule. Liveness is read in-band: a source slot with pos_scale.w == 0 (scene_array's surplus mask) gets no mirrored copy and its original slot is zeroed (INV-MR5). enabled == 0 zeroes only the mirrored half — originals pass through byte-identical (INV-MR1, off is free). Marker contract (INV-MR3, P1-amended): rot_pad.w in {0,1,2,3} — 0 = original slot, k > 0 = mirrored across the plane perpendicular to component k-1; only this atom writes nonzero, and render_scene.wgsl's vertex stage is the sole consumer. Mirrored scale stays positive: the flip rides on the vertex in the shader (exactness R'(w M v) + t' = M R (w v) + t'), a negated uniform scale would be a central inversion, not a reflection. FUSION (BUG-orm4): the gathered `in` wire stays external (bound `src_<slot>`) and the atom declares FusedOutputCapacity::MultipleOf { input: \"in\", factor: 2 } — a region it heads composes its count to 2 × the input slot's length, so the fused kernel dispatches the mirrored half too (the fresh dst is sized by the matching // @fused_output_capacity: marker). The fused-vs-unfused numerical proof lives in the gpu_tests module. Unwired in = one identity instance at the origin.",
     examples: [],
     picker: { label: "Reflect Array", category: Atom },
     summary: "Makes a mirrored copy of every instance across a plane — drop a reflected scene under the floor and ride the offset.",
@@ -161,6 +178,7 @@ impl Primitive for ReflectArray {
         };
         let plane_offset = ctx.scalar_or_param("plane_offset", 0.0);
         let enabled = ctx.scalar_or_param("enabled", 1.0);
+        let live_count = ctx.scalar_or_param("live_count", f32::MAX);
 
         let Some(out_buf) = ctx.outputs.array("out") else {
             return;
@@ -198,6 +216,7 @@ impl Primitive for ReflectArray {
             axis,
             plane_offset,
             enabled,
+            live_count,
             in_content: ctx.inputs.content_version("in"),
             out_identity: out_buf.identity_key(),
             rebuild_epoch: ctx.rebuild_epoch,
@@ -245,7 +264,9 @@ impl Primitive for ReflectArray {
             axis,
             plane_offset,
             enabled,
+            live_count,
             dispatch_count: out_cap,
+            _pad: [0; 3],
         };
 
         let pipeline = self.pipeline.as_ref().expect("pipeline initialized above");
@@ -526,20 +547,25 @@ mod gpu_tests {
     use super::*;
     use manifold_gpu::GpuDevice;
 
+    /// Every input slot is live: the unwired `live_count`.
+    const ALL: f32 = f32::MAX;
+
     /// CPU oracle — bit-for-bit the reflect_array_body.wgsl semantics.
     fn cpu_reflect(
         input: &[InstanceTransform],
         axis: u32,
         plane_offset: f32,
         enabled: f32,
+        live_count: f32,
     ) -> Vec<InstanceTransform> {
         let cap = input.len();
+        let n = live_count.clamp(0.0, cap as f32) as usize;
         let zero = InstanceTransform {
             pos_scale: [0.0; 4],
             rot_pad: [0.0; 4],
         };
         let mut out = vec![zero; cap * 2];
-        for (j, src) in input.iter().enumerate() {
+        for (j, src) in input.iter().enumerate().take(n) {
             let live = src.pos_scale[3] != 0.0;
             out[j] = if live {
                 InstanceTransform {
@@ -562,7 +588,7 @@ mod gpu_tests {
                 1 => [-r[0], r[1], -r[2]],
                 _ => [-r[0], -r[1], r[2]],
             };
-            out[cap + j] = InstanceTransform {
+            out[n + j] = InstanceTransform {
                 pos_scale: [p[0], p[1], p[2], src.pos_scale[3]],
                 rot_pad: [r2[0], r2[1], r2[2], comp as f32 + 1.0],
             };
@@ -591,12 +617,15 @@ mod gpu_tests {
         axis: u32,
         plane_offset: f32,
         enabled: f32,
+        live_count: f32,
     ) {
         let uniforms = ReflectUniforms {
             axis,
             plane_offset,
             enabled,
+            live_count,
             dispatch_count: out_cap,
+            _pad: [0; 3],
         };
         let mut enc = device.create_encoder("reflect_array_test");
         enc.dispatch_compute(
@@ -668,9 +697,9 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
         for axis in 0u32..6u32 {
-            dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, axis, 2.25, 1.0);
+            dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, axis, 2.25, 1.0, ALL);
             let gpu_data = read_back(&out_buf, out_cap);
-            let expected = cpu_reflect(&input, axis, 2.25, 1.0);
+            let expected = cpu_reflect(&input, axis, 2.25, 1.0, ALL);
             assert_matches_cpu(&gpu_data, &expected, "axis {axis}");
         }
     }
@@ -697,10 +726,10 @@ mod gpu_tests {
         let out_cap = (input.len() * 2) as u32;
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.5, 0.0);
+        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.5, 0.0, ALL);
         let gpu_data = read_back(&out_buf, out_cap);
 
-        let expected = cpu_reflect(&input, 2, 1.5, 0.0);
+        let expected = cpu_reflect(&input, 2, 1.5, 0.0, ALL);
         assert_matches_cpu(&gpu_data, &expected, "enabled = 0");
         // Byte-identical originals, spelled out: same positions, same
         // rotations, marker 0, and the mirrored half fully zeroed.
@@ -744,7 +773,7 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
         for axis in 0u32..6u32 {
-            dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, axis, 0.75, 1.0);
+            dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, axis, 0.75, 1.0, ALL);
             let gpu_data = read_back(&out_buf, out_cap);
             let want = (axis / 2) as f32 + 1.0;
             for (i, t) in gpu_data[..input.len()].iter().enumerate() {
@@ -781,23 +810,23 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
         // Gate on, offset 1.0.
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.0, 1.0);
+        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.0, 1.0, ALL);
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 1.0, 1.0), "offset 1 on");
+        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 1.0, 1.0, ALL), "offset 1 on");
 
         // Live writes, same buffers: offset moves, gate flips off, back on
         // at a new offset. Nothing is reallocated between dispatches.
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 4.0, 1.0);
+        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 4.0, 1.0, ALL);
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 4.0, 1.0), "offset 4 on");
+        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 4.0, 1.0, ALL), "offset 4 on");
 
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 4.0, 0.0);
+        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 4.0, 0.0, ALL);
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 4.0, 0.0), "offset 4 off");
+        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 4.0, 0.0, ALL), "offset 4 off");
 
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 4, -2.0, 1.0);
+        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 4, -2.0, 1.0, ALL);
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 4, -2.0, 1.0), "axis +Z off -2");
+        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 4, -2.0, 1.0, ALL), "axis +Z off -2");
     }
 
     /// INV-MR5: a mirrored copy exists iff its source slot has nonzero
@@ -830,9 +859,9 @@ mod gpu_tests {
         let out_cap = (input.len() * 2) as u32;
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 3, 1.25, 1.0);
+        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 3, 1.25, 1.0, ALL);
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 3, 1.25, 1.0), "masked");
+        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 3, 1.25, 1.0, ALL), "masked");
 
         // Spelled out: dead slots are zero on BOTH halves even though the
         // dead source carried a nonzero position and rotation.
@@ -880,7 +909,7 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(2 * 32);
 
         let d = 1.25f32; // floor plane y = 1.25
-        dispatch(&device, &pipeline, &in_buf, &out_buf, 2, 2, d, 1.0);
+        dispatch(&device, &pipeline, &in_buf, &out_buf, 2, 2, d, 1.0, ALL);
         let gpu_data = read_back(&out_buf, 2);
 
         // Expected via the true reflection, from raw linear algebra.
@@ -919,7 +948,7 @@ mod gpu_tests {
         }
 
         // And the buffer itself carries the stored transform verbatim.
-        let expected = cpu_reflect(&[src], 2, d, 1.0);
+        let expected = cpu_reflect(&[src], 2, d, 1.0, ALL);
         assert_matches_cpu(&gpu_data, &expected, "floor mirror");
         assert_eq!(gpu_data[1].pos_scale[3], src.pos_scale[3], "scale stays positive");
         assert_eq!(gpu_data[1].rot_pad[3], 2.0, "marker = plane component + 1");
@@ -948,9 +977,9 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(2 * 32);
 
         // -Y floor at d = 3: mirrored identity sits at y = -2 d = -6.
-        dispatch(&device, &pipeline, &in_buf, &out_buf, 2, 3, 3.0, 1.0);
+        dispatch(&device, &pipeline, &in_buf, &out_buf, 2, 3, 3.0, 1.0, ALL);
         let gpu_data = read_back(&out_buf, 2);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&identity, 3, 3.0, 1.0), "unwired");
+        assert_matches_cpu(&gpu_data, &cpu_reflect(&identity, 3, 3.0, 1.0, ALL), "unwired");
         assert_eq!(gpu_data[0].pos_scale, [0.0, 0.0, 0.0, 1.0], "original identity");
         assert_eq!(gpu_data[0].rot_pad, [0.0; 4], "original identity, marker 0");
         assert_eq!(gpu_data[1].pos_scale, [0.0, -6.0, 0.0, 1.0], "mirrored identity");
@@ -1042,9 +1071,9 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
         // Fused Params layout: n0_axis: u32, n0_plane_offset: f32,
-        // n0_enabled: f32, one pad word (struct padded to 16).
+        // n0_enabled: f32, n0_live_count: f32 (16 bytes, no pad).
         let (axis, plane_offset, enabled) = (3u32, 3.0f32, 1.0f32);
-        let uniforms: [u32; 4] = [axis, plane_offset.to_bits(), enabled.to_bits(), 0];
+        let uniforms: [u32; 4] = [axis, plane_offset.to_bits(), enabled.to_bits(), ALL.to_bits()];
         let mut enc = device.create_encoder("reflect_fused_test");
         enc.dispatch_compute(
             &pipeline,
@@ -1061,7 +1090,7 @@ mod gpu_tests {
         let gpu_data = read_back(&out_buf, out_cap);
         assert_matches_cpu(
             &gpu_data,
-            &cpu_reflect(&input, axis, plane_offset, enabled),
+            &cpu_reflect(&input, axis, plane_offset, enabled, ALL),
             "fused widened dispatch",
         );
         // The proof's teeth, spelled out: every mirrored slot past the input
@@ -1071,5 +1100,39 @@ mod gpu_tests {
         assert_eq!(gpu_data[5].rot_pad[3], 2.0, "mirrored slot 1 written, marker");
         assert_eq!(gpu_data[6].pos_scale, [0.0; 4], "dead slot gets no mirror");
         assert_eq!(gpu_data[7].rot_pad[3], 2.0, "mirrored slot 3 written, marker");
+    }
+
+    /// BUG-lkb56: a Copies count of n draws n instances of a buffer sized for
+    /// every copy. The mirrors pack right after the n live originals, so the
+    /// object's draw of 2n shows every mirror; stale slots past n (copies the
+    /// count has dropped) never reach the draw.
+    #[test]
+    fn live_count_packs_mirrors_after_the_live_copies() {
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ReflectArray>()
+            .expect("reflect_array codegen");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "reflect_array_test",
+        );
+        let input: Vec<InstanceTransform> =
+            (0..6).map(|i| live_instance([i as f32, 1.0 + i as f32, 0.5], 1.0, [0.1, 0.2, 0.3])).collect();
+        let in_buf = upload(&device, &input);
+        let out_cap = (input.len() * 2) as u32;
+        let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
+        for live in [0.0f32, 2.0, 3.6, 6.0] {
+            dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 0.0, 1.0, live);
+            let gpu_data = read_back(&out_buf, out_cap);
+            assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 0.0, 1.0, live), "live count");
+            let n = live as usize;
+            for (k, slot) in gpu_data.iter().enumerate() {
+                let drawn = k < 2 * n;
+                assert_eq!(slot.pos_scale[3] != 0.0, drawn, "live {live}: slot {k} drawn iff below 2n");
+                if drawn {
+                    assert_eq!(slot.rot_pad[3], if k < n { 0.0 } else { 2.0 }, "live {live}: slot {k} marker");
+                }
+            }
+        }
     }
 }

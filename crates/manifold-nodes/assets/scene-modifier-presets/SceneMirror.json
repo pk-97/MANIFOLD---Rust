@@ -83,12 +83,24 @@
                   "endpoint": "instances"
                 }
               }
+            },
+            {
+              "port": "instanceCount",
+              "source": {
+                "previous": {
+                  "endpoint": "instanceCount"
+                }
+              }
             }
           ],
           "outputs": [
             {
               "port": "instances",
               "endpoint": "instances"
+            },
+            {
+              "port": "instanceCount",
+              "endpoint": "instanceCount"
             }
           ]
         }
@@ -107,12 +119,20 @@
             {
               "name": "instances",
               "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "instanceCount",
+              "portType": "Scalar(F32)"
             }
           ],
           "outputs": [
             {
               "name": "instances",
               "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "instanceCount",
+              "portType": "Scalar(F32)"
             }
           ]
         },
@@ -148,6 +168,28 @@
             "nodeId": "mirror_output",
             "typeId": "system.group_output",
             "handle": "output"
+          },
+          {
+            "id": 4,
+            "nodeId": "group_instance_count",
+            "typeId": "system.group_input",
+            "handle": "instanceCount"
+          },
+          {
+            "id": 5,
+            "nodeId": "mirror_count",
+            "typeId": "node.math",
+            "handle": "mirror_count",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              },
+              "b": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
           }
         ],
         "wires": [
@@ -162,6 +204,24 @@
             "fromPort": "out",
             "toNode": 3,
             "toPort": "instances"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "instanceCount",
+            "toNode": 2,
+            "toPort": "live_count"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "instanceCount",
+            "toNode": 5,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "instanceCount"
           }
         ]
       }
