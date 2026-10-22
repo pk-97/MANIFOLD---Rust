@@ -30,6 +30,11 @@ use manifold_node_engine::scene::source_asset::{mesh_identity, LoadedAsset, Sour
 /// `node.mesh_ramp`'s 0..1 bounds are meaningful without a separate
 /// `normalize_mesh` GPU atom (which would need a same-frame GPU->CPU bounds
 /// readback, forbidden by DECOMPOSING section 7).
+/// The top of the vertex-count params: only what an Int param can hold. No
+/// count cap of its own; the GPU's buffer size is the limit, and a mesh the
+/// buffer cannot hold is refused (`load_error`), never cut short.
+const MAX_VERTICES: f32 = 2_000_000_000.0;
+
 pub const GLTF_FIT_MODES: &[&str] = &["none", "unit_box"];
 
 fn source_trace_enabled() -> bool {
@@ -189,7 +194,7 @@ manifold_node_engine::primitive! {
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(200000.0),
-            range: Some((36.0, 8000000.0)),
+            range: Some((36.0, MAX_VERTICES)),
             enum_values: &[],
         },
         ParamDef {
@@ -255,7 +260,7 @@ manifold_node_engine::primitive! {
             label: "Source Vertex Count",
             ty: ParamType::Int,
             default: ParamValue::Float(-1.0),
-            range: Some((-1.0, 8_000_000.0)),
+            range: Some((-1.0, MAX_VERTICES)),
             enum_values: &[],
         },
         ParamDef {
@@ -685,13 +690,16 @@ impl Primitive for GltfMeshSource {
 
         // 6. (Re)build the staging buffer when cached_verts changed.
         if !self.uploaded {
-            let n = self.cached_verts.len().min(capacity as usize);
-            if self.cached_verts.len() > capacity as usize {
-                log::warn!(
-                    "node.gltf_mesh_source: mesh has {} vertices, capacity {} — truncating",
-                    self.cached_verts.len(),
-                    capacity
-                );
+            let n = self.cached_verts.len();
+            if n > capacity as usize {
+                // Drawing a cut-off mesh would silently drop triangles.
+                let reason = format!("mesh has {n} vertices but its buffer holds {capacity}");
+                log::error!("node.gltf_mesh_source: {reason}");
+                ctx.error(reason.clone());
+                self.load_error = Some(reason);
+                self.cached_verts = Vec::new();
+                ctx.mark_outputs_pending();
+                return;
             }
             let bytes = &self.cached_verts[..n];
             let len_bytes = (n * std::mem::size_of::<MeshVertex>()) as u64;

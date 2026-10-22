@@ -22,8 +22,16 @@ use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, FilePart};
 
 /// `node.gltf_mesh_source`'s smallest buffer, in vertices.
 const MIN_CAPACITY: u32 = 36;
-/// Its largest.
-const MAX_CAPACITY: u32 = 8_000_000;
+
+/// The buffer size, in vertices, for a mesh of `vertex_count`: the mesh's own
+/// size, never a cap (a photoscan of millions of triangles draws whole). The
+/// param carries it as a float, so it rounds up to one a float holds exactly.
+/// A buffer the GPU cannot give is refused by the source, with its reason.
+fn capacity_for(vertex_count: u32) -> u32 {
+    let exact = vertex_count.clamp(MIN_CAPACITY, i32::MAX as u32);
+    let rounded = exact as f32;
+    if rounded as u64 >= u64::from(exact) { rounded as u32 } else { rounded.next_up() as u32 }
+}
 
 /// The mesh node for `file`'s node `node_path` (the whole file when empty),
 /// sized for `vertex_count` vertices.
@@ -39,9 +47,9 @@ fn source_params(b: &mut Builder<'_>, source: u32, file: &str, node_path: &str, 
         b.set(source, "node_path", SerializedParamValue::String { value: node_path.to_owned() });
     }
     if vertex_count > 0 {
-        let capacity = vertex_count.clamp(MIN_CAPACITY, MAX_CAPACITY);
-        b.set(source, "max_capacity", SerializedParamValue::Int { value: capacity as i32 });
-        b.set(source, "source_vertex_count", SerializedParamValue::Int { value: vertex_count.min(MAX_CAPACITY) as i32 });
+        let capacity = capacity_for(vertex_count);
+        b.set(source, "max_capacity", SerializedParamValue::Int { value: capacity.min(i32::MAX as u32) as i32 });
+        b.set(source, "source_vertex_count", SerializedParamValue::Int { value: vertex_count.min(i32::MAX as u32) as i32 });
     }
     b.set(source, "vertex_colors", SerializedParamValue::Bool { value: true });
 }
@@ -318,5 +326,21 @@ fn parts_below<'a>(item: &'a Item, out: &mut Vec<&'a Item>) {
     }
     for child in &item.children {
         parts_below(child, out);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capacity_for;
+
+    #[test]
+    fn a_photoscan_gets_a_buffer_as_big_as_its_mesh() {
+        // 3 million triangles, past the old 8 million vertex cap.
+        for vertices in [9_000_000u32, 16_777_217, 100_000_001] {
+            let capacity = capacity_for(vertices);
+            assert!(capacity >= vertices, "{vertices} vertices got a buffer of {capacity}");
+            assert_eq!(capacity as f32 as u32, capacity, "the float param holds it exactly");
+        }
+        assert_eq!(capacity_for(3), 36);
     }
 }

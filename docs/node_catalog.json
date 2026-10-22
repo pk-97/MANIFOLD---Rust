@@ -12950,7 +12950,7 @@
           "name": "max_capacity",
           "range": [
             "36",
-            "8000000"
+            "2000000000"
           ],
           "type": "int"
         },
@@ -13004,7 +13004,7 @@
           "name": "source_vertex_count",
           "range": [
             "-1",
-            "8000000"
+            "2000000000"
           ],
           "type": "int"
         },
