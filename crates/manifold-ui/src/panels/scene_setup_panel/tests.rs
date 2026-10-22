@@ -41,6 +41,10 @@ fn physics_field() -> FieldRowVm {
 fn live_panel(fields: Vec<FieldRowVm>) -> (ScenePanel, UITree) {
     let mut cube = item("cube", ItemKind::Object, "Cube", 0, None);
     cube.fields = fields;
+    live_panel_with(cube)
+}
+
+fn live_panel_with(cube: SceneItemVm) -> (ScenePanel, UITree) {
     let vm = SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
         items: vec![item("world", ItemKind::World, "World", 0, None), cube],
@@ -151,4 +155,48 @@ fn closing_the_tab_mid_card_drag_drops_the_drag() {
         !actions.iter().any(|action| matches!(action, PanelAction::Project(ProjectAction::SceneChainMove { .. }))),
         "a stale card drag reordered the chain: {actions:?}"
     );
+}
+
+/// The inline Material's structural rows on an Object card edit the
+/// Material, not the Object that draws with it.
+#[test]
+fn an_inline_material_row_sets_the_material_not_its_owner() {
+    let mut cube = item("cube", ItemKind::Object, "Cube", 0, None);
+    let mut material_type = physics_field();
+    material_type.id = "material_type".into();
+    material_type.label = "Type".into();
+    material_type.section = ControlGroup::Material;
+    cube.material = Some(MaterialBlockVm {
+        item: ItemId::new("cube-material"),
+        name: "Material".into(),
+        used_by: 1,
+        features: Vec::new(),
+        parameter_ids: Vec::new(),
+        fields: vec![material_type],
+        look: None,
+        pbr: true,
+    });
+    let (mut panel, mut tree) = live_panel_with(cube);
+    let button = panel.properties_card.row_host.toggle_ids.iter().flatten().next().expect("the Type row is a button row").button_id;
+    let actions = click(&mut panel, &mut tree, button);
+    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] = actions.as_slice() else {
+        panic!("expected one menu, got {actions:?}");
+    };
+    assert!(matches!(
+        &items[0].action,
+        Some(PanelAction::Project(ProjectAction::SceneFieldSet { item, field, .. })) if item.as_str() == "cube-material" && field == "material_type"
+    ), "{:?}", items[0].action);
+}
+
+/// Every base scene names its cube "cube": unlinking one layer's cube scale
+/// leaves another layer's cube linked.
+#[test]
+fn the_scale_link_belongs_to_one_layers_item() {
+    let (mut panel, _tree) = live_panel(Vec::new());
+    let cube = ItemId::new("cube");
+    panel.properties_card.rows.push(panel.scale_link_row(&cube));
+    let row = panel.properties_card.rows.len() - 1;
+    assert!(panel.scale_link_click(row));
+    assert!(!panel.scale_linked(&LayerId::new("layer-1"), &cube));
+    assert!(panel.scale_linked(&LayerId::new("layer-2"), &cube), "another layer's cube keeps its own link");
 }

@@ -481,6 +481,57 @@ impl SceneDoc {
         any
     }
 
+    /// Every file path the document names, with the family it collects into:
+    /// an import's model file (its Group's source, its parts' meshes, its
+    /// materials), an Environment's HDRI, a Material's texture file and a
+    /// Displace by Texture file. Empty paths included; the one list Collect,
+    /// save and load relink read.
+    pub fn files_mut(&mut self, mut f: impl FnMut(crate::file_loader::AssetFamily, &mut String)) {
+        use super::{EnvironmentSource, ModifierTexture, Shape, TextureSource};
+        use crate::file_loader::AssetFamily;
+        fn each(items: &mut [Item], f: &mut impl FnMut(AssetFamily, &mut String)) {
+            for item in items {
+                match &mut item.fields {
+                    ItemFields::Group(group) => {
+                        if let Some(source) = &mut group.source {
+                            f(AssetFamily::Mesh, source);
+                        }
+                    }
+                    ItemFields::Object(object) => {
+                        if let Shape::Mesh { file, .. } = &mut object.shape {
+                            f(AssetFamily::Mesh, file);
+                        }
+                    }
+                    ItemFields::Light(light) => {
+                        if let LightType::Environment { source: EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file } } =
+                            &mut light.light
+                        {
+                            f(AssetFamily::Hdri, file);
+                        }
+                    }
+                    ItemFields::Material(material) => match &mut material.texture {
+                        TextureSource::File { path } => f(AssetFamily::Images, path),
+                        TextureSource::Model { file, .. } => f(AssetFamily::Mesh, file),
+                        TextureSource::None | TextureSource::Layer { .. } => {}
+                    },
+                    ItemFields::Modifier(modifier) => {
+                        if let ModifierTexture::File { path } = &mut modifier.texture {
+                            f(AssetFamily::Images, path);
+                        }
+                    }
+                    ItemFields::Camera(_)
+                    | ItemFields::Water(_)
+                    | ItemFields::WaterSource(_)
+                    | ItemFields::Swarm(_)
+                    | ItemFields::Force(_)
+                    | ItemFields::World(_) => {}
+                }
+                each(&mut item.children, f);
+            }
+        }
+        each(&mut self.items, &mut f);
+    }
+
     /// Whether any Object or Group has a physics setting.
     pub fn any_physics(&self) -> bool {
         let mut any = false;

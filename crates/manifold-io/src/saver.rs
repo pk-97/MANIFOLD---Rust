@@ -78,7 +78,7 @@ pub fn save_project_v1(project: &Project, path: &Path) -> Result<(), SaveError> 
 /// project directory before falling back to missing-file searches.
 fn portable_project_json(project: &Project, directory: &Path) -> Result<String, SaveError> {
     use crate::collect::{
-        AssetTarget, collect_asset_paths, re_point_scene_modifier_asset, re_point_string_param,
+        AssetTarget, collect_asset_paths, re_point_scene_file, re_point_scene_modifier_asset, re_point_string_param,
     };
     let directory = if directory.as_os_str().is_empty() {
         Path::new(".")
@@ -90,7 +90,7 @@ fn portable_project_json(project: &Project, directory: &Path) -> Result<String, 
     for asset in collect_asset_paths(project) {
         if !matches!(
             asset.target,
-            AssetTarget::StringParam { .. } | AssetTarget::SceneModifierStringParam { .. }
+            AssetTarget::StringParam { .. } | AssetTarget::SceneModifierStringParam { .. } | AssetTarget::SceneFile { .. }
         ) {
             continue;
         }
@@ -115,6 +115,9 @@ fn portable_project_json(project: &Project, directory: &Path) -> Result<String, 
             }
             target @ AssetTarget::SceneModifierStringParam { .. } => {
                 re_point_scene_modifier_asset(saved, target, &old, &relative);
+            }
+            AssetTarget::SceneFile { layer_id } => {
+                re_point_scene_file(saved, layer_id, &old, &relative);
             }
             _ => unreachable!("string asset targets filtered above"),
         }

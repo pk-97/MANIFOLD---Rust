@@ -310,9 +310,10 @@ pub struct ScenePanel {
     group_toggle_ids: Vec<(NodeId, ItemId)>,
     /// Groups the user folded, per layer. Groups start open.
     collapsed_groups: std::collections::HashMap<LayerId, ahash::AHashSet<ItemId>>,
-    /// Items whose Scale link is off. The link starts on (section 7.17);
+    /// Items whose Scale link is off, by layer: every base scene shares its
+    /// item ids. The link starts on (section 7.17);
     /// card view state, never saved or mapped.
-    scale_unlinked: ahash::AHashSet<ItemId>,
+    scale_unlinked: ahash::AHashMap<LayerId, ahash::AHashSet<ItemId>>,
     /// Fold state for properties sections, keyed by section NAME globally
     /// within the panel. UI-local, never serialized. Missing = expanded.
     section_folded: ahash::AHashMap<String, bool>,
@@ -361,7 +362,7 @@ impl Default for ScenePanel {
             outliner_eye_index: ahash::AHashMap::new(),
             group_toggle_ids: Vec::new(),
             collapsed_groups: std::collections::HashMap::new(),
-            scale_unlinked: ahash::AHashSet::new(),
+            scale_unlinked: ahash::AHashMap::new(),
             section_folded: ahash::AHashMap::new(),
             material_block: Default::default(),
             chain_rows: Vec::new(),
