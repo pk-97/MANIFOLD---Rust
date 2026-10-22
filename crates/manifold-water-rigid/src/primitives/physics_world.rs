@@ -762,7 +762,13 @@ mod tests {
         let mut wire_slots: Vec<(&'static str, Slot)> = Vec::new();
         let mut pending = Vec::new();
         let mut next_resource = 0;
-        let mut body = RigidBody { collider: Some(crate::physics::platonic_solid(body_shape)), ..RigidBody::default() };
+        // Shape 0 is the body switched off: a structural edit that rebuilds.
+        // Any other shape swaps in place.
+        let mut body = RigidBody {
+            collider: Some(crate::physics::platonic_solid(body_shape.max(1))),
+            enabled: body_shape != 0,
+            ..RigidBody::default()
+        };
         body.transform.pos = [0.0, 8.0, 0.0];
         let body_slot = acquire_mock_wire(
             &mut backend,
@@ -1065,7 +1071,7 @@ mod tests {
         assert!(evaluate_mock_world_under(
             &mut node,
             0.0,
-            2,
+            0,
             MockFieldState::Complete,
             false,
             false,

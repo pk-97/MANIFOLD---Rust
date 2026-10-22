@@ -98,7 +98,7 @@ fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild() {
         .unwrap();
     assert!(simulation.impulse_stamp(PlayedTime::ZERO, 0).is_ok());
 
-    bodies[0].as_mut().unwrap().collider = Some(crate::physics::platonic_solid(2));
+    bodies[0].as_mut().unwrap().enabled = false;
     simulation.set_step(SimStep::default().authored_sample());
     simulation
         .advance(&bodies, [0.0; 3], PlayedTime::from_played(2.0), 1.0, 0.0)

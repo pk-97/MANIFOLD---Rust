@@ -419,6 +419,10 @@ pub struct LiquidBodies {
     resolved: Vec<(Arc<DistanceLattice>, LatticePlan)>,
     /// The lattices the shapes and atlas were last built from.
     used: Vec<Arc<DistanceLattice>>,
+    /// Each coupled body's lattice and plan in the last build, in order: a
+    /// body whose shape was swapped in place keeps it until its new one is
+    /// ready, so the liquid never holds for a reshaped body.
+    coupled_lattices: Vec<(Arc<DistanceLattice>, LatticePlan)>,
     /// Whether Inflow and Outflow roles are accepted as regions; a solver
     /// without sources and drains leaves this off and refuses them.
     accepts_regions: bool,
@@ -618,9 +622,13 @@ impl LiquidBodies {
             count += 1;
         }
         for (index, geometry) in coupled.iter().enumerate() {
+            let stand_in = (self.coupled.len() == coupled.len()).then(|| self.coupled_lattices.get(index)).flatten();
             match resolve_lattice(&mut self.lattices, geometry, cell_size, [1.0; 3], wait) {
                 Ok(Some(found)) => self.resolved.push(found),
-                Ok(None) => return Ok(BodiesStatus::Pending),
+                Ok(None) => match stand_in {
+                    Some(stand_in) => self.resolved.push(stand_in.clone()),
+                    None => return Ok(BodiesStatus::Pending),
+                },
                 Err(error) => return Err(format!("Liquid: coupled body {index}: {error}")),
             }
         }
@@ -694,6 +702,8 @@ impl LiquidBodies {
         }
         self.coupled.clear();
         self.coupled.extend(coupled.iter().cloned());
+        self.coupled_lattices.clear();
+        self.coupled_lattices.extend(self.resolved[self.resolved.len() - coupled.len()..].iter().cloned());
         self.lattices.retain(|entry| {
             roles.iter().flatten().any(|role| Arc::ptr_eq(&role.geometry, &entry.geometry))
                 || coupled.iter().any(|geometry| Arc::ptr_eq(geometry, &entry.geometry))

@@ -49,6 +49,9 @@ struct Coupled {
     /// The largest face of the body's local hull box.
     face_area: f32,
     friction: f32,
+    /// The world's shape revision of this body the geometry was built from;
+    /// an in-place reshape bumps it and the geometry is built again.
+    revision: u32,
 }
 
 /// The liquid tick whose reaction the GPU is still writing.
@@ -227,7 +230,7 @@ impl LiquidRigidOwner {
         let layout = CoupledRigidLayout::new(&rigid, &walled);
         let world = rigid.native_world().ok_or("Liquid coupling: the rigid world was not prepared")?;
         let reuse = reuse.filter(|owner| owner.matches(inputs, walls, colliders, capacity));
-        let known = |source: Source, _: BodyHandle| {
+        let known = |source: Source, _: BodyHandle, _: u32| {
             reuse.and_then(|owner| {
                 owner
                     .bodies
@@ -348,11 +351,11 @@ impl LiquidRigidOwner {
         if self.pending.is_some() {
             return Err("Liquid coupling: settle the pending reaction before rebinding bodies".into());
         }
-        let known = |_: Source, handle: BodyHandle| {
+        let known = |_: Source, handle: BodyHandle, revision: u32| {
             self.bodies
                 .iter()
                 .zip(&self.geometries)
-                .find(|(body, _)| body.handle == handle)
+                .find(|(body, _)| body.handle == handle && body.revision == revision)
                 .map(|(body, geometry)| (Arc::clone(geometry), body.face_area))
         };
         let Bound { bodies, geometries, uncoupled } = bind(&self.rigid, &self.walled, &self.colliders, self.capacity, known)?;
@@ -547,7 +550,7 @@ fn bind(
     walled: &RigidSceneInputs,
     colliders: &RigidImpulseTargets,
     capacity: usize,
-    known: impl Fn(Source, BodyHandle) -> Option<(Arc<PreparedFluidGeometry>, f32)>,
+    known: impl Fn(Source, BodyHandle, u32) -> Option<(Arc<PreparedFluidGeometry>, f32)>,
 ) -> Result<Bound, String> {
     let world = rigid.native_world().ok_or("Liquid coupling: the rigid world was not prepared")?;
     let mut selected: Vec<(BodyHandle, Source)> = rigid
@@ -574,7 +577,8 @@ fn bind(
                 .map(|(_, geometry, area)| (Arc::clone(geometry), *area)),
             Source::Body(_) => None,
         };
-        let (geometry, face_area) = match known(source, handle).or(cached) {
+        let revision = world.shape_revision(handle).map_err(|error| error.to_string())?;
+        let (geometry, face_area) = match known(source, handle, revision).or(cached) {
             Some(known) => known,
             None => {
                 let body = match source {
@@ -588,7 +592,7 @@ fn bind(
                 built
             }
         };
-        bodies.push(Coupled { handle, source, face_area, friction: 0.0 });
+        bodies.push(Coupled { handle, source, face_area, friction: 0.0, revision });
         geometries.push(geometry);
     }
     Ok(Bound { bodies, geometries, uncoupled })
@@ -1178,6 +1182,24 @@ mod tests {
             })
             .unwrap();
         assert!(!owner.wants_rebind());
+
+        // A Scale write (a live row) swaps that body's shape in place: the
+        // same epoch, the body keeps its motion, and its hull is built again
+        // at the new size while the other body's carries over.
+        let moving = owner.rows()[0].linear_velocity[1];
+        let mut scaled = grown.clone();
+        scaled.bodies[0].as_mut().unwrap().transform.scale = [2.0; 3];
+        let (hull, other) = (Arc::clone(&owner.geometries()[0]), Arc::clone(&owner.geometries()[1]));
+        assert!(owner.admit(&scaled, OPEN, &both, MAX_LIQUID_BODIES).unwrap());
+        owner.rebind().unwrap();
+        assert_eq!((owner.epoch(), owner.completed()), (3, 2), "no new epoch");
+        assert_eq!(owner.rows()[0].linear_velocity[1], moving);
+        assert!(!Arc::ptr_eq(&owner.geometries()[0], &hull) && Arc::ptr_eq(&owner.geometries()[1], &other));
+        let width = |geometry: &PreparedFluidGeometry| {
+            let xs = geometry.meshes.iter().flat_map(|mesh| mesh.vertices.iter().map(|v| v[0]));
+            xs.clone().fold(f32::NEG_INFINITY, f32::max) - xs.fold(f32::INFINITY, f32::min)
+        };
+        assert!((width(&owner.geometries()[0]) / width(&hull) - 2.0 / scene.bodies[0].as_ref().unwrap().transform.scale[0]).abs() < 1e-3);
     }
 
     /// A float reaction of m·(1 m/s) up, read past one leading row,

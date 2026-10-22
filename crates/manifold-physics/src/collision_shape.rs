@@ -427,13 +427,22 @@ impl Solid {
         }
     }
 
-    /// Swap a fixed hull body's hulls in place, through the same gate.
+    /// Swap an installed body's shape for this solid at `scale` in place,
+    /// through the same gate: its pose, its velocity and every other body
+    /// stay as they are. The body must already be the same form (hulls or
+    /// exact mesh).
     pub fn replace(&self, world: &mut PhysicsWorld, handle: BodyHandle, scale: [f32; 3], config: BodyConfig) -> Result<(), PhysicsError> {
         validate_scale(scale)?;
         match self {
             Self::Hulls(hulls) => world.replace_hulls(handle, &scaled_hulls(hulls, scale), config),
-            Self::Mesh(_) => Err(PhysicsError::InvalidInput("a mesh collider is rebuilt, not replaced")),
+            Self::Mesh(mesh) => world.replace_triangle_mesh(handle, &scaled(&mesh.vertices, scale), &mesh.triangles, config),
         }
+    }
+
+    /// Whether `self` and `other` install as the same form, so one can
+    /// replace the other in place ([`Self::replace`]).
+    pub fn same_form(&self, other: &Self) -> bool {
+        matches!((self, other), (Self::Hulls(_), Self::Hulls(_)) | (Self::Mesh(_), Self::Mesh(_)))
     }
 }
 

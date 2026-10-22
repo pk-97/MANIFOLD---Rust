@@ -130,9 +130,20 @@ mod ffi {
             point_counts: *const i32,
             hull_count: i32,
             max_vertex_count: i32,
+            mass: f32,
             friction: f32,
             restitution: f32,
             hull_out: *mut usize,
+        ) -> i32;
+        pub fn manifold_box3d_body_replace_mesh(
+            body: u64,
+            vertices: *const f32,
+            vertex_count: i32,
+            indices: *const i32,
+            triangle_count: i32,
+            friction: f32,
+            restitution: f32,
+            mesh_out: *mut usize,
         ) -> i32;
         pub fn manifold_box3d_body_set_bullet(body: u64, enabled: i32) -> i32;
         pub fn manifold_box3d_body_set_wall(body: u64, wall: i32) -> i32;
@@ -373,6 +384,9 @@ pub struct BodyHandle {
 struct BodyRecord {
     native: u64,
     owned_geometry: OwnedGeometry,
+    /// Bumped by each in-place shape swap, so a reader that keeps derived
+    /// geometry by handle knows when it went stale.
+    shape_revision: u32,
 }
 
 struct FieldApplication {
@@ -576,6 +590,7 @@ impl PhysicsWorld {
         self.bodies.push(BodyRecord {
             native,
             owned_geometry: OwnedGeometry::Hulls(owned_hulls),
+            shape_revision: 0,
         });
         self.field_seen.push(false);
         self.field_scratch
@@ -670,6 +685,7 @@ impl PhysicsWorld {
         self.bodies.push(BodyRecord {
             native,
             owned_geometry: OwnedGeometry::Mesh(owned_mesh),
+            shape_revision: 0,
         });
         self.field_seen.push(false);
         self.field_scratch
@@ -940,9 +956,10 @@ impl PhysicsWorld {
         }
     }
 
-    /// Swap the collision hulls of a fixed body for `hulls`, leaving the body,
-    /// its pose and every other body in the world as they are. The new hulls
-    /// are cooked first, so on `Err` the body keeps its old shape.
+    /// Swap a body's collision hulls for `hulls`, leaving its pose, its
+    /// velocity and every other body in the world as they are; a moving body
+    /// takes `config.mass` over its new hulls. The new hulls are cooked first,
+    /// so on `Err` the body keeps its old shape.
     pub fn replace_hulls(
         &mut self,
         handle: BodyHandle,
@@ -950,9 +967,6 @@ impl PhysicsWorld {
         config: BodyConfig,
     ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
-        if config.kind != BodyKind::Fixed {
-            return Err(PhysicsError::InvalidInput("only a fixed body's hulls can be replaced"));
-        }
         if hulls.is_empty() {
             return Err(PhysicsError::InvalidInput("body needs at least one hull"));
         }
@@ -974,6 +988,7 @@ impl PhysicsWorld {
                 point_counts.as_ptr(),
                 hulls.len() as i32,
                 128,
+                config.mass,
                 config.friction,
                 config.restitution,
                 new_hulls.as_mut_ptr(),
@@ -983,12 +998,78 @@ impl PhysicsWorld {
             return Err(PhysicsError::NativeFailure);
         }
         let record = &mut self.bodies[handle.index as usize];
+        record.shape_revision = record.shape_revision.wrapping_add(1);
         if let OwnedGeometry::Hulls(old) = std::mem::replace(&mut record.owned_geometry, OwnedGeometry::Hulls(new_hulls)) {
             for hull in old {
                 unsafe { ffi::manifold_box3d_destroy_hull(hull) };
             }
         }
         native_set_wall(native, config.wall)
+    }
+
+    /// Swap a fixed mesh body's triangle mesh for `vertices` and `triangles`,
+    /// leaving its pose and every other body in the world as they are. The
+    /// new mesh is built first, so on `Err` the body keeps its old shape.
+    pub fn replace_triangle_mesh(
+        &mut self,
+        handle: BodyHandle,
+        vertices: &[[f32; 3]],
+        triangles: &[[u32; 3]],
+        config: BodyConfig,
+    ) -> Result<(), PhysicsError> {
+        let config = validate_config(config)?;
+        if config.kind != BodyKind::Fixed {
+            return Err(PhysicsError::InvalidInput("triangle meshes only support fixed bodies"));
+        }
+        if !matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Mesh(_)) {
+            return Err(PhysicsError::InvalidInput("only a mesh body can have its mesh replaced"));
+        }
+        for vertex in vertices {
+            validate_position(*vertex)?;
+        }
+        if vertices.len() > i32::MAX as usize || triangles.len() > i32::MAX as usize {
+            return Err(PhysicsError::InvalidInput("too many mesh vertices or triangles"));
+        }
+        let mut indices = Vec::with_capacity(triangles.len() * 3);
+        for triangle in triangles {
+            for &index in triangle {
+                if index as usize >= vertices.len() {
+                    return Err(PhysicsError::InvalidInput("mesh index is out of range"));
+                }
+                indices.push(i32::try_from(index).map_err(|_| PhysicsError::InvalidInput("mesh index is too large"))?);
+            }
+        }
+        let mut new_mesh = 0usize;
+        let native = self.native_body(handle)?;
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_replace_mesh(
+                native,
+                vertices.as_ptr().cast::<f32>(),
+                vertices.len() as i32,
+                indices.as_ptr(),
+                triangles.len() as i32,
+                config.friction,
+                config.restitution,
+                &mut new_mesh,
+            )
+        };
+        match result {
+            0 if new_mesh != 0 => {}
+            3 => return Err(PhysicsError::InvalidInput("Box3D discarded degenerate mesh triangles")),
+            _ => return Err(PhysicsError::NativeFailure),
+        }
+        let record = &mut self.bodies[handle.index as usize];
+        record.shape_revision = record.shape_revision.wrapping_add(1);
+        if let OwnedGeometry::Mesh(old) = std::mem::replace(&mut record.owned_geometry, OwnedGeometry::Mesh(new_mesh)) {
+            unsafe { ffi::manifold_box3d_destroy_mesh(old) };
+        }
+        native_set_wall(native, config.wall)
+    }
+
+    /// How many times `handle`'s shape has been swapped in place.
+    pub fn shape_revision(&self, handle: BodyHandle) -> Result<u32, PhysicsError> {
+        Ok(self.body_record(handle)?.shape_revision)
     }
 
     /// Enable or disable continuous collision detection for a dynamic body.
