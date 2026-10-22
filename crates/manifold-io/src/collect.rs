@@ -440,6 +440,8 @@ pub struct CollectReport {
     pub bytes_copied: u64,
     pub missing: usize,
     pub re_pointed: usize,
+    /// Each re-pointed ref: where it is stored, its old path, its new one.
+    pub moves: Vec<(AssetTarget, PathBuf, PathBuf)>,
 }
 
 #[derive(Debug)]
@@ -769,6 +771,20 @@ fn re_point(
 
     if changed {
         report.re_pointed += 1;
+        report.moves.push((target.clone(), old_path.to_path_buf(), new_path.to_path_buf()));
+    }
+}
+
+/// Apply a collect's re-points to another copy of the project saved at
+/// `project_path`: the content thread's, after the UI thread collected and
+/// saved its own copy, so a later save keeps the collected paths.
+pub fn re_point_moves(project: &mut Project, moves: &[(AssetTarget, PathBuf, PathBuf)], project_path: &Path) {
+    let Some(project_dir) = project_path.parent() else {
+        return;
+    };
+    let mut report = CollectReport::default();
+    for (target, old, new) in moves {
+        re_point(project, target, old, new, project_dir, &mut report);
     }
 }
 
@@ -1823,6 +1839,8 @@ mod tests {
             .clone();
 
         let project_path = proj_dir.join("MyShow.manifold");
+        // The content thread's copy of the same project.
+        let mut twin = project.clone();
         let report = collect_all_and_save(&mut project, &project_path).unwrap();
 
         // On-disk layout: one file per family (video, audio, meshes).
@@ -1843,6 +1861,10 @@ mod tests {
         };
         let collected = scene_files(&project);
         assert_eq!(collected.len(), 5, "{collected:?}");
+        // The twin takes the same re-points, so its next save keeps them.
+        re_point_moves(&mut twin, &report.moves, &project_path);
+        assert_eq!(scene_files(&twin), collected);
+        assert_eq!(twin.video_library.clips[0].file_path, project.video_library.clips[0].file_path);
         for file in &collected {
             assert!(std::path::Path::new(file).starts_with(&proj_dir), "a scene file still points outside the project: {file}");
             assert!(std::path::Path::new(file).is_file(), "{file}");

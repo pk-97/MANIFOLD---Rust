@@ -199,7 +199,10 @@ fn every_scene_edit_undoes_exactly() {
         let mut project = carded();
         // A row both types share starts at the new type's default on a swap.
         let shared = param_id(&id("peel"), "value");
-        assert!(project.timeline.layers[0].gen_params_mut().unwrap().set_base_param(&shared, 0.9));
+        let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+        assert!(fx.set_base_param(&shared, 0.9));
+        // First, so an undo that re-adds the cube's LFO keeps the order.
+        fx.drivers.get_or_insert_with(Vec::new).insert(0, ParameterDriver::new(shared.clone(), BeatDivision::Quarter, DriverWaveform::Sine));
         let before = state(&project);
         let mut undo = UndoRedoManager::new();
         assert!(undo.execute(edit, &mut project), "{name} applies");
@@ -213,6 +216,8 @@ fn every_scene_edit_undoes_exactly() {
                 assert_eq!(chain(&project), ["peel", "waves"], "a swap keeps the card's place");
                 assert!(peel.on && peel.targets == ModifierTargets::Items(vec![id(CUBE)]), "and its toggle and targets");
                 assert_eq!(scene(&project).get_base_param(&shared), 0.5, "its rows start at the new type's defaults");
+                let kept = scene(&project).drivers.iter().flatten().any(|d| d.param_id == shared);
+                assert!(kept, "a row both types share keeps its LFO");
             }
             "remove target" => assert_eq!(card(&project, "peel").targets, ModifierTargets::Items(Vec::new())),
             _ => {}

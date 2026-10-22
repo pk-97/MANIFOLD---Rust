@@ -594,8 +594,9 @@ impl SceneDoc {
         any
     }
 
-    /// Every model file the compile reads facts from: a Group's source, a
-    /// Mesh shape's file and a Material's model. Empty paths included.
+    /// Every file the compile reads facts from: a Group's source, a Mesh
+    /// shape's file, a Material's model and its picture file (for its size).
+    /// Empty paths included.
     pub fn model_files<'a>(&'a self, mut f: impl FnMut(&'a str)) {
         use super::{Shape, TextureSource};
         self.walk(|item, _| match &item.fields {
@@ -606,7 +607,7 @@ impl SceneDoc {
                 }
             }
             ItemFields::Material(material) => {
-                if let TextureSource::Model { file, .. } = &material.texture {
+                if let TextureSource::Model { file, .. } | TextureSource::File { path: file } = &material.texture {
                     f(file);
                 }
             }

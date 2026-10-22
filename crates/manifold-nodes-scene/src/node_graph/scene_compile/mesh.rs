@@ -33,6 +33,11 @@ fn capacity_for(vertex_count: u32) -> u32 {
     if rounded as u64 >= u64::from(exact) { rounded as u32 } else { rounded.next_up() as u32 }
 }
 
+/// The vertices of `parts` together.
+fn vertices_of(parts: &[FilePart]) -> u32 {
+    parts.iter().fold(0u32, |total, part| total.saturating_add(part.vertex_count))
+}
+
 /// The mesh node for `file`'s node `node_path` (the whole file when empty),
 /// sized for `vertex_count` vertices.
 pub(crate) fn emit_source(b: &mut Builder<'_>, owner: &str, file: &str, node_path: &str, vertex_count: u32) -> u32 {
@@ -93,6 +98,13 @@ fn emit_part_in(
     let owner = item.id.as_str();
     let model = model_file(b.doc, file);
     let facts = model.and_then(|model| model.nodes.get(node_path).map(|facts| (model, facts)));
+    // The file's own count, once its facts arrive, over the one the
+    // document recorded at import: a re-export to the same path may be
+    // bigger, and its buffer must hold it.
+    let vertex_count = facts.map_or(vertex_count, |(_, facts)| match primitives.material() {
+        Some(material) => facts.part(Some(material)).map_or(vertex_count, |part| part.vertex_count),
+        None => vertices_of(&facts.parts),
+    });
     // The glTF material the part's primitives use (`None` the default), when
     // one is known: the selection's, else the node's only material.
     let part = facts.and_then(|(_, facts)| facts.part(primitives.material()));
@@ -258,13 +270,17 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
     for child in &group.children {
         parts_below(child, &mut parts);
     }
-    let vertices = parts.iter().fold(0u32, |total, part| match &part.fields {
-        ItemFields::Object(object) => match object.shape {
-            Shape::Mesh { vertex_count, .. } => total.saturating_add(vertex_count),
+    // The whole file's count from its facts, else what the parts recorded.
+    let vertices = match model_file(b.doc, file) {
+        Some(model) => model.nodes.values().fold(0u32, |total, node| total.saturating_add(vertices_of(&node.parts))),
+        None => parts.iter().fold(0u32, |total, part| match &part.fields {
+            ItemFields::Object(object) => match object.shape {
+                Shape::Mesh { vertex_count, .. } => total.saturating_add(vertex_count),
+                _ => total,
+            },
             _ => total,
-        },
-        _ => total,
-    });
+        }),
+    };
     let owner = group.id.as_str();
     // Nothing draws the shape, so it loads only when a body or copies read it.
     let shape = emit_source(b, owner, file, "", vertices);

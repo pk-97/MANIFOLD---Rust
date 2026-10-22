@@ -30,9 +30,9 @@ pub enum FieldControl {
     /// One item reference, or none (`none` names the empty value).
     Item { items: fn(&Item) -> bool, none: &'static str },
     /// Any number of items, or everything (`all`). A pick toggles the item in
-    /// the set. `refused` gives why the item holding the row (its fields
-    /// first) cannot take a candidate: the choice is drawn disabled.
-    ItemSet { items: fn(&Item) -> bool, all: &'static str, refused: fn(&ItemFields, &Item) -> Option<&'static str> },
+    /// the set. `refused` gives why the item holding the row (second) cannot
+    /// take a candidate (third): the choice is drawn disabled.
+    ItemSet { items: fn(&Item) -> bool, all: &'static str, refused: fn(&SceneDoc, &Item, &Item) -> Option<&'static str> },
     /// A closed set, then every layer in the project.
     ClosedOrLayer(&'static [Choice]),
     /// A file picker.

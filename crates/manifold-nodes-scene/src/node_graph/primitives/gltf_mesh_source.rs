@@ -692,15 +692,19 @@ impl Primitive for GltfMeshSource {
         if !self.uploaded {
             let n = self.cached_verts.len();
             if n > capacity as usize {
-                // Drawing a cut-off mesh would silently drop triangles.
-                let reason = format!("mesh has {n} vertices but its buffer holds {capacity}");
-                log::error!("node.gltf_mesh_source: {reason}");
-                ctx.error(reason.clone());
-                self.load_error = Some(reason);
-                self.cached_verts = Vec::new();
+                // Drawing a cut-off mesh would silently drop triangles. The
+                // parsed mesh is kept: once the file's facts arrive, the
+                // recompile sizes the buffer from them and the mesh draws.
+                if self.load_error.is_none() {
+                    let reason = format!("mesh has {n} vertices but its buffer holds {capacity}");
+                    log::error!("node.gltf_mesh_source: {reason}");
+                    ctx.error(reason.clone());
+                    self.load_error = Some(reason);
+                }
                 ctx.mark_outputs_pending();
                 return;
             }
+            self.load_error = None;
             let bytes = &self.cached_verts[..n];
             let len_bytes = (n * std::mem::size_of::<MeshVertex>()) as u64;
             let device = ctx.gpu_encoder().device;

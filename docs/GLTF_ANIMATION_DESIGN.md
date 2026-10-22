@@ -482,7 +482,7 @@ hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable sc
 5. New ui-snapshot fixture `"gltfanimscene"` (`ui_snapshot/fixtures.rs`, sibling
    of `gltf_scene()`) importing `BoxAnimated.glb`, registered in `script.rs`/
    `mod.rs`'s scene allowlists. New L3 flow
-   `scripts/ui-flows/gltf-clip-scrub-retrigger.json`: resolve the Progress
+   `gltf-clip-scrub-retrigger.json` (deleted): resolve the Progress
    slider and Retrigger button by label on the card, drag/click, assert the
    card re-renders with the expected widget state.
 
@@ -497,7 +497,7 @@ hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable sc
 - Round-trip: the new params (Table with the clip_index column, Enum
   `loop_mode`, new inputs) survive V1 JSON save→reload — existing
   param-serialization path, proven not assumed.
-- L3: `cargo xtask ui-snap gltfanimscene --script scripts/ui-flows/gltf-clip-scrub-retrigger.json`
+- L3: `cargo xtask ui-snap gltfanimscene --script gltf-clip-scrub-retrigger.json` (deleted)
   (exit 0, all steps green) drives the real input path: asserts all four
   card knobs (Rate/Clip/Loop Mode/Retrigger) exist on `BoxAnimated.glb`'s
   imported card, drags the Rate slider's real widget — confirmed via stdout
@@ -541,4 +541,4 @@ Moved from the status header 2026-07-28.
 - **A1 (2026-07-16) — rigid TRS vertical slice:** `node.gltf_animation_source`, beat-drive default, saw-LFO loop gesture, four-phase goldens, save/reload round-trip. BUG-170 (gltf-crate-missing-field-node-parse-failure) logged (A1 filed it as BUG-187/BUG-200; deduped 2026-07-17 into BUG-170, the canonical five-asset entry) — blocks the `AnimatedColorsCube`-style `KHR_animation_pointer` held-out case.
 - **A2 (2026-07-16) — skinning vertical slice:** `node.gltf_skinned_mesh_source` + `node.gltf_skeleton_pose` + `node.skin_mesh`, codegen-path + parity test; CesiumMan/Fox deform correctly at 5–7 ms/frame. BUG-190 (brainstem-24-skinned-objects-370ms-per-frame) logged; `BrainStem.glb` is not a named gate fixture and did not block.
 - **A3 (2026-07-16) — morph targets:** `node.gltf_morph_weights` (CPU weight sampler) + `node.morph_targets_blend` (GPU codegen-path N-ary additive blend) + `node.gltf_morph_deltas_source` (background-thread delta loader, added mid-phase — vertex-scale delta data doesn't fit the import-time Table convention); `node.morph_mesh` untouched per its header's boundary. AnimatedMorphCube/MorphStressTest animate; parity + round-trip + hot-path gates green. Section 3 (Phasing)'s "through the morph_mesh shape" wording was superseded by the brief's re-derived N-ary additive-blend finding.
-- **A4 (2026-07-17) — performance surface:** D4 clip selector + Loop/Once/PingPong + retrigger-origin-shift, shared across all three CPU samplers via `gltf_anim_shared.rs` — a deliberate deviation from A1–A3's per-primitive duplication, justified by real cross-primitive sync coupling. `progress` stays wire-only; a real "Rate" card knob substitutes for a literal progress-scrub override per the A4 brief's Deviation note. Rate/Clip/Loop Mode/Retrigger knobs stamped on every animated object; L3 flow `gltf-clip-scrub-retrigger.json` green. BUG-192 (ui-automation-under-text-flat-card-rows) logged — `under_text` doesn't resolve against `param_card.rs`'s flat rows; worked around with `Widget`/`nth` targeting.
+- **A4 (2026-07-17) — performance surface:** D4 clip selector + Loop/Once/PingPong + retrigger-origin-shift, shared across all three CPU samplers via `gltf_anim_shared.rs` — a deliberate deviation from A1–A3's per-primitive duplication, justified by real cross-primitive sync coupling. `progress` stays wire-only; a real "Rate" card knob substitutes for a literal progress-scrub override per the A4 brief's Deviation note. Rate/Clip/Loop Mode/Retrigger knobs stamped on every animated object; L3 flow `gltf-clip-scrub-retrigger.json` (deleted) green. BUG-192 (ui-automation-under-text-flat-card-rows) logged — `under_text` doesn't resolve against `param_card.rs`'s flat rows; worked around with `Widget`/`nth` targeting.

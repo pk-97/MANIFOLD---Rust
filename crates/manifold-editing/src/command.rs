@@ -172,6 +172,11 @@ impl CompositeCommand {
         }
     }
 
+    /// The commands, to run again on another copy of the project.
+    pub fn into_commands(self) -> Vec<Box<dyn Command>> {
+        self.commands
+    }
+
     /// The end of the run of scene document commands on one layer that
     /// starts at `start`; `start + 1` when none starts there.
     fn scene_run_end(&mut self, start: usize) -> usize {

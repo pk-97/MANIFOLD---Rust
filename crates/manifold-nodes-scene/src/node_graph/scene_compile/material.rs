@@ -69,9 +69,10 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         TextureSource::File { path } => {
             let texture = b.add(owner, "texture", "node.gltf_texture_source");
             b.set(texture, "path", SerializedParamValue::String { value: path.clone() });
-            // The file's own size, from its header (8192 is the param's
-            // range limit); an unreadable file keeps the default.
-            if let Some((w, h)) = crate::node_graph::gltf_load::picture_file_dims(std::path::Path::new(path)) {
+            // The file's own size, read from its header on the worker
+            // (8192 is the param's range limit); until it arrives, or for an
+            // unreadable file, the default.
+            if let Some((w, h)) = crate::node_graph::gltf_import::model_file::picture_size(b.doc, path) {
                 b.set(texture, "width", SerializedParamValue::Int { value: w.clamp(1, 8192) as i32 });
                 b.set(texture, "height", SerializedParamValue::Int { value: h.clamp(1, 8192) as i32 });
             }
@@ -134,6 +135,9 @@ mod tests {
         let material = doc.find_mut(&ItemId::new(BASE_CUBE_MATERIAL)).unwrap();
         let ItemFields::Material(m) = &mut material.fields else { panic!("not a material") };
         m.texture = TextureSource::File { path: path.to_string_lossy().into_owned() };
+        // The size arrives as the file's facts, read on the worker.
+        let (facts, _) = crate::node_graph::gltf_import::read_file_facts(&path).unwrap();
+        doc.models.insert(path.to_string_lossy().into_owned(), facts);
         let def = crate::node_graph::scene_compile::compile(&doc).unwrap();
         let source = def.nodes.iter().find(|n| n.type_id == "node.gltf_texture_source").expect("a texture source");
         let size = |name: &str| match source.params.get(name) {

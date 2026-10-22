@@ -293,7 +293,7 @@ fn part(
 }
 
 pub(crate) mod model_file;
-pub use model_file::read_facts;
+pub use model_file::{read_facts, read_file_facts};
 
 #[cfg(test)]
 mod tests;

@@ -203,7 +203,7 @@ Metadata supplies all card controls; remove hardcoded photoscan row whitelists a
 
 **Gesture:** duplicate Elastic Sculpture, map one Phase to an LFO, then reorder and remove the other card; the first mapping stays live. Reopen the project and change the mapped range. Use a playing photoscan clip so the same flow observes both controls and changing geometry.
 
-**Gate:** `cargo test -p manifold-app scene_modifier_surface`; focused app/UI clippy. Deliver `scripts/ui-flows/scene-modifier-preset.json`, using current semantic action assertions. Build `manifold-app` with `ui-snapshot`, then run `target/debug/manifold ui-snap gltfscene --script scripts/ui-flows/scene-modifier-preset.json`; extend the fixture with a playing clip and recheck its selection at execution. A8 counts rebuilds while a parameter gesture runs; expects zero structural rebuilds and zero pipeline compiles. **Demo:** flow capture — target L3. **Forbidden:** title-based ownership, hardcoded Loop/Fog rows, writing model fields from UI.
+**Gate:** `cargo test -p manifold-app scene_modifier_surface`; focused app/UI clippy. Deliver `scene-modifier-preset.json` (deleted), using current semantic action assertions. Build `manifold-app` with `ui-snapshot`, then run `target/debug/manifold ui-snap gltfscene --script scene-modifier-preset.json` (deleted); extend the fixture with a playing clip and recheck its selection at execution. A8 counts rebuilds while a parameter gesture runs; expects zero structural rebuilds and zero pipeline compiles. **Demo:** flow capture — target L3. **Forbidden:** title-based ownership, hardcoded Loop/Fog rows, writing model fields from UI.
 
 ## 9. F6 — all stock files and old runtime deletion
 
