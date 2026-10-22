@@ -640,7 +640,7 @@ Files: in `scene_doc.rs`, the Modifier kind and its fields and the per-object li
 15. Promise 1's test covers adding, reordering and swapping a card.
 16. Surface Peel works on a Cube, a Sphere, a Plane, an imported part, a Group and the whole scene (one look in the app each).
 
-**L7 (Sonnet; BUG-elwvu.7): Water and Water Source.**
+**L7 (Opus; BUG-elwvu.7): Water and Water Source.**
 Files: `manifold-nodes-water/`, `scene_compile/water.rs` and `water_source.rs`, `scene_schema/water.rs` and `water_source.rs`, `manifold-water-rigid/` (water coupling), the Physics View menu entry. Joins: colliders through L4's `CollisionShape`; L9 writes item ids in the water passes.
 1. Add → Water adds a domain; Add inside a Water adds a Water Source.
 2. The Water card has the rows of section 8; solver internals are automatic in the table.
