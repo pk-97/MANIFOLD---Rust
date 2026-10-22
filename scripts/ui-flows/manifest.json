@@ -94,6 +94,10 @@
       "scene-setup-empty-states",
       "scene-forces-controls"
     ],
+    "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
+      "scene-forces-controls",
+      "scene-header-draw-modes"
+    ],
     "crates/manifold-app/src/ui_bridge/projection/scene_card.rs": [
       "scene-card-new-empty",
       "scene-naming"
