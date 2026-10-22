@@ -16,8 +16,6 @@ mod outliner;
 pub use outliner::SceneGroup;
 #[path = "scene_setup_panel/item_header.rs"]
 mod item_header;
-#[path = "scene_setup_panel/copies.rs"]
-mod copies;
 #[path = "scene_setup_panel/keyboard.rs"]
 mod keyboard;
 pub use keyboard::SceneItemAddress;
@@ -523,7 +521,6 @@ pub struct ScenePanel {
     /// The groups the tree drew this frame, in order.
     tree_groups: Vec<SceneGroup>,
     header_buttons: item_header::HeaderButtons,
-    make_copies: copies::MakeCopies,
     /// P5 (D7): the outliner selection, per layer — UI-local workspace
     /// state, like fold state, NEVER serialized. Missing entry = the
     /// default (first object, else World) — resolved by
@@ -702,7 +699,6 @@ impl Default for ScenePanel {
             physics_enable_id: None,
             tree_groups: Vec::new(),
             header_buttons: Default::default(),
-            make_copies: Default::default(),
             selection: std::collections::HashMap::new(),
             selected: std::collections::HashMap::new(),
             selection_version: 0,
@@ -981,7 +977,6 @@ impl ScenePanel {
         self.physics_enable_id = None;
         self.tree_groups.clear();
         self.header_buttons.clear();
-        self.make_copies.clear();
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
@@ -1571,9 +1566,6 @@ impl ScenePanel {
                     return (true, actions);
                 }
                 if let Some(actions) = self.force_card_click(*node_id, tree) {
-                    return (true, actions);
-                }
-                if let Some(actions) = self.make_copies_click(*node_id) {
                     return (true, actions);
                 }
                 // D7: an outliner row click sets the UI-local selection —

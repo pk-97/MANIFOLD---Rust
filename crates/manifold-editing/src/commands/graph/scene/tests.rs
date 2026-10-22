@@ -18,7 +18,6 @@ use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate, insert_scene_te
 mod addressing;
 mod clip_string_overrides;
 mod force_targets;
-mod make_copies;
 mod rigid_boundary;
 
 /// A single `node.render_scene` node (id 0) with `objects`/`lights` set to

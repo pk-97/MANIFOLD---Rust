@@ -7,12 +7,15 @@ use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, ItemFields};
 
 use super::builder::Builder;
+use super::copies;
 
-/// What an item inside a group reads from it: the group's transform node and
-/// the node whose `out` is its visibility, both outputs.
+/// What an item inside a group reads from it: the transform node it sits in
+/// (none under a group whose copies place it), the node whose `out` is its
+/// visibility, and the copies body whose instances draw it.
 pub(crate) struct Frame {
-    pub transform: u32,
+    pub transform: Option<u32>,
     pub visible: u32,
+    pub copies: Option<u32>,
 }
 
 /// `node.math`'s Multiply.
@@ -44,7 +47,9 @@ fn emit(b: &mut Builder<'_>, item: &Item, outer: Option<&Frame>) -> Frame {
     let visible = match outer {
         None => own_visible,
         Some(outer) => {
-            b.wire(outer.transform, "transform", transform, "parent");
+            if let Some(parent) = outer.transform {
+                b.wire(parent, "transform", transform, "parent");
+            }
             let chain = b.add(owner, "visible_chain", "node.math");
             b.set(chain, "op", SerializedParamValue::Enum { value: MULTIPLY });
             b.wire(own_visible, "out", chain, "a");
@@ -52,6 +57,14 @@ fn emit(b: &mut Builder<'_>, item: &Item, outer: Option<&Frame>) -> Frame {
             chain
         }
     };
+    // A group with Copies on is placed by its copies: the instances carry its
+    // transform, so what is inside sits in the group's own outer frame.
+    let copies = match &item.fields {
+        ItemFields::Group(group) if group.copies && outer.is_none_or(|outer| outer.copies.is_none()) => {
+            Some(copies::emit_group(b, item, transform, group.physics))
+        }
+        _ => None,
+    };
     b.rows(item);
-    Frame { transform, visible }
+    Frame { transform: if copies.is_some() { outer.and_then(|outer| outer.transform) } else { Some(transform) }, visible, copies }
 }

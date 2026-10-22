@@ -496,24 +496,8 @@ pub fn sync_inspector_data(
                                                     None => (false, None),
                                                 }
                                             };
-                                        // Make Copies, on the rows the model says can take it, and
-                                        // the reason on a compound import's parent row.
-                                        let copies_check = (known.copy_group().is_none()
-                                            && known.kind != manifold_core::scene_surface::SceneObjectRowKind::LookChild
-                                            && known.liquid_domain.is_none()
-                                            && (known.capabilities.make_copies || (*is_group && known.parent.is_none())))
-                                            .then(|| def.as_ref().map(|def| {
-                                                manifold_editing::commands::graph::make_copies_eligibility(
-                                                    def,
-                                                    manifold_core::scene_slots::SceneSlot { render_id: vm.scene_root_node_id, index: known.index as u32 },
-                                                )
-                                            }))
-                                            .flatten();
-                                        let (copies_available, copies_unavailable_reason) = match copies_check {
-                                            Some(Ok(())) => (true, None),
-                                            Some(Err(reason)) => (false, Some(reason)),
-                                            None => (false, None),
-                                        };
+                                        // Make Copies is gone: Copies is a section on the item.
+                                        let (copies_available, copies_unavailable_reason): (bool, Option<String>) = (false, None);
                                         let owned = super::scene::owned_nodes(
                                             &items, &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Object(known.object.clone()),
                                         ).to_vec();

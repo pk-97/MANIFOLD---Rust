@@ -8,12 +8,14 @@
 
 mod commands;
 mod group;
+mod modifiers;
 
 pub use commands::{
     AddSceneItemCommand, RemoveSceneItemCommand, RenameSceneItemCommand, ReparentSceneItemCommand,
     SetSceneItemFieldsCommand,
 };
 pub use group::{group_commands, ungroup_commands};
+pub use modifiers::{add_modifier, move_modifier, remove_modifier};
 
 #[cfg(test)]
 mod tests;

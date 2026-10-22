@@ -803,13 +803,6 @@ pub(super) fn dispatch_project(
             }));
             DispatchResult::handled()
         }
-        ProjectAction::SceneSetupMakeCopies(layer_id, object) => {
-            // Built on the content thread, like Duplicate.
-            ContentCommand::send(content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::MakeCopies {
-                layer: layer_id.clone(), object: object.clone(),
-            }));
-            DispatchResult::handled()
-        }
         ProjectAction::SceneSetupDuplicateSubmesh(layer_id, part) => {
             if let Some(mut default) = generator_catalog_default(project, layer_id) {
                 manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
@@ -1321,7 +1314,6 @@ mod tests {
     use manifold_core::effect_graph_def::SerializedParamValue;
     use manifold_editing::command::Command;
     use manifold_core::types::LayerType;
-    mod copy_group;
     mod swarm_add;
     mod water_family;
     mod water_family_actions;

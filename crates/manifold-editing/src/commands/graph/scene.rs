@@ -27,7 +27,6 @@ mod clone_values;
 mod copy;
 mod duplicate;
 mod fluid;
-mod make_copies;
 mod physics;
 mod physics_match;
 
@@ -42,7 +41,6 @@ mod fluid_object_lifecycle_tests;
 pub use fluid::*;
 pub use copy::{copy_scene_item_wires, WireCopy};
 pub use duplicate::DuplicateSceneObjectCommand;
-pub use make_copies::{MakeCopyGroupCommand, make_copies_edit, make_copies_eligibility};
 pub use manifold_core::physics_body_slots::{BodySlots, WorldBodySlots};
 use manifold_core::copies_body::copy_group_of_input;
 use manifold_core::physics_body_slots::fit_world_bodies;

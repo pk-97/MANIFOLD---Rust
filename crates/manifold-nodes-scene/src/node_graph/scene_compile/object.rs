@@ -4,8 +4,10 @@
 
 use manifold_core::effect_graph_def::{EffectGraphWire, SerializedParamValue};
 use manifold_core::scene_doc::{Item, ItemFields, Shape};
+use manifold_core::scene_schema::can_copy;
 
 use super::builder::Builder;
+use super::copies;
 use super::group::Frame;
 use super::material::surface_for;
 use crate::node_graph::scene_graph::wire;
@@ -51,15 +53,29 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let transform = b.add(owner, "transform", "node.transform_3d");
     let object = b.add(owner, "object", "node.scene_object");
     let (surface, texture) = surface_for(b, &item.id);
+    // The enclosing group's copies draw this object; otherwise its own. A
+    // copied object takes its pose from each instance, not from a transform.
+    let group_copies = frame.and_then(|frame| frame.copies);
+    let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
     for w in object_wires(mesh, surface, transform, object) {
+        if (own_copies || group_copies.is_some()) && w.to_port == "transform" {
+            continue;
+        }
         b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
     }
     if let Some(texture) = texture {
         b.wire(texture, "out", object, "base_color_map");
     }
     if let Some(frame) = frame {
-        b.wire(frame.transform, "transform", object, "parent_transform");
+        if let Some(parent) = frame.transform {
+            b.wire(parent, "transform", object, "parent_transform");
+        }
         b.wire(frame.visible, "out", object, "parent_visible");
+    }
+    if own_copies {
+        copies::emit_object(b, item, mesh, transform, object, fields.physics);
+    } else if let Some(body) = group_copies {
+        copies::draw_instances(b, body, object, true);
     }
     b.objects.push(object);
     b.rows(item);

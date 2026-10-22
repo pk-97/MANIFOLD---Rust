@@ -1188,9 +1188,9 @@ impl ContentThread {
                             ));
                         match renderers.iter_mut().find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()) {
                             Some(renderer) => {
-                                if let Err(message) = renderer.fire_scene_impulse_between_frames(layer, param_id.as_ref(), source, project_tempo.as_ref(), pending_target, tempo_shift) {
-                                    log::warn!("{message}");
-                                }
+                                // A refused hit is already in the renderer's impulse
+                                // diagnostics with its reason, which the stage toasts.
+                                let _refusal_is_toasted = renderer.fire_scene_impulse_between_frames(layer, param_id.as_ref(), source, project_tempo.as_ref(), pending_target, tempo_shift);
                             }
                             None => unavailable = true,
                         }

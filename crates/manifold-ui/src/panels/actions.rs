@@ -277,8 +277,6 @@ pub enum ProjectAction {
     /// Copy an object N times in one undo step (the header copy button sends
     /// one): `(layer_id, object, copies)`.
     SceneSetupDuplicateObject(LayerId, SceneNodeRef),
-    /// The object card's Make Copies: the object becomes a copy group.
-    SceneSetupMakeCopies(LayerId, SceneNodeRef),
     /// Duplicate one physical child mesh inside a compound scene object:
     /// `(layer_id, part)`.
     SceneSetupDuplicateSubmesh(LayerId, SceneNodeRef),

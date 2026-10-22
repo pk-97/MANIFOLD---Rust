@@ -1,5 +1,4 @@
 use manifold_nodes as _;
-mod copy_group;
 mod generator_provider;
 mod liquid_conformance;
 mod physics_solids;

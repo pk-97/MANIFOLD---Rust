@@ -184,13 +184,6 @@ pub(crate) enum SceneItemAction {
         layer: LayerId,
         object: SceneNodeRef,
     },
-    /// The object becomes a copy group (copy_group_design.md section 5):
-    /// physics on, its body a copy-group prototype in the Physics World, one
-    /// undo step.
-    MakeCopies {
-        layer: LayerId,
-        object: SceneNodeRef,
-    },
     DuplicateLight {
         layer: LayerId,
         light: SceneNodeRef,
@@ -217,7 +210,7 @@ impl SceneItemAction {
             Self::Paste { layer, clipboard, .. } => (layer, clipboard.kind),
             Self::DuplicateObject { layer, .. } => (layer, SceneItemKind::Object),
             Self::DuplicateLight { layer, .. } => (layer, SceneItemKind::Light),
-            Self::Move { .. } | Self::SetPhysics { .. } | Self::MakeCopies { .. } => return None,
+            Self::Move { .. } | Self::SetPhysics { .. } => return None,
         };
         Some(match kind {
             SceneItemKind::Object => crate::edit_selection::SelectAfterEdit::NewObject(layer.clone()),
@@ -601,29 +594,6 @@ fn set_physics(project: &Project, layer: &LayerId, object: &SceneNodeRef, enable
     }
 }
 
-/// Make Copies: the object becomes a copy group. The card rows it stamps are
-/// the copies body's spawner controls.
-fn make_copies(project: &Project, layer: &LayerId, object: &SceneNodeRef) -> Result<Box<dyn Command>, String> {
-    use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
-    let mut default = crate::ui_bridge::project::generator_catalog_default(project, layer).ok_or("Scene is unavailable")?;
-    migrate_scene_exposures(&mut default);
-    let copies: Vec<_> = manifold_core::param_lookup::stamped_params_for("node.rigid_body", true)
-        .into_iter()
-        .filter(|meta| manifold_core::copies_body::is_copies_body_param("node.rigid_body", &meta.name))
-        .collect();
-    manifold_editing::commands::graph::MakeCopyGroupCommand::new(
-        project,
-        GraphTarget::Generator(layer.clone()),
-        object.clone(),
-        &metadata_for_node_type("node.rigid_body"),
-        &metadata_for_node_type("node.physics_world"),
-        &copies,
-        &default,
-    )
-    .map(|command| Box::new(command) as Box<dyn Command>)
-    .map_err(|error| error.message)
-}
-
 /// Attach a copy of each force the copied item owns, aimed at the copy alone
 /// in the scene with doc id `scene`. Each copy's rows take the source rows'
 /// presentation, and `remaps` gains them so their values and routes follow.
@@ -717,7 +687,6 @@ pub(crate) fn build_action(
             Ok(Box::new(command))
         }
         SceneItemAction::SetPhysics { layer, object, enabled } => set_physics(project, &layer, &object, enabled),
-        SceneItemAction::MakeCopies { layer, object } => make_copies(project, &layer, &object),
         SceneItemAction::DuplicateLight { layer, light } => {
             let clipboard = SceneItemClipboard::capture(project, &layer, SceneItemKind::Light, &light)?;
             let target = GraphTarget::Generator(layer.clone());

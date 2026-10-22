@@ -4,13 +4,17 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire,
     ParamSpecDef, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::scene_doc::{Item, SceneDoc, param_id};
 use manifold_core::scene_exposure::NodeParamMetadata;
+use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 use manifold_core::scene_schema::{self, CardFacts, Exposure, PropertyRow, Reach};
 use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
+
+use manifold_node_engine::load::expand::resolve_modifier_mesh_frames;
 
 use crate::node_graph::scene_graph::{plain_node, wire};
 
@@ -34,6 +38,10 @@ pub(crate) struct Builder<'d> {
     pub(crate) lights: Vec<u32>,
     /// Whether the camera emitter wired the render's output chain.
     pub(crate) output_wired: bool,
+    /// The copies bodies, in copy-group order.
+    pub(crate) copy_bodies: Vec<u32>,
+    /// The scene modifiers (forces, mesh modifiers), in application order.
+    modifiers: Vec<SceneModifierInstanceDef>,
 }
 
 impl<'d> Builder<'d> {
@@ -51,6 +59,8 @@ impl<'d> Builder<'d> {
             objects: Vec::new(),
             lights: Vec::new(),
             output_wired: false,
+            copy_bodies: Vec::new(),
+            modifiers: Vec::new(),
         };
         b.add(SCENE, "input", "system.generator_input");
         b.add(SCENE, "render", "node.render_scene");
@@ -165,6 +175,8 @@ impl<'d> Builder<'d> {
                 Reach::Own(role) => self.id(item.id.as_str(), role).into_iter().collect(),
                 Reach::Scene(role) => self.id(SCENE, role).into_iter().collect(),
                 Reach::EveryCameraLens => self.lenses.clone(),
+                // A scene modifier's params are declared with the modifier.
+                Reach::Modifier => Vec::new(),
             };
             if targets.is_empty() {
                 continue;
@@ -235,7 +247,7 @@ impl<'d> Builder<'d> {
             let output = self.scene("output");
             self.wire(render, "color", output, "in");
         }
-        let def = EffectGraphDef {
+        let mut def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION_WITH_METADATA,
             name: Some("Scene".into()),
             description: None,
@@ -244,7 +256,35 @@ impl<'d> Builder<'d> {
             nodes: self.nodes,
             wires: self.wires,
         };
+        if !self.modifiers.is_empty() {
+            def.version = EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS;
+            // A recipe that reads the source mesh's placement captures it
+            // once, from the scene it is attached to.
+            for modifier in &mut self.modifiers {
+                modifier.mesh_frames = resolve_modifier_mesh_frames(&def, modifier)
+                    .map_err(|error| format!("{}: {error}", modifier.id))?;
+            }
+            def.scene_modifiers = self.modifiers;
+        }
         Ok(def)
+    }
+
+    /// How many scene modifiers are attached so far.
+    pub(crate) fn modifier_count(&self) -> usize {
+        self.modifiers.len()
+    }
+
+    /// Attach a scene modifier instance with the host params and bindings
+    /// that drive its recipe's params.
+    pub(crate) fn push_modifier(
+        &mut self,
+        instance: SceneModifierInstanceDef,
+        params: Vec<ParamSpecDef>,
+        bindings: Vec<BindingDef>,
+    ) {
+        self.modifiers.push(instance);
+        self.params.extend(params);
+        self.bindings.extend(bindings);
     }
 }
 
