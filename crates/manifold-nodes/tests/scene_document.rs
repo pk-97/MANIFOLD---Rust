@@ -189,10 +189,21 @@ mod every_param_has_a_row {
     fn doc_with_every_kind() -> SceneDoc {
         let mut doc = SceneDoc::base();
         for (k, entry) in ADD_ENTRIES.iter().enumerate() {
-            let item = Item::new(ItemId::new(format!("added{k}")), entry.name, (entry.fields)());
+            // The model file entry imports a file; the Object it makes is below.
+            let Some(fields) = entry.fields else { continue };
+            let item = Item::new(ItemId::new(format!("added{k}")), entry.name, fields());
             let at = doc.items.len();
             doc.insert(None, at, item).unwrap();
         }
+        let mesh = manifold_core::scene_doc::Shape::Mesh {
+            file: String::new(),
+            node_path: String::new(),
+            vertex_count: 0,
+            primitives: Default::default(),
+        };
+        let fields = manifold_core::scene_doc::ObjectFields { shape: mesh, ..Default::default() };
+        let at = doc.items.len();
+        doc.insert(None, at, Item::new(ItemId::new("mesh"), "Mesh", manifold_core::scene_doc::ItemFields::Object(fields))).unwrap();
         doc
     }
 

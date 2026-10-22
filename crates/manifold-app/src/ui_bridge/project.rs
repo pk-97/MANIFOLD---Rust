@@ -238,7 +238,15 @@ pub(super) fn dispatch_project(
 
         // ── The Scene tab (SCENE_DOCUMENT_DESIGN.md section 8): every edit is
         // built here from the document and sent as one undo step.
+        // An entry with no fields is "Mesh from file": the native picker, then
+        // the same import a drop runs, into this layer.
         ProjectAction::SceneAdd { layer_id, entry, parent } => {
+            if manifold_core::scene_schema::add_entry(entry).is_some_and(|found| found.fields.is_none()) {
+                let Some(path) = crate::file_dialogs::pick_file(crate::file_dialogs::DialogAction::ImportModel, dialogs, user_prefs) else {
+                    return DispatchResult::handled();
+                };
+                return DispatchResult { import_model: Some((path, layer_id.clone())), ..DispatchResult::handled() };
+            }
             let built = crate::scene_edit::add(project, layer_id, entry, parent.as_ref()).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
@@ -268,6 +276,10 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SceneModifierEdit { layer_id, item, key, to } => {
             let built = crate::scene_edit::modifier_edit(project, layer_id, item, key, *to).map(Some);
+            send_scene_edit(content_tx, layer_id, built)
+        }
+        ProjectAction::SceneMaterialLook { layer_id, material, look } => {
+            let built = crate::scene_edit::material_look(project, layer_id, material, *look);
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneMakeMaterialUnique(layer_id, owner) => {
@@ -427,27 +439,6 @@ pub(super) fn dispatch_project(
                     ),
                 ),
             );
-            DispatchResult::handled()
-        }
-        // "Import Model…": a native file dialog picks a `.glb`/`.gltf`, which
-        // joins the scene as a Group of its parts, one undo step. A file that
-        // cannot be read toasts.
-        ProjectAction::SceneSetupImportModelClicked(layer_id) => {
-            let Some(path) = crate::file_dialogs::pick_file(
-                crate::file_dialogs::DialogAction::ImportModel,
-                dialogs,
-                user_prefs,
-            ) else {
-                return DispatchResult::handled();
-            };
-            match crate::scene_import::add_model_commands(layer_id, &path) {
-                Ok(commands) => project.execute_batch(commands, "Import 3D Model".to_string()),
-                Err(e) => {
-                    log::warn!("[Scene Setup] Import Model… failed for {}: {e}", path.display());
-                    let name = path.file_name().map_or_else(|| "model".into(), |n| n.to_string_lossy().into_owned());
-                    ui.toast.show_with_accent(format!("Couldn't import {name}: {e}"), manifold_ui::color::RED_BASE);
-                }
-            }
             DispatchResult::handled()
         }
         // Model File swap on an imported Group or Object: the picked file

@@ -224,8 +224,12 @@ pub enum ProjectAction {
     /// Remove an Object's mesh modifier `key` (`to` is `None`) or move it to
     /// `to` in its list.
     SceneModifierEdit { layer_id: LayerId, item: ItemId, key: String, to: Option<usize> },
-    /// Give an item a copy of the Material it draws with, for it alone.
+    /// Give an item a Material for it alone: a copy of the one it draws with
+    /// (Make Unique), or a new one when it draws with none (New Material).
     SceneMakeMaterialUnique(LayerId, ItemId),
+    /// Apply a starting look to a Material: its features and factors, one
+    /// undo step.
+    SceneMaterialLook { layer_id: LayerId, material: ItemId, look: crate::param_surface::MaterialLook },
     /// "Aim Sun at HDRI": turn the scene's Sun toward the brightest region of
     /// the HDRI file at the given path. `(layer_id, hdri_file)`.
     SceneSetupAimSunAtHdri(LayerId, String),
@@ -233,10 +237,6 @@ pub enum ProjectAction {
     SceneNew(LayerId),
     /// "Frame" in an item's header: point the camera at the item.
     SceneSetupFrameSelected(LayerId, ItemId),
-    /// "Import Model…" in the Add menu: opens the native file dialog and, on a
-    /// picked `.glb`/`.gltf`, adds it to this layer's scene as a Group of its
-    /// parts, one undo step.
-    SceneSetupImportModelClicked(LayerId),
     /// A Model File swap on an imported Group or Object: `(layer_id, item)`.
     /// Opens the native file dialog and, on a picked `.glb`/`.gltf`, points the
     /// item at it: parts whose file node path survives keep their edits, the

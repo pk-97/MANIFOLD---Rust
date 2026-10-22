@@ -328,12 +328,14 @@ impl ScenePanel {
                 for row in i..run_end {
                     cy = self.build_properties_block(tree, inner_x, cy, row, label_width, slider_w, target.clone());
                 }
-                // The Material's summary closes the Material section's fields.
-                if let Some(material) = item.material.as_ref()
-                    && !slots[i].material
+                // The Material's summary closes the Material section's fields:
+                // on an Object or Group with no Material too, which gets New
+                // Material there.
+                if !slots[i].material
                     && slots[i].group == ControlGroup::Material
+                    && (item.material.is_some() || matches!(item.kind, ItemKind::Object | ItemKind::Group))
                 {
-                    cy = self.build_material_summary(tree, (inner_x, inner_w), cy, item, material);
+                    cy = self.build_material_summary(tree, (inner_x, inner_w), cy, item, item.material.as_ref(), (label_width, slider_w));
                 }
             }
             // "+ Add feature" closes the last of the Material's sections.

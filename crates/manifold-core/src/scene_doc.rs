@@ -15,7 +15,7 @@ mod base;
 mod import;
 mod tree;
 
-
+pub use base::{BASE_CUBE, BASE_CUBE_MATERIAL};
 pub use manifold_foundation::id::ItemId;
 pub use import::{
     ImportPlacement, ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, camera_item, import_child_id,
@@ -242,6 +242,7 @@ impl ObjectFields {
 pub enum Shape {
     #[default]
     Cube,
+    Sphere,
     Plane,
     Tetrahedron,
     Octahedron,

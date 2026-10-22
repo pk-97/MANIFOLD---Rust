@@ -5,20 +5,20 @@
 
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{ItemFields, ItemId, ItemKind, LightType, MaterialFields, FeatureSetting, CameraRig, SceneDoc, param_id};
+use manifold_core::scene_doc::{CameraRig, FeatureSetting, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, SceneDoc, Shape, TextureSource, param_id};
 use manifold_core::scene_schema::{self, FieldControl, FieldValue, add_entry, field_for, unique_name};
 use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::effects::ChangeGraphParamCommand;
 use manifold_editing::commands::scene_doc::{
     AddSceneItemCommand, RemoveSceneItemCommand, RenameSceneItemCommand, ReparentSceneItemCommand, SetSceneItemFieldsCommand,
-    group_commands,
+    add_object_commands, group_commands, new_material, own_material_commands,
     move_modifier,
     remove_modifier,
     ungroup_commands,
 };
 use manifold_core::scene_surface::FieldPick;
-use manifold_ui::param_surface::MaterialFeature as UiFeature;
+use manifold_ui::param_surface::{MaterialFeature as UiFeature, MaterialLook as UiLook};
 
 /// A built edit: the command and the item the selection should move to.
 pub(crate) struct SceneEdit {
@@ -59,16 +59,32 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
     let parent = parent.and_then(|id| doc.find(id)).filter(|p| manifold_core::scene_doc::can_hold(Some(p.kind()), entry.kind));
     let index = parent.map_or(doc.items.len(), |p| p.children.len());
     let parent = parent.map(|p| p.id.clone());
-    let mut names = Vec::new();
-    doc.walk(|item, _| names.push(item.name.as_str()));
+    let fields = entry.fields.ok_or_else(|| format!("{} opens the file picker", entry.label))?;
+    let names = names(doc);
     let name = unique_name(entry.name, &names);
     let id = new_id();
-    let commands: Vec<Box<dyn Command>> = vec![
-        Box::new(AddSceneItemCommand::new(layer.clone(), entry.kind, parent, index, None, id.clone())),
-        Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id.clone(), (entry.fields)())),
-        Box::new(RenameSceneItemCommand::new(layer.clone(), id.clone(), name)),
-    ];
+    // An Object comes with its own Material, so its colour is on its card
+    // at once.
+    let commands: Vec<Box<dyn Command>> = if entry.kind == ItemKind::Object {
+        let material = new_material(new_id(), unique_name(MATERIAL_NAME, &names));
+        add_object_commands(layer, parent, index, Item::new(id.clone(), name, fields()), material)
+    } else {
+        vec![
+            Box::new(AddSceneItemCommand::new(layer.clone(), entry.kind, parent, index, None, id.clone())),
+            Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id.clone(), fields())),
+            Box::new(RenameSceneItemCommand::new(layer.clone(), id.clone(), name)),
+        ]
+    };
     Ok(batch(commands, &format!("Add {}", entry.label), Some(id)))
+}
+
+/// What a new Material is called, numbered when taken.
+const MATERIAL_NAME: &str = "Material";
+
+fn names(doc: &SceneDoc) -> Vec<&str> {
+    let mut names = Vec::new();
+    doc.walk(|item, _| names.push(item.name.as_str()));
+    names
 }
 
 pub(crate) fn remove(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
@@ -142,10 +158,53 @@ pub(crate) fn set_field(project: &Project, layer: &LayerId, item: &ItemId, field
     if fields == found.fields {
         return Ok(None);
     }
+    if let (ItemFields::Object(old), ItemFields::Object(new)) = (&found.fields, &fields)
+        && old.shape != new.shape
+    {
+        return Ok(Some(batch(shape_change(layer, doc, found, &old.shape, fields.clone()), "Set Shape", None)));
+    }
     Ok(Some(SceneEdit { command: Box::new(SetSceneItemFieldsCommand::new(layer.clone(), item.clone(), fields)), select: None }))
 }
 
-fn core_feature(feature: UiFeature) -> manifold_core::material_inspector::MaterialFeature {
+/// A Shape change, one undo step: the new Shape; a default name follows it
+/// (Cube becomes Sphere), a name the user gave stays; and an imported
+/// object that takes a built-in drops its file, so the Material it alone
+/// draws with stops reading the file's maps.
+fn shape_change(layer: &LayerId, doc: &SceneDoc, object: &Item, old: &Shape, fields: ItemFields) -> Vec<Box<dyn Command>> {
+    let mut commands: Vec<Box<dyn Command>> = Vec::new();
+    if let (Shape::Mesh { .. }, ItemFields::Object(new)) = (old, &fields)
+        && !matches!(new.shape, Shape::Mesh { .. })
+        && let Some(material) = new.material.as_ref().and_then(|id| doc.find(id))
+        && let ItemFields::Material(material_fields) = &material.fields
+        && matches!(material_fields.texture, TextureSource::Model { .. })
+        && material_users(doc, &material.id) == 1
+    {
+        let plain = ItemFields::Material(MaterialFields { texture: TextureSource::None, ..material_fields.clone() });
+        commands.push(Box::new(SetSceneItemFieldsCommand::new(layer.clone(), material.id.clone(), plain)));
+    }
+    if let ItemFields::Object(new) = &fields
+        && scene_schema::has_shape_name(&object.name, old)
+    {
+        let names: Vec<&str> = names(doc).into_iter().filter(|name| *name != object.name).collect();
+        let name = unique_name(&scene_schema::shape_name(&new.shape), &names);
+        commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), object.id.clone(), name)));
+    }
+    commands.insert(0, Box::new(SetSceneItemFieldsCommand::new(layer.clone(), object.id.clone(), fields)));
+    commands
+}
+
+/// How many Objects and Groups draw with `material`.
+fn material_users(doc: &SceneDoc, material: &ItemId) -> usize {
+    let mut users = 0;
+    doc.walk(|item, _| {
+        if matches!(item.kind(), ItemKind::Object | ItemKind::Group) && doc.effective_material(&item.id).as_ref() == Some(material) {
+            users += 1;
+        }
+    });
+    users
+}
+
+pub(crate) fn core_feature(feature: UiFeature) -> manifold_core::material_inspector::MaterialFeature {
     use manifold_core::material_inspector::MaterialFeature as Core;
     match feature {
         UiFeature::Coat => Core::Coat,
@@ -209,25 +268,45 @@ pub(crate) fn material_feature(project: &Project, layer: &LayerId, material: &It
     Ok(Some(batch(commands, if add { "Add Material Feature" } else { "Remove Material Feature" }, None)))
 }
 
-/// Give `owner` a copy of the material it shares with others, so edits to it
-/// stop moving them.
+/// Give `owner` a Material for it alone: a copy of the one it shares with
+/// others, so edits to it stop moving them (Make Unique), or a new one when
+/// it draws with none (New Material).
 pub(crate) fn make_material_unique(project: &Project, layer: &LayerId, owner: &ItemId) -> Result<SceneEdit, String> {
     let doc = doc(project, layer)?;
-    let found = doc.find(owner).ok_or("That item is no longer in the scene")?;
-    let material = doc.effective_material(owner).ok_or("This item has no material to copy")?;
-    let (parent, index) = doc.locate(&material).ok_or("That material is no longer in the scene")?;
-    let copy = new_id();
-    let mut fields = found.fields.clone();
-    match &mut fields {
-        ItemFields::Object(object) => object.material = Some(copy.clone()),
-        ItemFields::Group(group) => group.material = Some(copy.clone()),
-        _ => return Err("Only an object or a group draws with a material".to_owned()),
+    let description = if doc.effective_material(owner).is_some() { "Make Material Unique" } else { "New Material" };
+    let name = unique_name(MATERIAL_NAME, &names(doc));
+    let commands = own_material_commands(layer, doc, owner, new_id(), &name)?;
+    Ok(batch(commands, description, None))
+}
+
+/// Apply a starting look to a Material: its features become the look's and
+/// the look's factors are written, in one undo step. Default puts every
+/// factor back and takes every feature off.
+pub(crate) fn material_look(project: &Project, layer: &LayerId, material: &ItemId, look: UiLook) -> Result<Option<SceneEdit>, String> {
+    let doc = doc(project, layer)?;
+    let found = doc.find(material).ok_or("That material is no longer in the scene")?;
+    let ItemFields::Material(fields) = &found.fields else {
+        return Err("That item is not a material".to_owned());
+    };
+    let inst = instance(project, layer).ok_or("There is no scene to edit")?;
+    let recipe = crate::scene_material_look::recipe(look);
+    let mut commands: Vec<Box<dyn Command>> = Vec::new();
+    let features: Vec<FeatureSetting> =
+        recipe.features.iter().map(|feature| FeatureSetting { feature: core_feature(*feature), mode: 2 }).collect();
+    if features != fields.features {
+        let edited = ItemFields::Material(MaterialFields { features, ..fields.clone() });
+        commands.push(Box::new(SetSceneItemFieldsCommand::new(layer.clone(), material.clone(), edited)));
     }
-    let commands: Vec<Box<dyn Command>> = vec![
-        Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Material, parent, index + 1, Some(material), copy)),
-        Box::new(SetSceneItemFieldsCommand::new(layer.clone(), owner.clone(), fields)),
-    ];
-    Ok(batch(commands, "Make Material Unique", None))
+    for (property, value) in crate::scene_material_look::writes(inst, &crate::scene_material_look::param_ids(inst, material), look) {
+        let Some(param) = inst.params.get(&param_id(material, &property)) else { continue };
+        if (param.base - value).abs() > f32::EPSILON {
+            commands.push(write(layer, material, &property, param.base, value));
+        }
+    }
+    if commands.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(batch(commands, &format!("Material Look: {}", look.label()), None)))
 }
 
 pub(crate) fn rename(project: &Project, layer: &LayerId, item: &ItemId, name: &str) -> Result<Option<SceneEdit>, String> {

@@ -16,6 +16,8 @@ pub enum MeshSource {
     Platonic { shape: u32, radius: f32 },
     /// `node.plane_mesh`: the XY plane facing +Z, `width` by `height`.
     Plane { width: f32, height: f32 },
+    /// `node.sphere_mesh`: a smooth UV sphere about the origin.
+    Sphere { radius: f32, segments: u32, rings: u32 },
     Gltf {
         path: Arc<str>,
         /// The one file node whose mesh this is (an imported part), or `None`
@@ -32,6 +34,7 @@ impl MeshSource {
     pub fn load_vertices(&self) -> Result<Vec<MeshVertex>, String> {
         let (shape, radius) = match self {
             Self::Plane { width, height } => return plane_vertices(*width, *height),
+            Self::Sphere { radius, segments, rings } => return sphere_vertices(*radius, *segments, *rings),
             Self::Cube { size } => {
                 if !size.is_finite() || *size <= 0.0 {
                     return Err("mesh source size must be finite and positive".into());
@@ -94,6 +97,70 @@ fn plane_vertices(width: f32, height: f32) -> Result<Vec<MeshVertex>, String> {
         vertex
     };
     Ok(vec![corner(-x, -y), corner(x, -y), corner(x, y), corner(-x, -y), corner(x, y), corner(-x, y)])
+}
+
+
+/// The triangle-list vertex count of `node.sphere_mesh`: a cap fan at each
+/// pole and two triangles per quad between, `segments` around and `rings`
+/// from pole to pole.
+pub fn sphere_vertex_count(segments: u32, rings: u32) -> u32 {
+    6 * segments * rings.saturating_sub(1)
+}
+
+/// Vertex `idx` of `node.sphere_mesh`, the CPU mirror of its WGSL body: a
+/// smooth UV sphere of `radius` about the origin, outward wound, with
+/// longitude-latitude UVs and the poles exact.
+pub fn sphere_vertex(idx: u32, segments: u32, rings: u32, radius: f32) -> MeshVertex {
+    let tri = idx / 3;
+    let corner = idx % 3;
+    let caps = segments;
+    let total = 2 * segments * (rings - 1);
+    // (ring, segment) of each corner; a pole corner takes the middle of its
+    // segment so its UV sits under the fan.
+    let (ring, seg, pole) = if tri < caps {
+        let s = tri;
+        [(0, s, true), (1, s + 1, false), (1, s, false)][corner as usize]
+    } else if tri >= total - caps {
+        let s = tri - (total - caps);
+        [(rings - 1, s, false), (rings - 1, s + 1, false), (rings, s, true)][corner as usize]
+    } else {
+        let band = tri - caps;
+        let quad = band / 2;
+        let (r, s) = (1 + quad / segments, quad % segments);
+        let corners = if band.is_multiple_of(2) { [(r, s), (r, s + 1), (r + 1, s + 1)] } else { [(r, s), (r + 1, s + 1), (r + 1, s)] };
+        let (r, s) = corners[corner as usize];
+        (r, s, false)
+    };
+    let u = if pole { (seg as f32 + 0.5) / segments as f32 } else { seg as f32 / segments as f32 };
+    let v = ring as f32 / rings as f32;
+    let phi = std::f32::consts::TAU * u;
+    let theta = std::f32::consts::PI * v;
+    let (sin_phi, cos_phi) = phi.sin_cos();
+    let normal = if ring == 0 {
+        [0.0, 1.0, 0.0]
+    } else if ring == rings {
+        [0.0, -1.0, 0.0]
+    } else {
+        let (sin_theta, cos_theta) = theta.sin_cos();
+        [sin_theta * cos_phi, cos_theta, sin_theta * sin_phi]
+    };
+    let mut vertex: MeshVertex = bytemuck::Zeroable::zeroed();
+    vertex.position = normal.map(|axis| axis * radius);
+    vertex.normal = normal;
+    vertex.uv = [u, v];
+    vertex.tangent = [-sin_phi, 0.0, cos_phi, 1.0];
+    vertex.color = [1.0; 4];
+    vertex
+}
+
+fn sphere_vertices(radius: f32, segments: u32, rings: u32) -> Result<Vec<MeshVertex>, String> {
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err("mesh source size must be finite and positive".into());
+    }
+    if segments < 3 || rings < 2 {
+        return Err("a sphere needs at least 3 segments and 2 rings".into());
+    }
+    Ok((0..sphere_vertex_count(segments, rings)).map(|idx| sphere_vertex(idx, segments, rings, radius)).collect())
 }
 
 #[cfg(test)]
@@ -202,8 +269,39 @@ mod tests {
         assert!((radius - 2.5).abs() < 1.0e-6);
     }
 
+    /// The sphere the collision shape reads: every vertex on the sphere, every
+    /// triangle facing out, and every edge shared by exactly one other
+    /// triangle running the other way (closed and consistently wound).
+    #[test]
+    fn mesh_source_sphere_is_closed_round_and_faces_out() {
+        let (segments, rings, radius) = (12, 7, 0.5);
+        let vertices = MeshSource::Sphere { radius, segments, rings }.load_vertices().unwrap();
+        assert_eq!(vertices.len() as u32, sphere_vertex_count(segments, rings));
+        let key = |p: [f32; 3]| p.map(|v| (v * 1.0e4).round() as i64);
+        let mut edges = std::collections::HashMap::new();
+        for tri in vertices.chunks(3) {
+            let [a, b, c] = [tri[0].position, tri[1].position, tri[2].position];
+            let (e1, e2) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+            let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            let centre = [0, 1, 2].map(|k| (a[k] + b[k] + c[k]) / 3.0);
+            assert!(n.iter().zip(centre).map(|(n, c)| n * c).sum::<f32>() > 0.0, "a triangle faces in");
+            for (from, to) in [(a, b), (b, c), (c, a)] {
+                *edges.entry((key(from), key(to))).or_insert(0) += 1;
+            }
+        }
+        for vertex in &vertices {
+            let length = vertex.position.iter().map(|v| v * v).sum::<f32>().sqrt();
+            assert!((length - radius).abs() < 1.0e-5);
+        }
+        for ((from, to), count) in &edges {
+            assert_eq!(*count, 1, "an edge is wound twice the same way");
+            assert_eq!(edges.get(&(*to, *from)), Some(&1), "an open edge");
+        }
+    }
+
     #[test]
     fn mesh_source_rejects_invalid_dimensions_and_selectors() {
+        assert!(MeshSource::Sphere { radius: 1.0, segments: 2, rings: 4 }.load_vertices().is_err());
         assert!(MeshSource::Cube { size: 0.0 }.load_vertices().is_err());
         assert!(MeshSource::Platonic {
             shape: PLATONIC_SHAPES.len() as u32,

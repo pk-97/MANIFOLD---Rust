@@ -87,6 +87,7 @@ mod selection_outline;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
 mod scene_edit;
+mod scene_material_look;
 mod scene_view_copy;
 mod generator_change;
 mod modifier_preset;

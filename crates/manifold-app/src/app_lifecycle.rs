@@ -652,6 +652,14 @@ impl Application {
         self.spawn_import_worker(req);
     }
 
+    /// Import a model the Scene tab's Add menu picked into scene layer
+    /// `layer`, through the same worker and tail a drop on that layer takes.
+    pub(crate) fn import_model_into_layer(&mut self, path: &std::path::Path, layer: &manifold_core::LayerId) {
+        let index = self.local_project.timeline.layer_index_for_id(layer);
+        let beat = self.content_state.current_beat.as_f32();
+        self.import_model_file(path, beat, index);
+    }
+
     /// Spawn `import_worker::run_import_worker` on a background thread for
     /// `req` and show the first stage toast immediately (D4) — never wait
     /// for the worker's own first `Stage` event, so the toast appears in

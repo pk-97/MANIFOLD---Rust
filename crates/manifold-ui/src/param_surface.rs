@@ -54,6 +54,33 @@ pub const MATERIAL_FEATURES: &[MaterialFeature] = &[
     MaterialFeature::Subsurface,
 ];
 
+/// A Material's starting looks: a one-click set of features and factors,
+/// not a stored setting. The Material block shows the look its values match,
+/// or Custom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialLook {
+    Default,
+    Matte,
+    Coated,
+    BrushedMetal,
+    Glass,
+}
+
+impl MaterialLook {
+    pub const ALL: [MaterialLook; 5] =
+        [MaterialLook::Default, MaterialLook::Matte, MaterialLook::Coated, MaterialLook::BrushedMetal, MaterialLook::Glass];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MaterialLook::Default => "Default",
+            MaterialLook::Matte => "Matte",
+            MaterialLook::Coated => "Coated",
+            MaterialLook::BrushedMetal => "Brushed Metal",
+            MaterialLook::Glass => "Glass",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialGroup {
     Surface,

@@ -103,6 +103,16 @@ fn every_scene_edit_undoes_exactly() {
         physics: PhysicsSetting::Body,
         ..Default::default()
     });
+    let ball = manifold_core::scene_doc::Item::new(
+        id("ball"),
+        "Icosahedron",
+        ItemFields::Object(manifold_core::scene_doc::ObjectFields {
+            shape: manifold_core::scene_doc::Shape::Icosahedron,
+            ..Default::default()
+        }),
+    );
+    let ball_material = new_material(id("ball-material"), "Material 2");
+    let make_unique = own_material_commands(&layer, &doc, &id(CUBE), id("paint"), "Material 2").unwrap();
     let edits: Vec<(&str, Box<dyn Command>)> = vec![
         ("add", Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Light, None, 0, None, id("lamp")))),
         ("duplicate", Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Object, None, 0, Some(id(CUBE)), id("cube2")))),
@@ -112,6 +122,8 @@ fn every_scene_edit_undoes_exactly() {
         ("set", Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id(CUBE), body))),
         ("group", Box::new(CompositeCommand::new(group_commands(&layer, &doc, &[id(CUBE), id("sun")], id("rig")), "Group".into()))),
         ("material feature", Box::new(material_feature(&layer))),
+        ("add object", Box::new(CompositeCommand::new(add_object_commands(&layer, None, 0, ball, ball_material), "Add".into()))),
+        ("make unique", Box::new(CompositeCommand::new(make_unique, "Make Unique".into()))),
     ];
     for (name, edit) in edits {
         let (mut project, _) = self::project();

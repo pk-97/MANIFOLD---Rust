@@ -322,6 +322,12 @@ crate::param_tooltips!("node.plane_mesh", {
     "height" => "The plane's height in world units.",
 });
 
+crate::param_tooltips!("node.sphere_mesh", {
+    "segments" => "How many slices around the sphere. More gives a rounder outline, set when the effect is built.",
+    "rings" => "How many bands from pole to pole. More gives a smoother profile, set when the effect is built.",
+    "radius" => "The sphere's radius in world units. 0.5 fills the same box as a unit cube.",
+});
+
 crate::param_tooltips!("node.grid_mesh", {
     "max_capacity" => "The most vertices the grid can ever hold. Set it once when building the effect since changing it rebuilds the graph, and keep it at or above resolution X times resolution Y.",
     "resolution_x" => "How many points across the grid. More points give finer detail at the cost of memory.",

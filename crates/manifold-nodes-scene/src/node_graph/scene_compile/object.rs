@@ -27,6 +27,7 @@ pub(crate) fn object_wires(mesh: u32, material: u32, transform: u32, object: u32
 fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
     Some(match shape {
         Shape::Cube => ("node.cube_mesh", None),
+        Shape::Sphere => ("node.sphere_mesh", None),
         Shape::Plane => ("node.plane_mesh", None),
         // `node.platonic_solid_mesh`'s shapes: Tetrahedron 0, Cube 1,
         // Octahedron 2, Icosahedron 3, Dodecahedron 4.

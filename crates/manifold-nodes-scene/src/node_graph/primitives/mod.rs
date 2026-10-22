@@ -34,6 +34,7 @@ pub mod render_mesh_diagram;
 mod generate_grid_uv;
 mod generate_instance_transforms;
 mod plane_mesh;
+mod sphere_mesh;
 mod glitch_jitter;
 pub(crate) mod gltf_anim_shared;
 manifold_core::testkit_visible! { mod gltf_animation_source; }

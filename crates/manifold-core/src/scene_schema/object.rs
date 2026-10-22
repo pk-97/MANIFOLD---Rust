@@ -23,6 +23,10 @@ fn cube(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Object(o) if o.shape == Shape::Cube)
 }
 
+fn sphere(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Object(o) if o.shape == Shape::Sphere)
+}
+
 fn plane(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Object(o) if o.shape == Shape::Plane)
 }
@@ -42,13 +46,14 @@ fn platonic(fields: &ItemFields) -> bool {
 }
 
 const SCALE_SETS_SIZE: &str = "Scale sets the size";
+const SPHERE_DETAIL: &str = "a sphere has a fixed vertex count";
 const WHOLE_FILE_NODE: &str = "the file node path picks the mesh";
 const FROM_FILE: &str = "read from the model file";
 const OWN_CENTRE: &str = "the part's own centre, so it turns about itself";
 const GROUP_CLOCK: &str = "the import Group's Animation rows";
 const CLOCK_PAYLOAD: &str = "the clip data loads from the model file";
 
-pub static OBJECT_ROWS: [PropertyRow; 72] = [
+pub static OBJECT_ROWS: [PropertyRow; 75] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -74,6 +79,10 @@ pub static OBJECT_ROWS: [PropertyRow; 72] = [
     row("plane_capacity", MESH, Transform, Exposure::Internal("a plane has a fixed vertex count"))
         .param("max_capacity")
         .when(plane),
+    // Half a unit, so the sphere fits the unit box a cube fills.
+    row("sphere_radius", MESH, Transform, Exposure::Internal(SCALE_SETS_SIZE)).param("radius").default(0.5).when(sphere),
+    row("sphere_segments", MESH, Transform, Exposure::Internal(SPHERE_DETAIL)).param("segments").when(sphere),
+    row("sphere_rings", MESH, Transform, Exposure::Internal(SPHERE_DETAIL)).param("rings").when(sphere),
     row("solid", MESH, Transform, Exposure::Automatic("the Shape field")).param("shape").when(platonic),
     // Half a unit, so a solid fits the unit box a cube fills.
     row("solid_radius", MESH, Transform, Exposure::Internal(SCALE_SETS_SIZE))
@@ -139,20 +148,34 @@ pub static OBJECT_ROWS: [PropertyRow; 72] = [
     row("blend_targets", BLEND, Transform, Exposure::Automatic(FROM_FILE)).param("target_count").when(from_file),
 ];
 
+/// The built-in solids: what Shape offers. A model file is not a shape
+/// pick; it comes in through Add or a drop and lives in Model File.
 const SHAPES: &[Choice] = &[
     Choice { key: "cube", label: "Cube" },
+    Choice { key: "sphere", label: "Sphere" },
     Choice { key: "plane", label: "Plane" },
     Choice { key: "tetrahedron", label: "Tetrahedron" },
     Choice { key: "octahedron", label: "Octahedron" },
     Choice { key: "icosahedron", label: "Icosahedron" },
     Choice { key: "dodecahedron", label: "Dodecahedron" },
-    Choice { key: "ocean", label: "Ocean" },
-    Choice { key: "mesh", label: "Mesh from file" },
+];
+
+/// An imported object's Shape: its file, kept until a built-in is picked.
+const MESH_SHAPES: &[Choice] = &[
+    Choice { key: "mesh", label: "From Model File" },
+    Choice { key: "cube", label: "Cube" },
+    Choice { key: "sphere", label: "Sphere" },
+    Choice { key: "plane", label: "Plane" },
+    Choice { key: "tetrahedron", label: "Tetrahedron" },
+    Choice { key: "octahedron", label: "Octahedron" },
+    Choice { key: "icosahedron", label: "Icosahedron" },
+    Choice { key: "dodecahedron", label: "Dodecahedron" },
 ];
 
 fn shape_key(shape: &Shape) -> &'static str {
     match shape {
         Shape::Cube => "cube",
+        Shape::Sphere => "sphere",
         Shape::Plane => "plane",
         Shape::Tetrahedron => "tetrahedron",
         Shape::Octahedron => "octahedron",
@@ -163,8 +186,66 @@ fn shape_key(shape: &Shape) -> &'static str {
     }
 }
 
+/// The name a new item of `shape` gets: the built-in's label, or the model
+/// file's name.
+pub fn shape_name(shape: &Shape) -> String {
+    match shape {
+        Shape::Mesh { file, .. } => std::path::Path::new(file)
+            .file_stem()
+            .map_or_else(|| "Mesh".to_owned(), |stem| stem.to_string_lossy().into_owned()),
+        Shape::Ocean => "Ocean".to_owned(),
+        builtin => {
+            let key = shape_key(builtin);
+            SHAPES.iter().find(|choice| choice.key == key).map_or(key, |choice| choice.label).to_owned()
+        }
+    }
+}
+
+/// Whether `name` is still the default name for `shape`: its shape name, or
+/// that name numbered as `unique_name` numbers it. A renamed item keeps its
+/// name when its Shape changes.
+pub fn has_shape_name(name: &str, shape: &Shape) -> bool {
+    let base = shape_name(shape);
+    name == base
+        || name
+            .strip_prefix(base.as_str())
+            .and_then(|rest| rest.strip_prefix(' '))
+            .is_some_and(|number| number.parse::<u32>().is_ok_and(|n| n >= 2))
+}
+
 fn mesh_shape(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Object(o) if matches!(o.shape, Shape::Mesh { .. }))
+}
+
+fn builtin_shape(fields: &ItemFields) -> bool {
+    !mesh_shape(fields)
+}
+
+fn read_shape(fields: &ItemFields) -> FieldValue {
+    match fields {
+        ItemFields::Object(o) => FieldValue::Choice(shape_key(&o.shape).to_owned()),
+        _ => FieldValue::Choice(String::new()),
+    }
+}
+
+/// Set a built-in shape. Picking a built-in on an imported object drops its
+/// file; "mesh" only keeps the file an object already has.
+fn write_shape(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String> {
+    let (ItemFields::Object(o), FieldValue::Choice(key)) = (fields, value) else {
+        return Err(wrong_value("shape", value));
+    };
+    o.shape = match key.as_str() {
+        "cube" => Shape::Cube,
+        "sphere" => Shape::Sphere,
+        "plane" => Shape::Plane,
+        "tetrahedron" => Shape::Tetrahedron,
+        "octahedron" => Shape::Octahedron,
+        "icosahedron" => Shape::Icosahedron,
+        "dodecahedron" => Shape::Dodecahedron,
+        "mesh" if matches!(o.shape, Shape::Mesh { .. }) => o.shape.clone(),
+        _ => return Err(wrong_value("shape", value)),
+    };
+    Ok(())
 }
 
 /// A part inside an import Group takes its file from the Group's Model File.
@@ -197,36 +278,26 @@ fn add_modifier_disabled(_: &SceneDoc, item: &Item) -> Option<&'static str> {
     }
 }
 
-pub static OBJECT_FIELDS: [FieldRow; 6] = [
+pub static OBJECT_FIELDS: [FieldRow; 7] = [
     FieldRow {
         id: "shape",
         label: "Shape",
         section: ControlGroup::Shape,
         control: FieldControl::Closed(SHAPES),
-        applies: always,
+        applies: builtin_shape,
         disabled: enabled,
-        read: |fields| match fields {
-            ItemFields::Object(o) => FieldValue::Choice(shape_key(&o.shape).to_owned()),
-            _ => FieldValue::Choice(String::new()),
-        },
-        write: |fields, value| {
-            let (ItemFields::Object(o), FieldValue::Choice(key)) = (fields, value) else {
-                return Err(wrong_value("shape", value));
-            };
-            o.shape = match key.as_str() {
-                "cube" => Shape::Cube,
-                "plane" => Shape::Plane,
-                "tetrahedron" => Shape::Tetrahedron,
-                "octahedron" => Shape::Octahedron,
-                "icosahedron" => Shape::Icosahedron,
-                "dodecahedron" => Shape::Dodecahedron,
-                "ocean" => Shape::Ocean,
-                "mesh" if matches!(o.shape, Shape::Mesh { .. }) => o.shape.clone(),
-                "mesh" => Shape::Mesh { file: String::new(), node_path: String::new(), vertex_count: 0, primitives: Default::default() },
-                _ => return Err(wrong_value("shape", value)),
-            };
-            Ok(())
-        },
+        read: read_shape,
+        write: write_shape,
+    },
+    FieldRow {
+        id: "shape",
+        label: "Shape",
+        section: ControlGroup::Shape,
+        control: FieldControl::Closed(MESH_SHAPES),
+        applies: mesh_shape,
+        disabled: part_of_import,
+        read: read_shape,
+        write: write_shape,
     },
     FieldRow {
         id: "model_file",
