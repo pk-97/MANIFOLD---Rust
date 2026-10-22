@@ -62,13 +62,38 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
     // Post-processing wired after the Scene node survives a Scene panel edit,
     // which recompiles only what is inside the Scene node.
     with_post_blur(fx);
+    // The blur's radius goes on the layer card with an LFO on it.
+    let radius = "user.post_blur.radius.1";
+    fx.append_user_binding(manifold_core::effects::UserParamBinding {
+        id: radius.into(),
+        label: "Blur".into(),
+        node_id: manifold_core::NodeId::new("post_blur"),
+        legacy_node_handle: None,
+        inner_param: "radius".into(),
+        min: 0.0,
+        max: 20.0,
+        default_value: 4.0,
+        convert: Default::default(),
+        is_angle: false,
+        invert: false,
+        curve: Default::default(),
+        scale: 1.0,
+        offset: 0.0,
+        value_labels: Vec::new(),
+        section: None,
+    });
+    assert!(fx.set_base_param(radius, 9.0));
     let post = fx.graph.as_ref().unwrap().wires.clone();
     doc.insert(None, 0, Item::new(ItemId::new("lamp"), "Lamp", ItemFields::default_for(ItemKind::Light))).unwrap();
     fx.install_scene_document(doc.clone()).unwrap();
     assert_eq!(fx.graph.as_ref().unwrap().wires, post, "a recompile rewired the user's post-processing");
+    assert_eq!(fx.get_base_param(radius), 9.0, "a recompile dropped the blur's card control");
     assert!(flat(fx).nodes.iter().any(|n| n.node_id.as_str() == "lamp:light"), "the new light is inside the Scene node");
     assert!(fx.set_base_param("cube.pos_y", 2.5), "the cube has a Position Y");
-    fx.drivers = Some(vec![ParameterDriver::new("cube.pos_y", BeatDivision::Quarter, DriverWaveform::Sine)]);
+    fx.drivers = Some(vec![
+        ParameterDriver::new("cube.pos_y", BeatDivision::Quarter, DriverWaveform::Sine),
+        ParameterDriver::new(radius, BeatDivision::Quarter, DriverWaveform::Sine),
+    ]);
     let (before, graph) = (values(fx), fx.graph.clone());
     let mut project = Project::default();
     project.timeline.layers.push(layer);
@@ -85,6 +110,8 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
         .expect("the loaded layer graph builds, Scene node and post-processing together");
     assert_eq!(values(fx), before, "every value comes back under its id");
     assert_eq!(fx.drivers.as_ref().unwrap()[0].param_id, "cube.pos_y", "the LFO still points at the cube");
+    assert!(fx.params.get(radius).is_some_and(|p| p.exposed), "the blur's control is back on the card");
+    assert_eq!(fx.drivers.as_ref().unwrap()[1].param_id, radius, "and its LFO with it");
 }
 
 thread_local! {

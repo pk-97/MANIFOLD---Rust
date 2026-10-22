@@ -114,6 +114,9 @@ pub const AUTHORED_HISTORY_CAPACITY: usize = 256;
 const IMPULSE_CAPACITY: usize = 256;
 const FIXED_TICK: Seconds = Seconds(1.0 / 60.0);
 
+/// Why a worker refused a change of bodies: it needs a fresh world.
+pub(crate) const NEEDS_NEW_WORLD: &str = "Physics worker cannot rebuild native topology within an epoch";
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum AdvancementPolicy {
     #[default]
@@ -916,6 +919,11 @@ impl RigidSimulation {
             });
         let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset
             || (accepted_interval.is_none() && self.clock.rate_changed(self.step.interval.0));
+        // A worker's world lives through its owner's epoch: a change it cannot
+        // take live is the owner's to restart.
+        if self.advancement_policy.is_worker() && self.world.is_some() && (topology_changed || copy_topology_changed) {
+            return Err(NEEDS_NEW_WORLD.into());
+        }
         if !rebuild && let Some(error) = &self.impulse_failure {
             return Err(error.clone());
         }

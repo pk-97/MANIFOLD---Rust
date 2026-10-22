@@ -412,7 +412,7 @@ where
 {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         registry,
         std::sync::Arc::clone(&h.device),
         width,
@@ -1215,7 +1215,7 @@ fn prove_temporal_sss_history(tilted_normals: bool) {
     registry.register("test.sss_tilted_normal_cube", || Box::new(tilted_normal_cube_source()));
     registry.register("test.sss_static_copies", || Box::new(StaticCopiesSource::new()));
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &scene.to_string(), &registry, std::sync::Arc::clone(&h.device),
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(&scene.to_string()), &registry, std::sync::Arc::clone(&h.device),
         PROOF_WIDTH, PROOF_HEIGHT, GpuTextureFormat::Rgba16Float, None,
     ).expect("temporal SSS graph");
     let target = RenderTarget::new(&h.device, PROOF_WIDTH, PROOF_HEIGHT,

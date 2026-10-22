@@ -14,7 +14,7 @@
 use crate::NodeId;
 use crate::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GroupDef,
-    GroupInterface, InterfacePortDef,
+    GroupInterface, InterfacePortDef, PresetMetadata,
 };
 
 /// Type id of the sealed Scene node. Its body is the compiled scene.
@@ -89,7 +89,8 @@ pub fn is_filled(graph: &EffectGraphDef) -> bool {
 /// other node and wire as it is; with no layer graph yet, build the default
 /// one: the layer input, the Scene node, and its colour into the layer output.
 /// The layer graph takes the compiled manifest and scene modifiers, which the
-/// compiler owns.
+/// compiler owns. The card controls the user exposed from the nodes around
+/// the Scene node stay, so their maps and automation keep working.
 pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<EffectGraphDef, String> {
     let EffectGraphDef { version, name, description, preset_metadata, scene_modifiers, nodes, wires } = compiled;
     let find = |type_id: &str| -> Result<u32, String> {
@@ -149,7 +150,15 @@ pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<
     graph.version = version;
     graph.name = name;
     graph.description = description;
-    graph.preset_metadata = preset_metadata;
+    let user = graph.preset_metadata.as_ref().and_then(user_controls);
+    graph.preset_metadata = match (preset_metadata, user) {
+        (Some(mut compiled), Some(user)) => {
+            compiled.params.extend(user.params);
+            compiled.bindings.extend(user.bindings);
+            Some(compiled)
+        }
+        (compiled, user) => compiled.or(user),
+    };
     graph.scene_modifiers = scene_modifiers;
     let node = graph.nodes.iter_mut().find(|node| is_scene_node(node)).expect("the layer graph has its Scene node");
     *node = EffectGraphNode {
@@ -214,7 +223,8 @@ fn bare(id: u32, node_id: NodeId, type_id: &str, editor_pos: Option<(f32, f32)>)
 }
 
 /// What a save writes for a scene layer's graph: every node and wire the user
-/// placed, and the Scene node with its body emptied. The compiled scene, its
+/// placed, and the Scene node with its body emptied. Of the metadata only the
+/// card controls the user exposed are saved. The compiled scene, its
 /// manifest and its scene modifiers are never saved; a load compiles them
 /// from the document.
 pub fn saved(graph: &EffectGraphDef) -> EffectGraphDef {
@@ -222,7 +232,7 @@ pub fn saved(graph: &EffectGraphDef) -> EffectGraphDef {
         version: graph.version,
         name: None,
         description: None,
-        preset_metadata: None,
+        preset_metadata: graph.preset_metadata.as_ref().and_then(user_controls),
         scene_modifiers: Vec::new(),
         nodes: Vec::with_capacity(graph.nodes.len()),
         wires: graph.wires.clone(),
@@ -256,8 +266,31 @@ pub fn check_saved(graph: &EffectGraphDef) -> Result<(), String> {
         return Err("a scene layer saves its document; its compiled Scene node is never saved".into());
     }
     let nested = graph.nodes.iter().filter_map(|node| node.group.as_deref()).any(|body| contains_scene_node(&body.nodes));
-    if nested || graph.preset_metadata.is_some() || !graph.scene_modifiers.is_empty() {
+    let compiled_meta = graph.preset_metadata.as_ref().is_some_and(|meta| user_controls(meta).as_ref() != Some(meta));
+    if nested || compiled_meta || !graph.scene_modifiers.is_empty() {
         return Err("a scene layer's saved graph carries what only the scene compiler writes".into());
     }
     Ok(())
+}
+
+/// The card controls the user exposed from nodes around the Scene node: the
+/// user-added bindings and their params, and nothing the compiler writes.
+/// `None` when there are none.
+pub fn user_controls(meta: &PresetMetadata) -> Option<PresetMetadata> {
+    let bindings: Vec<_> = meta.bindings.iter().filter(|binding| binding.user_added).cloned().collect();
+    if bindings.is_empty() {
+        return None;
+    }
+    let params = meta.params.iter().filter(|spec| bindings.iter().any(|binding| binding.id == spec.id)).cloned().collect();
+    Some(PresetMetadata {
+        params,
+        bindings,
+        param_aliases: Vec::new(),
+        value_aliases: Vec::new(),
+        string_params: Vec::new(),
+        string_bindings: Vec::new(),
+        scene_bounds: None,
+        scene_modifier: None,
+        ..meta.clone()
+    })
 }

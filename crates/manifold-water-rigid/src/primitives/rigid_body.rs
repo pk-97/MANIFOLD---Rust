@@ -1,10 +1,10 @@
 use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use crate::physics::{CopySpawn, MAX_COPIES, RigidBody, Solid};
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
-use crate::physics_mesh::{MESH_PORTS, PART_PORTS, transform_vertices, validate_transform};
+use crate::physics_mesh::{PartPorts, is_part_mesh, transform_vertices, validate_transform};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Transform, rotation_to_render_scene_euler};
 use manifold_physics::collision_shape::{CollisionShape, SCALE_STEPS_PER_OCTAVE, ShapeKey};
@@ -79,7 +79,7 @@ enum Form {
 struct ShapeWant {
     /// Wired meshes, each placed by its part transform: `mesh_k` with
     /// `part_k`, or the single `source` with `source_transform` in slot 0.
-    parts: Box<[Option<(MeshSource, Transform)>; 64]>,
+    parts: Vec<Option<(MeshSource, Transform)>>,
     /// An unwired body's mesh file and selection (a shatter piece).
     path: String,
     selection: Option<MeshSelection>,
@@ -91,7 +91,7 @@ struct ShapeWant {
 impl Default for ShapeWant {
     fn default() -> Self {
         Self {
-            parts: Box::new(std::array::from_fn(|_| None)),
+            parts: Vec::new(),
             path: String::new(),
             selection: None,
             form: Form::Hulls,
@@ -120,6 +120,7 @@ impl PartialEq for ShapeWant {
             && self.scale_steps == other.scale_steps
             && self.path == other.path
             && same_selection
+            && self.parts.len() == other.parts.len()
             && self.parts.iter().zip(other.parts.iter()).all(|(a, b)| same_part(a, b))
     }
 }
@@ -208,134 +209,6 @@ manifold_node_engine::primitive! {
   transform: Transform required,
   source: MeshSource optional,
   source_transform: Transform optional,
-  part_0: Transform optional,
-  part_1: Transform optional,
-  part_2: Transform optional,
-  part_3: Transform optional,
-  part_4: Transform optional,
-  part_5: Transform optional,
-  part_6: Transform optional,
-  part_7: Transform optional,
-  part_8: Transform optional,
-  part_9: Transform optional,
-  part_10: Transform optional,
-  part_11: Transform optional,
-  part_12: Transform optional,
-  part_13: Transform optional,
-  part_14: Transform optional,
-  part_15: Transform optional,
-  part_16: Transform optional,
-  part_17: Transform optional,
-  part_18: Transform optional,
-  part_19: Transform optional,
-  part_20: Transform optional,
-  part_21: Transform optional,
-  part_22: Transform optional,
-  part_23: Transform optional,
-  part_24: Transform optional,
-  part_25: Transform optional,
-  part_26: Transform optional,
-  part_27: Transform optional,
-  part_28: Transform optional,
-  part_29: Transform optional,
-  part_30: Transform optional,
-  part_31: Transform optional,
-  part_32: Transform optional,
-  part_33: Transform optional,
-  part_34: Transform optional,
-  part_35: Transform optional,
-  part_36: Transform optional,
-  part_37: Transform optional,
-  part_38: Transform optional,
-  part_39: Transform optional,
-  part_40: Transform optional,
-  part_41: Transform optional,
-  part_42: Transform optional,
-  part_43: Transform optional,
-  part_44: Transform optional,
-  part_45: Transform optional,
-  part_46: Transform optional,
-  part_47: Transform optional,
-  part_48: Transform optional,
-  part_49: Transform optional,
-  part_50: Transform optional,
-  part_51: Transform optional,
-  part_52: Transform optional,
-  part_53: Transform optional,
-  part_54: Transform optional,
-  part_55: Transform optional,
-  part_56: Transform optional,
-  part_57: Transform optional,
-  part_58: Transform optional,
-  part_59: Transform optional,
-  part_60: Transform optional,
-  part_61: Transform optional,
-  part_62: Transform optional,
-  part_63: Transform optional,
-  mesh_0: MeshSource optional,
-  mesh_1: MeshSource optional,
-  mesh_2: MeshSource optional,
-  mesh_3: MeshSource optional,
-  mesh_4: MeshSource optional,
-  mesh_5: MeshSource optional,
-  mesh_6: MeshSource optional,
-  mesh_7: MeshSource optional,
-  mesh_8: MeshSource optional,
-  mesh_9: MeshSource optional,
-  mesh_10: MeshSource optional,
-  mesh_11: MeshSource optional,
-  mesh_12: MeshSource optional,
-  mesh_13: MeshSource optional,
-  mesh_14: MeshSource optional,
-  mesh_15: MeshSource optional,
-  mesh_16: MeshSource optional,
-  mesh_17: MeshSource optional,
-  mesh_18: MeshSource optional,
-  mesh_19: MeshSource optional,
-  mesh_20: MeshSource optional,
-  mesh_21: MeshSource optional,
-  mesh_22: MeshSource optional,
-  mesh_23: MeshSource optional,
-  mesh_24: MeshSource optional,
-  mesh_25: MeshSource optional,
-  mesh_26: MeshSource optional,
-  mesh_27: MeshSource optional,
-  mesh_28: MeshSource optional,
-  mesh_29: MeshSource optional,
-  mesh_30: MeshSource optional,
-  mesh_31: MeshSource optional,
-  mesh_32: MeshSource optional,
-  mesh_33: MeshSource optional,
-  mesh_34: MeshSource optional,
-  mesh_35: MeshSource optional,
-  mesh_36: MeshSource optional,
-  mesh_37: MeshSource optional,
-  mesh_38: MeshSource optional,
-  mesh_39: MeshSource optional,
-  mesh_40: MeshSource optional,
-  mesh_41: MeshSource optional,
-  mesh_42: MeshSource optional,
-  mesh_43: MeshSource optional,
-  mesh_44: MeshSource optional,
-  mesh_45: MeshSource optional,
-  mesh_46: MeshSource optional,
-  mesh_47: MeshSource optional,
-  mesh_48: MeshSource optional,
-  mesh_49: MeshSource optional,
-  mesh_50: MeshSource optional,
-  mesh_51: MeshSource optional,
-  mesh_52: MeshSource optional,
-  mesh_53: MeshSource optional,
-  mesh_54: MeshSource optional,
-  mesh_55: MeshSource optional,
-  mesh_56: MeshSource optional,
-  mesh_57: MeshSource optional,
-  mesh_58: MeshSource optional,
-  mesh_59: MeshSource optional,
-  mesh_60: MeshSource optional,
-  mesh_61: MeshSource optional,
-  mesh_62: MeshSource optional,
-  mesh_63: MeshSource optional,
   mass: ScalarF32 optional,
   friction: ScalarF32 optional,
   bounce: ScalarF32 optional,
@@ -377,6 +250,7 @@ ParamDef { name: Cow::Borrowed("copy_layout"), label: "Layout", ty: ParamType::E
 ParamDef { name: Cow::Borrowed("copy_turn_x"), label: "Copy Turn X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_turn_y"), label: "Copy Turn Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("parts"), label: "Parts", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
  ],
  depth_rule: Terminal,
  composition_notes: "One description per body. All bodies that should collide feed the same Physics World. The shape comes from the mesh: wire the object's mesh source into source (one mesh, placed by source_transform) or mesh_k with part_k (a compound body of several meshes, each placed by its part transform, parent frames included); an unwired body reads its mesh file (path and selection), as a shatter piece does. A Fixed body is static and collides as the exact mesh; changing its authored transform teleports it. Moving and Animated bodies collide as convex hulls, detail chosen from size and triangle count, open surfaces given a 0.1% shell. While a new shape is prepared the body keeps its old one; a body with no shape yet stays out of the world until it has one, and the world keeps stepping. The transform's parent frame is folded into the body's world pose. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group with uniform scale. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
@@ -408,6 +282,8 @@ ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamTy
     // a structural edit runs before the mesh's producer), not that the body
     // has none.
     mesh_seen: bool = false,
+    // The part inputs, one pair per part: the `parts` param sizes them.
+    part_ports: PartPorts = PartPorts::default(),
  },
 }
 
@@ -431,17 +307,13 @@ impl RigidBodyNode {
         }
         asked.path.clear();
         asked.selection = None;
-        let wired_parts = MESH_PORTS.iter().any(|port| ctx.inputs.slot(port).is_some());
+        let ports = &self.part_ports;
+        let wired_parts = (0..ports.count()).any(|index| ctx.inputs.slot(ports.ports(index).0).is_some());
+        // A part still loading keeps its last mesh, so the slots carry over.
+        asked.parts.resize(if wired_parts { ports.count() } else { 1 }, None);
         let mut loading = false;
         for (index, part) in asked.parts.iter_mut().enumerate() {
-            let (port, transform_port) = if wired_parts {
-                (MESH_PORTS[index], PART_PORTS[index])
-            } else if index == 0 {
-                ("source", "source_transform")
-            } else {
-                *part = None;
-                continue;
-            };
+            let (port, transform_port) = if wired_parts { ports.ports(index) } else { ("source", "source_transform") };
             let Some(slot) = ctx.inputs.slot(port) else {
                 *part = None;
                 continue;
@@ -513,6 +385,14 @@ impl RigidBodyNode {
 }
 
 impl Primitive for RigidBodyNode {
+    fn reconfigure(&mut self, params: &ParamValues) {
+        self.part_ports.configure(<Self as manifold_node_engine::primitive::PrimitiveSpec>::INPUTS, params);
+    }
+
+    fn live_inputs(&self) -> Option<&[manifold_node_engine::ports::NodeInput]> {
+        self.part_ports.inputs()
+    }
+
     fn source_asset_paths(&self) -> &'static [&'static str] {
         &["path"]
     }
@@ -536,7 +416,7 @@ impl Primitive for RigidBodyNode {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.inputs.any_pending_except(|port| port == "source" || MESH_PORTS.contains(&port)) {
+        if ctx.inputs.any_pending_except(|port| port == "source" || is_part_mesh(port)) {
             ctx.mark_outputs_pending();
             return;
         }

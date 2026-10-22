@@ -877,6 +877,17 @@ impl MatterDomain {
                 owner.reanchor_start(start)?;
             }
         }
+        // Bodies that joined couple between ticks, never by a restart.
+        if !restart
+            && let Some(owner) = self.coupled.owner.as_mut()
+            && owner.pending().is_none()
+            && owner.wants_rebind()
+        {
+            owner.rebind()?;
+            if self.bodies.prepare(roles, owner.geometries(), lattice.cell_size(), offline)? == BodiesStatus::Pending {
+                return Ok(None);
+            }
+        }
         self.setup = Some(setup);
         self.layout = Some(layout);
         let frame = self.clock.advance(
@@ -1065,7 +1076,16 @@ impl MatterDomain {
             .validate()?;
         let reset_edge = previous_reset.is_some_and(|previous| previous != observation.reset);
         *previous_reset = Some(observation.reset);
-        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, &*colliders, *capacity)) {
+        // A body that joined is admitted into the running world; only a
+        // change it cannot take live starts a new epoch.
+        let changed = owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, &*colliders, *capacity));
+        let admitted = !reset_edge
+            && changed
+            && match owner.as_mut() {
+                Some(owner) => owner.admit(&observation.inputs, *walls, &*colliders, *capacity)?,
+                None => false,
+            };
+        if reset_edge || (changed && !admitted) {
             *epochs += 1;
             let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, &*colliders, *capacity, *epochs, owner.as_ref())?;
             built.set_step(*step);

@@ -420,7 +420,8 @@ fn gather_known_params(
 }
 
 /// A scene layer's descriptors: its compiled graph's `meta.params`, as the
-/// (kind, property) table wrote them. The table is the one authority for a
+/// (kind, property) table wrote them. A control the user exposed from a node
+/// around the Scene node is theirs (user-added), described by its binding. The table is the one authority for a
 /// scene row (SCENE_DOCUMENT_DESIGN.md section 8 (Cards by kind)), so no
 /// lookup joins over it.
 fn compiled_scene_params(
@@ -438,7 +439,12 @@ fn compiled_scene_params(
         .map(|meta| {
             meta.params
                 .iter()
-                .map(|spec| (spec.clone(), ParamOrigin::Bundled, SpecSource::Lookup, ParamChoices::default()))
+                .map(|spec| {
+                    let user = meta.bindings.iter().any(|binding| binding.user_added && binding.id == spec.id);
+                    let (origin, source) =
+                        if user { (ParamOrigin::UserAdded, SpecSource::Authored) } else { (ParamOrigin::Bundled, SpecSource::Lookup) };
+                    (spec.clone(), origin, source, ParamChoices::default())
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -917,7 +923,8 @@ impl GeneratorInstanceRaw {
     /// A scene layer's file is closed (SCENE_DOCUMENT_DESIGN.md section 7.1
     /// (The scene document)): its graph is only what the user wired around an
     /// empty Scene node, and it saves no param description; the compiled
-    /// table describes every param.
+    /// table describes every param but the card controls the user exposed
+    /// from nodes around the Scene node.
     fn check_scene(&self) -> Result<(), String> {
         if self.scene.is_none() {
             return Ok(());
@@ -925,7 +932,10 @@ impl GeneratorInstanceRaw {
         if let Some(graph) = &self.graph {
             crate::scene_node::check_saved(graph)?;
         }
-        if let Some(id) = self.params.iter().flatten().find_map(|(id, entry)| entry.has_spec().then_some(id)) {
+        let user = |id: &str| {
+            self.graph.as_ref().and_then(|graph| graph.preset_metadata.as_ref()).is_some_and(|meta| meta.bindings.iter().any(|binding| binding.user_added && binding.id == id))
+        };
+        if let Some(id) = self.params.iter().flatten().find_map(|(id, entry)| (entry.has_spec() && !user(id)).then_some(id)) {
             return Err(format!("scene param {id:?} carries a description; a scene layer's params are described by its kind tables"));
         }
         Ok(())

@@ -8,7 +8,6 @@ use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
-use super::MAX_GROUP_PARTS;
 use crate::scene_doc::{Item, ItemFields, Shape};
 
 /// The role of the copies body inside its item.
@@ -37,7 +36,7 @@ const fn internal(property: &'static str, param: &'static str, why: &'static str
     card(property, param, Exposure::Internal(why))
 }
 
-pub static COPIES_ROWS: [PropertyRow; 25] = [
+pub static COPIES_ROWS: [PropertyRow; 26] = [
     card("count", "copy_count", perform(CardBand::Scene, 0)).default(START_COUNT),
     card("layout", "copy_layout", perform(CardBand::Scene, 1)),
     card("spacing", "copy_size_spacing", perform(CardBand::Scene, 2)).unit(Unit::SizeMultiple).limit(AT_LEAST_ZERO),
@@ -63,6 +62,7 @@ pub static COPIES_ROWS: [PropertyRow; 25] = [
     internal("copies_fragment_count", "fragment_count", "copies are whole solids"),
     internal("copies_fragment_index", "fragment_index", "copies are whole solids"),
     internal("copies_fragment_parent", "fragment_parent", "copies are whole solids"),
+    auto("copies_parts", "parts", "the objects inside a copied group"),
 ];
 
 /// Whether an Object of this shape can be copied: every solid can, an Ocean
@@ -88,7 +88,6 @@ pub fn copies_unavailable(item: &Item) -> Option<&'static str> {
         ItemFields::Object(object) if !can_copy(&object.shape) => Some("An Ocean surface cannot be copied"),
         ItemFields::Group(_) => match copied_parts(&item.children) {
             0 => Some("Nothing in this group has a shape to copy"),
-            count if count > MAX_GROUP_PARTS => Some("Copies of a group take at most 64 objects"),
             _ => None,
         },
         _ => None,

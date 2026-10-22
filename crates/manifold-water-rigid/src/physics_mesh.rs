@@ -1,16 +1,19 @@
 //! Loading and placing a body's source geometry before it becomes a
 //! collision shape (`manifold_physics::collision_shape`).
 
+use std::borrow::Cow;
 use std::path::Path;
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::ports::{NodeInput, PortKind, PortType};
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_node_engine::scene::transform::Transform;
 
-/// One `part_k` input per compound part; its length is the editing cap.
-pub const PART_PORTS: [&str; manifold_core::scene_surface::RIGID_BODY_MAX_PARTS as usize] = [
+/// A fluid role source's fixed part inputs (`part_k`); a scene Water
+/// Source wires only `mesh_0`. A rigid body's parts grow ([`PartPorts`]).
+pub const PART_PORTS: [&str; 64] = [
     "part_0", "part_1", "part_2", "part_3", "part_4", "part_5", "part_6", "part_7", "part_8",
     "part_9", "part_10", "part_11", "part_12", "part_13", "part_14", "part_15", "part_16",
     "part_17", "part_18", "part_19", "part_20", "part_21", "part_22", "part_23", "part_24",
@@ -21,7 +24,7 @@ pub const PART_PORTS: [&str; manifold_core::scene_surface::RIGID_BODY_MAX_PARTS 
     "part_57", "part_58", "part_59", "part_60", "part_61", "part_62", "part_63",
 ];
 
-/// One `mesh_k` input per wired part, paired with `part_k`.
+/// A fluid role source's `mesh_k` inputs, paired with `part_k`.
 pub const MESH_PORTS: [&str; 64] = [
     "mesh_0", "mesh_1", "mesh_2", "mesh_3", "mesh_4", "mesh_5", "mesh_6", "mesh_7", "mesh_8",
     "mesh_9", "mesh_10", "mesh_11", "mesh_12", "mesh_13", "mesh_14", "mesh_15", "mesh_16",
@@ -200,4 +203,61 @@ mod transform_tests {
         .is_err());
     }
 
+}
+
+/// The `parts` param: how many compound parts (`mesh_k` with `part_k`) a
+/// rigid body takes. A Group body has one per object inside it.
+pub fn part_count(params: &ParamValues) -> usize {
+    params
+        .get("parts")
+        .and_then(ParamValue::as_scalar)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map_or(0, |value| value.round() as usize)
+}
+
+/// Whether `port` is one of a body's `mesh_k` part inputs.
+pub fn is_part_mesh(port: &str) -> bool {
+    port.strip_prefix("mesh_").is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// A rigid body's part inputs, sized by its `parts` param: the node's fixed
+/// inputs, then `part_k` and `mesh_k` for each part. Sized when the param
+/// changes, never per frame, so a group of any size is one body.
+#[derive(Default)]
+pub struct PartPorts {
+    inputs: Vec<NodeInput>,
+    meshes: Vec<String>,
+    parts: Vec<String>,
+}
+
+impl PartPorts {
+    /// Size the part inputs to the `parts` param after `fixed`.
+    pub fn configure(&mut self, fixed: &'static [NodeInput], params: &ParamValues) {
+        let count = part_count(params);
+        if !self.inputs.is_empty() && self.meshes.len() == count {
+            return;
+        }
+        self.meshes = (0..count).map(|index| format!("mesh_{index}")).collect();
+        self.parts = (0..count).map(|index| format!("part_{index}")).collect();
+        self.inputs.clear();
+        self.inputs.extend(fixed.iter().cloned());
+        let port = |name: &String, ty| NodeInput { name: Cow::Owned(name.clone()), ty, kind: PortKind::Input, required: false };
+        self.inputs.extend(self.parts.iter().map(|name| port(name, PortType::Transform)));
+        self.inputs.extend(self.meshes.iter().map(|name| port(name, PortType::MeshSource)));
+    }
+
+    /// The node's inputs, once configured.
+    pub fn inputs(&self) -> Option<&[NodeInput]> {
+        (!self.inputs.is_empty()).then_some(self.inputs.as_slice())
+    }
+
+    /// The parts this body takes.
+    pub fn count(&self) -> usize {
+        self.meshes.len()
+    }
+
+    /// Part `index`'s mesh and transform inputs.
+    pub fn ports(&self, index: usize) -> (&str, &str) {
+        (&self.meshes[index], &self.parts[index])
+    }
 }

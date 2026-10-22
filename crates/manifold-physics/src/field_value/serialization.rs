@@ -1,10 +1,10 @@
 use std::{borrow::Cow, sync::Arc};
 
-use serde::de::{self, Deserialize, Deserializer, SeqAccess, Visitor};
-use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
+use serde::de::{self, Deserialize, Deserializer};
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde::{Deserialize as DeriveDeserialize, Serialize as DeriveSerialize};
 
-use super::{FieldValue, MAX_OPERATIONS, Operation};
+use super::{FieldValue, Operation, Program, stack_depth};
 use crate::{FalloffCurve, RadialField, SampledField, TurbulenceField, UniformField, VortexField};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, DeriveSerialize, DeriveDeserialize)]
@@ -93,77 +93,7 @@ enum OperationRecord<'a> {
 #[derive(Debug, DeriveSerialize, DeriveDeserialize)]
 #[serde(rename_all = "camelCase")]
 struct FieldValueRecord {
-    operations: BoundedOperations<'static>,
-}
-
-#[derive(Debug)]
-struct BoundedOperations<'a> {
-    entries: [Option<OperationRecord<'a>>; MAX_OPERATIONS],
-    len: usize,
-}
-
-impl Serialize for BoundedOperations<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut sequence = serializer.serialize_seq(Some(self.len))?;
-        for operation in self.entries[..self.len].iter().flatten() {
-            sequence.serialize_element(operation)?;
-        }
-        sequence.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for BoundedOperations<'static> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct OperationsVisitor;
-
-        impl<'de> Visitor<'de> for OperationsVisitor {
-            type Value = BoundedOperations<'static>;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("an array containing between 1 and 32 field operations")
-            }
-
-            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-            where
-                A: SeqAccess<'de>,
-            {
-                if sequence
-                    .size_hint()
-                    .is_some_and(|size| size > MAX_OPERATIONS)
-                {
-                    return Err(de::Error::custom("field value exceeds 32 operations"));
-                }
-                let mut entries: [Option<OperationRecord<'static>>; MAX_OPERATIONS] =
-                    std::array::from_fn(|_| None);
-                let mut len = 0;
-                while len < MAX_OPERATIONS {
-                    let Some(operation) = sequence.next_element::<OperationRecord<'static>>()?
-                    else {
-                        break;
-                    };
-                    entries[len] = Some(operation);
-                    len += 1;
-                }
-                if len == MAX_OPERATIONS && sequence.next_element::<de::IgnoredAny>()?.is_some() {
-                    return Err(de::Error::custom("field value exceeds 32 operations"));
-                }
-                if len == 0 {
-                    return Err(de::Error::custom(
-                        "field value requires at least one operation",
-                    ));
-                }
-                Ok(BoundedOperations { entries, len })
-            }
-        }
-
-        deserializer.deserialize_seq(OperationsVisitor)
-    }
+    operations: Vec<OperationRecord<'static>>,
 }
 
 impl Serialize for FieldValue {
@@ -171,52 +101,47 @@ impl Serialize for FieldValue {
     where
         S: Serializer,
     {
-        let operations = BoundedOperations {
-            entries: std::array::from_fn(|index| {
-                if index >= self.len {
-                    return None;
-                }
-                Some(match &self.operations[index] {
-                    Operation::Uniform(field) => OperationRecord::Uniform {
-                        vector: field.vector(),
-                    },
-                    Operation::Radial(field) => OperationRecord::Radial {
-                        center: field.center(),
-                        radius: field.radius(),
-                        falloff: field.falloff(),
-                        curve: field.curve().into(),
-                    },
-                    Operation::Vortex(field) => OperationRecord::Vortex {
-                        center: field.center(),
-                        axis: field.axis(),
-                        radius: field.radius(),
-                        falloff: field.falloff(),
-                        curve: field.curve().into(),
-                    },
-                    Operation::Sampled(field) => OperationRecord::Sampled {
-                        origin: field.origin(),
-                        cell_size: field.cell_size(),
-                        dimensions: field.dimensions(),
-                        values: Cow::Borrowed(field.values()),
-                    },
-                    Operation::Turbulence(field) => OperationRecord::Turbulence {
-                        size: field.size(),
-                        offset: field.offset(),
-                        seed: field.seed(),
-                    },
-                    Operation::Zero { air } => OperationRecord::Zero { air: *air },
-                    Operation::Add => OperationRecord::Add,
-                    Operation::Multiply => OperationRecord::Multiply,
-                    Operation::Scale(strength) => OperationRecord::Scale {
-                        strength: *strength,
-                    },
-                    Operation::Air(drag_rate) => OperationRecord::Air { drag_rate: *drag_rate },
-                    Operation::AirDrag(weight) => OperationRecord::AirDrag { weight: *weight },
-                    Operation::Unused => unreachable!("field program is privately constructed"),
-                })
-            }),
-            len: self.len,
-        };
+        let operations: Vec<OperationRecord<'_>> = self
+            .operations
+            .iter()
+            .map(|operation| match operation {
+                Operation::Uniform(field) => OperationRecord::Uniform {
+                    vector: field.vector(),
+                },
+                Operation::Radial(field) => OperationRecord::Radial {
+                    center: field.center(),
+                    radius: field.radius(),
+                    falloff: field.falloff(),
+                    curve: field.curve().into(),
+                },
+                Operation::Vortex(field) => OperationRecord::Vortex {
+                    center: field.center(),
+                    axis: field.axis(),
+                    radius: field.radius(),
+                    falloff: field.falloff(),
+                    curve: field.curve().into(),
+                },
+                Operation::Sampled(field) => OperationRecord::Sampled {
+                    origin: field.origin(),
+                    cell_size: field.cell_size(),
+                    dimensions: field.dimensions(),
+                    values: Cow::Borrowed(field.values()),
+                },
+                Operation::Turbulence(field) => OperationRecord::Turbulence {
+                    size: field.size(),
+                    offset: field.offset(),
+                    seed: field.seed(),
+                },
+                Operation::Zero { air } => OperationRecord::Zero { air: *air },
+                Operation::Add => OperationRecord::Add,
+                Operation::Multiply => OperationRecord::Multiply,
+                Operation::Scale(strength) => OperationRecord::Scale {
+                    strength: *strength,
+                },
+                Operation::Air(drag_rate) => OperationRecord::Air { drag_rate: *drag_rate },
+                Operation::AirDrag(weight) => OperationRecord::AirDrag { weight: *weight },
+            })
+            .collect();
         let mut record = serializer.serialize_struct("FieldValue", 1)?;
         record.serialize_field("operations", &operations)?;
         record.end()
@@ -228,14 +153,13 @@ impl<'de> Deserialize<'de> for FieldValue {
     where
         D: Deserializer<'de>,
     {
-        let mut record = FieldValueRecord::deserialize(deserializer)?;
-        let mut operations: [Operation; MAX_OPERATIONS] =
-            std::array::from_fn(|_| Operation::Unused);
+        let record = FieldValueRecord::deserialize(deserializer)?;
+        if record.operations.is_empty() {
+            return Err(de::Error::custom("field value requires at least one operation"));
+        }
+        let mut operations = Program::with_capacity(record.operations.len());
         let mut depth = 0usize;
-        for index in 0..record.operations.len {
-            let operation = record.operations.entries[index]
-                .take()
-                .expect("bounded operation entry is populated");
+        for operation in record.operations {
             let operation = match operation {
                 OperationRecord::Uniform { vector } => {
                     depth += 1;
@@ -319,17 +243,15 @@ impl<'de> Deserialize<'de> for FieldValue {
                     Operation::AirDrag(weight)
                 }
             };
-            operations[index] = operation;
+            operations.push(operation);
         }
         if depth != 1 {
             return Err(de::Error::custom(
                 "field value postfix program must end at stack depth one",
             ));
         }
-        Ok(FieldValue {
-            operations,
-            len: record.operations.len,
-        })
+        let depth = stack_depth(&operations);
+        Ok(FieldValue { operations, depth })
     }
 }
 
@@ -456,12 +378,13 @@ mod tests {
     }
 
     #[test]
-    fn field_value_serde_rejects_oversized_program_while_reading_operations() {
-        let operations = (0..=MAX_OPERATIONS)
-            .map(|_| serde_json::json!({ "type": "uniform", "vector": [1.0, 0.0, 0.0] }))
-            .collect::<Vec<_>>();
-        let json = serde_json::json!({ "operations": operations });
-        assert!(serde_json::from_value::<FieldValue>(json).is_err());
+    fn field_value_serde_round_trips_a_long_program() {
+        let mut field = FieldValue::uniform([1.0, 0.0, 0.0]).unwrap();
+        for _ in 0..40 {
+            field = field.sum(&FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()).unwrap();
+        }
+        let json = serde_json::to_value(&field).unwrap();
+        assert_eq!(serde_json::from_value::<FieldValue>(json).unwrap(), field);
     }
 
     #[test]

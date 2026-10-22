@@ -26,7 +26,7 @@
     "crates/manifold-node-engine/src/runtime/mod.rs": 200,
     "crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs": 2257,
     "crates/manifold-nodes-scene/src/node_graph/gltf_load.rs": 6110,
-    "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs": 3088,
+    "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs": 3101,
     "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": 3295,
     "crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/fusion_proof.rs": 2637,
     "crates/manifold-physics/src/lib.rs": 3150,

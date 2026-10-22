@@ -16,7 +16,7 @@
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, PhysicsSetting};
-use manifold_core::scene_schema::{BODY_ROLE, COPIES_ROLE, MAX_GROUP_PARTS};
+use manifold_core::scene_schema::{BODY_ROLE, COPIES_ROLE};
 
 use super::builder::{Builder, SCENE};
 
@@ -65,17 +65,13 @@ pub(crate) fn emit_group(b: &mut Builder<'_>, item: &Item, transform: u32, physi
 }
 
 /// One object inside a copied group: its mesh, placed by its transform inside
-/// one copy, is one part of the copies body's shape. A body takes at most
-/// [`MAX_GROUP_PARTS`]; the Copies switch says so before that.
+/// one copy, is one part of the copies body's shape.
 pub(crate) fn add_part(b: &mut Builder<'_>, body: u32, mesh: u32, transform: u32) {
     // A swarm's copies node has no shape to size.
     if b.swarm_frames.contains_key(&body) {
         return;
     }
-    let parts = b.copy_parts.entry(body).or_default();
-    if parts.len() < MAX_GROUP_PARTS {
-        parts.push((mesh, transform));
-    }
+    b.copy_parts.entry(body).or_default().push((mesh, transform));
 }
 
 /// Make `object` draw `body`'s copies.
@@ -106,6 +102,7 @@ pub(crate) fn join_world(b: &mut Builder<'_>) {
         .or_else(|| b.id(SCENE, "physics"))
         .unwrap_or_else(|| b.add(SCENE, "physics", "node.physics_world"));
     for (body, parts) in std::mem::take(&mut b.copy_parts) {
+        b.set(body, "parts", SerializedParamValue::Int { value: parts.len() as i32 });
         for (k, (mesh, transform)) in parts.into_iter().enumerate() {
             b.wire(mesh, "source", body, &format!("mesh_{k}"));
             b.wire(transform, "transform", body, &format!("part_{k}"));
