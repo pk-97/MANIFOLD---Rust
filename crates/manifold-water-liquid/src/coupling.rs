@@ -25,7 +25,8 @@ use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 use manifold_physics::clock::TICK;
 use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidLayout};
-use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
+use crate::fluid_role::PreparedFluidGeometry;
+#[cfg(test)]
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation, Solid};
@@ -87,7 +88,7 @@ pub const REACTION_FLOATS: usize = 8;
 
 /// A pending tick's float reaction as one impulse per row; rows that take no
 /// reaction are left alone. `offset` counts the rows before the first
-/// coupled body's (the Collider roles').
+/// coupled body's.
 #[inline]
 pub fn decode_reaction(
     offset: usize,
@@ -107,13 +108,6 @@ pub fn decode_reaction(
         }
     }
     Ok(())
-}
-
-/// The coupled bodies a liquid takes beside `roles`' colliders: the body
-/// rows it holds that the colliders leave free.
-pub fn coupling_capacity(roles: &[Option<FluidRole>]) -> usize {
-    let colliders = roles.iter().flatten().filter(|role| role.kind == FluidRoleKind::Collider).count();
-    MAX_LIQUID_BODIES.saturating_sub(colliders)
 }
 
 /// A coupled domain's box and which faces are closed (bit order −x, +x, −y,
@@ -962,7 +956,7 @@ mod tests {
         assert!((v - (1.0 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
     }
 
-    /// A float reaction of m·(1 m/s) up, read past one Collider role's row,
+    /// A float reaction of m·(1 m/s) up, read past one leading row,
     /// reaches Box3D on top of the tick's gravity; a reaction too short for
     /// the rows is refused by name.
     #[test]

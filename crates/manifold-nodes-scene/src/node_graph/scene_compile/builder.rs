@@ -162,16 +162,24 @@ impl<'d> Builder<'d> {
     /// `from_param`, starting at its value: a second node that follows the
     /// same control.
     pub(crate) fn follow(&mut self, from: u32, from_param: &str, to: u32, to_param: &str) {
+        self.follow_offset(from, from_param, to, to_param, 0.0);
+    }
+
+    /// [`Self::follow`], with `to_param` at the control's value plus `offset`.
+    pub(crate) fn follow_offset(&mut self, from: u32, from_param: &str, to: u32, to_param: &str, offset: f32) {
         let Some(source) = self.node_mut(from).map(|node| (node.node_id.clone(), node.params.get(from_param).cloned())) else {
             return;
         };
-        let Some(target) = self.node_mut(to) else {
+        let Some((target_id, target_type)) = self.node_mut(to).map(|node| (node.node_id.clone(), node.type_id.clone())) else {
             return;
         };
-        if let Some(value) = source.1 {
-            target.params.insert(to_param.to_owned(), value);
+        // A shifted control lands on the target's own type, not the source's.
+        let convert = if offset == 0.0 { None } else { self.param_meta(&target_type, to_param).map(|meta| meta.convert) };
+        match source.1 {
+            Some(value) if offset == 0.0 => self.set(to, to_param, value),
+            Some(value) => self.set_number(to, to_param, number(&value) + offset),
+            None => {}
         }
-        let target_id = target.node_id.clone();
         let followed: Vec<BindingDef> = self
             .bindings
             .iter()
@@ -179,6 +187,10 @@ impl<'d> Builder<'d> {
             .map(|binding| {
                 let mut binding = binding.clone();
                 binding.target = BindingTarget::Node { node_id: target_id.clone(), param: to_param.to_owned() };
+                binding.offset += offset;
+                if let Some(convert) = convert {
+                    binding.convert = convert;
+                }
                 binding
             })
             .collect();

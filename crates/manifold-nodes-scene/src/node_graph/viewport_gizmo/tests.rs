@@ -303,7 +303,6 @@ fn role_source_targets_derive_their_kind_from_the_role() {
         (FluidRole::InitialFill, GizmoTargetKind::InitialFill),
         (FluidRole::Inflow, GizmoTargetKind::Inflow),
         (FluidRole::Outflow, GizmoTargetKind::Drain),
-        (FluidRole::Collider, GizmoTargetKind::Collider),
     ] {
         let owner = ShapeOwner::RoleSource { node: NodeId::new("role"), role };
         let shape = node_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_z", -5.0)], &[]);

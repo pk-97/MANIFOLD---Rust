@@ -290,7 +290,7 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
 /// the water standing where the static obstacle stands, and that obstacle
 /// removed. A light box is where an explicit body reaction runs away.
 pub fn gpu_flip_dam_break_with_box(density_ratio: f32) -> (EffectGraphDef, BoxScene) {
-    let water = WaterScene { obstacle: false, ..WaterScene::dam_break(64) };
+    let water = WaterScene::dam_break(64);
     let edge = 0.6;
     let scene = BoxScene {
         domain_size: water.size as f32,
@@ -366,7 +366,7 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
         Some(scene) => scene.test_stacked(fixture, scene.apply(bundled("WaterFloatingBoxMatter"), MATTER_DOMAIN_TYPE_ID)),
         None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
         None if fixture == Fixture::FaceGrid => {
-            let mut def = matter_dam_break_faces(None, false);
+            let mut def = matter_dam_break_faces(None);
             let resolution = SerializedParamValue::Int { value: FACE_GRID_RESOLUTION as i32 };
             set_type_param(&mut def, MATTER_DOMAIN_TYPE_ID, "resolution", resolution);
             def

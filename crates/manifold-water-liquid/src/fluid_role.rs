@@ -21,17 +21,13 @@ pub enum FluidRoleKind {
     InitialFill,
     Inflow,
     Outflow,
-    /// A static solid the water holds back. Off the Role menu; only a saved
-    /// role 3 reaches it, until the water reads the World's Colliders
-    /// directly (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision
-    /// shapes)) and the kind is deleted.
-    Collider,
 }
 
 impl FluidRoleKind {
-    /// Every kind by the index a role wire carries; the source node's Role
-    /// menu offers the first three.
-    pub const ALL: [Self; 4] = [Self::InitialFill, Self::Inflow, Self::Outflow, Self::Collider];
+    /// Every kind by the index a role wire carries. Solids are never a role:
+    /// the water reads the World's Colliders and Bodies
+    /// (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision shapes)).
+    pub const ALL: [Self; 3] = [Self::InitialFill, Self::Inflow, Self::Outflow];
 
     pub fn from_index(index: u32) -> Option<Self> {
         Self::ALL.get(index as usize).copied()

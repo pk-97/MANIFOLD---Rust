@@ -25,15 +25,12 @@ pub const DIVISOR_ROW: u32 = 65 * 64 * 64;
 /// and the frame, so the two fold into one fused dispatch: node.divide_by_value,
 /// chosen for its shape, not its meaning, dividing by the length of the u
 /// faces (node.dot_products, a boundary). `consumer` is the v or w axis.
-/// Without `collider` the moving box is unwired, so the tank holds only the
-/// column and the pool, as GPU FLIP's Dam Break does.
-pub fn matter_dam_break_faces(consumer: Option<usize>, collider: bool) -> EffectGraphDef {
+pub fn matter_dam_break_faces(consumer: Option<usize>) -> EffectGraphDef {
     let json = manifold_node_engine::load::catalog_source::preset_json(&manifold_core::PresetTypeId::new("WaterDamBreakMatter"))
         .expect("registered catalog owner must provide WaterDamBreakMatter");
     let mut preset: Value = serde_json::from_str(&json).expect("preset parses");
     let nodes = preset["nodes"].as_array_mut().expect("preset nodes");
     let group = nodes.iter_mut().find(|n| n["nodeId"] == "Live Matter").expect("Live Matter group");
-    let group_id = group["id"].clone();
     let inner = &mut group["group"];
     let id_of = |inner: &Value, name: &str| -> u64 {
         let nodes = inner["nodes"].as_array().expect("group nodes");
@@ -76,8 +73,5 @@ pub fn matter_dam_break_faces(consumer: Option<usize>, collider: bool) -> Effect
         }
     }
     inner["wires"].as_array_mut().expect("group wires").extend(wires);
-    if !collider {
-        preset["wires"].as_array_mut().expect("preset wires").retain(|w| !(w["toNode"] == group_id && w["toPort"] == "collider"));
-    }
     serde_json::from_value(preset).expect("matter faces def")
 }

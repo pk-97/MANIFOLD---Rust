@@ -10821,7 +10821,6 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "OceanCliff",
         "WaterDamBreakGpuFlip",
         "WaterDamBreakMatter",
         "WaterDamBreakParticles",
@@ -36534,13 +36533,14 @@
             "Rendered",
             "Solid",
             "Wireframe",
-            "Points"
+            "Points",
+            "Physics View"
           ],
           "label": "Mode",
           "name": "mode",
           "range": [
             "0",
-            "3"
+            "4"
           ],
           "type": "enum"
         },
@@ -36766,13 +36766,14 @@
             "Rendered",
             "Solid",
             "Wireframe",
-            "Points"
+            "Points",
+            "Physics View"
           ],
           "label": "Render Mode",
           "name": "render_mode",
           "range": [
             "0",
-            "3"
+            "4"
           ],
           "type": "enum"
         },

@@ -3,7 +3,8 @@
 //! the app read this list and nothing else.
 
 use crate::scene_doc::{
-    CameraFields, CameraRig, ForceFields, ForceType, ItemFields, ItemKind, LightFields, LightType, ObjectFields, Shape,
+    CameraFields, CameraRig, ForceFields, ForceType, ItemFields, ItemKind, LightFields, LightType, ObjectFields, Shape, SourceRole,
+    WaterSourceFields,
 };
 
 /// One thing the Add menu adds: an item of `kind` whose fields are
@@ -41,6 +42,10 @@ fn force(force: ForceType) -> ItemFields {
     ItemFields::Force(ForceFields { force, ..ForceFields::default() })
 }
 
+fn source(role: SourceRole) -> ItemFields {
+    ItemFields::WaterSource(WaterSourceFields { role, ..WaterSourceFields::default() })
+}
+
 const fn entry(
     key: &'static str,
     group: &'static str,
@@ -58,7 +63,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 22] = [
+pub static ADD_ENTRIES: [AddEntry; 26] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
@@ -75,6 +80,10 @@ pub static ADD_ENTRIES: [AddEntry; 22] = [
     entry("group", "Group", "Group", ItemKind::Group, "Group", || ItemFields::default_for(ItemKind::Group)),
     entry("material", "Material", "Material", ItemKind::Material, "Material", || ItemFields::default_for(ItemKind::Material)),
     entry("swarm", "Swarm", "Swarm", ItemKind::Swarm, "Swarm", || ItemFields::default_for(ItemKind::Swarm)),
+    entry("water", "Water", "Water", ItemKind::Water, "Water", || ItemFields::default_for(ItemKind::Water)),
+    entry("water_source.fill", "Water Source", "Fill", ItemKind::WaterSource, "Fill", || source(SourceRole::Fill)),
+    entry("water_source.inflow", "Water Source", "Inflow", ItemKind::WaterSource, "Inflow", || source(SourceRole::Inflow)),
+    entry("water_source.drain", "Water Source", "Drain", ItemKind::WaterSource, "Drain", || source(SourceRole::Drain)),
     entry("force.radial", "Force", "Radial", ItemKind::Force, "Radial Force", || force(ForceType::Radial)),
     entry("force.uniform", "Force", "Uniform", ItemKind::Force, "Uniform Force", || force(ForceType::Uniform)),
     entry("force.vortex", "Force", "Vortex", ItemKind::Force, "Vortex", || force(ForceType::Vortex)),

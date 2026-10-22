@@ -117,6 +117,16 @@ pub fn field_rows(kind: ItemKind) -> &'static [FieldRow] {
     }
 }
 
+/// Why `item` cannot take the choice `key` of its field `field` right now,
+/// or `None`. The choice is drawn disabled with the reason, and a pick of it
+/// is refused.
+pub fn choice_disabled(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> Option<&'static str> {
+    match item.kind() {
+        ItemKind::WaterSource => super::water_source::choice_unavailable(doc, item, field, key),
+        _ => None,
+    }
+}
+
 /// The field rows that exist for an item with `fields`.
 pub fn applicable_fields(fields: &ItemFields) -> impl Iterator<Item = &'static FieldRow> + '_ {
     field_rows(fields.kind()).iter().filter(move |row| (row.applies)(fields))
@@ -132,6 +142,11 @@ pub fn field_for(fields: &ItemFields, id: &str) -> Option<&'static FieldRow> {
 /// take) is an error and changes nothing.
 pub fn set_field(doc: &SceneDoc, item: &Item, row: &FieldRow, value: &FieldValue) -> Result<ItemFields, String> {
     if let Some(reason) = (row.disabled)(doc, item) {
+        return Err(reason.to_owned());
+    }
+    if let FieldValue::Choice(key) = value
+        && let Some(reason) = choice_disabled(doc, item, row.id, key)
+    {
         return Err(reason.to_owned());
     }
     let mut fields = item.fields.clone();

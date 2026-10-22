@@ -5,7 +5,10 @@
 
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{CameraFields, CameraRig, FeatureSetting, ForceFields, ForceType, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, SceneDoc, Shape, TextureSource, param_id};
+use manifold_core::scene_doc::{
+    CameraFields, CameraRig, FeatureSetting, ForceFields, ForceType, Item, ItemFields, ItemId, ItemKind, LightType, MaterialFields, SceneDoc,
+    Shape, SourceRole, TextureSource, WaterSourceFields, param_id,
+};
 use manifold_core::scene_schema::{self, FieldControl, FieldValue, add_entry, field_for, unique_name};
 use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::command::{Command, CompositeCommand};
@@ -92,8 +95,26 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
             commands.extend(values.iter().map(|(property, value)| write(layer, &force_id, property, 0.0, *value)));
         }
     }
+    if entry.kind == ItemKind::Water {
+        let fill = new_id();
+        commands.push(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::WaterSource, Some(id.clone()), 0, None, fill.clone())));
+        commands.push(Box::new(SetSceneItemFieldsCommand::new(
+            layer.clone(),
+            fill.clone(),
+            ItemFields::WaterSource(WaterSourceFields { role: SourceRole::Fill, ..WaterSourceFields::default() }),
+        )));
+        commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), fill.clone(), unique_name("Fill", &names))));
+        // Its params exist once it is added; they start at the column's box.
+        commands.extend(WATER_FILL.iter().map(|(property, value)| write(layer, &fill, property, 0.0, *value)));
+    }
     Ok(batch(commands, &format!("Add {}", entry.label), Some(id)))
 }
+
+/// What a new Water brings (Blender's Quick Liquid fills its domain the same
+/// way): a Fill, the FLIP Fluids Dam Break column standing against the left
+/// wall of the default four-metre domain, so play shows a dam break at once.
+const WATER_FILL: [(&str, f32); 6] =
+    [("pos_x", -1.25), ("pos_y", 1.12), ("pos_z", 0.0), ("scale_x", 1.18), ("scale_y", 1.92), ("scale_z", 3.5)];
 
 /// What a new Material is called, numbered when taken.
 const MATERIAL_NAME: &str = "Material";

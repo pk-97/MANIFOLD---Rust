@@ -9,7 +9,7 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, SceneDoc, Shape, param_id, split_param_id};
 use manifold_core::scene_schema::{
-    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, bodies_past_capacity, impulse_unavailable, modifier_label,
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, bodies_past_capacity, choice_disabled, impulse_unavailable, modifier_label,
 };
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
@@ -62,7 +62,13 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
     }
     let add_entries = ADD_ENTRIES
         .iter()
-        .map(|entry| AddEntryVm { key: entry.key.to_owned(), group: entry.group.to_owned(), label: entry.label.to_owned() })
+        .map(|entry| AddEntryVm {
+            key: entry.key.to_owned(),
+            group: entry.group.to_owned(),
+            label: entry.label.to_owned(),
+            top_level: manifold_core::scene_doc::can_hold(None, entry.kind),
+            holders: ItemKind::ALL.into_iter().filter(|holder| manifold_core::scene_doc::can_hold(Some(*holder), entry.kind)).collect(),
+        })
         .collect();
     SceneSetupVm { layer_id, items, add_entries }
 }
@@ -198,6 +204,7 @@ fn closed(choices: &[Choice], held: &FieldValue) -> Vec<FieldOptionVm> {
             label: choice.label.to_owned(),
             pick: FieldPick::Choice(choice.key.to_owned()),
             checked: matches!(held, FieldValue::Choice(key) if key == choice.key),
+            disabled: None,
         })
         .collect()
 }
@@ -210,6 +217,7 @@ fn item_options(doc: &SceneDoc, item: &Item, passes: fn(&Item) -> bool, held: &F
                 label: other.name.clone(),
                 pick: FieldPick::Item(Some(other.id.clone())),
                 checked: matches!(held, FieldValue::Item(Some(id)) if *id == other.id),
+                disabled: None,
             });
         }
     });
@@ -226,7 +234,13 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
         FieldControlVm::Pick { current, options }
     };
     match row.control {
-        FieldControl::Closed(choices) => pick(closed(choices, &held)),
+        FieldControl::Closed(choices) => {
+            let mut options = closed(choices, &held);
+            for (option, choice) in options.iter_mut().zip(choices) {
+                option.disabled = choice_disabled(doc, item, row.id, choice.key).map(str::to_owned);
+            }
+            pick(options)
+        }
         FieldControl::ClosedOrItem { closed: choices, items } => {
             let mut options = closed(choices, &held);
             options.extend(item_options(doc, item, items, &held));
@@ -237,6 +251,7 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                 label: none.to_owned(),
                 pick: FieldPick::Item(None),
                 checked: matches!(held, FieldValue::Item(None)),
+                disabled: None,
             }];
             options.extend(item_options(doc, item, items, &held));
             pick(options)
@@ -246,13 +261,14 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                 FieldValue::Items(set) => set.as_slice(),
                 _ => &[],
             };
-            let mut options = vec![FieldOptionVm { label: all.to_owned(), pick: FieldPick::All, checked: set.is_empty() }];
+            let mut options = vec![FieldOptionVm { label: all.to_owned(), pick: FieldPick::All, checked: set.is_empty(), disabled: None }];
             doc.walk(|other, _| {
                 if other.id != item.id && items(other) {
                     options.push(FieldOptionVm {
                         label: other.name.clone(),
                         pick: FieldPick::Toggle(other.id.clone()),
                         checked: set.contains(&other.id),
+                        disabled: None,
                     });
                 }
             });
@@ -264,6 +280,7 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                 label: name.clone(),
                 pick: FieldPick::Layer(id.clone()),
                 checked: matches!(&held, FieldValue::Layer(held) if held == id),
+                disabled: None,
             }));
             pick(options)
         }
@@ -274,7 +291,7 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                 .map(|(index, name)| {
                     let key = index.to_string();
                     let checked = matches!(&held, FieldValue::Choice(held) if *held == key);
-                    FieldOptionVm { label: name.clone(), pick: FieldPick::Choice(key), checked }
+                    FieldOptionVm { label: name.clone(), pick: FieldPick::Choice(key), checked, disabled: None }
                 })
                 .collect(),
         ),

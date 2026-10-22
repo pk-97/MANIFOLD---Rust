@@ -27,13 +27,14 @@ mod object;
 mod physics;
 mod scene_level;
 mod swarm;
+mod water;
 mod water_source;
 mod world;
 
 pub use add_menu::{ADD_ENTRIES, AddEntry, add_entry, unique_name};
 pub use camera::CAMERA_ROWS;
 pub use fields::{
-    Choice, FieldControl, FieldRow, FieldValue, applicable_fields, field_for, field_rows, is_camera, is_material,
+    Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, field_rows, is_camera, is_material,
     is_object_or_group, set_field,
 };
 pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, can_copy, copies_unavailable, copy_groups_full};
@@ -46,6 +47,11 @@ pub use object::{OBJECT_ROWS, has_shape_name, modifier_label, shape_name};
 pub use physics::{BODY_ROLE, MAX_GROUP_PARTS, PHYSICS_ROWS, PhysicsPart, bodies_past_capacity, physics_parts, physics_unavailable, world_full};
 pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
+pub use water::{
+    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, WATER_FAMILY_REASON, WATER_ROWS, WHITEWATER_PER_CELL, WORLD_FOLLOWS,
+    WaterFamily, WaterTemplate, template_roles, water_family,
+};
+pub use water_source::{DRAIN_ROLE, FILL_ROLE, INFLOW_ROLE, WATER_SOURCE_ROWS, role_index};
 pub use world::{SPEED_RANGE, WORLD_ROWS};
 
 use manifold_foundation::param_range::HardLimit;
@@ -269,8 +275,8 @@ pub fn rows(kind: ItemKind) -> &'static [PropertyRow] {
         ItemKind::World => &WORLD_ROWS,
         ItemKind::Force => &FORCE_ROWS,
         ItemKind::Swarm => &SWARM_ROWS,
-        // Their tables arrive with their emitters (section 11, wave 3).
-        ItemKind::Water | ItemKind::WaterSource => &[],
+        ItemKind::Water => &WATER_ROWS,
+        ItemKind::WaterSource => &WATER_SOURCE_ROWS,
     }
 }
 

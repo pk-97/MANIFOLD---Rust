@@ -4,7 +4,7 @@
 //! fill boxes, the fixed-tick clock (D8) and the per-tick substep count and
 //! material dials (D3, D4) the matter atoms read as wires. P1 carries the
 //! domain, walls, box fill, clock, gravity, speed, reset, seed and the water
-//! dials; P2a Collider roles as bodies, shapes and a distance atlas (D11);
+//! dials; P2a coupled bodies, shapes and a distance atlas (D11);
 //! P2b the scene's Box3D bodies as two-way coupled bodies (section 5): the
 //! domain owns the rigid world in-thread and steps it one settled fluid tick
 //! at a time. Scene forces and impulses reach the liquid through the shared
@@ -31,7 +31,7 @@ use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, Liqu
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::lattice::closed_faces;
 use manifold_water_liquid::clock::LiquidClock;
-use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, coupling_capacity, takes_reaction};
+use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
 use {manifold_water_liquid::fields, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_physics::tick_samples::TickSamples;
@@ -372,7 +372,7 @@ pub struct Coupling {
     owner: Option<LiquidRigidOwner>,
     /// This frame's domain box and closed faces: the bodies' walls.
     walls: DomainWalls,
-    /// The coupled bodies this frame's roles leave the liquid room for.
+    /// The coupled bodies the liquid has body rows for.
     capacity: usize,
     /// This frame's simulation step, handed to the rigid owner.
     step: manifold_water_rigid::physics::SimStep,
@@ -889,7 +889,7 @@ impl MatterDomain {
         }
         let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
         self.coupled.walls = DomainWalls::of(&layout, closed_faces(ctx.params));
-        self.coupled.capacity = coupling_capacity(roles);
+        self.coupled.capacity = MAX_LIQUID_BODIES;
         if self.coupled.mode && !self.observe_rigid(ctx.played(), speed)? {
             return Ok(None);
         }

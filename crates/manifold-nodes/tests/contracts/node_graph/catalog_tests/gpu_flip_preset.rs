@@ -100,15 +100,9 @@ use serde_json::{Value, json};
             step.with_iterations(4),
             WaterScene::dam_break(64).with_steps(1).with_surface(),
         ];
-        // The obstacle, bare and meshed, and in the still pool the kinematic
-        // proof moves it through.
-        let obstacle = LATTICES.into_iter().flat_map(|n| {
-            let dam = WaterScene::dam_break(n).with_obstacle();
-            [dam, dam.with_surface(), WaterScene::still_pool(n).with_obstacle()]
-        });
         // The open-face drain.
         let open = [WaterScene::still_pool(64).with_closed_faces(63 & !1)];
-        for scene in all.chain(probes).chain(obstacle).chain(open) {
+        for scene in all.chain(probes).chain(open) {
             let n = scene.pressure.n;
             let def = water_def(scene);
             let (graph, plan) = built(&def);
@@ -185,19 +179,6 @@ use serde_json::{Value, json};
         let pool = per_slot * f64::from(AUTO_INFLOW_SLOTS);
         println!("GPU FLIP auto inflow pool: {per_slot:.0} bytes a slot, {:.2} GB", pool / 1e9);
         assert!((0.5e9..1.5e9).contains(&pool), "{pool} bytes");
-        // The walk reports the pool the allocator gets: the obstacle turned
-        // into an Inflow grows the fill's count to the inflow pool.
-        let scene = WaterScene::dam_break(64);
-        let collider = render_def(scene);
-        let mut inflow = collider.clone();
-        find_node_mut(&mut inflow.nodes, "obstacle_collider")
-            .expect("obstacle collider")
-            .params
-            .insert("role".into(), serde_json::from_value(json!({"type": "Enum", "value": 1})).unwrap());
-        let grown = walked(&inflow, false, "inflow").scene_bytes - walked(&collider, false, "collider").scene_bytes;
-        let expected = per_slot * (f64::from(AUTO_INFLOW_SLOTS) - scene.particles() as f64);
-        println!("GPU FLIP inflow walk: {grown} bytes more, {expected:.0} expected");
-        assert!((grown as f64 - expected).abs() < 1e-3 * expected, "{grown} bytes, {expected:.0} expected");
     }
 
 
@@ -565,11 +546,7 @@ use serde_json::{Value, json};
         assert_eq!(domain.handle.as_deref(), Some("Simulation"));
         // This handle belongs to insertion; the preset recipe leaves it unnamed.
         domain.handle = None;
-        for (def, particles, obstacle) in [
-            (render_def(WaterScene::dam_break(64)), false, true),
-            (particle_view_def(), true, true),
-            (render_def(WaterScene { obstacle: false, ..WaterScene::dam_break(64) }), false, false),
-        ] {
+        for (def, particles) in [(render_def(WaterScene::dam_break(64)), false), (particle_view_def(), true)] {
             let saved = serde_json::to_string(&def).unwrap();
             let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
             let family = find_node(&def.nodes, "water_family").unwrap();
@@ -579,8 +556,7 @@ use serde_json::{Value, json};
             let mut outputs = family_outputs().to_vec();
             if !particles { outputs.push("object_4"); }
             assert_eq!(group.interface.outputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), outputs);
-            assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-                if obstacle { vec!["role_0"] } else { vec![] });
+            assert!(group.interface.inputs.is_empty(), "solids reach the water from the World, not a role input");
             assert_eq!(facts(&body.nodes, &body.wires, particles), facts(&group.nodes, &group.wires, particles));
             assert_eq!(group.nodes.iter().filter(|n| n.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID).count(), 1);
             assert_eq!(group.nodes.iter().filter(|n| n.type_id == "node.whitewater_obstacle_source").count(), 1);

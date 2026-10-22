@@ -74,7 +74,11 @@ pub enum ControlGroup {
     /// The physics setting and its rows (titled Physics).
     Body,
     Copies,
+    /// A Water's domain box and its Resolution.
+    Domain,
     Simulation,
+    /// A Water's surface dials.
+    Surface,
     Whitewater,
     WhitewaterAdvanced,
     Source,
@@ -105,7 +109,9 @@ impl ControlGroup {
             Self::Material => "Material",
             Self::Body => "Physics",
             Self::Copies => "Copies",
+            Self::Domain => "Domain",
             Self::Simulation => "Simulation",
+            Self::Surface => "Surface",
             Self::Whitewater => "Whitewater",
             Self::WhitewaterAdvanced => "Advanced · Whitewater",
             Self::Source => "Source",

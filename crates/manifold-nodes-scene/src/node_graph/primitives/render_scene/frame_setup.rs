@@ -604,7 +604,8 @@ impl RenderScene {
         let render_mode = ctx.inputs.render_mode("render_mode_in").unwrap_or_else(|| {
             use manifold_node_engine::scene::render_mode::{RENDER_MODE_POINTS, RENDER_MODE_RENDERED, RenderMode};
             let mode = match ctx.params.get("render_mode") {
-                Some(ParamValue::Enum(mode)) => (*mode).min(RENDER_MODE_POINTS),
+                // Physics View draws the scene as Rendered; the water switches itself.
+                Some(ParamValue::Enum(mode)) if *mode <= RENDER_MODE_POINTS => *mode,
                 _ => RENDER_MODE_RENDERED,
             };
             RenderMode { mode, ..RenderMode::default() }
