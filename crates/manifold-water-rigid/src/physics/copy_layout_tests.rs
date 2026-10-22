@@ -67,7 +67,7 @@ fn yaw_of(rotation: [f32; 4]) -> f32 {
 #[test]
 fn the_platonic_widths_are_the_installed_hulls_bit_for_bit() {
     for shape in 0..5u32 {
-        let body = RigidBody { shape, ..cube([0.0; 3], 0.8) };
+        let body = RigidBody { collider: Some(platonic_solid(shape)), ..cube([0.0; 3], 0.8) };
         assert_eq!(copy_width(&body), platonic_width(shape, 0.8), "shape {shape}");
         let half = PLATONIC_HALF_WIDTH[shape as usize];
         let max = manifold_node_engine::platonic::platonic_points(shape).iter().map(|p| p[0]).fold(f32::MIN, f32::max);

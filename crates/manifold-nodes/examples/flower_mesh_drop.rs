@@ -5,14 +5,12 @@
 
 use std::{borrow::Cow, error::Error, fs, path::Path};
 
-use bytemuck::Zeroable;
 use manifold_foundation::{Beats, Bpm};
 use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
-use manifold_node_engine::mesh::MeshVertex;
-use manifold_water_rigid::physics_mesh::prepare_colliders;
+use manifold_physics::collision_shape::CollisionShape;
 use serde_json::{Value, json};
 
-use manifold_node_engine::scene::mesh_partition as fracture;
+use manifold_foundation::mesh_partition as fracture;
 
 struct Contributor {
     primitive: Value,
@@ -387,30 +385,22 @@ fn run(
     let fragments = pieces
         .map(|count| fracture::partition(&vertices, &triangles, count))
         .transpose()?;
-    let hulls_for = |vertices: &[[f32; 3]], triangles: &[[u32; 3]], parts| {
-        let mesh: Vec<_> = triangles
-            .iter()
-            .flat_map(|tri| {
-                tri.iter().map(|&index| MeshVertex {
-                    position: vertices[index as usize],
-                    ..MeshVertex::zeroed()
-                })
-            })
-            .collect();
-        prepare_colliders(&mesh, parts)
+    let hulls_for = |vertices: &[[f32; 3]], triangles: &[[u32; 3]]| {
+        let list: Vec<[f32; 3]> = triangles.iter().flat_map(|tri| tri.iter().map(|&index| vertices[index as usize])).collect();
+        CollisionShape::from_triangle_lists([list.as_slice()]).and_then(|shape| shape.body_hulls([1.0; 3]))
     };
-    let collider = hulls_for(&vertices, &triangles, 32)?;
+    let collider = hulls_for(&vertices, &triangles)?;
     let fragment_colliders = fragments
         .as_ref()
         .map(|fragments| {
             fragments
                 .iter()
-                .map(|f| hulls_for(&f.vertices, &f.triangles, 1))
+                .map(|f| hulls_for(&f.vertices, &f.triangles))
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?;
     let mut world = floor_world()?;
-    let body = world.add_hulls(&collider.hulls, config)?;
+    let body = world.add_hulls(&collider, config)?;
     world.set_hit_events(body, true)?;
     eprintln!(
         "Original scan: {} vertices, {} triangles; 32 standard convex colliders; longest dimension 2.2 m; 1 m drop.",
@@ -445,7 +435,7 @@ fn run(
                         fragments.iter().zip(fragment_colliders.as_ref().unwrap())
                     {
                         let handle = broken_world.add_hulls(
-                            &collider.hulls,
+                            collider,
                             BodyConfig {
                                 position: pose.position,
                                 rotation: pose.rotation,

@@ -38,9 +38,7 @@ fn dam_break_obstacle_mass_is_the_card_mass_whatever_the_hull_volume() {
             scale,
             ..Transform::default()
         },
-        collider: Some(Arc::new(ColliderGeometry {
-            hulls: vec![manifold_physics::cook_hull(&points).unwrap()],
-        })),
+        collider: Some(Arc::new(Solid::Hulls(vec![manifold_physics::cook_hull(&points).unwrap()]))),
         ..RigidBody::default()
     };
     let mut world = PhysicsWorld::new(GRAVITY).unwrap();
@@ -594,8 +592,13 @@ fn zero_speed_finishes_preceding_interval_and_holds_until_resume() {
     assert_eq!(simulation.physics_time, 1.0);
 }
 
+/// Fundamental 4 (SCENE_DOCUMENT_DESIGN.md section 10 (Testing)), with the
+/// join rule: a body joins the running world when it is enabled or its shape
+/// is ready, and a NaN scale or a flat mesh is refused with a reason while
+/// everything else keeps stepping. Nothing reaches Box3D's checks.
 #[test]
-fn disabled_body_keeps_authored_pose_and_joins_the_running_world_when_enabled() {
+fn a_body_joins_the_running_world_when_ready_and_bad_input_stays_out() {
+    let asserts_before = manifold_physics::native_assert_count();
     let mut bodies = vec![None; 64];
     bodies[0] = Some(RigidBody {
         enabled: false,
@@ -607,6 +610,13 @@ fn disabled_body_keeps_authored_pose_and_joins_the_running_world_when_enabled() 
         ..RigidBody::default()
     });
     bodies[1] = Some(body([0.0, 1.5, 0.0]));
+    let mut nan_scale = body([3.0, 1.5, 0.0]);
+    nan_scale.transform.scale = [f32::NAN, 1.0, 1.0];
+    bodies[2] = Some(nan_scale);
+    let flat = [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]];
+    bodies[3] = Some(RigidBody { collider: Some(Arc::new(Solid::Hulls(vec![flat.to_vec()]))), ..body([6.0, 1.5, 0.0]) });
+    // Its shape is still being built.
+    bodies[4] = Some(RigidBody { collider: None, ..body([-3.0, 1.5, 0.0]) });
     let mut simulation = RigidSimulation::default();
     simulation
         .advance(&bodies, GRAVITY, PlayedTime::ZERO, 1.0, 0.0)
@@ -616,9 +626,14 @@ fn disabled_body_keeps_authored_pose_and_joins_the_running_world_when_enabled() 
         .unwrap();
 
     assert_eq!(simulation.poses[0].pos, [0.0, 0.0, 0.0]);
-    assert!(simulation.poses[1].pos[1] < 0.0);
+    assert!(simulation.poses[1].pos[1] < 0.0, "the world keeps stepping");
+    assert_eq!(simulation.handles[2..5], [None; 3], "refused and unready bodies stay out of the solver");
+    let refused: Vec<Member> = simulation.refusals().iter().map(|refusal| refusal.member).collect();
+    assert_eq!(refused, [Member::Body(2), Member::Body(3)], "a refusal names each bad body; an unready one is not refused");
+    assert!(simulation.refusals().iter().all(|refusal| !refusal.reason.to_string().is_empty()));
 
     bodies[0].as_mut().unwrap().enabled = true;
+    bodies[4].as_mut().unwrap().collider = Some(default_solid());
     simulation
         .advance(&bodies, GRAVITY, PlayedTime::from_played(2.0), 1.0, 0.0)
         .unwrap();
@@ -627,6 +642,8 @@ fn disabled_body_keeps_authored_pose_and_joins_the_running_world_when_enabled() 
         .unwrap();
     assert!(simulation.poses[0].pos[1].abs() < 1.0e-5);
     assert!(simulation.poses[1].pos[1] < 0.0, "the crate that already fell is not reset by the new ground");
+    assert!(simulation.handles[4].is_some() && simulation.poses[4].pos[1] < 1.5, "a body whose shape arrives joins and falls");
+    assert_eq!(manifold_physics::native_assert_count(), asserts_before, "no Box3D check failed");
 }
 
 #[test]
@@ -754,14 +771,12 @@ fn fragment_release_reset_restores_intact_state_and_allows_retrigger() {
 
 #[test]
 fn fragment_release_inherits_spinning_parent_pose_and_point_velocity() {
-    let child_geometry = Arc::new(ColliderGeometry {
-        hulls: vec![vec![
+    let child_geometry = Arc::new(Solid::Hulls(vec![vec![
             [0.35, -0.2, -0.2],
             [0.85, -0.2, -0.2],
             [0.35, 0.2, -0.2],
             [0.35, -0.2, 0.2],
-        ]],
-    });
+        ]]));
     let mut bodies = vec![None; 64];
     bodies[0] = Some(RigidBody {
         transform: Transform {
@@ -1004,8 +1019,7 @@ fn material_edit_preserves_the_current_falling_pose() {
 
 #[test]
 fn multi_hull_geometry_rebuilds_on_reset_and_material_edits_keep_pose() {
-    let geometry = Arc::new(ColliderGeometry {
-        hulls: vec![
+    let geometry = Arc::new(Solid::Hulls(vec![
             vec![
                 [-0.5, -0.5, -0.5],
                 [0.5, -0.5, -0.5],
@@ -1018,8 +1032,7 @@ fn multi_hull_geometry_rebuilds_on_reset_and_material_edits_keep_pose() {
                 [0.0, 0.5, 0.5],
                 [0.0, 0.0, -0.5],
             ],
-        ],
-    });
+        ]));
     let mut bodies = vec![None; 64];
     bodies[0] = Some(RigidBody {
         collider: Some(geometry.clone()),
@@ -1075,7 +1088,7 @@ fn all_scaled_platonic_hulls_settle_on_the_ground() {
                 scale: [0.7 + index as f32 * 0.15, 0.8 + index as f32 * 0.1, 0.7],
                 ..Transform::default()
             },
-            shape: index as u32,
+            collider: Some(platonic_solid(index as u32)),
             ..RigidBody::default()
         });
     }

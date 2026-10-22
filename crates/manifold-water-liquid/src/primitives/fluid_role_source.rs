@@ -12,23 +12,19 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
-use manifold_node_engine::mesh::PLATONIC_SHAPES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
-use manifold_water_rigid::physics_mesh::{PART_PORTS, parse_compound_materials};
+use manifold_water_rigid::physics_mesh::{MESH_PORTS, PART_PORTS, parse_compound_materials};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
-use geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
+use geometry::{prepare_geometry, prepare_wired_geometry};
 
-/// Saved projects store the index: labels may change, the order never.
-const GEOMETRY_MODES: &[&str] = &["Collision Proxy", "Exact Mesh"];
-/// World metres: how thick an open surface is as a solid.
-const DEFAULT_SHELL_THICKNESS: f32 = 0.05;
-const FLUID_ROLE_KINDS: &[&str] = &["Initial Fill", "Inflow", "Outflow", "Collider"];
-const _: () = assert!(FLUID_ROLE_KINDS.len() == FluidRoleKind::ALL.len());
+/// The Role menu: the first kinds of [`FluidRoleKind::ALL`], by the index a
+/// saved project stores.
+const FLUID_ROLE_KINDS: &[&str] = &["Initial Fill", "Inflow", "Outflow"];
 
 manifold_core::testkit_visible! {
     testkit {
@@ -46,17 +42,6 @@ pub(crate) struct CompoundPreparation {
 }
     }
 }
-
-pub(crate) const MESH_PORTS: [&str; 64] = [
-    "mesh_0", "mesh_1", "mesh_2", "mesh_3", "mesh_4", "mesh_5", "mesh_6", "mesh_7", "mesh_8",
-    "mesh_9", "mesh_10", "mesh_11", "mesh_12", "mesh_13", "mesh_14", "mesh_15", "mesh_16",
-    "mesh_17", "mesh_18", "mesh_19", "mesh_20", "mesh_21", "mesh_22", "mesh_23", "mesh_24",
-    "mesh_25", "mesh_26", "mesh_27", "mesh_28", "mesh_29", "mesh_30", "mesh_31", "mesh_32",
-    "mesh_33", "mesh_34", "mesh_35", "mesh_36", "mesh_37", "mesh_38", "mesh_39", "mesh_40",
-    "mesh_41", "mesh_42", "mesh_43", "mesh_44", "mesh_45", "mesh_46", "mesh_47", "mesh_48",
-    "mesh_49", "mesh_50", "mesh_51", "mesh_52", "mesh_53", "mesh_54", "mesh_55", "mesh_56",
-    "mesh_57", "mesh_58", "mesh_59", "mesh_60", "mesh_61", "mesh_62", "mesh_63",
-];
 
 manifold_core::testkit_visible! {
     testkit {
@@ -80,11 +65,7 @@ manifold_core::testkit_visible! {
 pub(crate) struct PreparationKey {
     path: String,
     selection: MeshSelection,
-    shape: u32,
-    radius: f32,
     source_transform: Transform,
-    mode: GeometryMode,
-    shell_thickness: f32,
     compound: Option<CompoundPreparation>,
     wired: Option<Box<WiredPreparation>>,
 }
@@ -95,19 +76,13 @@ impl PreparationKey {
         &self,
         path: &str,
         selection: MeshSelection,
-        builtin: (u32, f32),
         source_transform: Transform,
-        (mode, shell_thickness): (GeometryMode, f32),
         compound: Option<&CompoundPreparation>,
         wired: Option<&WiredPreparation>,
     ) -> bool {
         self.path == path
             && self.selection == selection
-            && self.shape == builtin.0
-            && self.radius == builtin.1
             && self.source_transform == source_transform
-            && self.mode == mode
-            && self.shell_thickness == shell_thickness
             && self.compound.as_ref() == compound
             && self.wired.as_deref() == wired
     }
@@ -116,7 +91,7 @@ impl PreparationKey {
 manifold_node_engine::primitive! {
     name: FluidRoleSource,
     type_id: "node.fluid_role_source",
-    purpose: "Prepare one built-in or imported mesh as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Exact Mesh preserves the exact indexed surface after exact-coordinate welding: its closed parts are solid volumes and its open parts are shells Shell Thickness (world metres) thick. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
+    purpose: "Prepare one imported or wired mesh (a cube when there is none) as a CPU FluidRole wire: the exact indexed surface after exact-coordinate welding, closed parts solid and open parts shells with an automatic thickness (manifold_physics::collision_shape). Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
     inputs: {
         transform: Transform required,
         source_transform: Transform optional,
@@ -256,10 +231,6 @@ manifold_node_engine::primitive! {
         velocity_z: ScalarF32 optional,
         inherit_motion: ScalarF32 optional,
         friction: ScalarF32 optional,
-        geometry: ScalarF32 optional,
-        shell_thickness: ScalarF32 optional,
-        shape: ScalarF32 optional,
-        radius: ScalarF32 optional,
         mesh_index: ScalarF32 optional,
         primitive_index: ScalarF32 optional,
         material_index: ScalarF32 optional,
@@ -270,23 +241,18 @@ manifold_node_engine::primitive! {
         translate_z: ScalarF32 optional,
         fragment_count: ScalarF32 optional,
         fragment_index: ScalarF32 optional,
-        collider_parts: ScalarF32 optional,
     },
     outputs: {
         role: FluidRole,
     },
     params: [
-        ParamDef { name: Cow::Borrowed("role"), label: "Role", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 3.0)), enum_values: FLUID_ROLE_KINDS },
+        ParamDef { name: Cow::Borrowed("role"), label: "Role", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 2.0)), enum_values: FLUID_ROLE_KINDS },
         ParamDef { name: Cow::Borrowed("enabled"), label: "Enabled", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("velocity_x"), label: "Velocity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("velocity_y"), label: "Velocity Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("velocity_z"), label: "Velocity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("inherit_motion"), label: "Inherit Motion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 2.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("friction"), label: "Friction", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("geometry"), label: "Geometry", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: GEOMETRY_MODES },
-        ParamDef { name: Cow::Borrowed("shell_thickness"), label: "Shell Thickness", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_SHELL_THICKNESS), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("shape"), label: "Builtin Shape", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, (PLATONIC_SHAPES.len() - 1) as f32)), enum_values: PLATONIC_SHAPES },
-        ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.001, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("path"), label: "Mesh File", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("compound_materials"), label: "Compound Materials", ty: ParamType::Table, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("mesh_index"), label: "Mesh Index", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 1024.0)), enum_values: &[] },
@@ -299,16 +265,15 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("translate_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fragment_count"), label: "Pieces", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fragment_index"), label: "Piece", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 63.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("collider_parts"), label: "Collider Detail", ty: ParamType::Int, default: ParamValue::Float(32.0), range: Some((1.0, 64.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Use one source for each fluid role and wire all roles into the fluid world. Choose Initial Fill for starting volume, Inflow/Outflow for boundary sources, or Collider for obstacles. Builtin shapes use the shared Platonic geometry; imported paths reuse the existing MeshSelection loader. Collision Proxy is explicit approximate convex geometry; Exact Mesh keeps a nonconvex container's cavity and turns open surfaces (a ground plane, a scanned wall) into shells Shell Thickness thick. A shell is never thinner than two cells of the liquid it collides with, so a thickness under that rests the water up to one cell above the drawn surface.",
+    composition_notes: "Use one source for each fluid role and wire all roles into the fluid world. Choose Initial Fill for starting volume or Inflow/Outflow for boundary sources; solids in the water come from the World's Colliders and Bodies, never from a role. Imported paths reuse the existing MeshSelection loader. An open surface is a shell two of the liquid's cells thick, or 0.1% of the mesh when that is thicker.",
     examples: [],
     picker: { label: "Fluid Role Source", category: Atom },
-    summary: "Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire.",
+    summary: "Prepares one reusable fluid source geometry and emits its typed CPU role wire.",
     category: Geometry3D,
     role: Source,
-    aliases: ["fluid source", "fluid role", "fluid collider", "inflow", "outflow", "initial fill"],
+    aliases: ["fluid source", "fluid role", "inflow", "outflow", "initial fill"],
     boundary_reason: NonGpu,
     extra_fields: {
         last_key: Option<PreparationKey> = None,
@@ -469,76 +434,22 @@ impl Primitive for FluidRoleSource {
                 "Fluid role compound_materials requires an imported mesh path".into(),
             );
         }
-        let mode = match resolve_index(ctx, "geometry", 0, GEOMETRY_MODES.len() as u32) {
-            Ok(0) => GeometryMode::CollisionProxy,
-            Ok(1) => GeometryMode::ExactMesh,
-            Ok(_) => unreachable!(),
-            Err(error) => return self.fail_setup(ctx, error),
-        };
-        // Cooked hulls are always closed, so only the exact mesh reads it.
-        let shell_thickness = if mode == GeometryMode::ExactMesh {
-            match resolve_f32(ctx, "shell_thickness", DEFAULT_SHELL_THICKNESS) {
-                Ok(value) if value.is_finite() && value >= 0.0 => value,
-                Ok(_) => {
-                    return self.fail_setup(
-                        ctx,
-                        "Fluid role shell_thickness must be finite and non-negative".into(),
-                    );
-                }
+        let selection = if wired.is_some() {
+            default_selection()
+        } else {
+            match resolve_selection(ctx) {
+                Ok(selection) => selection,
                 Err(error) => return self.fail_setup(ctx, error),
             }
-        } else {
-            0.0
-        };
-        let shape = if wired.is_some() {
-            1
-        } else {
-            match resolve_index(ctx, "shape", 1, PLATONIC_SHAPES.len() as u32) {
-                Ok(value) => value,
-                Err(error) => return self.fail_setup(ctx, error),
-            }
-        };
-        let radius = if wired.is_some() {
-            1.0
-        } else {
-            match resolve_f32(ctx, "radius", 1.0) {
-                Ok(value) if value.is_finite() && value > 0.0 => value,
-                Ok(_) => {
-                    return self
-                        .fail_setup(ctx, "Fluid role radius must be finite and positive".into());
-                }
-                Err(error) => return self.fail_setup(ctx, error),
-            }
-        };
-        let selection_result = if wired.is_some() {
-            resolve_collider_parts(ctx).map(default_selection)
-        } else {
-            resolve_selection(ctx)
-        };
-        let selection = match selection_result {
-            Ok(selection) => selection,
-            Err(error) => return self.fail_setup(ctx, error),
         };
         let setup_changed = self.last_key.as_ref().is_none_or(|last| {
-            !last.matches(
-                path,
-                selection,
-                (shape, radius),
-                source_transform,
-                (mode, shell_thickness),
-                compound.as_ref(),
-                wired.as_ref(),
-            )
+            !last.matches(path, selection, source_transform, compound.as_ref(), wired.as_ref())
         });
         if setup_changed {
             self.last_key = Some(PreparationKey {
                 path: path.to_owned(),
                 selection,
-                shape,
-                radius,
                 source_transform,
-                mode,
-                shell_thickness,
                 compound,
                 wired: wired.as_ref().map(|wired| Box::new(wired.clone())),
             });
@@ -551,25 +462,12 @@ impl Primitive for FluidRoleSource {
                 .name("fluid-role-prepare".into())
                 .spawn(move || {
                     let result = if let Some(wired) = wired {
-                        prepare_wired_geometry(
-                            &wired,
-                            source_transform,
-                            mode,
-                            selection.collider_parts,
-                        )
+                        prepare_wired_geometry(&wired, source_transform)
                     } else {
-                        prepare_geometry(
-                            &path_for_worker,
-                            selection,
-                            shape,
-                            radius,
-                            source_transform,
-                            mode,
-                            compound.as_ref(),
-                        )
+                        prepare_geometry(&path_for_worker, selection, source_transform, compound.as_ref())
                     }
                     .map(|meshes| {
-                        let geometry = PreparedFluidGeometry::new(meshes, shell_thickness);
+                        let geometry = PreparedFluidGeometry::new(meshes);
                         // Classify the parts here, off the content thread.
                         geometry.has_open_parts();
                         Arc::new(geometry)
@@ -741,7 +639,7 @@ fn resolve_compound(
 }
 
 manifold_core::testkit_visible! {
-pub(crate) fn default_selection(collider_parts: u32) -> MeshSelection {
+pub(crate) fn default_selection() -> MeshSelection {
     MeshSelection {
         mesh: -1,
         primitive: -1,
@@ -751,17 +649,8 @@ pub(crate) fn default_selection(collider_parts: u32) -> MeshSelection {
         translate: [0.0; 3],
         fragment_count: 1,
         fragment_index: 0,
-        collider_parts,
     }
 }
-}
-
-fn resolve_collider_parts(ctx: &EffectNodeContext<'_, '_>) -> Result<u32, String> {
-    let parts = resolve_integer(ctx, "collider_parts", 32)?;
-    if !(1..=64).contains(&parts) {
-        return Err("Fluid role collider_parts must be in 1..=64".into());
-    }
-    Ok(parts as u32)
 }
 
 fn validate_transform(transform: Transform, label: &str) -> Result<(), String> {
@@ -859,14 +748,16 @@ fn initial_fill_is_a_box(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> 
     if path || MESH_PORTS.iter().any(|port| ctx.inputs.slot(port).is_some()) {
         return Err("An Initial Fill fills a box; a mesh cannot be filled yet".into());
     }
-    if resolve_index(ctx, "shape", 1, PLATONIC_SHAPES.len() as u32)? != 1 {
-        return Err("An Initial Fill fills a box; set its shape to Cube".into());
-    }
     Ok(())
 }
 
 /// The role this source plays, from the `role` wire or param. The node and
 /// its extent rule both read it here.
+///
+/// Stopgap: a saved Collider (index 3) still resolves, off the menu, so every
+/// bundled water scene keeps its walls until the water reads the World's
+/// Colliders (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision
+/// shapes)), which deletes the kind.
 fn role_kind(wired: Option<f32>, param: Option<&ParamValue>) -> Result<FluidRoleKind, String> {
     let index = index_from(wired, param, "role", 1, FluidRoleKind::ALL.len() as u32)?;
     Ok(FluidRoleKind::ALL[index as usize])
@@ -933,13 +824,9 @@ fn resolve_selection(ctx: &EffectNodeContext<'_, '_>) -> Result<MeshSelection, S
     }
     let fragment_count = resolve_integer(ctx, "fragment_count", 1)?;
     let fragment_index = resolve_integer(ctx, "fragment_index", 0)?;
-    let collider_parts = resolve_integer(ctx, "collider_parts", 32)?;
     if !(1..=64).contains(&fragment_count) || fragment_index < 0 || fragment_index >= fragment_count
     {
         return Err("Fluid role fragment_index must be within fragment_count 1..=64".into());
-    }
-    if !(1..=64).contains(&collider_parts) {
-        return Err("Fluid role collider_parts must be in 1..=64".into());
     }
     Ok(MeshSelection {
         mesh,
@@ -950,7 +837,6 @@ fn resolve_selection(ctx: &EffectNodeContext<'_, '_>) -> Result<MeshSelection, S
         translate: [translate[0], translate[1], translate[2]],
         fragment_count: fragment_count as u32,
         fragment_index: fragment_index as u32,
-        collider_parts: collider_parts as u32,
     })
 }
 
@@ -1004,10 +890,8 @@ mod tests {
         let inputs = [("transform", transform), ("mesh_0", mesh)];
         let mut primitive = FluidRoleSource::new();
         let mut params = ParamValues::default();
-        params.insert(Cow::Borrowed("geometry"), ParamValue::Enum(1));
         // Connected geometry shadows legacy source fields completely.
         params.insert(Cow::Borrowed("path"), ParamValue::Float(42.0));
-        params.insert(Cow::Borrowed("radius"), ParamValue::Float(-1.0));
         params.insert(Cow::Borrowed("compound_materials"), ParamValue::Bool(false));
         let first = settle_inputs(&mut primitive, &mut backend, &inputs, output, &params);
         let extent = |role: &FluidRole| {
@@ -1079,7 +963,6 @@ mod tests {
         backend.set_transform(transform_slot, column);
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("role"), ParamValue::Enum(0));
-        params.insert(Cow::Borrowed("shape"), ParamValue::Enum(1));
         let mut primitive = FluidRoleSource::new();
         assert!(!run_once(&mut primitive, &mut backend, transform_slot, output_slot, &params), "no pending frame");
         let role = backend.cpu_values().get::<FluidRole>(output_slot).expect("published at once");
@@ -1088,9 +971,9 @@ mod tests {
         assert!(role.enabled);
         assert!(role.geometry.meshes.is_empty(), "a fill carries no geometry");
 
-        params.insert(Cow::Borrowed("shape"), ParamValue::Enum(0));
-        let mut sphere = FluidRoleSource::new();
-        assert!(run_once(&mut sphere, &mut backend, transform_slot, output_slot, &params), "a sphere is refused");
+        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new("scan.glb".to_string())));
+        let mut mesh = FluidRoleSource::new();
+        assert!(run_once(&mut mesh, &mut backend, transform_slot, output_slot, &params), "a mesh fill is refused");
     }
 
     #[test]
@@ -1125,7 +1008,7 @@ mod tests {
             &params,
         );
         let mut invalid = params.clone();
-        invalid.insert(Cow::Borrowed("radius"), ParamValue::Float(-1.0));
+        invalid.insert(Cow::Borrowed("fragment_count"), ParamValue::Float(0.0));
         assert!(run_once(
             &mut primitive,
             &mut backend,
@@ -1193,7 +1076,7 @@ mod tests {
             &params,
         );
         let mut changed = params.clone();
-        changed.insert(Cow::Borrowed("radius"), ParamValue::Float(2.0));
+        changed.insert(Cow::Borrowed("translate_x"), ParamValue::Float(0.5));
         run_once(
             &mut primitive,
             &mut backend,

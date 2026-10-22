@@ -64,17 +64,9 @@
       "id": 3,
       "nodeId": "obstacle_collider",
       "params": {
-        "radius": {
-          "type": "Float",
-          "value": 0.8660253882408142
-        },
         "role": {
           "type": "Enum",
           "value": 3
-        },
-        "shape": {
-          "type": "Enum",
-          "value": 1
         }
       },
       "typeId": "node.fluid_role_source"
@@ -2895,17 +2887,9 @@
             "typeId": "node.fluid_role_source",
             "handle": "Initial Fill",
             "params": {
-              "radius": {
-                "type": "Float",
-                "value": 0.8660254
-              },
               "role": {
                 "type": "Enum",
                 "value": 0
-              },
-              "shape": {
-                "type": "Enum",
-                "value": 1
               }
             }
           },

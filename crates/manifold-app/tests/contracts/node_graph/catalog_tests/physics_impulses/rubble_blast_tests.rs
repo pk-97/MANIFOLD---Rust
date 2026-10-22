@@ -5,7 +5,9 @@ use manifold_core::effect_graph_def::{BindingTarget, SerializedParamValue};
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::scene_impulse::{ImpulseFire, RigidImpulseTargets};
 use manifold_node_engine::scene::transform::Transform;
-use manifold_water_rigid::physics::{CopySpawn, ResolvedRigidImpulse, RigidBody, RigidSceneInputs, RigidSimulation};
+use manifold_node_engine::platonic::platonic_points;
+use manifold_water_rigid::physics::{CopySpawn, ResolvedRigidImpulse, RigidBody, RigidSceneInputs, RigidSimulation, Solid};
+use std::sync::Arc;
 
 fn rubble() -> EffectGraphDef {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes/assets/generator-presets/RubblePile.json");
@@ -50,6 +52,11 @@ fn scene_of(def: &EffectGraphDef) -> RigidSceneInputs {
             other => panic!("unexpected {name}: {other:?}"),
         }
     };
+    // A body's shape is the platonic mesh wired into its `source`.
+    let solid_of = |id: u32| {
+        let mesh = def.wires.iter().find(|w| w.to_node == id && w.to_port == "source").expect("a mesh shapes the body").from_node;
+        Arc::new(Solid::Hulls(vec![platonic_points(scalar(mesh, "shape") as u32).to_vec()]))
+    };
     let body = |id: u32, spawn: CopySpawn| RigidBody {
         transform: Transform {
             pos: ["pos_x", "pos_y", "pos_z"].map(|p| scalar(id - 1, p)),
@@ -59,7 +66,7 @@ fn scene_of(def: &EffectGraphDef) -> RigidSceneInputs {
             ..Default::default()
         },
         mass: scalar(id, "mass"),
-        shape: scalar(id, "shape") as u32,
+        collider: Some(solid_of(id)),
         kind: scalar(id, "motion") as u32,
         friction: scalar(id, "friction"),
         bounce: scalar(id, "bounce"),

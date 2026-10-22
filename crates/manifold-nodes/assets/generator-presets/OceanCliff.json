@@ -2780,10 +2780,6 @@
           "type": "Enum",
           "value": 3
         },
-        "geometry": {
-          "type": "Enum",
-          "value": 0
-        },
         "path": {
           "type": "String",
           "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
@@ -2799,10 +2795,6 @@
         "fragment_index": {
           "type": "Int",
           "value": 0
-        },
-        "collider_parts": {
-          "type": "Int",
-          "value": 64
         }
       }
     },
@@ -2814,10 +2806,6 @@
         "role": {
           "type": "Enum",
           "value": 3
-        },
-        "geometry": {
-          "type": "Enum",
-          "value": 0
         },
         "path": {
           "type": "String",
@@ -2834,10 +2822,6 @@
         "fragment_index": {
           "type": "Int",
           "value": 2
-        },
-        "collider_parts": {
-          "type": "Int",
-          "value": 64
         }
       }
     },
@@ -2911,18 +2895,6 @@
         "role": {
           "type": "Enum",
           "value": 3
-        },
-        "geometry": {
-          "type": "Enum",
-          "value": 0
-        },
-        "shape": {
-          "type": "Enum",
-          "value": 1
-        },
-        "radius": {
-          "type": "Float",
-          "value": 0.8660254037844386
         }
       }
     },
@@ -3142,10 +3114,6 @@
           "type": "Enum",
           "value": 3
         },
-        "geometry": {
-          "type": "Enum",
-          "value": 0
-        },
         "path": {
           "type": "String",
           "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
@@ -3161,10 +3129,6 @@
         "fragment_index": {
           "type": "Int",
           "value": 5
-        },
-        "collider_parts": {
-          "type": "Int",
-          "value": 64
         }
       }
     },
@@ -3215,10 +3179,6 @@
           "type": "Enum",
           "value": 3
         },
-        "geometry": {
-          "type": "Enum",
-          "value": 0
-        },
         "path": {
           "type": "String",
           "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
@@ -3234,10 +3194,6 @@
         "fragment_index": {
           "type": "Int",
           "value": 4
-        },
-        "collider_parts": {
-          "type": "Int",
-          "value": 64
         }
       }
     },
@@ -3311,10 +3267,6 @@
           "type": "Enum",
           "value": 3
         },
-        "geometry": {
-          "type": "Enum",
-          "value": 0
-        },
         "path": {
           "type": "String",
           "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
@@ -3330,10 +3282,6 @@
         "fragment_index": {
           "type": "Int",
           "value": 6
-        },
-        "collider_parts": {
-          "type": "Int",
-          "value": 64
         }
       }
     },
@@ -3384,10 +3332,6 @@
           "type": "Enum",
           "value": 3
         },
-        "geometry": {
-          "type": "Enum",
-          "value": 0
-        },
         "path": {
           "type": "String",
           "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
@@ -3403,10 +3347,6 @@
         "fragment_index": {
           "type": "Int",
           "value": 7
-        },
-        "collider_parts": {
-          "type": "Int",
-          "value": 64
         }
       }
     }

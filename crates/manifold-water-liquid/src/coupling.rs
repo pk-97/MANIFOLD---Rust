@@ -28,7 +28,8 @@ use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidLayout}
 use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
+use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation, Solid};
+use manifold_physics::TriangleMesh;
 use manifold_node_engine::scene::transform::Transform;
 
 /// Where a coupled body's controls come from.
@@ -144,7 +145,6 @@ impl DomainWalls {
                 std::array::from_fn(|d| if d == axis { half_thick } else { 0.5 * self.size[d] + 2.0 * half_thick });
             RigidBody {
                 transform: Transform { pos, scale: half.map(|h| h * 3f32.sqrt()), ..Transform::default() },
-                shape: 1,
                 kind: 0,
                 bounce: 0.0,
                 wall: true,
@@ -265,7 +265,11 @@ impl LiquidRigidOwner {
             let (geometry, face_area) = match known(source).or(cached) {
                 Some(known) => known,
                 None => {
-                    let built = hull_geometry(world, handle)?;
+                    let body = match source {
+                        Source::Body(index) => walled.bodies.get(index).and_then(Option::as_ref),
+                        Source::Group(_) => None,
+                    };
+                    let built = hull_geometry(world, handle, body)?;
                     if let Source::Group(group) = source {
                         group_hull = Some((group, Arc::clone(&built.0), built.1));
                     }
@@ -488,10 +492,20 @@ impl LiquidRigidOwner {
     }
 }
 
-/// A body's installed hulls about its centre of mass, and its largest local
-/// box face.
-fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle) -> Result<(Arc<PreparedFluidGeometry>, f32), String> {
-    let mut meshes = world.hull_meshes(handle).map_err(|error| error.to_string())?;
+/// A body's installed solid about its centre of mass, and its largest local
+/// box face: its hulls, or for a static collider its exact mesh at its scale.
+fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle, body: Option<&RigidBody>) -> Result<(Arc<PreparedFluidGeometry>, f32), String> {
+    let exact = body.and_then(|body| match body.collider.as_deref() {
+        Some(Solid::Mesh(mesh)) => Some(TriangleMesh {
+            vertices: mesh.vertices.iter().map(|v| std::array::from_fn(|axis| v[axis] * body.transform.scale[axis])).collect(),
+            triangles: mesh.triangles.clone(),
+        }),
+        _ => None,
+    });
+    let mut meshes = match exact {
+        Some(mesh) => vec![mesh],
+        None => world.hull_meshes(handle).map_err(|error| error.to_string())?,
+    };
     let centre = world.local_center_of_mass(handle).map_err(|error| error.to_string())?;
     let (mut low, mut high) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
     for vertex in meshes.iter_mut().flat_map(|mesh| mesh.vertices.iter_mut()) {
@@ -501,13 +515,14 @@ fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle) -> Result<(Arc<Prepar
             high[axis] = high[axis].max(vertex[axis]);
         }
     }
-    if meshes.is_empty() || !(0..3).all(|axis| high[axis] > low[axis]) {
+    // A flat static mesh (a ground plane) is a shell in the water; it still
+    // needs two sides.
+    if meshes.is_empty() || (0..3).filter(|&axis| high[axis] > low[axis]).count() < 2 {
         return Err("Liquid coupling: a coupled body has no solid hull".into());
     }
     let size: [f32; 3] = std::array::from_fn(|axis| high[axis] - low[axis]);
     let face = (size[0] * size[1]).max(size[1] * size[2]).max(size[0] * size[2]);
-    // Cooked hulls are closed, so no shell thickness applies.
-    Ok((Arc::new(PreparedFluidGeometry::new(meshes, 0.0)), face))
+    Ok((Arc::new(PreparedFluidGeometry::new(meshes)), face))
 }
 
 /// Each coupled body's state as a row: its centre of mass, 1/m, velocities,

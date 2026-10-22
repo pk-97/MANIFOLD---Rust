@@ -16,10 +16,20 @@ use manifold_core::effects::{ParamConvert, PresetInstance};
 use manifold_core::project::{EmbeddedPreset, Project};
 use manifold_core::preset_def::PresetKind;
 use manifold_node_engine::scene::transform::Transform;
-use manifold_water_rigid::physics::{CopySpawn, DEFAULT_MASS_KG, RigidBody, RigidSceneInputs, RigidSimulation};
+use manifold_node_engine::platonic::platonic_points;
+use manifold_water_rigid::physics::{CopySpawn, DEFAULT_MASS_KG, RigidBody, RigidSceneInputs, RigidSimulation, Solid};
 
 const WORLD: &str = "node.physics_world";
 const BODY_SLOTS: usize = 64;
+
+/// The Platonic solid a saved body's Shape named, one shared solid per
+/// shape: the world tells shapes apart by identity.
+fn saved_shape(shape: u32) -> std::sync::Arc<Solid> {
+    static SOLIDS: std::sync::LazyLock<[std::sync::Arc<Solid>; 5]> = std::sync::LazyLock::new(|| {
+        std::array::from_fn(|shape| std::sync::Arc::new(Solid::Hulls(vec![platonic_points(shape as u32).to_vec()])))
+    });
+    std::sync::Arc::clone(&SOLIDS[(shape as usize).min(4)])
+}
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/copy_groups").join(name)
@@ -148,7 +158,7 @@ impl Values<'_> {
                 ..Default::default()
             },
             enabled: self.get(id, "enabled").unwrap_or(1.0) >= 0.5,
-            shape: self.get(id, "shape").unwrap_or(1.0) as u32,
+            collider: Some(saved_shape(self.get(id, "shape").unwrap_or(1.0) as u32)),
             kind: self.get(id, "motion").unwrap_or(1.0) as u32,
             mass: self.get(id, "mass").unwrap_or(DEFAULT_MASS_KG),
             friction: self.get(id, "friction").unwrap_or(0.5),
@@ -243,5 +253,6 @@ fn box3d_testing_fills_the_copy_pool_and_plays_its_default_mass() {
     let played = play("box3DTesting.manifold");
     assert_eq!((played.made, played.not_made), (4_000, 0));
     // The saved bodies carry a density, which no longer exists: each takes the default mass in kg.
-    assert_eq!(played.digest, 0xccb7_e05e_b4c8_69b2, "box3DTesting left its trajectory");
+    // The digest moved when a Fixed body became its exact mesh and the bullet test took the shape's true extent.
+    assert_eq!(played.digest, 0x3f04_07fd_97a2_0b50, "box3DTesting left its trajectory");
 }

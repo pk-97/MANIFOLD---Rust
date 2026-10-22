@@ -192,7 +192,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Facet Normals | `node.facet_normals` | Filter | Recomputes a mesh's normals from its own triangle geometry, giving flat, faceted shading — the exact fix for a mesh whose normals went stale after a heavy defo… |
 | Flatten 3D → 2D | `node.flatten_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
 | Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
-| Fluid Role Source | `node.fluid_role_source` | Source | Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire. |
+| Fluid Role Source | `node.fluid_role_source` | Source | Prepares one reusable fluid source geometry and emits its typed CPU role wire. |
 | Fold | `node.fold_mesh` | Filter | Mirrors a mesh across a plane through the origin along one axis, with adjustable blend amount — the building block for kaleidoscope geometry. |
 | Free Camera | `node.free_camera` | Source | A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly. |
 | Glitch Jitter | `node.glitch_jitter` | Filter | Snaps every vertex to a new random offset on each time step, giving a hard-cut digital glitch look. |
@@ -595,15 +595,15 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `Ocean` | Ocean | generator | Sim | 365 |
-| `OceanCliff` | Ocean Cliff | generator | Sim | 2372 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2337 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1344 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 2004 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1336 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1992 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `RubblePile` | Rubble Pile | generator | Geometry | 1351 |
+| `RubblePile` | Rubble Pile | generator | Geometry | 1343 |
 | `Scene` | Scene | generator | Geometry | 370 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
@@ -617,12 +617,12 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2072 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1423 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2026 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1401 |
-| `WaterInScan` | Water in a Photoscan | generator | Sim | 2072 |
-| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2355 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2062 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1413 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2016 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1399 |
+| `WaterInScan` | Water in a Photoscan | generator | Sim | 2062 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2345 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1077 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |

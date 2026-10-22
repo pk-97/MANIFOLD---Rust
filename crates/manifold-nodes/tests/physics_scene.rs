@@ -118,12 +118,12 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
             ..Default::default()
         },
         enabled: true,
-        shape: scalar(id, "shape") as u32,
         kind: scalar(id, "motion") as u32,
         mass: scalar(id, "mass"),
         friction: scalar(id, "friction"),
         bounce: scalar(id, "bounce"),
-        collider: None,
+        collider: Some(manifold_water_rigid::physics::default_solid()),
+        refused: None,
         fragment_parent: None,
         release_count: 0.0,
         wall: false,
@@ -270,7 +270,7 @@ fn physics_solids_exposures_cover_body_world_triggers_and_roundtrip() {
 
     let targets = binding_targets(&migrated);
     for body_id in [101, 111, 121, 131, 141, 151] {
-        for param in ["mass", "friction", "bounce", "motion", "shape"] {
+        for param in ["mass", "friction", "bounce", "motion"] {
             assert!(
                 targets.contains(&(body_id, param.to_string())),
                 "body {body_id}.{param} must be exposed"

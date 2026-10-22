@@ -567,9 +567,9 @@ mod tests {
         let before_physics_time = simulation.physics_time;
         let before_pending_time = simulation.pending_time;
         let before_history_len = simulation.authored_samples.iter().count();
-        let before_shape = simulation.descriptions[0].as_ref().unwrap().shape;
+        let before_shape = simulation.descriptions[0].as_ref().unwrap().collider.clone().unwrap();
         let mut changed = inputs.clone();
-        changed.bodies[0].as_mut().unwrap().shape = 2;
+        changed.bodies[0].as_mut().unwrap().collider = Some(crate::physics::platonic_solid(2));
         assert!(simulation
             .advance_worker(&changed, Seconds::ZERO, 1, &mut coupling)
             .is_err());
@@ -587,10 +587,10 @@ mod tests {
             simulation.authored_samples.iter().count(),
             before_history_len
         );
-        assert_eq!(
-            simulation.descriptions[0].as_ref().unwrap().shape,
-            before_shape
-        );
+        assert!(std::sync::Arc::ptr_eq(
+            simulation.descriptions[0].as_ref().unwrap().collider.as_ref().unwrap(),
+            &before_shape
+        ));
     }
 
     #[test]

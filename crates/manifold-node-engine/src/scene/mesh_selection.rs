@@ -2,7 +2,7 @@
 use std::path::Path;
 
 use crate::exec::effect_node::EffectNodeContext;
-use super::mesh_partition::{Fragment, partition};
+use manifold_foundation::mesh_partition::{Fragment, partition};
 use crate::parameters::ParamValue;
 use crate::mesh::MeshVertex;
 
@@ -16,7 +16,6 @@ pub struct MeshSelection {
     pub translate: [f32; 3],
     pub fragment_count: u32,
     pub fragment_index: u32,
-    pub collider_parts: u32,
 }
 
 impl MeshSelection {
@@ -39,10 +38,6 @@ impl MeshSelection {
                 .round()
                 .clamp(1.0, 64.0) as u32,
             fragment_index: ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32,
-            collider_parts: ctx
-                .param_f32("collider_parts", 32.0)
-                .round()
-                .clamp(1.0, 64.0) as u32,
         }
     }
 

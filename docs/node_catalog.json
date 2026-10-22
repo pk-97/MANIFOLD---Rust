@@ -10815,7 +10815,6 @@
       "aliases": [
         "fluid source",
         "fluid role",
-        "fluid collider",
         "inflow",
         "outflow",
         "initial fill"
@@ -11517,26 +11516,6 @@
           "type": "f32"
         },
         {
-          "name": "geometry",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "shell_thickness",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "shape",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "radius",
-          "required": false,
-          "type": "f32"
-        },
-        {
           "name": "mesh_index",
           "required": false,
           "type": "f32"
@@ -11585,11 +11564,6 @@
           "name": "fragment_index",
           "required": false,
           "type": "f32"
-        },
-        {
-          "name": "collider_parts",
-          "required": false,
-          "type": "f32"
         }
       ],
       "label": "Fluid Role Source",
@@ -11605,14 +11579,13 @@
           "enum_values": [
             "Initial Fill",
             "Inflow",
-            "Outflow",
-            "Collider"
+            "Outflow"
           ],
           "label": "Role",
           "name": "role",
           "range": [
             "0",
-            "3"
+            "2"
           ],
           "type": "enum"
         },
@@ -11669,57 +11642,6 @@
           "range": [
             "0",
             "1"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Collision Proxy",
-            "Exact Mesh"
-          ],
-          "label": "Geometry",
-          "name": "geometry",
-          "range": [
-            "0",
-            "1"
-          ],
-          "type": "enum"
-        },
-        {
-          "default": "0.05",
-          "label": "Shell Thickness",
-          "name": "shell_thickness",
-          "range": [
-            "0",
-            "1"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "enum_values": [
-            "Tetrahedron",
-            "Cube",
-            "Octahedron",
-            "Icosahedron",
-            "Dodecahedron"
-          ],
-          "label": "Builtin Shape",
-          "name": "shape",
-          "range": [
-            "0",
-            "4"
-          ],
-          "type": "enum"
-        },
-        {
-          "default": "1",
-          "label": "Radius",
-          "name": "radius",
-          "range": [
-            "0.001",
-            "1000"
           ],
           "type": "float"
         },
@@ -11822,22 +11744,12 @@
             "63"
           ],
           "type": "int"
-        },
-        {
-          "default": "32",
-          "label": "Collider Detail",
-          "name": "collider_parts",
-          "range": [
-            "1",
-            "64"
-          ],
-          "type": "int"
         }
       ],
-      "purpose": "Prepare one built-in or imported mesh as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Exact Mesh preserves the exact indexed surface after exact-coordinate welding: its closed parts are solid volumes and its open parts are shells Shell Thickness (world metres) thick. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
+      "purpose": "Prepare one imported or wired mesh (a cube when there is none) as a CPU FluidRole wire: the exact indexed surface after exact-coordinate welding, closed parts solid and open parts shells with an automatic thickness (manifold_physics::collision_shape). Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire.",
+      "summary": "Prepares one reusable fluid source geometry and emits its typed CPU role wire.",
       "type_id": "node.fluid_role_source"
     },
     {
@@ -33314,6 +33226,10 @@
           "capacity": "param:max_capacity=6",
           "name": "vertices",
           "type": "Array"
+        },
+        {
+          "name": "source",
+          "type": "MeshSource"
         }
       ],
       "params": [
@@ -38091,6 +38007,326 @@
           "type": "Transform"
         },
         {
+          "name": "mesh_0",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_1",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_2",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_3",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_4",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_5",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_6",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_7",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_8",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_9",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_10",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_11",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_12",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_13",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_14",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_15",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_16",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_17",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_18",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_19",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_20",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_21",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_22",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_23",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_24",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_25",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_26",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_27",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_28",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_29",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_30",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_31",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_32",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_33",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_34",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_35",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_36",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_37",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_38",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_39",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_40",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_41",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_42",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_43",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_44",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_45",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_46",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_47",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_48",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_49",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_50",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_51",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_52",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_53",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_54",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_55",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_56",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_57",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_58",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_59",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_60",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_61",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_62",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_63",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
           "name": "mass",
           "required": false,
           "type": "f32"
@@ -38158,10 +38394,6 @@
           "type": "RigidBody"
         },
         {
-          "name": "shape",
-          "type": "f32"
-        },
-        {
           "name": "pose",
           "type": "Transform"
         },
@@ -38181,23 +38413,6 @@
           "label": "Enabled",
           "name": "enabled",
           "type": "bool"
-        },
-        {
-          "default": "1",
-          "enum_values": [
-            "Tetrahedron",
-            "Cube",
-            "Octahedron",
-            "Icosahedron",
-            "Dodecahedron"
-          ],
-          "label": "Shape",
-          "name": "shape",
-          "range": [
-            "0",
-            "4"
-          ],
-          "type": "enum"
         },
         {
           "default": "1",
@@ -38359,22 +38574,6 @@
           "type": "int"
         },
         {
-          "default": "32",
-          "label": "Collider Detail",
-          "name": "collider_parts",
-          "range": [
-            "1",
-            "64"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Compound Materials",
-          "name": "compound_materials",
-          "type": "table"
-        },
-        {
           "default": "100",
           "label": "Count",
           "name": "copy_count",
@@ -38451,7 +38650,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Describe a rigid body's shape, starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
+      "purpose": "Describe a rigid body's starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Its collision shape comes from its mesh automatically (manifold_physics::collision_shape): a Fixed body is the exact mesh, a moving body convex hulls with detail chosen from its size and triangles. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",
@@ -76915,7 +77114,7 @@
         {
           "default": "3",
           "id": "2001_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -76962,44 +77161,9 @@
           "name": "Friction"
         },
         {
-          "default": "0",
-          "id": "2001_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2001_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2001_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "1",
-          "id": "2001_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "64",
-          "id": "2001_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
-        },
-        {
           "default": "3",
           "id": "2002_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -77044,41 +77208,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2002_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2002_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2002_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "1",
-          "id": "2002_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "64",
-          "id": "2002_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0",
@@ -77146,7 +77275,7 @@
         {
           "default": "3",
           "id": "2005_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -77191,41 +77320,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2005_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2005_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2005_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "2005_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "2005_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "1",
@@ -79449,7 +79543,7 @@
         {
           "default": "3",
           "id": "2015_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -79496,41 +79590,6 @@
           "name": "Friction"
         },
         {
-          "default": "0",
-          "id": "2015_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2015_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2015_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "1",
-          "id": "2015_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "64",
-          "id": "2015_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
-        },
-        {
           "default": "1",
           "id": "2017_visible",
           "max": "1",
@@ -79568,7 +79627,7 @@
         {
           "default": "3",
           "id": "2018_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -79613,41 +79672,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2018_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2018_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2018_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "1",
-          "id": "2018_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "64",
-          "id": "2018_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "-5.67",
@@ -79757,7 +79781,7 @@
         {
           "default": "3",
           "id": "2022_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -79804,41 +79828,6 @@
           "name": "Friction"
         },
         {
-          "default": "0",
-          "id": "2022_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2022_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2022_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "1",
-          "id": "2022_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "64",
-          "id": "2022_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
-        },
-        {
           "default": "1",
           "id": "2024_visible",
           "max": "1",
@@ -79876,7 +79865,7 @@
         {
           "default": "3",
           "id": "2025_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -79921,41 +79910,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2025_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2025_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2025_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "1",
-          "id": "2025_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "64",
-          "id": "2025_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         }
       ]
     },
@@ -80708,13 +80662,6 @@
           "name": "Global Illumination"
         },
         {
-          "default": "1",
-          "id": "101_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "0",
           "id": "101_motion",
           "max": "2",
@@ -80741,13 +80688,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "101_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0",
@@ -82935,13 +82875,6 @@
         },
         {
           "default": "1",
-          "id": "121_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
-          "default": "1",
           "id": "121_motion",
           "max": "2",
           "min": "0",
@@ -82967,13 +82900,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "121_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.08",
@@ -85251,13 +85177,6 @@
           "name": "Billboard"
         },
         {
-          "default": "1",
-          "id": "141_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "0",
           "id": "141_motion",
           "max": "2",
@@ -85284,13 +85203,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "141_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.9",
@@ -87477,13 +87389,6 @@
           "name": "Billboard"
         },
         {
-          "default": "1",
-          "id": "161_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "0",
           "id": "161_motion",
           "max": "2",
@@ -87510,13 +87415,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "161_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.9",
@@ -90314,13 +90212,6 @@
           "name": "Global Illumination"
         },
         {
-          "default": "1",
-          "id": "101_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "0",
           "id": "101_motion",
           "max": "2",
@@ -90347,13 +90238,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "101_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0",
@@ -92540,13 +92424,6 @@
           "name": "Instances Space"
         },
         {
-          "default": "0",
-          "id": "111_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "1",
           "id": "111_motion",
           "max": "2",
@@ -92573,13 +92450,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "111_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "-3",
@@ -94767,13 +94637,6 @@
         },
         {
           "default": "1",
-          "id": "121_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
-          "default": "1",
           "id": "121_motion",
           "max": "2",
           "min": "0",
@@ -94799,13 +94662,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "121_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "-1.5",
@@ -96992,13 +96848,6 @@
           "name": "Instances Space"
         },
         {
-          "default": "2",
-          "id": "131_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "1",
           "id": "131_motion",
           "max": "2",
@@ -97025,13 +96874,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "131_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0",
@@ -99218,13 +99060,6 @@
           "name": "Instances Space"
         },
         {
-          "default": "3",
-          "id": "141_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "1",
           "id": "141_motion",
           "max": "2",
@@ -99251,13 +99086,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "141_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "1.5",
@@ -101444,13 +101272,6 @@
           "name": "Instances Space"
         },
         {
-          "default": "4",
-          "id": "151_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "1",
           "id": "151_motion",
           "max": "2",
@@ -101477,13 +101298,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "151_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "3",
@@ -104299,13 +104113,6 @@
           "name": "Global Illumination"
         },
         {
-          "default": "1",
-          "id": "101_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "0",
           "id": "101_motion",
           "max": "2",
@@ -104332,13 +104139,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "101_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0",
@@ -106526,13 +106326,6 @@
         },
         {
           "default": "1",
-          "id": "121_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
-          "default": "1",
           "id": "121_motion",
           "max": "2",
           "min": "0",
@@ -106544,13 +106337,6 @@
           "max": "100000",
           "min": "0.1",
           "name": "Mass"
-        },
-        {
-          "default": "32",
-          "id": "121_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "10",
@@ -108821,13 +108607,6 @@
           "name": "Billboard"
         },
         {
-          "default": "1",
-          "id": "141_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "0",
           "id": "141_motion",
           "max": "2",
@@ -108854,13 +108633,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "141_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.22",
@@ -111047,13 +110819,6 @@
           "name": "Billboard"
         },
         {
-          "default": "1",
-          "id": "161_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
           "default": "0",
           "id": "161_motion",
           "max": "2",
@@ -111080,13 +110845,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "161_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.22",
@@ -125525,7 +125283,7 @@
         {
           "default": "0",
           "id": "2_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -125570,41 +125328,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "2_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "2_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "1",
@@ -134527,7 +134250,7 @@
         {
           "default": "3",
           "id": "475_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -134572,41 +134295,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "475_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "475_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "475_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "475_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "475_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.52",
@@ -144273,7 +143961,7 @@
         {
           "default": "0",
           "id": "2_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -144318,41 +144006,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "2_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "2_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "9.35",
@@ -144497,7 +144150,7 @@
         {
           "default": "3",
           "id": "65_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -144542,41 +144195,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "65_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "65_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "65_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "65_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "65_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.52",
@@ -149952,7 +149570,7 @@
         {
           "default": "0",
           "id": "2_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -149997,41 +149615,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "2_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "2_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "1",
@@ -158688,7 +158271,7 @@
         {
           "default": "3",
           "id": "475_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -158733,41 +158316,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "475_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "475_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "475_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "475_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "475_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.52",
@@ -168482,13 +168030,6 @@
         },
         {
           "default": "1",
-          "id": "72_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Shape"
-        },
-        {
-          "default": "1",
           "id": "72_motion",
           "max": "2",
           "min": "0",
@@ -168507,13 +168048,6 @@
           "max": "1",
           "min": "0",
           "name": "Bounce"
-        },
-        {
-          "default": "32",
-          "id": "72_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.42",
@@ -174015,7 +173549,7 @@
         {
           "default": "0",
           "id": "2_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -174060,41 +173594,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "2_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "2_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "1",
@@ -185131,7 +184630,7 @@
         {
           "default": "3",
           "id": "481_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -185176,41 +184675,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "1",
-          "id": "481_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.125",
-          "id": "481_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "481_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "1",
-          "id": "481_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "481_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         }
       ]
     },
@@ -199357,7 +198821,7 @@
         {
           "default": "0",
           "id": "2_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -199402,41 +198866,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "2_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "2_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "2_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "2_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "2_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "3.3",
@@ -199511,7 +198940,7 @@
         {
           "default": "3",
           "id": "3_role",
-          "max": "3",
+          "max": "2",
           "min": "0",
           "name": "Role"
         },
@@ -199556,41 +198985,6 @@
           "max": "1",
           "min": "0",
           "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "3_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "0.05",
-          "id": "3_shell_thickness",
-          "max": "1",
-          "min": "0",
-          "name": "Shell Thickness"
-        },
-        {
-          "default": "1",
-          "id": "3_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "3_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "3_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "0.52",

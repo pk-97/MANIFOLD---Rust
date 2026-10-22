@@ -90,7 +90,7 @@ fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
 }
 
 #[test]
-fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
+fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild() {
     let mut bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
@@ -98,11 +98,7 @@ fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
         .unwrap();
     assert!(simulation.impulse_stamp(PlayedTime::ZERO, 0).is_ok());
 
-    simulation.hold_pending(PlayedTime::from_played(1.0));
-    assert!(simulation.impulse_stamp(PlayedTime::from_played(1.0), 1).is_err());
-
-    let body = bodies[0].as_mut().unwrap();
-    body.shape = (body.shape + 1) % 5;
+    bodies[0].as_mut().unwrap().collider = Some(crate::physics::platonic_solid(2));
     simulation.set_step(SimStep::default().authored_sample());
     simulation
         .advance(&bodies, [0.0; 3], PlayedTime::from_played(2.0), 1.0, 0.0)

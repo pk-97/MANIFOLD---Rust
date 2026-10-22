@@ -29,6 +29,7 @@ fn walk(b: &mut Builder<'_>, items: &[Item], frame: Option<&Frame>) {
         match &item.fields {
             ItemFields::Group(_) => {
                 let inner = emit(b, item, frame);
+                let inner = super::physics::group(b, item, inner);
                 walk(b, &item.children, Some(&inner));
             }
             ItemFields::Object(_) => super::object::emit(b, item, frame),

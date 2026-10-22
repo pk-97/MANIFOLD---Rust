@@ -330,7 +330,6 @@ pub(super) fn prepare(
                         .insert("fragment_index".into(), float(piece as f32));
                     body.params
                         .insert("fragment_parent".into(), float(parent_slot as f32));
-                    body.params.insert("collider_parts".into(), float(1.0));
                     // A piece is the parent's material: on release the world gives
                     // it the parent's density over its own hull; this is the placeholder.
                     body.params.insert("mass".into(), float(mass));

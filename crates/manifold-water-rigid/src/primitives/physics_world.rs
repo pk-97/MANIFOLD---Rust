@@ -19,12 +19,14 @@ use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use manifold_core::scene_impulse::ImpulseTarget;
+use manifold_core::scene_schema::SPEED_RANGE;
 use manifold_core::scene_surface::{
     PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_DEFAULT_COPY_GROUPS,
 };
 use manifold_node_engine::exec::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
 };
+use manifold_node_engine::bindings::NodeInputs;
 use manifold_node_engine::exec::instance_upload::InstanceSnapshotUpload;
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -35,7 +37,7 @@ use manifold_physics::FieldValue;
 use crate::coupled_frame::CoupledRigidFrame;
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
 use crate::physics::{
-    MAX_BODIES, MAX_COPIES, MAX_COPY_GROUPS, ResolvedRigidImpulse, RigidBody, RigidSceneInputs,
+    MAX_BODIES, MAX_COPIES, MAX_COPY_GROUPS, ResolvedRigidImpulse, RigidSceneInputs,
     RigidSceneObservation, RigidSimulation,
 };
 use crate::physics_events::{map_rigid_receipt, ResolvedNodeImpulse};
@@ -246,41 +248,29 @@ impl PhysicsWorldNode {
         InstanceSnapshotUpload::prewarm(device);
     }
 
-    /// Refill `self.observation` from this frame's inputs. `Ok(false)` while
-    /// any wired input is pending.
+    /// Refill `self.observation` from this frame's inputs. A wired input
+    /// still pending keeps its last value, and one never seen is absent: a
+    /// body whose shape is still being built joins when it is ready, and the
+    /// world never pauses for it. Speed clamps to its range.
     fn resolve_rigid_scene_observation(
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         validate_controls: bool,
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         let names: &'static PortNames = &PORT_NAMES;
         let inputs = &mut self.observation.inputs;
-        let mut pending = ctx.inputs.any_pending();
-        for (body, port) in inputs.bodies.iter_mut().zip(&names.body) {
-            *body = None;
-            if ctx.inputs.slot(port).is_some() {
-                *body = ctx.inputs.cpu_value::<RigidBody>(port);
-                pending |= body.is_none();
-            }
+        for (body, port) in inputs.bodies.iter_mut().zip(&names.body).chain(inputs.groups.iter_mut().zip(&names.copies)) {
+            latest(body, &ctx.inputs, port);
         }
-        for (group, port) in inputs.groups.iter_mut().zip(&names.copies) {
-            *group = ctx.inputs.cpu_value::<RigidBody>(port);
-            if ctx.inputs.slot(port).is_some() {
-                pending |= group.is_none();
-            }
-        }
-        inputs.acceleration_field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
-        if ctx.inputs.slot("acceleration_field").is_some() {
-            pending |= inputs.acceleration_field.is_none();
-        }
+        latest(&mut inputs.acceleration_field, &ctx.inputs, "acceleration_field");
         let bodies = self.bodies;
         let targeted_ports = names.body_acceleration[..bodies]
             .iter()
             .zip(&names.body)
             .chain(names.copies_acceleration[..self.groups].iter().zip(&names.copies));
         for (field, (port, matching)) in inputs.targeted_fields.iter_mut().zip(targeted_ports) {
-            *field = None;
             if ctx.inputs.slot(port).is_none() {
+                *field = None;
                 continue;
             }
             if ctx.inputs.slot(matching).is_none() {
@@ -288,11 +278,7 @@ impl PhysicsWorldNode {
                     "Physics World `{port}` requires its matching body input to be wired"
                 ));
             }
-            *field = ctx.inputs.cpu_value::<FieldValue>(port);
-            pending |= field.is_none();
-        }
-        if pending {
-            return Ok(false);
+            latest(field, &ctx.inputs, port);
         }
         // Every field as the bodies feel it: the air it carries scaled by Air
         // Drag (0 ignores the air). The World's still air reaches every body
@@ -313,25 +299,20 @@ impl PhysicsWorldNode {
             ctx.scalar_or_param("gravity_y", -9.81),
             ctx.scalar_or_param("gravity_z", 0.0),
         ];
-        let speed = ctx.scalar_or_param("speed", 1.0);
+        let speed = ctx.scalar_or_param("speed", 1.0).clamp(SPEED_RANGE.0, SPEED_RANGE.1);
         let reset = ctx.scalar_or_param("reset", 0.0);
-        if validate_controls {
-            if !ctx.played().is_finite()
+        if validate_controls
+            && (!ctx.played().is_finite()
                 || !speed.is_finite()
-                || !(0.0..=4.0).contains(&speed)
                 || !reset.is_finite()
-                || inputs.gravity.iter().any(|value| !value.is_finite())
-            {
-                return Err("Physics: non-finite clock/control or speed outside 0–4".into());
-            }
-            for prototype in inputs.groups.iter().flatten() {
-                crate::physics::validate_spawn(prototype.spawn)?;
-            }
+                || inputs.gravity.iter().any(|value| !value.is_finite()))
+        {
+            return Err("Physics: non-finite clock or control".into());
         }
         self.observation.transport = ctx.played();
         self.observation.speed = speed;
         self.observation.reset = reset;
-        Ok(true)
+        Ok(())
     }
 
     fn publish_coupled_frame(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -462,8 +443,8 @@ impl EffectNode for PhysicsWorldNode {
         self.coupled_frame_ready = false;
     }
 
-    // While a body is pending the simulation clock holds instead of jumping
-    // when the body lands; coupled mode publishes the liquid's frame.
+    // A pending body keeps its last description and the world keeps
+    // stepping; coupled mode publishes the liquid's frame.
     fn runs_with_pending_inputs(&self) -> bool {
         true
     }
@@ -475,19 +456,10 @@ impl EffectNode for PhysicsWorldNode {
             return;
         }
         self.observation_valid = false;
-        match self.resolve_rigid_scene_observation(ctx, false) {
-            Ok(true) => {}
-            Ok(false) => {
-                self.simulation.hold_pending(ctx.played());
-                ctx.mark_outputs_pending();
-                return;
-            }
-            Err(error) => {
-                ctx.error(error);
-                self.simulation.hold_pending(ctx.played());
-                ctx.mark_outputs_pending();
-                return;
-            }
+        if let Err(error) = self.resolve_rigid_scene_observation(ctx, false) {
+            ctx.error(error);
+            ctx.mark_outputs_pending();
+            return;
         }
         let observation = &self.observation;
         let body_count = observation.inputs.bodies.iter().flatten().count();
@@ -532,6 +504,18 @@ impl EffectNode for PhysicsWorldNode {
                 return;
             }
         }
+    }
+}
+
+/// Take a wired input's value when it has one; a wired input still pending
+/// keeps its last value, and an unwired one is absent.
+fn latest<T: Clone + Send + 'static>(slot: &mut Option<T>, inputs: &NodeInputs<'_>, port: &str) {
+    if inputs.slot(port).is_none() {
+        *slot = None;
+    } else if !inputs.port_pending(port)
+        && let Some(value) = inputs.cpu_value::<T>(port)
+    {
+        *slot = Some(value);
     }
 }
 
@@ -646,10 +630,7 @@ impl PhysicsNode for PhysicsWorldNode {
         self.simulation.set_step(ctx.sim_step);
         self.observation_valid = false;
         self.coupled_frame_ready = false;
-        if !self.resolve_rigid_scene_observation(ctx, true)? {
-            ctx.mark_outputs_pending();
-            return Ok(());
-        }
+        self.resolve_rigid_scene_observation(ctx, true)?;
         self.observation_valid = true;
         Ok(())
     }
@@ -763,7 +744,7 @@ mod tests {
         let mut wire_slots: Vec<(&'static str, Slot)> = Vec::new();
         let mut pending = Vec::new();
         let mut next_resource = 0;
-        let mut body = RigidBody { shape: body_shape, ..RigidBody::default() };
+        let mut body = RigidBody { collider: Some(crate::physics::platonic_solid(body_shape)), ..RigidBody::default() };
         body.transform.pos = [0.0, 8.0, 0.0];
         let body_slot = acquire_mock_wire(
             &mut backend,
@@ -990,8 +971,8 @@ mod tests {
         )
         .expect("fixed tick complete rigid observation");
 
-        assert_eq!(first.inputs.bodies[0].as_ref().unwrap().shape, 1);
-        assert_eq!(first.inputs.groups[0].as_ref().unwrap().shape, 1);
+        assert_eq!(first.inputs.bodies[0].as_ref().unwrap().collider, Some(crate::physics::platonic_solid(1)));
+        assert_eq!(first.inputs.groups[0].as_ref().unwrap().collider, Some(crate::physics::platonic_solid(1)));
         assert_eq!(
             first.inputs.groups[0].as_ref().unwrap().spawn,
             crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0, turn: [0.0; 3] },
@@ -1036,32 +1017,19 @@ mod tests {
     }
 
     #[test]
-    fn effect_node_observation_clears_for_unavailable_or_invalid_inputs() {
-        for (field_state, invalid_speed) in [
-            (MockFieldState::MissingTarget, false),
-            (MockFieldState::PendingGlobal, false),
-            (MockFieldState::Complete, true),
-        ] {
+    fn effect_node_observation_keeps_late_fields_and_clears_for_invalid_controls() {
+        for field_state in [MockFieldState::MissingTarget, MockFieldState::PendingGlobal] {
             let mut node = PhysicsWorldNode::new();
-            assert!(evaluate_mock_world(
-                &mut node,
-                0.0,
-                1,
-                MockFieldState::Complete,
-                false,
-                false,
-            )
-            .is_some());
-            assert!(evaluate_mock_world(
-                &mut node,
-                1.0 / 60.0,
-                1,
-                field_state,
-                invalid_speed,
-                false,
-            )
-            .is_none());
+            let complete = evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false)
+                .expect("complete rigid observation");
+            let late = evaluate_mock_world(&mut node, 1.0 / 60.0, 1, field_state, false, false)
+                .expect("a late field never stops the world");
+            assert_eq!(late.inputs.acceleration_field, complete.inputs.acceleration_field, "a late field keeps its last value");
+            assert_eq!(late.inputs.targeted_fields, complete.inputs.targeted_fields, "a late field keeps its last value");
         }
+        let mut node = PhysicsWorldNode::new();
+        assert!(evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false).is_some());
+        assert!(evaluate_mock_world(&mut node, 1.0 / 60.0, 1, MockFieldState::Complete, true, false).is_none());
     }
 
     #[test]
@@ -1089,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn coupled_capture_has_no_native_owner_and_clears_pending_or_invalid_observations() {
+    fn coupled_capture_has_no_native_owner_keeps_late_fields_and_clears_invalid_observations() {
         let mut node = PhysicsWorldNode::new();
         let observation = evaluate_mock_world(
             &mut node,
@@ -1118,8 +1086,7 @@ mod tests {
             false,
             true,
         )
-        .is_none());
-        assert!(PhysicsNode::rigid_scene_observation(&node).is_none());
+        .is_some_and(|late| late.inputs.acceleration_field == observation.inputs.acceleration_field), "a late field keeps its last value");
         assert!(evaluate_mock_world(
             &mut node,
             1.0 / 60.0,
@@ -1133,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn coupled_pending_capture_keeps_reserved_copies_and_publishes_nothing() {
+    fn coupled_capture_of_a_late_field_keeps_reserved_copies_and_publishes_nothing() {
         let mut node = PhysicsWorldNode::new();
         PhysicsNode::set_coupled_physics(&mut node, true);
         let capacity = node
@@ -1153,7 +1120,7 @@ mod tests {
             false,
             true,
         )
-        .is_none());
+        .is_some_and(|first| first.inputs.acceleration_field.is_none()), "a field never seen is absent");
         let retained = node.coupled_frame.as_ref().expect("retained storage");
         assert_eq!(retained.copies.capacity(), capacity);
         assert!(!node.coupled_frame_ready);

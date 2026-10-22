@@ -19,6 +19,7 @@ mod group;
 mod light;
 mod material;
 mod object;
+mod physics;
 mod scene_level;
 mod world;
 
@@ -27,6 +28,7 @@ pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily};
 pub use object::OBJECT_ROWS;
+pub use physics::{BODY_ROLE, MAX_GROUP_PARTS, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
 pub use world::{SPEED_RANGE, WORLD_ROWS};
 
@@ -227,9 +229,18 @@ pub fn rows(kind: ItemKind) -> &'static [PropertyRow] {
     }
 }
 
+/// The Physics section's rows, on the kinds that have the section.
+fn physics_rows(kind: ItemKind) -> &'static [PropertyRow] {
+    match kind {
+        ItemKind::Object | ItemKind::Group => &PHYSICS_ROWS,
+        _ => &[],
+    }
+}
+
 /// The rows that exist for an item with `fields`.
 pub fn applicable(fields: &ItemFields) -> impl Iterator<Item = &'static PropertyRow> + '_ {
-    rows(fields.kind()).iter().filter(move |row| (row.applies)(fields))
+    let kind = fields.kind();
+    rows(kind).iter().chain(physics_rows(kind)).filter(move |row| (row.applies)(fields))
 }
 
 /// The row for `property` on an item with `fields`, if it exists there.

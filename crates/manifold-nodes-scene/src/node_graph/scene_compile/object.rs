@@ -51,15 +51,25 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let transform = b.add(owner, "transform", "node.transform_3d");
     let object = b.add(owner, "object", "node.scene_object");
     let (surface, texture) = surface_for(b, &item.id);
+    // An object that is its own body draws at the body's solved pose.
+    let pose = super::physics::object(b, item, frame, mesh, transform);
     for w in object_wires(mesh, surface, transform, object) {
+        if pose.is_some() && w.to_port == "transform" {
+            continue;
+        }
         b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
     }
     if let Some(texture) = texture {
         b.wire(texture, "out", object, "base_color_map");
     }
     if let Some(frame) = frame {
-        b.wire(frame.transform, "transform", object, "parent_transform");
+        if pose.is_none() {
+            b.wire(frame.transform, "transform", object, "parent_transform");
+        }
         b.wire(frame.visible, "out", object, "parent_visible");
+    }
+    if let Some(pose) = pose {
+        b.wire(pose, "transform", object, "parent_transform");
     }
     b.objects.push(object);
     b.rows(item);

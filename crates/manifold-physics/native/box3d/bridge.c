@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
+#include <stdatomic.h>
+#include <stdio.h>
 
 _Static_assert( sizeof( b3Vec3 ) == sizeof( float ) * 3, "unexpected b3Vec3 layout" );
 _Static_assert( sizeof( b3Quat ) == sizeof( float ) * 4, "unexpected b3Quat layout" );
@@ -192,6 +194,30 @@ static float manifold_friction( float friction_a, uint64_t material_a, float fri
 		return friction_a;
 	}
 	return sqrtf( friction_a * friction_b );
+}
+
+// A failed Box3D check is logged and counted, never a trap: a check that
+// aborted the app would end the show. Box3D guards what follows its checks
+// (the tree query stops pushing at its stack limit), and the Rust install
+// gate keeps non-finite and degenerate input from reaching them. Rust
+// installs the handler before its first native call.
+static atomic_uint manifold_assert_failures;
+
+static int manifold_assert( const char* condition, const char* fileName, int lineNumber )
+{
+	atomic_fetch_add( &manifold_assert_failures, 1u );
+	fprintf( stderr, "[box3d-assert] %s, %s, line %d\n", condition, fileName, lineNumber );
+	return 0;
+}
+
+uint32_t manifold_box3d_assert_count( void )
+{
+	return atomic_load( &manifold_assert_failures );
+}
+
+void manifold_box3d_install_assert_handler( void )
+{
+	b3SetAssertFcn( manifold_assert );
 }
 
 uint32_t manifold_box3d_world_create( float gx, float gy, float gz )

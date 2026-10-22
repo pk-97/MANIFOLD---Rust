@@ -238,8 +238,6 @@ impl MatterScene {
             }
             let fill = add(&mut graph, "node.fluid_role_source");
             graph.set_param(fill, "role", ParamValue::Enum(0)).expect("role");
-            graph.set_param(fill, "shape", ParamValue::Enum(1)).expect("shape");
-            graph.set_param(fill, "radius", ParamValue::Float(manifold_core::initial_fill::UNIT_CUBE_RADIUS)).expect("radius");
             wire(&mut graph, (t, "transform"), (fill, "transform"));
             // The last role, past the colliders.
             wire(&mut graph, (fill, "role"), (domain, "role_63"));
@@ -317,12 +315,7 @@ impl MatterScene {
             let transform = add(graph, "node.transform_3d");
             let source = add(graph, "node.fluid_role_source");
             set(graph, source, "role", ParamValue::Enum(3));
-            set(graph, source, "shape", ParamValue::Enum(1));
-            // A built-in cube of this radius spans ±0.5, so the transform's
-            // scale is the box size.
-            set(graph, source, "radius", ParamValue::Float(0.5 / 0.577_350_26));
             if let Some(path) = &settings.collider_mesh {
-                set(graph, source, "geometry", ParamValue::Enum(1));
                 set(graph, source, "path", ParamValue::String(std::sync::Arc::new(path.to_str().expect("utf-8 path").to_owned())));
             }
             wire(graph, (transform, "transform"), (source, "transform"));
