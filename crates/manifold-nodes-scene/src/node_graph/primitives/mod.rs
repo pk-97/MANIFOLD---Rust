@@ -16,6 +16,7 @@ manifold_core::testkit_visible! { mod analytic_echo_instances; }
 mod bake_equirect_envmap;
 mod pack_curve_xy;
 mod polygon_curve;
+mod curve_solid_source;
 mod consecutive_edges;
 manifold_core::testkit_visible! { mod copy_positions; }
 mod cylinder_wrap_field;

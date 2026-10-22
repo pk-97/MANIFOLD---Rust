@@ -5,9 +5,11 @@
 //! `outline: Array<CurvePoint>` sweeps into a `(steps+1) × cols` grid
 //! (`cols = outline_len`, or `outline_len + 1` when `close` duplicates the
 //! first outline point as the last column — a closed loop): `pos(i,j) =
-//! (x_j, y_j, depth × i/steps)`. Normals are left zero; wire
-//! `node.make_triangles` downstream. No end caps in v1 (Deferred #3 — the
-//! extruded solid is open at both ends).
+//! (x_j, y_j, depth × i/steps)`, centred on the plane when `symmetric`.
+//! `caps` adds a cap at each end (Blender's Fill Caps). The grid carries
+//! exact normals; wire `node.make_triangles` with Keep Normals downstream.
+//! The CPU mirror (`curve_sweep::extrude_grid`) is what a collision shape
+//! reads.
 
 use std::borrow::Cow;
 
@@ -20,9 +22,9 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`depth`
-/// f32, `steps` Int→i32, `close` Bool→u32), then the derived `outline_len`
-/// (u32), then the codegen-injected `dispatch_count`, padded to a 16-byte
-/// multiple. 5 words + 3 pad = 32 bytes. Matches
+/// f32, `steps` Int→i32, `close`, `symmetric` and `caps` Bool→u32), then the
+/// derived `outline_len` (u32), then the codegen-injected `dispatch_count`,
+/// padded to a 16-byte multiple. 7 words + 1 pad = 32 bytes. Matches
 /// `standalone_for_spec::<ExtrudeCurve>()`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -30,17 +32,17 @@ struct ExtrudeCurveUniforms {
     depth: f32,
     steps: i32,
     close: u32,
+    symmetric: u32,
+    caps: u32,
     outline_len: u32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
     name: ExtrudeCurve,
     type_id: "node.extrude_curve",
-    purpose: "Extrude a 2D outline curve (Array<CurvePoint>) along +Z into a (steps+1) x cols positions+uv grid, cols = the outline's point count (or +1 when `close` duplicates the first point as the last column for a closed loop). pos(i,j) = (x_j, y_j, depth * i/steps). Normals are left zero — wire node.make_triangles downstream (src_cols=cols, src_rows=steps+1). No end caps in v1 (the extruded solid is open at both ends).",
+    purpose: "Extrude a 2D outline curve (Array<CurvePoint>) along +Z into a (steps+1) x cols positions+uv grid, cols = the outline's point count (or +1 when `close` duplicates the first point as the last column for a closed loop). pos(i,j) = (x_j, y_j, depth * i/steps). `symmetric` centres it on the curve plane (z from -depth/2 to depth/2, Blender's Extrude). `caps` adds a start cap (centre, rim) and an end cap (rim, centre) row pair, each fanned from the curve's origin with a hard rim edge, for an outline drawn round its origin. Normals are exact (across the outline on the side, along Z on a cap) — wire node.make_triangles with keep_normals on downstream (src_cols=cols, src_rows=steps+1, +4 with caps).",
     inputs: {
         outline: Array(CurvePoint) required,
         depth: ScalarF32 optional,
@@ -73,9 +75,25 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("symmetric"),
+            label: "Symmetric",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("caps"),
+            label: "Fill Caps",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "Reach for this to turn a flat 2D shape (polygon_shape, generate_range + array_math profile, pack_curve_xy) into an extruded 3D solid — letters, ribbons, beveled panels. `close=true` wraps the outline into a closed loop (duplicates the first outline point as the last column) for a tube-like cross-section; `close=false` leaves an open sheet. Wire node.make_triangles downstream with src_cols = outline point count (+1 if close), src_rows = steps+1. No end caps — pair with a separate flat cap mesh if a sealed solid is needed (Deferred #3).",
+    composition_notes: "Reach for this to turn a flat 2D shape (polygon_shape, generate_range + array_math profile, pack_curve_xy) into an extruded 3D solid — letters, ribbons, beveled panels. `close=true` wraps the outline into a closed loop (duplicates the first outline point as the last column) for a tube-like cross-section; `close=false` leaves an open sheet. Wire node.make_triangles (keep_normals on) downstream with src_cols = outline point count (+1 if close), src_rows = steps+1, plus 4 with caps. `caps` seals a closed outline drawn round its origin (circle, polygon, star) into a solid; a self-crossing outline has no single inside to fill.",
     examples: [],
     picker: { label: "Extrude Curve", category: Atom },
     summary: "Pushes a flat 2D shape straight through space to build a 3D extrusion — like a cookie cutter dragged through dough. Turns outlines into solid ribbons or beveled panels.",
@@ -109,8 +127,9 @@ impl Primitive for ExtrudeCurve {
             _ => 1,
         };
         let close = matches!(params.get("close"), Some(ParamValue::Bool(true)));
+        let caps = matches!(params.get("caps"), Some(ParamValue::Bool(true)));
         let cols = if close { outline_len + 1 } else { outline_len };
-        Some(cols.saturating_mul(steps + 1))
+        Some(cols.saturating_mul(steps + 1 + if caps { 4 } else { 0 }))
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -119,7 +138,8 @@ impl Primitive for ExtrudeCurve {
             Some(ParamValue::Float(n)) => n.round().max(1.0) as i32,
             _ => 1,
         };
-        let close = matches!(ctx.params.get("close"), Some(ParamValue::Bool(true)));
+        let flag = |name: &str| u32::from(matches!(ctx.params.get(name), Some(ParamValue::Bool(true))));
+        let (close, symmetric, caps) = (flag("close"), flag("symmetric"), flag("caps"));
 
         let Some(outline) = ctx.inputs.array("outline") else {
             return;
@@ -142,12 +162,12 @@ impl Primitive for ExtrudeCurve {
         let uniforms = ExtrudeCurveUniforms {
             depth,
             steps,
-            close: u32::from(close),
+            close,
+            symmetric,
+            caps,
             outline_len,
             dispatch_count: dst_capacity,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -243,11 +263,11 @@ mod gpu_tests {
             depth,
             steps,
             close: u32::from(close),
+            symmetric: 0,
+            caps: 0,
             outline_len: outline.len() as u32,
             dispatch_count: dst_cap,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
 
         let bindings = [

@@ -7,10 +7,10 @@
 //! x_i·sin(phi_j))`, `phi_j = sweep × j/segments`. The seam column
 //! (j=segments) is a DUPLICATE of j=0's position when `sweep` is an exact
 //! multiple of 2π (uv still spans 0..1, not wrapping) — the deliberate D5
-//! seam-duplication contract that keeps `node.make_triangles`' finite-
-//! difference normals continuous across the seam. Normals are left zero;
-//! wire `node.make_triangles` downstream (matching `src_cols = segments+1`,
-//! `src_rows = profile_len`) for topology + finite-difference normals.
+//! seam-duplication contract. The grid carries exact normals; wire
+//! `node.make_triangles` with Keep Normals downstream (matching `src_cols =
+//! segments+1`, `src_rows = profile_len`). The CPU mirror is
+//! `curve_sweep::revolve_grid`.
 
 use std::borrow::Cow;
 
@@ -38,7 +38,7 @@ struct RevolveCurveUniforms {
 manifold_node_engine::primitive! {
     name: RevolveCurve,
     type_id: "node.revolve_curve",
-    purpose: "Revolve a 2D profile curve (Array<CurvePoint>, x=radius, y=height) around the Y axis into a profile_len x (segments+1) positions+uv grid. pos(i,j) = (x_i*cos(phi_j), y_i, x_i*sin(phi_j)), phi_j = sweep * j/segments. Normals are left zero — wire node.make_triangles downstream (src_cols=segments+1, src_rows=profile_len) for topology and finite-difference normals. `sweep` is UNBOUNDED (range None) — a saw LFO sweeping past 2*pi and beyond is a valid performer gesture (BUG-039 class); sin/cos absorb the wrap with no seam.",
+    purpose: "Revolve a 2D profile curve (Array<CurvePoint>, x=radius, y=height) around the Y axis into a profile_len x (segments+1) positions+uv grid. pos(i,j) = (x_i*cos(phi_j), y_i, x_i*sin(phi_j)), phi_j = sweep * j/segments. Normals are exact (the profile normal turned to phi, defined on the axis too) — wire node.make_triangles with keep_normals on downstream (src_cols=segments+1, src_rows=profile_len). `sweep` is UNBOUNDED (range None) — a saw LFO sweeping past 2*pi and beyond is a valid performer gesture (BUG-039 class); sin/cos absorb the wrap with no seam.",
     inputs: {
         profile: Array(CurvePoint) required,
         sweep: ScalarF32 optional,
@@ -280,14 +280,14 @@ mod gpu_tests {
         struct TriUniforms {
             src_cols: i32,
             src_rows: i32,
+            keep_normals: u32,
             dispatch_count: u32,
-            _pad0: u32,
         }
         let tri_uniforms = TriUniforms {
             src_cols: COLS as i32,
             src_rows: ROWS as i32,
+            keep_normals: 0,
             dispatch_count: tri_dst_cap,
-            _pad0: 0,
         };
         let pipeline = device.create_compute_pipeline(
             &tri_pipeline,

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::mesh::{MeshVertex, PLATONIC_SHAPES};
 use crate::platonic::platonic_mesh;
+use crate::scene::curve_sweep::SweptCurve;
 use crate::scene::mesh_selection::MeshSelection;
 
 /// Authored source geometry description for mesh-producing nodes.
@@ -18,6 +19,9 @@ pub enum MeshSource {
     Plane { width: f32, height: f32 },
     /// `node.sphere_mesh`: a smooth UV sphere about the origin.
     Sphere { radius: f32, segments: u32, rings: u32 },
+    /// A curve swept into a solid (`node.curve_solid_source`): the CPU
+    /// mirror of the sweep and `node.make_triangles` the curve shape draws.
+    Swept(Arc<SweptCurve>),
     Gltf {
         path: Arc<str>,
         /// The one file node whose mesh this is (an imported part), or `None`
@@ -35,6 +39,7 @@ impl MeshSource {
         let (shape, radius) = match self {
             Self::Plane { width, height } => return plane_vertices(*width, *height),
             Self::Sphere { radius, segments, rings } => return sphere_vertices(*radius, *segments, *rings),
+            Self::Swept(curve) => return curve.load_vertices(),
             Self::Cube { size } => {
                 if !size.is_finite() || *size <= 0.0 {
                     return Err("mesh source size must be finite and positive".into());

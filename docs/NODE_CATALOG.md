@@ -181,6 +181,7 @@ _Generated from the node registry. Do not hand-edit. 398 nodes registered, group
 | Count Surface Edges | `node.count_surface_edges` | Filter | Counts shared marching-cubes surface edges at lattice nodes so a later scan can index one vertex per crossing. |
 | Count Surface Triangles | `node.count_surface_triangles` | Filter | Works out how many triangles each small cube of the liquid's surface needs, the first step of building its mesh. |
 | Cube Mesh | `node.cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
+| Curve Solid | `node.curve_solid_source` | Source | Hands the solid an extruded, revolved or tube curve makes to physics and copies, so a curve shape can fall, collide or be copied. |
 | Cut Mesh Bands | `node.cut_mesh_bands` | Source | Cuts mesh triangles into directional bands while retaining source-triangle provenance. |
 | Cut Mesh Cells | `node.cut_mesh_cells` | Source | Cuts mesh triangles into grid cells while retaining source-triangle provenance. |
 | Cut Out Box | `node.cut_out_box` | Filter | Hides the part of a mesh inside a box, for example to cut a hole in an ocean where a splash tank sits. |

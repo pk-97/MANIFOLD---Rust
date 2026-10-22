@@ -10,8 +10,9 @@
 //! contract. Frame per path point: tangent from a central finite
 //! difference, reference-up = +Y — **documented limit (Deferred #4): this
 //! degenerates when the tangent is (near-)parallel to +Y** (a vertical path
-//! segment); parallel-transport frames are deferred. Normals are left zero;
-//! wire `node.make_triangles` downstream.
+//! segment); parallel-transport frames are deferred. `caps` closes the
+//! path's ends. The grid carries exact normals; wire `node.make_triangles`
+//! with Keep Normals downstream. The CPU mirror is `curve_sweep::tube_grid`.
 
 use std::borrow::Cow;
 
@@ -24,27 +25,27 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`radius`
-/// f32, `sides` Int→i32), then the derived `path_len`/`lift_len`/
-/// `radius_scale_len` (u32 each), then the codegen-injected
-/// `dispatch_count`, padded to a 16-byte multiple. 6 words + 2 pad = 32
+/// f32, `sides` Int→i32, `caps` Bool→u32), then the derived `path_len`/
+/// `lift_len`/`radius_scale_len` (u32 each), then the codegen-injected
+/// `dispatch_count`, padded to a 16-byte multiple. 7 words + 1 pad = 32
 /// bytes. Matches `standalone_for_spec::<TubeFromPath>()`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TubeFromPathUniforms {
     radius: f32,
     sides: i32,
+    caps: u32,
     path_len: u32,
     lift_len: u32,
     radius_scale_len: u32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 manifold_node_engine::primitive! {
     name: TubeFromPath,
     type_id: "node.tube_from_path",
-    purpose: "Sweep a circular ring around a centerline path (Array<CurvePoint>, XZ plane: x=world X, y=world Z) into a path_len x (sides+1) positions+uv tube grid. Optional `lift` (+Y per path point) and `radius_scale` (per path point, composable with a ramp for tapered vines) degrade to 0.0 / 1.0 past a short or unwired buffer, never to silent zero-radius. Frame per point: tangent from a central finite difference, reference-up=+Y — degenerates when the tangent is (near-)parallel to +Y (a vertical path segment); parallel-transport frames are deferred. Normals are left zero — wire node.make_triangles downstream (src_cols=sides+1, src_rows=path point count).",
+    purpose: "Sweep a circular ring around a centerline path (Array<CurvePoint>, XZ plane: x=world X, y=world Z) into a path_len x (sides+1) positions+uv tube grid. Optional `lift` (+Y per path point) and `radius_scale` (per path point, composable with a ramp for tapered vines) degrade to 0.0 / 1.0 past a short or unwired buffer, never to silent zero-radius. Frame per point: tangent from a central finite difference, reference-up=+Y — degenerates when the tangent is (near-)parallel to +Y (a vertical path segment); parallel-transport frames are deferred. `caps` closes the path's two ends with a cap each (Blender's Fill Caps, for an open path). Normals are exact (the ring direction; a cap faces along the path), so a tube thicker than its tightest turn still displaces cleanly — wire node.make_triangles with keep_normals on downstream (src_cols=sides+1, src_rows=path point count, +4 with caps).",
     inputs: {
         path: Array(CurvePoint) required,
         lift: Array(f32) optional,
@@ -71,9 +72,17 @@ manifold_node_engine::primitive! {
             range: Some((3.0, 64.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("caps"),
+            label: "Fill Caps",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "The vine/ribbon/sweep atom — a path built from generate_range + array_math (a circle: cos/sin of an angle ramp) plus a linear `lift` becomes a helix, the archetypal climbing vine. Wire `radius_scale` to a growth-front ramp (generate_range fraction -> array_math ScaleOffset/Clamp01 threshold against a beat-driven phase) so the tube visibly grows from base to tip — the radius collapses to 0 past the front instead of the whole tube popping in at once. Wire node.make_triangles downstream with src_cols = sides+1, src_rows = the path's point count. The +Y reference frame degenerates on a near-vertical path segment (Deferred #4) — keep paths mostly horizontal/spiraling in v1, or accept the pinch.",
+    composition_notes: "The vine/ribbon/sweep atom — a path built from generate_range + array_math (a circle: cos/sin of an angle ramp) plus a linear `lift` becomes a helix, the archetypal climbing vine. Wire `radius_scale` to a growth-front ramp (generate_range fraction -> array_math ScaleOffset/Clamp01 threshold against a beat-driven phase) so the tube visibly grows from base to tip — the radius collapses to 0 past the front instead of the whole tube popping in at once. Wire node.make_triangles (keep_normals on) downstream with src_cols = sides+1, src_rows = the path's point count, plus 4 with caps. The +Y reference frame degenerates on a near-vertical path segment (Deferred #4) — keep paths mostly horizontal/spiraling in v1, or accept the pinch.",
     examples: ["Vine"],
     picker: { label: "Tube From Path", category: Atom },
     summary: "Sweeps a tube of adjustable thickness along a path — the way you'd build a vine, cable, or ribbon from a center-line curve. Thickness and lift can vary per point for tapered, climbing shapes.",
@@ -106,7 +115,8 @@ impl Primitive for TubeFromPath {
             Some(ParamValue::Float(n)) => n.round().max(3.0) as u32,
             _ => 8,
         };
-        Some(path_len.saturating_mul(sides + 1))
+        let caps = matches!(params.get("caps"), Some(ParamValue::Bool(true)));
+        Some(path_len.saturating_add(if caps { 4 } else { 0 }).saturating_mul(sides + 1))
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -116,6 +126,7 @@ impl Primitive for TubeFromPath {
             _ => 8,
         };
 
+        let caps = u32::from(matches!(ctx.params.get("caps"), Some(ParamValue::Bool(true))));
         let Some(path) = ctx.inputs.array("path") else {
             return;
         };
@@ -150,12 +161,12 @@ impl Primitive for TubeFromPath {
         let uniforms = TubeFromPathUniforms {
             radius,
             sides,
+            caps,
             path_len,
             lift_len,
             radius_scale_len,
             dispatch_count: dst_capacity,
             _pad0: 0,
-            _pad1: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -275,12 +286,12 @@ mod gpu_tests {
         let uniforms = TubeFromPathUniforms {
             radius,
             sides,
+            caps: 0,
             path_len: path.len() as u32,
             lift_len,
             radius_scale_len: rs_len,
             dispatch_count: dst_cap,
             _pad0: 0,
-            _pad1: 0,
         };
 
         let bindings = [

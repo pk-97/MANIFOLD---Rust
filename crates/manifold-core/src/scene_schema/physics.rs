@@ -93,9 +93,6 @@ pub fn physics_unavailable(doc: &SceneDoc, item: &ItemId) -> Option<&'static str
         ItemFields::Object(object) if object.shape == Shape::Ocean => {
             return Some("An Ocean surface cannot collide; use Water for water");
         }
-        ItemFields::Object(object) if object.shape.curve().is_some() => {
-            return Some(CURVE_HAS_NO_SOLID);
-        }
         ItemFields::Object(_) | ItemFields::Group(_) => {}
         _ => return Some("Only Objects and Groups have physics"),
     }
@@ -141,12 +138,8 @@ fn copies(fields: &ItemFields) -> bool {
     }
 }
 
-/// Why a curve shape takes no physics or copies: its mesh is built on the GPU
-/// from live rows, and a collision shape or a copy layout needs it on the CPU.
-pub(super) const CURVE_HAS_NO_SOLID: &str = "A curve shape has no solid for physics or copies yet";
-
 fn solid(shape: &Shape) -> bool {
-    *shape != Shape::Ocean && shape.curve().is_none()
+    *shape != Shape::Ocean
 }
 
 /// Objects in `items` a group body takes: not under copies, and for a
