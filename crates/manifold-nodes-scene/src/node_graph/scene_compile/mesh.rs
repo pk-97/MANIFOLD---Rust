@@ -231,9 +231,15 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
     for (source, port) in maps {
         b.wire(source, "out", object, port);
     }
-    b.wire(frame.transform, "transform", object, "parent_transform");
+    if let Some(parent) = frame.transform {
+        b.wire(parent, "transform", object, "parent_transform");
+    }
     b.wire(frame.visible, "out", object, "parent_visible");
+    if let Some(body) = frame.copies {
+        super::copies::draw_instances(b, body, object, true);
+    }
     b.objects.push(object);
+    b.object_items.push(group.id.clone());
     true
 }
 

@@ -107,6 +107,15 @@ impl ItemFields {
         }
     }
 
+    /// Whether an Object or Group has Copies on.
+    pub fn copies(&self) -> bool {
+        match self {
+            ItemFields::Group(g) => g.copies,
+            ItemFields::Object(o) => o.copies,
+            _ => false,
+        }
+    }
+
     /// The physics setting of an Object or Group.
     pub fn physics(&self) -> PhysicsSetting {
         match self {
@@ -150,6 +159,78 @@ pub struct ObjectFields {
     pub material: Option<ItemId>,
     pub physics: PhysicsSetting,
     pub copies: bool,
+    /// The mesh modifiers on this object, in the order they apply. Adding,
+    /// removing and reordering are one `Set` each (section 6, difference 9).
+    pub modifiers: Vec<MeshModifier>,
+}
+
+/// One entry in an Object's modifier list. The key names it inside its
+/// object for good, so its params keep their ids when the list is reordered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MeshModifier {
+    pub key: String,
+    pub kind: MeshModifierKind,
+}
+
+/// The mesh modifiers the picker offers: the available scene modifier
+/// recipes that act on each object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MeshModifierKind {
+    SurfacePeel,
+    OrderedRecon,
+    SurfaceWaves,
+    SpatialEchoes,
+}
+
+impl MeshModifierKind {
+    pub const ALL: [MeshModifierKind; 4] = [
+        MeshModifierKind::SurfacePeel,
+        MeshModifierKind::OrderedRecon,
+        MeshModifierKind::SurfaceWaves,
+        MeshModifierKind::SpatialEchoes,
+    ];
+
+    /// The stock scene modifier recipe this compiles.
+    pub fn recipe(self) -> &'static str {
+        match self {
+            MeshModifierKind::SurfacePeel => "SurfacePeel",
+            MeshModifierKind::OrderedRecon => "OrderedRecon",
+            MeshModifierKind::SurfaceWaves => "SurfaceWaves",
+            MeshModifierKind::SpatialEchoes => "SpatialEchoes",
+        }
+    }
+}
+
+impl ObjectFields {
+    /// These fields with `modifier` added at the end of the list.
+    #[must_use]
+    pub fn with_modifier(&self, key: impl Into<String>, kind: MeshModifierKind) -> Self {
+        let mut next = self.clone();
+        next.modifiers.push(MeshModifier { key: key.into(), kind });
+        next
+    }
+
+    /// These fields without the modifier `key`.
+    #[must_use]
+    pub fn without_modifier(&self, key: &str) -> Self {
+        let mut next = self.clone();
+        next.modifiers.retain(|modifier| modifier.key != key);
+        next
+    }
+
+    /// These fields with the modifier `key` moved to `index` (clamped to the
+    /// end). An unknown key leaves the list alone.
+    #[must_use]
+    pub fn with_modifier_moved(&self, key: &str, index: usize) -> Self {
+        let mut next = self.clone();
+        if let Some(from) = next.modifiers.iter().position(|modifier| modifier.key == key) {
+            let modifier = next.modifiers.remove(from);
+            next.modifiers.insert(index.min(next.modifiers.len()), modifier);
+        }
+        next
+    }
 }
 
 /// An Object's Shape: the built-in solids, Ocean, or a mesh from a file.

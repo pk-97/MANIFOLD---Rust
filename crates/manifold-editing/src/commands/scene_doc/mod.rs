@@ -9,6 +9,7 @@
 mod commands;
 mod group;
 mod import;
+mod modifiers;
 
 pub use commands::{
     AddSceneItemCommand, RemoveSceneItemCommand, RenameSceneItemCommand, ReparentSceneItemCommand,
@@ -16,6 +17,7 @@ pub use commands::{
 };
 pub use group::{group_commands, ungroup_commands};
 pub use import::{SwapPlan, import_model_commands, swap_model_file_commands};
+pub use modifiers::{add_modifier, move_modifier, remove_modifier};
 
 #[cfg(test)]
 mod tests;

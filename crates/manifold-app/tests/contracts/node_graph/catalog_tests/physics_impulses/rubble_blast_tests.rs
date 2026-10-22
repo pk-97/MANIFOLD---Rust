@@ -38,6 +38,17 @@ fn blast_field(def: &EffectGraphDef) -> FieldValue {
         fields.push(event.value.field);
     });
     assert_eq!(fields.len(), 1, "one press, one hit");
+    // A frame with no press delivers nothing, and the next press is its own
+    // single hit: a trigger never repeats, never doubles.
+    runtime.execute_frame(time(DT * 2.0));
+    let mut stray = 0;
+    runtime.water().drain_scene_impulses(|_, _| stray += 1);
+    assert_eq!(stray, 0, "a frame without a press delivers no hit");
+    assert_eq!(runtime.fire_scene_impulse(&fire, time(DT * 2.0), &mut sequence), Ok(ImpulseFire::Admitted));
+    runtime.execute_frame(time(DT * 3.0));
+    let mut second = 0;
+    runtime.water().drain_scene_impulses(|_, _| second += 1);
+    assert_eq!(second, 1, "the second press is exactly one more hit");
     fields.remove(0)
 }
 

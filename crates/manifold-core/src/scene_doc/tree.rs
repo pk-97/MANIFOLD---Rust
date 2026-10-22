@@ -311,6 +311,25 @@ impl SceneDoc {
         self.items.iter().find(|item| item.kind() == ItemKind::World)
     }
 
+    /// Whether physics moves `id`, an item at or under it: it, something
+    /// inside it, or a group around it has a physics setting.
+    pub fn physical_under(&self, id: &ItemId) -> bool {
+        let mut any = false;
+        self.walk(|item, ancestors| {
+            let physical = item.fields.physics() != super::PhysicsSetting::None
+                || ancestors.iter().any(|holder| holder.fields.physics() != super::PhysicsSetting::None);
+            any |= physical && (&item.id == id || ancestors.iter().any(|holder| &holder.id == id));
+        });
+        any
+    }
+
+    /// Whether any Object or Group has Copies on.
+    pub fn any_copies(&self) -> bool {
+        let mut any = false;
+        self.walk(|item, _| any |= item.fields.copies());
+        any
+    }
+
     /// Whether any Object or Group has a physics setting.
     pub fn any_physics(&self) -> bool {
         let mut any = false;

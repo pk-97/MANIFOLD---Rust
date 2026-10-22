@@ -17,10 +17,12 @@
 mod add_menu;
 mod camera;
 mod fields;
+mod copies;
 mod force;
 mod group;
 mod light;
 mod material;
+mod modifier;
 mod object;
 mod physics;
 mod scene_level;
@@ -34,9 +36,12 @@ pub use fields::{
     Choice, FieldControl, FieldRow, FieldValue, applicable_fields, field_for, field_rows, is_camera, is_material,
     is_object_or_group, set_field,
 };
+pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, can_copy, copies_unavailable};
+pub use force::{FORCE_ROWS, impulse_unavailable};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily};
+pub use modifier::{modifier_param_id, modifier_property, modifier_rows, modifiers_unavailable};
 pub use object::OBJECT_ROWS;
 pub use physics::{BODY_ROLE, MAX_GROUP_PARTS, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
@@ -61,6 +66,10 @@ pub enum Reach {
     /// The animation clock of every imported part below an import Group
     /// (its skeleton pose and morph weights), so one row plays them all.
     Clocks,
+    /// A param of the scene modifier instance the item compiles to (a
+    /// Force, or one entry of an Object's modifier list). The row's
+    /// property is the recipe's own param id.
+    Modifier,
 }
 
 /// What a row is to the performer.
@@ -257,8 +266,9 @@ pub fn rows(kind: ItemKind) -> &'static [PropertyRow] {
         ItemKind::Light => &LIGHT_ROWS,
         ItemKind::Material => &MATERIAL_ROWS,
         ItemKind::World => &WORLD_ROWS,
+        ItemKind::Force => &FORCE_ROWS,
         // Their tables arrive with their emitters (section 11, waves 2 and 3).
-        ItemKind::Water | ItemKind::WaterSource | ItemKind::Swarm | ItemKind::Force => &[],
+        ItemKind::Water | ItemKind::WaterSource | ItemKind::Swarm => &[],
     }
 }
 
@@ -270,13 +280,27 @@ fn physics_rows(kind: ItemKind) -> &'static [PropertyRow] {
     }
 }
 
-/// The rows that exist for an item with `fields`.
-pub fn applicable(fields: &ItemFields) -> impl Iterator<Item = &'static PropertyRow> + '_ {
-    let kind = fields.kind();
-    rows(kind).iter().chain(physics_rows(kind)).filter(move |row| (row.applies)(fields))
+/// The Copies section's rows, on the kinds that have the section.
+fn copies_rows(kind: ItemKind) -> &'static [PropertyRow] {
+    match kind {
+        ItemKind::Object | ItemKind::Group => &COPIES_ROWS,
+        _ => &[],
+    }
 }
 
-/// The row for `property` on an item with `fields`, if it exists there.
+/// The rows that exist for an item with `fields`. An Object's modifier rows
+/// are not here: they are per entry of its list ([`modifier_rows`]).
+pub fn applicable(fields: &ItemFields) -> impl Iterator<Item = &'static PropertyRow> + '_ {
+    let kind = fields.kind();
+    rows(kind).iter().chain(physics_rows(kind)).chain(copies_rows(kind)).filter(move |row| (row.applies)(fields))
+}
+
+/// The row for `property` on an item with `fields`, if it exists there. An
+/// Object's `<key>.<param>` names a row of one of its modifiers.
 pub fn row_for(fields: &ItemFields, property: &str) -> Option<&'static PropertyRow> {
+    if let (ItemFields::Object(object), Some((key, param))) = (fields, property.split_once('.')) {
+        let modifier = object.modifiers.iter().find(|modifier| modifier.key == key)?;
+        return modifier_rows(modifier.kind).iter().find(|row| row.property == param);
+    }
     applicable(fields).find(|row| row.property == property)
 }

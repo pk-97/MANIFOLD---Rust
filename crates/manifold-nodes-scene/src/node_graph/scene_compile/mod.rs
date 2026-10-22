@@ -11,11 +11,15 @@
 //! its node param; the (kind, property) table in `manifold_core::scene_schema`
 //! decides which rows exist.
 //!
-//! Kinds whose emitters arrive in later lanes (Water, Water Source, Swarm,
-//! Force) and the Ocean shape compile to nothing yet.
+//! Kinds whose emitters arrive in later lanes (Water, Water Source, Swarm)
+//! and the Ocean shape compile to nothing yet. Forces and mesh modifiers
+//! compile to scene modifier instances (`forces.rs`); Copies emit a copies
+//! body per item (`copies.rs`); physics emits a body per item (`physics.rs`).
 
 mod builder;
 mod camera;
+mod copies;
+mod forces;
 mod group;
 mod light;
 mod material;
@@ -39,6 +43,8 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     light::emit_all(&mut b);
     group::emit_tree(&mut b);
     world::emit(&mut b);
+    copies::join_world(&mut b);
+    forces::emit_all(&mut b)?;
     b.finish()
 }
 

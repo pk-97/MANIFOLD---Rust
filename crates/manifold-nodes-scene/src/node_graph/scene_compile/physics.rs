@@ -71,8 +71,8 @@ fn pose_frame(b: &mut Builder<'_>, item: &Item, body: u32) -> u32 {
 pub(crate) fn object(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>, mesh: u32, transform: u32) -> Option<u32> {
     match b.physics.part(item) {
         PhysicsPart::Solo(setting) => {
-            if let Some(frame) = frame {
-                b.wire(frame.transform, "transform", transform, "parent");
+            if let Some(parent) = frame.and_then(|frame| frame.transform) {
+                b.wire(parent, "transform", transform, "parent");
             }
             let body = add_body(b, item, setting, transform);
             b.wire(mesh, "source", body, "source");
@@ -103,17 +103,24 @@ fn add_part(b: &mut Builder<'_>, root: ItemId, part: (u32, u32)) {
 pub(crate) fn group(b: &mut Builder<'_>, item: &Item, inner: Frame) -> Frame {
     match b.physics.part(item) {
         PhysicsPart::Group(setting) => {
-            let body = add_body(b, item, setting, inner.transform);
+            // A group under copies is the Copies section's, so a group body
+            // always has its own transform.
+            let Some(transform) = inner.transform else {
+                return inner;
+            };
+            let body = add_body(b, item, setting, transform);
             // The group's rows ran before its body existed.
             b.apply_rows(item, PHYSICS_ROWS.iter().filter(|row| (row.applies)(&item.fields)));
             if setting == PhysicsSetting::Body {
-                return Frame { transform: pose_frame(b, item, body), ..inner };
+                return Frame { transform: Some(pose_frame(b, item, body)), ..inner };
             }
             inner
         }
         PhysicsPart::Member { local, .. } => {
             let body_local = b.add(item.id.as_str(), "body_local", TRANSFORM_TYPE);
-            b.mirror(inner.transform, body_local);
+            if let Some(transform) = inner.transform {
+                b.mirror(transform, body_local);
+            }
             if let Some(parent) = local.and_then(|local| b.id(local.as_str(), "body_local")) {
                 b.wire(parent, "transform", body_local, "parent");
             }

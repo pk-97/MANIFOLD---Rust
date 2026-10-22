@@ -14,7 +14,7 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
         return;
     };
     let owner = item.id.as_str();
-    if b.doc.any_physics() {
+    if b.doc.any_physics() || b.doc.any_copies() {
         let world = b.add(owner, "physics", "node.physics_world");
         super::physics::join_world(b, world);
     }

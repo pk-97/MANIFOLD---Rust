@@ -219,6 +219,8 @@ mod every_param_has_a_row {
                         Reach::Scene(r) => owner == "scene" && r == role,
                         Reach::EveryCameraLens => role == "lens",
                         Reach::Clocks => role == "pose",
+                        // A scene modifier's params live on its instance, not a compiled node.
+                        Reach::Modifier => false,
                     };
             }
         });
