@@ -432,8 +432,11 @@ mod every_param_has_a_row {
             _ => false,
         });
         let plain_material = owner == "scene" && role == "default_material";
+        // A modifier frame's rest centre is placed by the compiler, not a row.
+        let frame_centre = role.starts_with("centre:")
+            && doc.find(&ItemId::new(owner)).is_some_and(|item| item.kind() == ItemKind::Modifier);
         let scene_level = SCENE_LEVEL_ROWS.iter().any(|row| matches!(row.reach, Reach::Scene(r) if r == role) && row.param == param);
-        found || family || water || plain_material || (owner == "scene" && scene_level)
+        found || family || water || plain_material || frame_centre || (owner == "scene" && scene_level)
     }
 
     #[test]

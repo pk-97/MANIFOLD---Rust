@@ -551,6 +551,7 @@ const NON_STANDALONE: &[&str] = &[
     "node.mesh_edges",
     "node.one_euro_filter",
     "node.platonic_solid_edges",
+    "node.polygon_curve",
     "node.range",
     "node.repeat_outline",
     "node.switch_array",
@@ -606,6 +607,10 @@ const NON_STANDALONE: &[&str] = &[
     // Welded normals: barriered clear, accumulate and resolve passes over one
     // hand shader, its SmoothUniforms reflected in uniform_layout_extended.
     "node.smooth_normals",
+    // Mesh merging and nested copies: one hand shader each, their
+    // PartUniforms and NestUniforms reflected in uniform_layout_extended.
+    "node.merge_meshes",
+    "node.nest_copies",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.

@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 398 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 403 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -166,7 +166,7 @@ _Generated from the node registry. Do not hand-edit. 398 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (98)
+### 3D Geometry (103)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -188,6 +188,7 @@ _Generated from the node registry. Do not hand-edit. 398 nodes registered, group
 | Cylinder Wrap Field | `node.cylinder_wrap_field` | Map | Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry. |
 | Digital Plants Render | `node.digital_plants_render` | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
 | Displace Copies | `node.displace_copies` | Filter | Moves copies along a chosen direction according to a scalar field while preserving their transform metadata. |
+| Drop Hidden Triangles | `node.drop_hidden_triangles` | Filter | Removes the parts of a mesh that an alpha cut has hidden, so the hole shows on any material. |
 | Edge Pairs | `node.edge_pairs` | Source | Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start. |
 | Extrude Curve | `node.extrude_curve` | Source | Pushes a flat 2D shape straight through space to build a 3D extrusion — like a cookie cutter dragged through dough. Turns outlines into solid ribbons or bevele… |
 | Facet Normals | `node.facet_normals` | Filter | Recomputes a mesh's normals from its own triangle geometry, giving flat, faceted shading — the exact fix for a mesh whose normals went stale after a heavy defo… |
@@ -214,6 +215,7 @@ _Generated from the node registry. Do not hand-edit. 398 nodes registered, group
 | Mesh Ramp | `node.mesh_ramp` | Source | Turns a mesh's own positions into a growth mask — a value from 0 to 1 per vertex that sweeps across the mesh along an axis. Feeds any deformer's weight input t… |
 | Mesh Spatial Mask | `node.mesh_spatial_mask` | Source | Makes soft band or sphere weights from mesh positions for driving a staged surface response. |
 | Mesh Stagger Envelope | `node.mesh_stagger_envelope` | Source | Turns elapsed beats into a directional attack/hold/release weight that arrives across a mesh in order. |
+| Mesh Texture Weights | `node.mesh_texture_weights` | Source | Reads a picture across a 3D mesh from all three sides at once, giving every point a value that can push the surface in or out. |
 | Morph Mesh | `node.morph_mesh` | Filter | Blends smoothly between two meshes vertex-by-vertex, so one shape dissolves into another. Works best when both meshes share the same vertex count and layout. |
 | Morph Targets Blend | `node.morph_targets_blend` | Filter | Blends an imported mesh's morph targets by their live animated weights — the GPU counterpart to a Morph Weights node's sampled weight vector. |
 | Nest Copies | `node.nest_copies` | Map | Puts a whole set of copies at every copy of another set: copies of copies. |
@@ -229,6 +231,7 @@ _Generated from the node registry. Do not hand-edit. 398 nodes registered, group
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Mesh | `node.platonic_solid_mesh` | Source | Builds a reusable closed triangle mesh for any of the five Platonic solids. |
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
+| Polygon Curve | `node.polygon_curve` | Source | Draws the outline of a polygon or a star as a list of points. Sides sets the corners; Pinch pulls every other corner in to make a star. |
 | Projected Grid | `node.projected_grid` | Source | Lays a grid on a water level that fills the camera's view out to the horizon, dense near the camera and thin far away, the base surface for an ocean. |
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
@@ -255,6 +258,7 @@ _Generated from the node registry. Do not hand-edit. 398 nodes registered, group
 | Shatter | `node.shatter_mesh` | Filter | Explodes a mesh into separate triangular shards, each sliding away along its own flat face normal. |
 | Skin Mesh | `node.skin_mesh` | Filter | Deforms an imported rigged mesh by its animated skeleton — the GPU counterpart to a Skeleton Pose node's joint matrices. |
 | Slice | `node.slice_mesh` | Filter | Clamps all vertices past a plane onto the plane, turning a mesh into a flat cut face you can sweep across. |
+| Smooth Normals | `node.smooth_normals` | Filter | Gives every corner of a mesh one shared, smooth direction, so pushing the surface outward keeps hard edges joined instead of splitting the faces apart. |
 | Smooth Surface Mesh | `node.smooth_surface_mesh` | Filter | Smooths a liquid's surface mesh by easing each point toward its neighbours, rounding off the small facets and steps. |
 | Sphere Mesh | `node.sphere_mesh` | Source | Builds a smooth round ball of mesh, the sphere among the built-in solids. |
 | Subdivide Mesh | `node.subdivide_mesh` | Filter | Splits every triangle of a mesh into smaller ones without changing its shape, so a bend or a wave has enough points to curve smoothly. |

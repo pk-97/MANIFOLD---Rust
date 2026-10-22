@@ -505,6 +505,28 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "merge_meshes.rs",
+        rust_struct: "PartUniforms",
+        shader: "shaders/merge_meshes.wgsl",
+        shader_struct: "Params",
+        aliases: &[
+            ("matrix[0]", "m0"),
+            ("matrix[1]", "m1"),
+            ("matrix[2]", "m2"),
+            ("matrix[3]", "m3"),
+            ("normals[0]", "n0"),
+            ("normals[1]", "n1"),
+            ("normals[2]", "n2"),
+        ],
+    },
+    CustomAbiCase {
+        source: "nest_copies.rs",
+        rust_struct: "NestUniforms",
+        shader: "shaders/nest_copies.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "smooth_normals.rs",
         rust_struct: "SmoothUniforms",
         shader: "shaders/smooth_normals.wgsl",
