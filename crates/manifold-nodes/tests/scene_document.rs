@@ -877,12 +877,13 @@ fn run(project: &mut Project, mut command: impl manifold_editing::command::Comma
     assert!(command.was_applied(), "{} was refused: {:?}", command.description(), command.rejection_reason());
 }
 
-/// A name is display only and a camera's place in the tree is not its cut:
-/// renaming every item and reordering the cameras compiles to the same graph
-/// and manifest, so the structure version holds and nothing restarts (GPU
-/// water restarts on a structure version change).
+/// A name and a place among siblings are display only: renaming an item of
+/// every kind and reversing every sibling list (the modifier chain aside,
+/// whose order is its meaning) compiles to the same graph and manifest, so
+/// the structure version holds and nothing restarts (GPU water restarts on a
+/// structure version change). A camera's place is not its cut number either.
 #[test]
-fn renaming_anything_or_reordering_cameras_recompiles_nothing() {
+fn renaming_or_reordering_items_recompiles_nothing() {
     use manifold_editing::commands::scene_doc::{RenameSceneItemCommand, ReparentSceneItemCommand};
     let doc = every_param_has_a_row::doc_with_every_kind();
     let mut project = project_with(doc.clone());
@@ -905,17 +906,29 @@ fn renaming_anything_or_reordering_cameras_recompiles_nothing() {
     for id in picked {
         run(&mut project, RenameSceneItemCommand::new(layer.clone(), id.clone(), format!("renamed {id}")));
     }
-    let cameras: Vec<ItemId> = doc.cameras().into_iter().cloned().collect();
-    assert!(cameras.len() >= 2, "the scene has cameras to reorder");
-    for camera in &cameras {
-        run(&mut project, ReparentSceneItemCommand::new(layer.clone(), camera.clone(), None, 0));
+    // Reverse every sibling list: each item in turn to the front of its parent.
+    let mut moves = Vec::new();
+    let top = doc.items.iter().map(|item| (None, item));
+    let inner = doc.ids().into_iter().filter_map(|id| doc.find(&id)).flat_map(|parent| {
+        parent.children.iter().map(move |child| (Some(parent.id.clone()), child))
+    });
+    for (parent, item) in top.chain(inner.collect::<Vec<_>>()) {
+        if item.kind() != ItemKind::Modifier {
+            moves.push((item.id.clone(), parent));
+        }
+    }
+    for (id, parent) in moves {
+        run(&mut project, ReparentSceneItemCommand::new(layer.clone(), id, parent, 0));
     }
 
     let fx = project.timeline.layers[0].gen_params().unwrap();
     let edited = fx.scene.as_ref().unwrap();
-    assert!(edited.find(&cameras[0]).is_some_and(|item| item.name.starts_with("renamed")), "the renames landed");
+    assert!(edited.find(&doc.cameras()[0].clone()).is_some_and(|item| item.name.starts_with("renamed")), "the renames landed");
     assert_ne!(edited.cameras(), doc.cameras(), "the cameras moved");
-    assert_eq!(serde_json::to_string(&fx.graph).unwrap(), graph, "a rename or a camera reorder changed the compiled graph");
+    assert_ne!(edited.ids(), doc.ids(), "the items moved");
+    let chain = |doc: &SceneDoc| doc.items.iter().filter(|item| item.kind() == ItemKind::Modifier).map(|item| item.id.clone()).collect::<Vec<_>>();
+    assert_eq!(chain(edited), chain(&doc), "the modifier chain kept its order");
+    assert_eq!(serde_json::to_string(&fx.graph).unwrap(), graph, "a rename or a reorder changed the compiled graph");
     assert_eq!(format!("{:?}", fx.params.iter().map(|p| &p.spec).collect::<Vec<_>>()), manifest, "and the manifest");
     assert_eq!(fx.graph_structure_version, version, "and bumped the structure version, which restarts water");
 }
