@@ -490,9 +490,11 @@ pub enum ForceTargets {
 pub struct WorldFields {
     /// Fog adds the atmosphere pass; off in the base scene.
     pub fog: bool,
-    /// The scene's default active camera; the first camera when unset.
-    pub active_camera: Option<ItemId>,
 }
+
+/// The World's Camera row: the live cut, the index of the rendering camera
+/// in [`SceneDoc::cameras`] order (ruling 11).
+pub const CAMERA_PICK: &str = "camera";
 
 /// A live property's param id: `<item id>.<property>` (ruling 7). Renaming
 /// or reparenting an item never changes it.

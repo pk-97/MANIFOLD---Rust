@@ -1,77 +1,164 @@
-//! `node.camera_switch` — two-input camera mux (SCENE_MODIFIER_FRAMEWORK_DESIGN
-//! section 3.5).
+//! `node.camera_switch` — N-way camera selector.
 //!
-//! Selects between two `Camera` inputs on `select` (enum "A"/"B"): A passes
-//! `a` through, B passes `b`. An unwired input falls back to the other, so a
-//! lone producer on either side still reaches `out`. The enable wiring of
-//! camera-path scene modifiers (D5 Switch decl) mints one of these between
-//! the previous camera producer and the lens — toggling the modifier is a
-//! param write on `select`, never a graph rebuild.
+//! `num_inputs` sets how many `Camera` inputs the node exposes (`a`, `b`,
+//! `c`, …) and the `select` enum picks one for `out`. A scene's live camera
+//! cut is one of these with every camera's lens wired in: a cut is a param
+//! write on `select`, never a rebuild. Camera-path scene modifiers mint the
+//! two-input form (previous camera on `a`, the modifier's on `b`), so the
+//! default of two inputs keeps their graphs as they were.
 //!
-//! CPU-only — `Camera` is a value type drained per wire per frame, same
-//! convention as `node.loop_camera`. Non-GPU: outside the freeze-codegen
-//! mandate (ADDING_PRIMITIVES.md's CPU-atom exclusion).
+//! An unwired pick falls back to the first wired input, so a lone producer
+//! still reaches `out`. With `select` set as a param, the inputs it does not
+//! pick are pruned from the frame.
+//!
+//! CPU-only: `Camera` is a value type drained per wire per frame. Hand-written
+//! because the port list follows `num_inputs` (the `node.switch_texture`
+//! pattern).
 
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
-use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use manifold_node_engine::scene::camera::Camera;
 
-pub const CAMERA_SWITCH_SELECT_LABELS: &[&str] = &["A", "B"];
+pub const CAMERA_SWITCH_TYPE_ID: &str = "node.camera_switch";
 
-manifold_node_engine::primitive! {
-    name: CameraSwitch,
-    type_id: "node.camera_switch",
-    purpose: "Select between two Camera inputs with an enum select: A passes `a`, B passes `b`. An unwired input falls back to the other, so a single producer on either side still reaches `out`. Camera-path scene modifiers mint one between the previous camera producer and the lens — the modifier's enable toggle is a param write on `select` (D5 Switch), never a structural edit. CPU-only; Camera is a value type (like loop_camera's outputs).",
-    inputs: {
-        a: Camera optional,
-        b: Camera optional,
+/// Port names, in pick order. The table is static because a port name must
+/// outlive the node; it matches `node.switch_texture`'s 32, the most images a
+/// cut can pick between.
+pub const CAMERA_SWITCH_INPUTS: [&str; 32] = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v",
+    "w", "x", "y", "z", "aa", "ab", "ac", "ad", "ae", "af",
+];
+
+/// The `select` labels, one per input.
+const SELECT_LABELS: [&str; 32] = [
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
+    "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF",
+];
+
+const DEFAULT_INPUTS: usize = 2;
+
+const OUTPUTS: [NodeOutput; 1] =
+    [NodePort { name: Cow::Borrowed("out"), ty: PortType::Camera, kind: PortKind::Output, required: false }];
+
+const PARAMS: [ParamDef; 2] = [
+    ParamDef {
+        name: Cow::Borrowed("select"),
+        label: "Select",
+        ty: ParamType::Enum,
+        default: ParamValue::Enum(0),
+        range: None,
+        enum_values: &SELECT_LABELS,
     },
-    outputs: {
-        out: Camera,
+    ParamDef {
+        name: Cow::Borrowed("num_inputs"),
+        label: "Input Count",
+        ty: ParamType::Int,
+        default: ParamValue::Float(DEFAULT_INPUTS as f32),
+        range: Some((1.0, CAMERA_SWITCH_INPUTS.len() as f32)),
+        enum_values: &[],
     },
-    params: [
-        ParamDef {
-            name: Cow::Borrowed("select"),
-            label: "Select",
-            ty: ParamType::Enum,
-            // Standalone default A = pass `a` through. A modifier apply
-            // stamps B (its own camera is wired to `b`, enabled by default).
-            default: ParamValue::Enum(0),
-            range: None,
-            enum_values: CAMERA_SWITCH_SELECT_LABELS,
-        },
-    ],
-    depth_rule: Terminal,
-    composition_notes: "Minted by camera-path scene modifier applies (SCENE_MODIFIER_FRAMEWORK D5 Switch), never authored by hand in v1: previous camera producer → `a`, the modifier's camera → `b`, `out` → the repointed camera port. Toggle = one param write on `select`; disabled (A) seamlessly restores the original camera with zero structural churn. Unwired input falls back to the other, so the mux degrades to a pass-through if one side never got wired.",
-    examples: [],
-    picker: { label: "Camera Switch", category: Driver },
-    summary: "Switches between two cameras. Scene modifiers use it so toggling the modifier on and off never rebuilds the graph.",
-    category: Geometry3D,
-    role: Source,
-    aliases: ["camera switch", "camera mux", "mux camera"],
-    boundary_reason: NonGpu,
+];
+
+pub struct CameraSwitch {
+    inputs: Vec<NodeInput>,
 }
 
-impl Primitive for CameraSwitch {
-    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let select_b = matches!(
-            ctx.params.get("select"),
-            Some(ParamValue::Enum(n)) if *n == 1
-        );
-        let a = ctx.inputs.camera("a");
-        let b = ctx.inputs.camera("b");
-        // Unwired input falls back to the other; nothing wired at all falls
-        // back to the identity-ish default (the same fallback consumers use).
-        let cam = match (select_b, a, b) {
-            (false, Some(cam), _) => cam,
-            (false, None, Some(cam)) => cam,
-            (true, _, Some(cam)) => cam,
-            (true, Some(cam), None) => cam,
-            (false, None, None) | (true, None, None) => Camera::default_perspective(),
+impl CameraSwitch {
+    pub fn new() -> Self {
+        let mut node = Self { inputs: Vec::new() };
+        node.rebuild_ports(DEFAULT_INPUTS);
+        node
+    }
+
+    fn rebuild_ports(&mut self, n: usize) {
+        let n = n.clamp(1, CAMERA_SWITCH_INPUTS.len());
+        self.inputs = CAMERA_SWITCH_INPUTS[..n]
+            .iter()
+            .map(|&name| NodePort { name: Cow::Borrowed(name), ty: PortType::Camera, kind: PortKind::Input, required: false })
+            .collect();
+    }
+
+    fn picked(&self, params: &ParamValues) -> &'static str {
+        let index = match params.get("select") {
+            Some(ParamValue::Enum(n)) => *n as usize,
+            _ => 0,
         };
-        ctx.outputs.set_camera("out", cam);
+        CAMERA_SWITCH_INPUTS[index.min(self.inputs.len().saturating_sub(1))]
+    }
+}
+
+impl Default for CameraSwitch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn cached_type_id() -> &'static EffectNodeType {
+    static CELL: OnceLock<EffectNodeType> = OnceLock::new();
+    CELL.get_or_init(|| EffectNodeType::new(CAMERA_SWITCH_TYPE_ID))
+}
+
+impl EffectNode for CameraSwitch {
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+    }
+
+    fn type_id(&self) -> &EffectNodeType {
+        cached_type_id()
+    }
+
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::NonGpu)
+    }
+
+    fn inputs(&self) -> &[NodeInput] {
+        &self.inputs
+    }
+
+    fn outputs(&self) -> &[NodeOutput] {
+        &OUTPUTS
+    }
+
+    fn parameters(&self) -> &[ParamDef] {
+        &PARAMS
+    }
+
+    fn reconfigure(&mut self, params: &ParamValues) {
+        let n = params.get("num_inputs").and_then(|v| v.as_scalar()).map_or(DEFAULT_INPUTS, |f| f.round().max(1.0) as usize);
+        if n != self.inputs.len() {
+            self.rebuild_ports(n);
+        }
+    }
+
+    /// The picked input's producers run; the others are skipped. An unwired
+    /// pick keeps every input live, since the fallback may need any of them.
+    fn selected_input_branch(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<&'static str> {
+        let picked = self.picked(params);
+        wired_inputs.contains(&picked).then_some(picked)
+    }
+
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let picked = self.picked(ctx.params);
+        let camera = ctx
+            .inputs
+            .camera(picked)
+            .or_else(|| self.inputs.iter().find_map(|port| ctx.inputs.camera(&port.name)))
+            .unwrap_or_else(Camera::default_perspective);
+        ctx.outputs.set_camera("out", camera);
+    }
+}
+
+inventory::submit! {
+    manifold_node_engine::persistence::PrimitiveFactory {
+        type_id: CAMERA_SWITCH_TYPE_ID,
+        create: || Box::new(CameraSwitch::new()),
+        picker: Some(manifold_node_engine::palette::PickerInfo {
+            label: "Camera Switch",
+            category: manifold_node_engine::palette::PaletteCategory::Driver,
+        }),
     }
 }

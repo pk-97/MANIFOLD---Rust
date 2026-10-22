@@ -97,10 +97,6 @@ pub fn is_material(item: &Item) -> bool {
     item.kind() == ItemKind::Material
 }
 
-pub fn is_camera(item: &Item) -> bool {
-    item.kind() == ItemKind::Camera
-}
-
 /// Every field row of `kind`.
 pub fn field_rows(kind: ItemKind) -> &'static [FieldRow] {
     match kind {

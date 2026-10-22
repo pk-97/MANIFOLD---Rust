@@ -175,7 +175,7 @@ _Generated from the node registry. Do not hand-edit. 395 nodes registered, group
 | Atmosphere | `node.atmosphere` | Source | Scene fog + sky tint for render_scene. Wire it into a scene's atmosphere input; put fog density on a fader for an instant depth-mood knob. |
 | Bend Mesh | `node.bend_mesh` | Filter | Curves a mesh into an arc around a hinge line, like bending a rod. Position and lighting normals both rotate exactly, so it reads correctly at any angle, inclu… |
 | Camera Lens | `node.camera_lens` | Filter | The physical camera: focus distance, aperture, shutter angle, and exposure — one lens any camera source can feed, and every 3D consumer reads. |
-| Camera Switch | `node.camera_switch` | Source | Switches between two cameras. Scene modifiers use it so toggling the modifier on and off never rebuilds the graph. |
+| Camera Switch | `node.camera_switch` | Source | Picks which of several cameras is shown. Switching is live and never rebuilds the graph, so a camera cut lands on the frame it is asked for. |
 | Combine XY (curve) | `node.combine_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | Copy Positions | `node.copy_positions` | Map | Turns copy transforms into homogeneous XYZ positions for downstream fields and geometry math. |
 | Count Surface Edges | `node.count_surface_edges` | Filter | Counts shared marching-cubes surface edges at lattice nodes so a later scan can index one vertex per crossing. |

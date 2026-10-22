@@ -1,7 +1,9 @@
-//! `node.transform_shake` — stateless shake/jitter on a `Transform` wire.
+//! `node.transform_shake` — stateless shake/jitter on a `Transform` or
+//! `Camera` wire.
 //!
-//! Pure CPU pass-through (no GPU dispatch): takes a `Transform` in, adds a
-//! stateless summed-sine noise offset, and emits a `Transform` out. The
+//! Pure CPU pass-through (no GPU dispatch): takes a `Transform` or a
+//! `Camera` in, adds a stateless summed-sine noise offset, and emits it
+//! out. A Camera's offset is in its own axes (Blender's Camera Shakify). The
 //! noise is a function of `time × frequency` only — no stored phase, no
 //! RNG state. Position and rotation each scale the same noise vector by
 //! their own strength (defaults: rotation 1, position 0.25). The response curve is `amount²`, so
@@ -35,9 +37,10 @@ const DEFAULT_POSITION_STRENGTH: f32 = 0.25;
 manifold_node_engine::primitive! {
     name: TransformShake,
     type_id: "node.transform_shake",
-    purpose: "Stateless camera/object shake on a Transform wire. Adds a summed-sine noise offset (rotation and position each scaled by their own strength) driven by time × frequency. amount² response means amount = 0 is a byte-identical passthrough.",
+    purpose: "Stateless shake on a Transform wire, a Camera wire, or both. Adds a summed-sine noise offset (rotation and position each scaled by their own strength) driven by time × frequency. A Camera shakes in its own axes about its own position (camera_out), as a handheld camera does; a Transform's offset adds to its position and Euler rotation (out). amount² response means amount = 0 is a byte-identical passthrough.",
     inputs: {
-        transform: Transform required,
+        transform: Transform optional,
+        camera: Camera optional,
         amount: ScalarF32 optional,
         frequency: ScalarF32 optional,
         position_strength: ScalarF32 optional,
@@ -46,6 +49,7 @@ manifold_node_engine::primitive! {
     },
     outputs: {
         out: Transform,
+        camera_out: Camera,
     },
     params: [
         ParamDef {
@@ -90,7 +94,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Insert between node.transform_3d and node.scene_object (or node.render_scene's transform_n) to add physical weight — a kick drum on amount, a subtle idle shimmer at low values. Drive time from a beat ramp or leave it unwired for continuous playback-clock animation. No state: reconnecting the wire or reloading the project produces identical output for the same time.",
+    composition_notes: "Insert between node.transform_3d and node.scene_object (or node.render_scene's transform_n) to add physical weight — a kick drum on amount, a subtle idle shimmer at low values. For a camera, wire the rig's Camera into camera and camera_out on to the lens: the camera wobbles in place, wherever the rig put it. Drive time from a beat ramp or leave it unwired for continuous playback-clock animation. No state: reconnecting the wire or reloading the project produces identical output for the same time.",
     examples: [],
     picker: { label: "Shake", category: Atom },
     summary: "Stateless shake on a Transform wire: position and rotation jitter, each with its own strength, driven by time and frequency.",
@@ -102,9 +106,11 @@ manifold_node_engine::primitive! {
 
 impl Primitive for TransformShake {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(input) = ctx.inputs.transform("transform") else {
+        let transform = ctx.inputs.transform("transform");
+        let camera = ctx.inputs.camera("camera");
+        if transform.is_none() && camera.is_none() {
             return;
-        };
+        }
 
         let amount = ctx.scalar_or_param("amount", 0.0);
         let frequency = ctx.scalar_or_param("frequency", 1.0);
@@ -133,6 +139,15 @@ impl Primitive for TransformShake {
         let rot_offset = [noise[0] * rot_gain, noise[1] * rot_gain, noise[2] * rot_gain];
         let pos_offset = [noise[0] * pos_gain, noise[1] * pos_gain, noise[2] * pos_gain];
 
+        // A camera wobbles about its own position, in its own axes, as a
+        // handheld camera does; amount 0 leaves it exactly as it came.
+        if let Some(mut camera) = camera {
+            camera.nudge_local(pos_offset, rot_offset);
+            ctx.outputs.set_camera("camera_out", camera);
+        }
+        let Some(input) = transform else {
+            return;
+        };
         ctx.outputs.set_transform(
             "out",
             Transform {

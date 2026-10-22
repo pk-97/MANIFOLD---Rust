@@ -242,7 +242,6 @@ impl SceneDoc {
                     ids.retain(|id| !gone(id));
                 }
             }
-            ItemFields::World(w) if w.active_camera.as_ref().is_some_and(gone) => w.active_camera = None,
             ItemFields::Camera(c) if c.target.as_ref().is_some_and(gone) => c.target = None,
             _ => {}
         });
@@ -315,6 +314,32 @@ impl SceneDoc {
     /// The scene's World, if it has one.
     pub fn world(&self) -> Option<&Item> {
         self.items.iter().find(|item| item.kind() == ItemKind::World)
+    }
+
+    /// Every Camera, in tree order: the World's Camera row picks by index
+    /// into this list.
+    pub fn cameras(&self) -> Vec<&ItemId> {
+        let mut cameras = Vec::new();
+        self.walk(|item, _| {
+            if item.kind() == ItemKind::Camera {
+                cameras.push(&item.id);
+            }
+        });
+        cameras
+    }
+
+    /// The param id of the World's Camera row.
+    pub fn camera_pick_param(&self) -> Option<String> {
+        self.world().map(|world| super::param_id(&world.id, super::CAMERA_PICK))
+    }
+
+    /// The camera a Camera row value picks: rounded, held to the cameras
+    /// there are.
+    pub fn picked_camera(&self, pick: f32) -> Option<&ItemId> {
+        let cameras = self.cameras();
+        let last = cameras.len().checked_sub(1)?;
+        let index = if pick.is_finite() { pick.round().clamp(0.0, last as f32) as usize } else { 0 };
+        cameras.get(index).copied()
     }
 
     /// Whether physics moves `id`, an item at or under it: it, something

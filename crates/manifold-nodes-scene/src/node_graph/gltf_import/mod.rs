@@ -17,6 +17,7 @@ use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, SerializedP
 use manifold_core::scene_doc::{
     ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, ItemId, LightType, MeshPrimitives,
 };
+use manifold_core::scene_schema::{FAR_CLIP, NEAR_CLIP};
 
 use super::gltf_load::{self, FileNode, GltfLightKind};
 
@@ -77,8 +78,10 @@ pub fn import_model(path: &Path) -> Result<ImportedModel, String> {
                 ("pitch", camera.pitch),
                 ("roll", camera.roll),
                 ("fov_y", camera.fov_y),
-                ("near", camera.near),
-                ("far", camera.far),
+                // Held to the card's limits, so an imported camera never starts
+                // with a clip a row could not reach.
+                ("near", NEAR_CLIP.clamp(camera.near, (0.0, 0.0))),
+                ("far", FAR_CLIP.clamp(camera.far, (0.0, 0.0))),
             ],
         })
         .collect();

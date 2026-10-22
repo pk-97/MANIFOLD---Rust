@@ -1,7 +1,8 @@
 //! A scene document through save, load and a running world
 //! (SCENE_DOCUMENT_DESIGN.md section 7 (Commands and the compiler)): a saved
 //! scene loads back as the same scene, adding a light keeps a falling body
-//! falling, and a Speed past its range clamps instead of freezing the world.
+//! falling, a Speed past its range clamps instead of freezing the world, and
+//! a param write or a camera cut reaches the next frame with no rebuild.
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -14,10 +15,11 @@ use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, PhysicsSettin
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{Beats, PresetTypeId, Seconds};
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime};
-use manifold_node_engine::parameters::ParamDef;
+use manifold_node_engine::parameters::{ParamDef, ParamValue};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::scene::transform::Transform;
 
 fn scene_layer(doc: SceneDoc) -> Layer {
@@ -172,6 +174,98 @@ fn adding_a_light_keeps_physics_running_and_speed_clamps() {
     let before = frame(&mut rebuilt, 0.4);
     let after = frame(&mut rebuilt, 0.5);
     assert!(after.pos[1] < before.pos[1], "the world froze at Speed 4: {before:?} then {after:?}");
+}
+
+thread_local! {
+    static SHOWN: Cell<Option<Camera>> = const { Cell::new(None) };
+}
+
+/// Reads the camera the scene's camera switch hands the render.
+struct CameraProbe(EffectNodeType);
+
+impl EffectNode for CameraProbe {
+    fn is_liveness_root(&self) -> bool {
+        true
+    }
+    fn type_id(&self) -> &EffectNodeType {
+        &self.0
+    }
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        static INPUTS: [NodeInput; 1] =
+            [NodePort { name: Cow::Borrowed("camera"), ty: PortType::Camera, kind: PortKind::Input, required: true }];
+        &INPUTS
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &[]
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &[]
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        SHOWN.set(ctx.inputs.camera("camera"));
+    }
+}
+
+/// The camera on air at `seconds`.
+fn shown(runtime: &mut PresetRuntime, seconds: f64) -> Camera {
+    SHOWN.set(None);
+    runtime.execute_frame(FrameTime {
+        seconds: Seconds(seconds),
+        beats: Beats(seconds * 2.0),
+        delta: Seconds(1.0 / 30.0),
+        frame_count: (seconds * 30.0) as i64,
+    });
+    SHOWN.get().expect("the camera switch hands the render a camera")
+}
+
+/// Promise 9 (SCENE_DOCUMENT_DESIGN.md section 10 (Testing)): a knob, MIDI or
+/// OSC change is a param write that reaches the item on the next frame, and a
+/// camera cut lands on its frame, both on the running graph with no rebuild.
+#[test]
+fn a_param_write_reaches_the_next_frame_and_a_cut_lands_on_its_frame() {
+    let mut doc = SceneDoc::base();
+    doc.insert(None, 1, Item::new(ItemId::new("closeup"), "Closeup", ItemFields::default_for(ItemKind::Camera))).unwrap();
+    let mut layer = scene_layer(doc);
+    let fx = layer.gen_params_mut().unwrap();
+    let graph = fx.graph.clone();
+    let mut def = fx.graph.clone().unwrap();
+    let switch = def.nodes.iter().find(|n| n.node_id.as_str() == "world:camera_switch").expect("the cut").id;
+    let probe = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
+    def.nodes.push(serde_json::from_value(serde_json::json!({"id": probe, "nodeId": "probe", "typeId": "test.scene_camera"})).unwrap());
+    def.wires.push(EffectGraphWire { from_node: switch, from_port: "out".into(), to_node: probe, to_port: "camera".into() });
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.scene_camera", || Box::new(CameraProbe(EffectNodeType::new("test.scene_camera"))));
+    let mut runtime = PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).unwrap();
+    runtime.apply_param_values(&fx.params);
+    let frame = 1.0 / 30.0;
+    let wide = shown(&mut runtime, 0.0);
+
+    let write = |fx: &mut PresetInstance, runtime: &mut PresetRuntime, id: &str, value: f32| {
+        assert!(fx.set_base_param(id, value), "the scene has {id}");
+        runtime.apply_param_values(&fx.params);
+    };
+    let distance = |camera: Camera, look_y: f32| {
+        let [x, y, z] = camera.pos;
+        (x * x + (y - look_y) * (y - look_y) + z * z).sqrt()
+    };
+    let look_y = fx.get_base_param("closeup.look_y");
+    write(fx, &mut runtime, "closeup.distance", 3.0);
+    assert_eq!(shown(&mut runtime, frame), wide, "a camera off air moved the picture");
+
+    write(fx, &mut runtime, "world.camera", 1.0);
+    let cut = shown(&mut runtime, 2.0 * frame);
+    assert!((distance(cut, look_y) - 3.0).abs() < 1e-4, "the cut did not land on its frame: {cut:?}");
+    let cut_image = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new("world:camera_cut")).unwrap();
+    let selector = runtime.graph.get_node(cut_image).unwrap().params.get("selector").cloned();
+    assert_eq!(selector, Some(ParamValue::Float(1.0)), "the closeup's depth of field and motion blur follow the cut");
+
+    write(fx, &mut runtime, "closeup.distance", 5.0);
+    let moved = shown(&mut runtime, 3.0 * frame);
+    assert!((distance(moved, look_y) - 5.0).abs() < 1e-4, "the knob did not reach the next frame: {moved:?}");
+    assert_eq!(fx.graph, graph, "a param write rebuilt the scene");
 }
 
 /// Every param of every node the compiler emits is in the scene table, for
