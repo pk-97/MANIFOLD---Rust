@@ -20,7 +20,7 @@ use super::fields::{
 };
 use super::{Exposure, PropertyRow, Reach, perform, row};
 use crate::scene_doc::{
-    DEFAULT_PIECES, Item, ItemFields, ModifierFields, ModifierTargets, ModifierTexture, ModifierType, PhysicsSetting,
+    DEFAULT_PIECES, Item, ItemFields, ItemId, ModifierFields, ModifierTargets, ModifierTexture, ModifierType, PhysicsSetting,
     SceneDoc, Shape,
 };
 
@@ -291,19 +291,25 @@ fn reaches(targets: &ModifierTargets, item: &Item, ancestors: &[&Item]) -> bool 
     }
 }
 
-/// Why the Shatter card `shatter` cannot break `target`; these are the targets
-/// the compiler leaves whole (`shatterable` in `scene_compile/modifiers.rs`).
-/// The Targets menu shows it after the item's name, so it does not name
-/// Shatter.
+/// Why the Shatter card `shatter` cannot break `target`. The Targets menu
+/// shows it after the item's name, so it does not name Shatter.
 pub fn shatter_refuses(doc: &SceneDoc, shatter: &Item, target: &Item) -> Option<&'static str> {
+    shatter_parts(doc, &shatter.id, target).err()
+}
+
+/// The parts the Shatter card `shatter` breaks of the Body `body`: the
+/// Objects in it no deforming card bends, or why it breaks none. The picker
+/// and the compiler (`shatterable` in `scene_compile/modifiers.rs`) both
+/// read this, so the panel says what the compile does.
+pub fn shatter_parts(doc: &SceneDoc, shatter: &ItemId, body: &Item) -> Result<Vec<ItemId>, &'static str> {
     // The parts reason below names this limit.
     const _: () = assert!(manifold_foundation::mesh_partition::MAX_PIECES == 64);
-    if target.fields.physics() != PhysicsSetting::Body {
-        return Some("Not a Body: set its Physics to Body");
+    if body.fields.physics() != PhysicsSetting::Body {
+        return Err("Not a Body: set its Physics to Body");
     }
     // Copies are a group of bodies the world lays out, not one body.
-    if target.fields.copies() {
-        return Some("Copies on: each copy is a body of the copies, not one body to break");
+    if body.fields.copies() {
+        return Err("Copies on: each copy is a body of the copies, not one body to break");
     }
     let on = |item: &Item| card(&item.fields).is_some_and(|m| m.on);
     let bending: Vec<&ModifierTargets> = doc
@@ -314,35 +320,39 @@ pub fn shatter_refuses(doc: &SceneDoc, shatter: &Item, target: &Item) -> Option<
         .filter(|m| modifier_type(m.modifier).deforms)
         .map(|m| &m.targets)
         .collect();
-    // Shatter cards before this one in the chain break their bodies first.
-    let earlier: Vec<&ModifierTargets> = doc
-        .items
-        .iter()
-        .take_while(|item| item.id != shatter.id)
-        .filter(|item| on(item))
-        .filter_map(|item| card(&item.fields))
-        .filter(|m| m.modifier == ModifierType::Shatter)
-        .map(|m| &m.targets)
-        .collect();
-    let (mut parts, mut bent, mut broken) = (0usize, false, false);
+    let (mut reached_by, mut parts, mut bent) = (Vec::new(), Vec::new(), false);
     doc.walk(|item, ancestors| {
-        if item.id == target.id {
-            broken = earlier.iter().any(|targets| reaches(targets, item, ancestors));
+        if item.id == body.id {
+            // Shatter cards before this one in the chain that break this
+            // body break it first.
+            reached_by = doc
+                .items
+                .iter()
+                .take_while(|card_item| &card_item.id != shatter)
+                .filter(|card_item| on(card_item) && is_shatter(&card_item.fields))
+                .filter(|card_item| card(&card_item.fields).is_some_and(|m| reaches(&m.targets, item, ancestors)))
+                .map(|card_item| &card_item.id)
+                .collect();
         }
-        let inside = item.id == target.id || ancestors.iter().any(|above| above.id == target.id);
+        let inside = item.id == body.id || ancestors.iter().any(|above| above.id == body.id);
         if inside && item.kind() == crate::scene_doc::ItemKind::Object {
-            parts += 1;
-            bent |= bending.iter().any(|targets| reaches(targets, item, ancestors));
+            if bending.iter().any(|targets| reaches(targets, item, ancestors)) {
+                bent = true;
+            } else {
+                parts.push(item.id.clone());
+            }
         }
     });
-    if broken {
-        Some("An earlier Shatter card already breaks this body")
-    } else if bent {
-        Some("A modifier card bends this body: Shatter breaks only an unbent shape")
-    } else if parts > 64 {
-        Some("More than 64 parts: a body breaks into at most 64 pieces")
+    if reached_by.into_iter().any(|earlier| shatter_parts(doc, earlier, body).is_ok()) {
+        Err("An earlier Shatter card already breaks this body")
+    } else if parts.is_empty() && bent {
+        Err("A modifier card bends every part: Shatter breaks only unbent shapes")
+    } else if parts.is_empty() {
+        Err("Nothing inside to break: add an Object")
+    } else if parts.len() > 64 {
+        Err("More than 64 unbent parts: a body breaks into at most 64 pieces")
     } else {
-        None
+        Ok(parts)
     }
 }
 
