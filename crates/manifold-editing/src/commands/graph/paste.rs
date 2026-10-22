@@ -78,6 +78,9 @@ fn rederive_inner_ids(node: &mut EffectGraphNode) {
 }
 
 impl Command for PasteNodesCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Level));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
@@ -85,6 +88,10 @@ impl Command for PasteNodesCommand {
 
     fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
+        if manifold_core::scene_node::contains_scene_node(&self.src_nodes) {
+            self.rejection = Some(manifold_core::scene_node::SCENE_NODE_NOT_COPIED);
+            return;
+        }
         let added = manifold_core::effect_graph_def::render_scene_count(&self.src_nodes);
         if refuses_second_scene(project, &self.target, &self.catalog_default, added) {
             self.rejection = Some(manifold_core::effect_graph_def::ONE_SCENE_PER_LAYER);

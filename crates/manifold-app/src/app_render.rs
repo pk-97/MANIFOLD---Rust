@@ -1312,6 +1312,12 @@ impl Application {
                     // with the card's live slider values snapshotted in, same
                     // resolution `ui_bridge::inspector::preset_source_def`
                     // does for the card-menu path.
+                    if let Some(reason) = self.watched_graph_target.as_ref()
+                        .and_then(|target| crate::editor_bridge::scene_graph_save_refusal(&self.local_project, target))
+                    {
+                        self.ws.ui_root.toast.show(reason.to_string());
+                        continue;
+                    }
                     let destination = if matches!(cmd, manifold_ui::GraphEditCommand::SaveGraphToLibrary { .. }) {
                         crate::text_input::SavePresetDestination::Library
                     } else {
@@ -1336,6 +1342,12 @@ impl Application {
                     continue;
                 }
                 manifold_ui::GraphEditCommand::PushGraphToLibrary { anchor } => {
+                    if let Some(reason) = self.watched_graph_target.as_ref()
+                        .and_then(|target| crate::editor_bridge::scene_graph_save_refusal(&self.local_project, target))
+                    {
+                        self.ws.ui_root.toast.show(reason.to_string());
+                        continue;
+                    }
                     // Push to Library (PRESET_LIBRARY_DESIGN D3, P4): only
                     // reachable while diverged (the header pill is gated on
                     // `has_graph_mod`), so the source is the instance's OWN

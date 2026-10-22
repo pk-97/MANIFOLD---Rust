@@ -39,6 +39,10 @@ pub trait Command: Debug + Send {
     fn graph_admission_targets(&self, _targets: &mut Vec<GraphTarget>) {}
     /// Clip-scoped source edits resolve their generator owner at execution.
     fn graph_admission_clips(&self, _clips: &mut Vec<manifold_core::ClipId>) {}
+    /// Append where in a graph this edit writes. The undo manager refuses an
+    /// edit that would write inside a scene layer's sealed Scene node before
+    /// it runs (`crate::commands::graph::sealed_refusal`).
+    fn graph_edit_sites(&self, _sites: &mut Vec<crate::commands::graph::GraphEditSite>) {}
     /// Optional stable diagnostic when execution or admission was rejected.
     fn rejection_reason(&self) -> Option<&str> {
         None
@@ -197,6 +201,12 @@ impl Command for CompositeCommand {
     fn graph_admission_clips(&self, clips: &mut Vec<manifold_core::ClipId>) {
         for command in &self.commands {
             command.graph_admission_clips(clips);
+        }
+    }
+
+    fn graph_edit_sites(&self, sites: &mut Vec<crate::commands::graph::GraphEditSite>) {
+        for command in &self.commands {
+            command.graph_edit_sites(sites);
         }
     }
 

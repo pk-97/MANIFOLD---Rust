@@ -22,11 +22,19 @@ use crate::undo::UndoRedoManager;
 fn stand_in(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     let ids = doc.ids();
     let node = |id: &ItemId| format!("{id}:item");
-    let nodes: Vec<_> = ids
+    let mut nodes: Vec<_> = ids
         .iter()
         .enumerate()
         .map(|(k, id)| serde_json::json!({"id": k, "nodeId": node(id), "typeId": "test.item"}))
         .collect();
+    // The scene's own input, render and output, which the Scene node seals.
+    let k = ids.len();
+    for (offset, role, type_id) in
+        [(0, "input", "system.generator_input"), (1, "render", "node.render_scene"), (2, "output", "system.final_output")]
+    {
+        nodes.push(serde_json::json!({"id": k + offset, "nodeId": format!("scene:{role}"), "typeId": type_id}));
+    }
+    let wires = [serde_json::json!({"fromNode": k + 1, "fromPort": "color", "toNode": k + 2, "toPort": "in"})];
     let params: Vec<_> = ids
         .iter()
         .map(|id| serde_json::json!({"id": param_id(id, "value"), "name": "Value", "min": 0.0, "max": 1.0, "defaultValue": 0.5}))
@@ -42,7 +50,7 @@ fn stand_in(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
         "version": 2, "name": "Scene",
         "presetMetadata": {"id": "Scene", "displayName": "Scene", "category": "Test", "oscPrefix": "scene",
             "available": true, "params": params, "bindings": bindings},
-        "nodes": nodes, "wires": []
+        "nodes": nodes, "wires": wires
     }))
     .map_err(|error| error.to_string())
 }
@@ -217,6 +225,28 @@ fn every_scene_edit_undoes_exactly() {
     assert!(scene(&project).scene.as_ref().unwrap().find(&id("rig")).is_none(), "the group is gone");
     assert!(undo.undo(&mut project));
     assert_eq!(state(&project), before, "ungroup undoes exactly");
+
+    // The graph editor's side and the Scene panel's side undo on their own
+    // (ruling 18): undoing a scene edit keeps a node wired after the Scene
+    // node, and no edit writes inside the Scene node or removes it.
+    use crate::commands::graph::{AddGraphNodeCommand, RemoveGraphNodeCommand};
+    let (mut project, layer) = self::project();
+    let mut undo = UndoRedoManager::new();
+    let target = GraphTarget::Generator(layer.clone());
+    let catalog = scene(&project).graph.clone().unwrap();
+    let post = AddGraphNodeCommand::new(target.clone(), "node.blur".into(), None, catalog.clone());
+    assert!(undo.execute(Box::new(post), &mut project));
+    let with_post = scene(&project).graph.clone();
+    let lamp = AddSceneItemCommand::new(layer.clone(), ItemKind::Light, None, 0, None, id("lamp"));
+    assert!(undo.execute(Box::new(lamp), &mut project));
+    assert!(undo.undo(&mut project));
+    assert_eq!(scene(&project).graph, with_post, "undoing a scene edit keeps the post-processing");
+    let sealed = manifold_core::scene_node::scene_node(scene(&project).graph.as_ref().unwrap()).unwrap().id;
+    let before = state(&project);
+    let inside = AddGraphNodeCommand::new(target.clone(), "node.blur".into(), None, catalog.clone()).with_scope(vec![sealed]);
+    assert!(!undo.execute(Box::new(inside), &mut project), "an edit inside the Scene node is refused");
+    assert!(!undo.execute(Box::new(RemoveGraphNodeCommand::new(target, sealed, catalog)), &mut project), "and so is its removal");
+    assert_eq!(state(&project), before);
 }
 
 /// A rename or a move compiles the same item under the same id, so its

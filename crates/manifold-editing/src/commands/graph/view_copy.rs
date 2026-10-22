@@ -48,6 +48,10 @@ impl Command for CopyViewportCameraCommand {
         self.writes.graph_admission_clips(clips);
     }
 
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        self.writes.graph_edit_sites(sites);
+    }
+
     fn rejection_reason(&self) -> Option<&str> {
         self.writes.rejection_reason()
     }

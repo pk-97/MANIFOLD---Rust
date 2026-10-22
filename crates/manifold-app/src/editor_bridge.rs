@@ -678,20 +678,6 @@ pub(crate) fn watch_editor_graph(
     if target.host_target().is_none() {
         return false;
     }
-    if scene_graph_refusal(project, target).is_some() {
-        if watched.take().is_none() {
-            return false;
-        }
-        *catalog_default = None;
-        mapping.close();
-        if let Some(canvas) = canvas {
-            canvas.close_mapping_popover();
-        }
-        if let Some(tx) = content_tx {
-            ContentCommand::send(tx, ContentCommand::WatchGraphTarget(None));
-        }
-        return true;
-    }
     if watched.as_ref() != Some(target) {
         mapping.close();
         if let Some(canvas) = canvas {
@@ -1311,7 +1297,6 @@ impl Application {
     }
 
     pub(crate) fn watch_graph_target(&mut self, target: manifold_core::GraphTarget) {
-        self.graph_editor_refusal = scene_graph_refusal(&self.local_project, &target);
         if !watch_editor_graph(
             &self.local_project,
             &target,
@@ -2837,20 +2822,15 @@ fn annotate_preparation_controls(
     }
 }
 
-/// Why the graph editor will not show `target`. Only the scene compiler
-/// writes a scene layer's graph (one writer per graph), so the editor never
-/// opens it or a modifier inside it; effects on the layer still open.
-pub(crate) fn scene_graph_refusal(
+/// Why the graph editor will not save `target` as a preset: a scene layer's
+/// graph holds its compiled Scene node, and a scene is saved from the Scene
+/// panel, never as a hand-wired graph (SCENE_DOCUMENT_DESIGN.md ruling 18).
+pub(crate) fn scene_graph_save_refusal(
     project: &manifold_core::project::Project,
     target: &manifold_core::GraphTarget,
 ) -> Option<&'static str> {
-    let manifold_core::GraphTarget::Generator(layer_id) = target.host_target()? else {
-        return None;
-    };
     project
-        .timeline
-        .find_layer_by_id(layer_id)
-        .and_then(|(_, layer)| layer.gen_params())
+        .graph_target_owner(target)
         .is_some_and(|host| host.scene.is_some())
-        .then_some("Scene layers are built from the Scene panel, so the graph editor can't open them.")
+        .then_some("A scene layer's graph holds its scene; save the scene from the Scene panel.")
 }

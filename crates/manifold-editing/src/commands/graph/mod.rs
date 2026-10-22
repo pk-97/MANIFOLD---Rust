@@ -151,9 +151,65 @@ pub(super) fn install_target_graph(
 // Group / Ungroup
 // ---------------------------------------------------------------------------
 
+/// Where in a graph a command writes, so an edit inside a scene layer's
+/// sealed Scene node is refused before it runs, whoever sent it
+/// (SCENE_DOCUMENT_DESIGN.md ruling 18 (One writer per region)).
+#[derive(Debug, Clone)]
+pub struct GraphEditSite {
+    pub target: GraphTarget,
+    /// Group-node ids from the root to the level the edit writes.
+    pub scope: Vec<u32>,
+    pub reach: SiteReach,
+}
+
+#[derive(Debug, Clone)]
+pub enum SiteReach {
+    /// Adds to the level or rewires or moves nodes on it; moving and wiring
+    /// from the Scene node is the user's.
+    Level,
+    /// Edits, removes or regroups these nodes of the level.
+    Nodes(Vec<u32>),
+    /// Rewrites what the scene compiler owns on a scene layer (the whole
+    /// graph, or the card it describes); refused there with this reason.
+    SceneLayer(&'static str),
+}
+
+impl GraphEditSite {
+    pub(super) fn new(target: &GraphTarget, scope: &[u32], reach: SiteReach) -> Self {
+        Self { target: target.clone(), scope: scope.to_vec(), reach }
+    }
+}
+
+/// Why `site` must not be written: it lies inside a scene layer's Scene node,
+/// it removes or regroups that node, or it rewrites what the compiler owns.
+pub fn sealed_refusal(project: &Project, site: &GraphEditSite) -> Option<&'static str> {
+    use manifold_core::scene_node::{INSIDE_SCENE_NODE, SCENE_NODE_STAYS, is_scene_node, scope_enters_scene_node};
+    let owner = project.graph_target_owner(&site.target)?;
+    owner.scene.as_ref()?;
+    if matches!(site.target, GraphTarget::SceneModifier { .. }) {
+        return Some(INSIDE_SCENE_NODE);
+    }
+    let graph = owner.graph.as_ref()?;
+    if let SiteReach::SceneLayer(reason) = site.reach {
+        return Some(reason);
+    }
+    if scope_enters_scene_node(&graph.nodes, &site.scope) {
+        return Some(INSIDE_SCENE_NODE);
+    }
+    let SiteReach::Nodes(ids) = &site.reach else {
+        return None;
+    };
+    let mut level = graph.nodes.as_slice();
+    for hop in &site.scope {
+        level = level.iter().find(|n| n.id == *hop).and_then(|n| n.group.as_deref()).map(|body| body.nodes.as_slice())?;
+    }
+    level.iter().any(|n| ids.contains(&n.id) && is_scene_node(n)).then_some(SCENE_NODE_STAYS)
+}
+
 /// Navigate to the node + wire vectors of the sub-graph at `scope` — a list of
 /// group-node ids to descend into (empty = the document root). Returns `None`
-/// if a hop doesn't resolve to a group. The mutable handles let a command both
+/// if a hop doesn't resolve to a group, or enters a sealed Scene node, which
+/// only the scene compiler writes. The mutable handles let a command both
 /// read the level (snapshot for undo) and replace it (apply the transform).
 pub(super) fn descend_level<'a>(
     nodes: &'a mut Vec<EffectGraphNode>,
@@ -164,6 +220,9 @@ pub(super) fn descend_level<'a>(
         None => Some((nodes, wires)),
         Some((gid, rest)) => {
             let group = nodes.iter_mut().find(|n| n.id == *gid)?;
+            if manifold_core::scene_node::is_scene_node(group) {
+                return None;
+            }
             let body = group.group.as_deref_mut()?;
             descend_level(&mut body.nodes, &mut body.wires, rest)
         }

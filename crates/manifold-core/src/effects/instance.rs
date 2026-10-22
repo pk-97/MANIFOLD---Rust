@@ -132,8 +132,9 @@ pub struct PresetInstance {
     pub unfolded_sections: Vec<String>,
     /// A scene layer's document, the source of truth its `graph` is compiled
     /// from (SCENE_DOCUMENT_DESIGN.md section 7.1 (The scene document)).
-    /// `Some` only on a scene layer's generator. The compiled graph is never
-    /// saved; its manifest is the (kind, property) table's, read verbatim.
+    /// `Some` only on a scene layer's generator. The compiled scene lives in
+    /// the graph's sealed Scene node (`crate::scene_node`) and is never saved;
+    /// its manifest is the (kind, property) table's, read verbatim.
     pub scene: Option<crate::scene_doc::SceneDoc>,
 }
 
@@ -165,6 +166,9 @@ impl PresetInstance {
             field_count += 1;
         }
         if self.graph.is_some() || self.scene.is_some() {
+            field_count += 1;
+        }
+        if self.scene.is_some() && self.graph.is_some() {
             field_count += 1;
         }
         if !self.folded_sections.is_empty() {
@@ -202,6 +206,9 @@ impl PresetInstance {
         }
         if let Some(scene) = &self.scene {
             s.serialize_field("scene", scene)?;
+            if let Some(graph) = self.saved_scene_graph() {
+                s.serialize_field("graph", &graph)?;
+            }
         } else if let Some(g) = &self.graph {
             // `params` on the wrapper is derived from the live manifest
             // (D12) — see `GraphWithDerivedParams`.
@@ -401,7 +408,7 @@ impl PresetInstance {
     /// time when it can't find a `LoadedPresetView` for the effect type and
     /// falls back to source passthrough (`preset_runtime.rs`).
     pub fn template_unresolved(&self) -> bool {
-        (self.scene.is_some() && self.graph.is_none())
+        (self.scene.is_some() && !self.scene_compiled())
             || !template_known_for(self.is_generator(), &self.effect_type, &self.graph)
     }
 

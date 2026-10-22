@@ -78,6 +78,7 @@ pub mod scene_schema;
 pub mod scene_exposure;
 pub mod scene_world_controls;
 pub mod scene_index;
+pub mod scene_node;
 pub mod scene_impulse;
 pub mod scene_modifier_preset;
 pub mod scene_modifier_math_view;

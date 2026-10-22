@@ -55,6 +55,9 @@ impl GroupNodesCommand {
 }
 
 impl Command for GroupNodesCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(self.selected.clone())));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
@@ -137,6 +140,9 @@ impl UngroupNodeCommand {
 }
 
 impl Command for UngroupNodeCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.group_node_id])));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
@@ -225,6 +231,9 @@ impl SetGroupTintCommand {
 }
 
 impl Command for SetGroupTintCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.group_node_id])));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
@@ -318,6 +327,9 @@ impl RenameGroupCommand {
     }
 }
 impl Command for RenameGroupCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.group_node_id])));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
