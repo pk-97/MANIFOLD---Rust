@@ -443,6 +443,8 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
         ("camera.focus_distance".into(), distance),
         ("camera.f_stop".into(), 32.0),
         ("camera.shutter_angle".into(), 180.0),
+        // The old contact-shadow reach: half the model's radius.
+        ("world.ao_distance".into(), (radius * 0.5).clamp((0.001 * radius).max(0.01), 2.0 * radius)),
         // Softbox at full strength with the old import's fill and strips.
         // The old environment had no sun wired in, so no sun disc.
         ("environment.env_intensity".into(), 1.0),

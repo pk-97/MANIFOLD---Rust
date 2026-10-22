@@ -197,6 +197,17 @@ impl<'d> Builder<'d> {
         self.wires.push(wire(from, from_port, to, to_port));
     }
 
+    /// Put a pass after `from`'s `port`: every wire that read that port now
+    /// reads `to`'s `to_port`. Wire the pass's own input from `from` after.
+    pub(crate) fn splice(&mut self, from: u32, port: &str, to: u32, to_port: &str) {
+        for wire in &mut self.wires {
+            if wire.from_node == from && wire.from_port == port {
+                wire.from_node = to;
+                to_port.clone_into(&mut wire.from_port);
+            }
+        }
+    }
+
     fn node_mut(&mut self, id: u32) -> Option<&mut EffectGraphNode> {
         fn find(nodes: &mut [EffectGraphNode], id: u32) -> Option<&mut EffectGraphNode> {
             for node in nodes {

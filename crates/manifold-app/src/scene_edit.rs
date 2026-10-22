@@ -357,15 +357,22 @@ pub(crate) fn rename(project: &Project, layer: &LayerId, item: &ItemId, name: &s
 pub(crate) fn aim_sun_at_hdri(project: &Project, layer: &LayerId, file: &str) -> Result<SceneEdit, String> {
     let doc = doc(project, layer)?;
     let inst = instance(project, layer).ok_or("There is no scene to aim")?;
-    let mut sun = None;
-    doc.walk(|item, _| {
-        if sun.is_none() && matches!(&item.fields, ItemFields::Light(light) if light.light == LightType::Sun) {
-            sun = Some(item.id.clone());
+    let (mut sun, mut environment) = (None, None);
+    doc.walk(|item, _| match &item.fields {
+        ItemFields::Light(light) if light.light == LightType::Sun && sun.is_none() => sun = Some(item.id.clone()),
+        ItemFields::Light(light) if matches!(light.light, LightType::Environment { .. }) && environment.is_none() => {
+            environment = Some(item.id.clone());
         }
+        _ => {}
     });
     let sun = sun.ok_or("This scene has no Sun light to aim")?;
-    let toward = manifold_nodes_scene::node_graph::hdri_sun::hdri_sun_direction(std::path::Path::new(file))
+    let [x, y, z] = manifold_nodes_scene::node_graph::hdri_sun::hdri_sun_direction(std::path::Path::new(file))
         .map_err(|reason| format!("Could not aim the Sun: {reason}"))?;
+    // The HDRI as drawn: turned counter-clockwise about the up axis, seen
+    // from above, by the Environment's Rotation.
+    let turn = environment.and_then(|environment| base(inst, &environment, "hdri_rotation")).unwrap_or(0.0);
+    let (sin, cos) = turn.sin_cos();
+    let toward = [x * cos + z * sin, y, z * cos - x * sin];
     let read = |property: &str| base(inst, &sun, property).unwrap_or(0.0);
     let aim = ["aim_x", "aim_y", "aim_z"].map(read);
     let pos = ["pos_x", "pos_y", "pos_z"].map(read);

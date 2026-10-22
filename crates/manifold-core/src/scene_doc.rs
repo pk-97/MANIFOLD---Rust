@@ -485,13 +485,22 @@ pub enum ForceTargets {
     Items(Vec<ItemId>),
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct WorldFields {
     /// Fog adds the atmosphere pass; off in the base scene.
     pub fog: bool,
+    /// Ambient occlusion adds the screen-space contact shadow pass; on in the
+    /// base scene.
+    pub ambient_occlusion: bool,
     /// The scene's default active camera; the first camera when unset.
     pub active_camera: Option<ItemId>,
+}
+
+impl Default for WorldFields {
+    fn default() -> Self {
+        Self { fog: false, ambient_occlusion: true, active_camera: None }
+    }
 }
 
 /// A live property's param id: `<item id>.<property>` (ruling 7). Renaming
