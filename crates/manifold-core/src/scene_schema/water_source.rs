@@ -14,7 +14,7 @@ use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, wrong_value};
-use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
+use super::{Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::{Item, ItemFields, SceneDoc, SourceRole, SourceShape, WaterSolver};
 
 const ROLES: &[Choice] = &[
@@ -77,6 +77,10 @@ const fn inflow(property: &'static str, name: &'static str, order: u8) -> Proper
         .when(inflows)
 }
 
+/// A source's size, metres: never zero, since the solver takes a source's
+/// scale only when it is positive on every axis.
+const SOURCE_SIZE: HardLimit = HardLimit::AtLeast(0.001);
+
 pub static WATER_SOURCE_ROWS: [PropertyRow; 32] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -84,9 +88,9 @@ pub static WATER_SOURCE_ROWS: [PropertyRow; 32] = [
     row("rot_x", T, Transform, setup()).limit(HardLimit::Unlimited).when(turns),
     row("rot_y", T, Transform, setup()).limit(HardLimit::Unlimited).when(turns),
     row("rot_z", T, Transform, setup()).limit(HardLimit::Unlimited).when(turns),
-    row("scale_x", T, Transform, setup()).unit(Unit::Metres).limit(AT_LEAST_ZERO),
-    row("scale_y", T, Transform, setup()).unit(Unit::Metres).limit(AT_LEAST_ZERO),
-    row("scale_z", T, Transform, setup()).unit(Unit::Metres).limit(AT_LEAST_ZERO),
+    row("scale_x", T, Transform, setup()).unit(Unit::Metres).limit(SOURCE_SIZE),
+    row("scale_y", T, Transform, setup()).unit(Unit::Metres).limit(SOURCE_SIZE),
+    row("scale_z", T, Transform, setup()).unit(Unit::Metres).limit(SOURCE_SIZE),
     row("billboard", T, Transform, Exposure::Internal("a source does not face the camera")),
     row("role", SOURCE, Source, Exposure::Automatic("the Role field")),
     row("enabled", SOURCE, Source, Exposure::Internal("a source acts while it is in the scene")),

@@ -875,8 +875,12 @@ impl RenderScene {
                     ))
             }),
         );
+        // A camera cut (a switch picking another camera) is a new shot: its
+        // first frame has no history from the camera before it.
+        let camera_cut = self.prev_cam_state.is_some_and(|previous| previous.shot != cam.shot);
         let reset_decision = self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time)
-            || topology_changed;
+            || topology_changed
+            || camera_cut;
         // A cut/seek means this node's velocity history is stale too: clear
         // it so the first post-cut frame takes the "no history yet"
         // zero-velocity seeding instead of ndc deltas measured across two

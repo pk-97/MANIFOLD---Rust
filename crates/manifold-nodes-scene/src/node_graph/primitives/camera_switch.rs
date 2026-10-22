@@ -143,14 +143,28 @@ impl EffectNode for CameraSwitch {
 
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let picked = self.picked(ctx.params);
-        let camera = ctx
+        let used = ctx
             .inputs
             .camera(picked)
-            .or_else(|| self.inputs.iter().find_map(|port| ctx.inputs.camera(&port.name)))
-            .unwrap_or_else(Camera::default_perspective);
+            .map(|camera| (picked, camera))
+            .or_else(|| self.inputs.iter().find_map(|port| ctx.inputs.camera(&port.name).map(|camera| (&*port.name, camera))));
+        let camera = match used {
+            Some((port, mut camera)) => {
+                // A different input is a different shot: the renderer resets
+                // its temporal history on the frame it changes.
+                let index = self.inputs.iter().position(|input| input.name == port).unwrap_or(0) as u64;
+                camera.shot = camera.shot.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (index + 1);
+                camera
+            }
+            None => Camera::default_perspective(),
+        };
         ctx.outputs.set_camera("out", camera);
     }
 }
+
+#[cfg(test)]
+#[path = "camera_switch_shot_tests.rs"]
+mod shot_tests;
 
 inventory::submit! {
     manifold_node_engine::persistence::PrimitiveFactory {

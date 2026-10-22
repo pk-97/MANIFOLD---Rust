@@ -126,6 +126,7 @@ pub fn choice_disabled(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> O
         ItemKind::WaterSource => super::water_source::choice_unavailable(doc, item, field, key),
         ItemKind::Camera => super::camera::choice_unavailable(doc, field, key),
         ItemKind::Modifier => super::scene_wide::type_unavailable(doc, item, field, key),
+        ItemKind::Object | ItemKind::Group if field == "physics" && key != "none" => physics_refused(doc, item),
         _ => None,
     }
 }
@@ -208,14 +209,20 @@ fn physics_blocked(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     None
 }
 
-/// The Physics row: refused inside a Body, and while the item has none, when
-/// it cannot take a body. None always stays pickable once a setting is on.
+/// The Physics row: while the item has none, refused inside a Body, above a
+/// Body, for copies on a surface, or when it cannot take a body. None always
+/// stays pickable once a setting is on, so a Collider inside a Body group can
+/// be switched off.
 fn physics_disabled(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
-    physics_blocked(doc, item).or_else(|| super::copies::surface_holds_copies(item)).or_else(|| {
-        (item.fields.physics() == crate::scene_doc::PhysicsSetting::None)
-            .then(|| super::physics_unavailable(doc, &item.id))
-            .flatten()
-    })
+    (item.fields.physics() == crate::scene_doc::PhysicsSetting::None).then(|| physics_refused(doc, item)).flatten()
+}
+
+/// Why this item can take no Collider or Body; with a setting already on,
+/// only those two choices are refused.
+fn physics_refused(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
+    physics_blocked(doc, item)
+        .or_else(|| super::copies::surface_holds_copies(item))
+        .or_else(|| super::physics_unavailable(doc, &item.id))
 }
 
 /// The Copies switch: refused while off when the item cannot take copies.
@@ -316,3 +323,33 @@ pub(super) const MATERIAL_BINDING: FieldRow = FieldRow {
         Ok(())
     },
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_doc::{GroupFields, ObjectFields, PhysicsSetting};
+
+    /// A Collider inside a Body group can always be switched back to None;
+    /// only Collider and Body stay refused there, with the reason.
+    #[test]
+    fn none_stays_pickable_inside_a_body_group() {
+        let part = Item {
+            id: ItemId::new("part"),
+            name: "Part".into(),
+            fields: ItemFields::Object(ObjectFields { physics: PhysicsSetting::Collider, ..ObjectFields::default() }),
+            children: Vec::new(),
+        };
+        let group = Item {
+            id: ItemId::new("group"),
+            name: "Group".into(),
+            fields: ItemFields::Group(GroupFields { physics: PhysicsSetting::Body, ..GroupFields::default() }),
+            children: vec![part.clone()],
+        };
+        let doc = SceneDoc { items: vec![group] };
+        let none = FieldValue::Choice("none".into());
+        let fields = set_field(&doc, &part, &PHYSICS, &none).expect("None is pickable");
+        assert_eq!(fields.physics(), PhysicsSetting::None);
+        assert!(set_field(&doc, &part, &PHYSICS, &FieldValue::Choice("body".into())).is_err());
+        assert!(choice_disabled(&doc, &part, "physics", "collider").is_some());
+    }
+}

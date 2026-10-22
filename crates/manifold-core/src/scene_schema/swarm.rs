@@ -13,7 +13,10 @@ use super::fields::{
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::scene_doc::{DrawAs, EmitFrom, ItemFields};
 
-/// Particles a swarm holds: the seed's capacity and Count's ceiling.
+/// Count's ceiling: the swarm's particle buffers are laid at this size when
+/// it is built (64 bytes a particle, about 6.4 MB per buffer), so Count can
+/// move live without rebuilding them. Not a memory limit: growing the
+/// buffers live past it is open work.
 pub const MAX_COUNT: f32 = 100_000.0;
 
 const T: Reach = Reach::Own("transform");
