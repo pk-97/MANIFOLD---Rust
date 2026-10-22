@@ -19,7 +19,6 @@ mod export;
 
 mod card_pin;
 mod dropdowns;
-mod scene_menus;
 // `build_picker_session` is called by `ui_bridge/state_sync.rs` at the historical
 // `crate::ui_root::build_picker_session` path; the re-export preserves it after
 // the fn moved into the `dropdowns` submodule (P-F2a).
@@ -192,7 +191,6 @@ pub struct UIRoot {
     pending_layer_reveal: Option<manifold_core::LayerId>,
     layer_reveal_version: u64,
     pub last_modifier_selection_sequence: Option<u64>,
-    pub last_object_modifier_selection_sequence: Option<u64>,
 
     /// Load-time warmup progress shown as a centered overlay during project
     /// open. `None` when no warmup is active.
@@ -264,8 +262,7 @@ pub struct UIRoot {
     /// Written only through `set_scene_modifier_clipboard` so the latest
     /// copy wins across both clipboards.
     pub scene_modifier_clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
-    pub scene_item_clipboard: Option<crate::scene_item_transfer::SceneItemClipboard>,
-    pub object_modifier_clipboard: Option<crate::object_modifier_transfer::ObjectModifierClipboard>,
+    pub scene_item_clipboard: Option<crate::scene_edit::SceneItemClipboard>,
     pub object_cards_have_focus: bool,
 
     /// Hover actions produced by continuous cursor movement, drained in process_events.
@@ -570,7 +567,6 @@ impl UIRoot {
             pending_layer_reveal: None,
             layer_reveal_version: 0,
             last_modifier_selection_sequence: None,
-            last_object_modifier_selection_sequence: None,
             embedded_presets: Vec::new(),
             built: false,
             screen_width: 1280.0,
@@ -595,7 +591,6 @@ impl UIRoot {
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
             scene_modifier_clipboard: None,
-            object_modifier_clipboard: None,
             scene_item_clipboard: None,
             object_cards_have_focus: false,
             cursor_hover_actions: Vec::new(),
@@ -641,7 +636,6 @@ impl UIRoot {
     ) {
         if clipboard.is_some() {
             self.effect_clipboard.clear();
-            self.object_modifier_clipboard = None;
             self.scene_item_clipboard = None;
         }
         self.scene_modifier_clipboard = clipboard;
@@ -1600,7 +1594,6 @@ impl UIRoot {
         self.layout.tick_splits(split_dt_ms);
         self.layer_headers.update(&mut self.tree);
         self.tick_inspector();
-        self.scene_setup_panel.tick_object_cards(&mut self.tree, split_dt_ms);
         self.viewport.update(&mut self.tree);
         self.perf_hud.update(&mut self.tree);
         // D11 toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2): repaints its own alpha
@@ -1642,7 +1635,6 @@ impl UIRoot {
         dt: f32,
     ) {
         self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
-        self.scene_setup_panel.update_object_card_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
@@ -1863,6 +1855,7 @@ mod tick_parity_tests {
                     mappable: false,
                 },
                 rgb_members: None,
+                affordance: None,
                 modulator_stored: false,
                 audio: Default::default(),
                 clip_trigger: None,

@@ -18,13 +18,16 @@
 //! Phase 3 of the per-card-divergence plan in
 //! `docs/NODE_GRAPH_SYSTEM.md`.
 
-use std::collections::BTreeMap;
 
+#[cfg(test)]
+use std::collections::BTreeMap;
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire,
 };
+#[cfg(test)]
+use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::project::Project;
 
 mod card_owned_write;
@@ -39,16 +42,10 @@ mod expose;
 pub use expose::*;
 mod groups;
 pub use groups::*;
-mod scene;
-pub use scene::*;
 mod instance_snapshot;
 pub(crate) use instance_snapshot::{InstanceLayerSnapshot, prune_instance_params};
 mod modifier_stack;
 pub use modifier_stack::*;
-mod modifiers;
-pub use modifiers::*;
-mod skin;
-pub use skin::*;
 mod paste;
 pub use paste::*;
 mod view_copy;
@@ -124,64 +121,6 @@ where
     project.with_graph_for_target_mut(target, None, structural, f)
 }
 
-/// Refresh the target's live `ParamManifest` from its just-mutated graph
-/// metadata (BUG-295). `with_target_graph_mut`/`with_existing_target_graph_mut`
-/// bump `graph_version`/`graph_structure_version` — a different counter the
-/// renderer watches for chain rebuilds — but never touch
-/// `PresetInstance::params` itself, so a command that stamps a freshly-minted
-/// node's exposures into `preset_metadata.params` (or restores a prior
-/// `preset_metadata` on undo) leaves the panel's live manifest stale until a
-/// save+reload round trip. Called after every scene-structural command that
-/// touches `preset_metadata` at runtime — see call sites below. A no-op if
-/// the target no longer resolves (effect/layer deleted).
-pub(super) fn refresh_target_manifest(project: &mut Project, target: &GraphTarget) {
-    if let GraphTarget::SceneModifier { modifier_id, .. } = target {
-        let Some(owner_target) = target.host_target() else {
-            eprintln!(
-                "[manifold-editing] cannot refresh invalid scene modifier target {}",
-                target.label()
-            );
-            return;
-        };
-        let Some(owner) = project.graph_target_owner(owner_target) else {
-            eprintln!(
-                "[manifold-editing] cannot refresh missing scene modifier owner {}",
-                target.label()
-            );
-            return;
-        };
-        let Some(owner_graph) = owner.graph.clone() else {
-            eprintln!(
-                "[manifold-editing] cannot refresh scene modifier without owner graph {}",
-                target.label()
-            );
-            return;
-        };
-        let edit = match manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-            &owner_graph,
-            modifier_id,
-        ) {
-            Ok(edit) => edit,
-            Err(error) => {
-                eprintln!(
-                    "[manifold-editing] scene modifier metadata refresh failed for {}: {error}",
-                    target.label()
-                );
-                return;
-            }
-        };
-        if let Some(host) = project.graph_target_owner_mut(owner_target) {
-            host.graph = Some(edit.graph);
-            prune_instance_params(host, &edit.removed_param_ids);
-            host.refresh_manifest_from_graph();
-        }
-        return;
-    }
-    project.with_preset_graph_mut(target, |host| host.refresh_manifest_from_graph());
-}
-
-/// Helper for the Revert command: take the target's current
-/// `Option<EffectGraphDef>` (consuming it; leaves `None` in place) and
 /// return what was there. Bumps the version counter.
 pub(super) fn take_target_graph(
     project: &mut Project,
@@ -272,58 +211,13 @@ pub(super) fn collect_node_ids(nodes: &[EffectGraphNode], out: &mut Vec<NodeId>)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Add Scene Object / Add Scene Light
-// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D7/D7a, P5)
-// ---------------------------------------------------------------------------
-
-/// Build a plain (non-group, non-boundary) node for the scene-build gestures
-/// below — same 12-field shape `AddGraphNodeCommand`/`group_edit::group_selection`
-/// use, factored out so the two commands below don't repeat the struct literal
-/// four times.
-pub(super) fn scene_build_node(
-    id: u32,
-    type_id: &str,
-    handle: Option<String>,
-    params: BTreeMap<String, SerializedParamValue>,
-) -> EffectGraphNode {
-    EffectGraphNode {
-        id,
-        node_id: NodeId::new(manifold_core::short_id()),
-        type_id: type_id.to_string(),
-        handle,
-        params,
-        exposed_params: Default::default(),
-        editor_pos: None,
-        wgsl_source: None,
-        title: None,
-        output_formats: BTreeMap::new(),
-        output_canvas_scales: BTreeMap::new(),
-        group: None,
-    }
-}
-
-pub(super) fn scene_build_wire(
-    from_node: u32,
-    from_port: &str,
-    to_node: u32,
-    to_port: &str,
-) -> EffectGraphWire {
-    EffectGraphWire {
-        from_node,
-        from_port: from_port.to_string(),
-        to_node,
-        to_port: to_port.to_string(),
-    }
-}
-
 /// Resolve the `&mut PresetInstance` a [`GraphTarget`] addresses — same match
 /// every `graph.rs` command uses (mirrors `ToggleNodeParamExposeCommand`'s
 /// identical resolve for its mirror step). Used by rename commands' D5 card-
 /// section sweep, which needs the manifest (`.params`) alongside the graph —
 /// outside `with_target_graph_mut`'s narrower `&mut EffectGraphDef` view.
 /// Free function (not a method) so both [`RenameGroupCommand`] and
-/// [`RenameSceneObjectCommand`] share one implementation.
+/// the scene rename share one implementation.
 pub(super) fn resolve_target_instance<'p>(
     target: &GraphTarget,
     project: &'p mut Project,

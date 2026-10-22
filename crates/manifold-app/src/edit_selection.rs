@@ -1,5 +1,6 @@
 //! Selection receipts for successful content-owned insertions.
-use manifold_core::{EffectId, LayerId, SceneNodeRef, project::Project};
+use manifold_core::scene_doc::ItemId;
+use manifold_core::{EffectId, LayerId, project::Project};
 use manifold_editing::commands::effect_target::{EffectTarget, with_effects};
 
 #[derive(Clone, Debug)]
@@ -9,20 +10,10 @@ pub(crate) enum EditSelection {
         ids: Vec<EffectId>,
     },
     Layer(LayerId),
-    Light {
+    /// A scene item the edit added.
+    Item {
         layer_id: LayerId,
-        light: SceneNodeRef,
-    },
-    Object {
-        layer_id: LayerId,
-        object: SceneNodeRef,
-    },
-    /// A placed fluid source, by its role node.
-    Source {
-        layer_id: LayerId,
-        /// The water row it lists under, unfolded so the row shows.
-        water: SceneNodeRef,
-        node: manifold_core::NodeId,
+        item: ItemId,
     },
 }
 
@@ -33,9 +24,7 @@ pub(crate) enum SelectAfterEdit {
         ids: Vec<EffectId>,
     },
     NewLayer,
-    NewObject(LayerId),
-    NewLight(LayerId),
-    NewSource(LayerId),
+    NewItem(LayerId, ItemId),
 }
 
 pub(crate) enum PendingSelection {
@@ -44,78 +33,10 @@ pub(crate) enum PendingSelection {
         ids: Vec<EffectId>,
     },
     Layer(Vec<LayerId>),
-    Light {
+    Item {
         layer_id: LayerId,
-        previous: Vec<SceneNodeRef>,
+        item: ItemId,
     },
-    Object {
-        layer_id: LayerId,
-        previous: Vec<SceneNodeRef>,
-    },
-    Source {
-        layer_id: LayerId,
-        previous: Vec<(SceneNodeRef, manifold_core::NodeId)>,
-    },
-}
-
-fn object_ids(project: &Project, layer: &LayerId) -> Vec<SceneNodeRef> {
-    let target = manifold_core::GraphTarget::Generator(layer.clone());
-    let Some(def) = crate::graph_target::resolve(project, &target) else {
-        return Vec::new();
-    };
-    manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def)
-        .map(|vm| {
-            vm.objects
-                .into_iter()
-                .filter_map(|object| match object {
-                    manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) => {
-                        Some(row.address)
-                    }
-                    _ => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Each placed source, by its role node, with the object id of the water it lists under.
-fn source_nodes(project: &Project, layer: &LayerId) -> Vec<(SceneNodeRef, manifold_core::NodeId)> {
-    let target = manifold_core::GraphTarget::Generator(layer.clone());
-    crate::graph_target::resolve(project, &target)
-        .and_then(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def))
-        .map(|vm| {
-            vm.objects
-                .into_iter()
-                .filter_map(|object| match object {
-                    manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) => {
-                        let water = row.address.clone();
-                        let placed = row.placed_sources;
-                        Some(placed.into_iter().map(move |source| (water.clone(), source.node)))
-                    }
-                    _ => None,
-                })
-                .flatten()
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn light_ids(project: &Project, layer: &LayerId) -> Vec<SceneNodeRef> {
-    let target = manifold_core::GraphTarget::Generator(layer.clone());
-    crate::graph_target::resolve(project, &target)
-    .and_then(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def))
-    .map(|vm| {
-        vm.lights
-            .into_iter()
-            .filter_map(|light| match light {
-                manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Known(row) => {
-                    Some(row.address)
-                }
-                _ => None,
-            })
-            .collect()
-    })
-    .unwrap_or_default()
 }
 
 impl SelectAfterEdit {
@@ -130,18 +51,7 @@ impl SelectAfterEdit {
                     .map(|layer| layer.layer_id.clone())
                     .collect(),
             ),
-            Self::NewLight(layer_id) => {
-                let previous = light_ids(project, &layer_id);
-                PendingSelection::Light { layer_id, previous }
-            }
-            Self::NewObject(layer_id) => {
-                let previous = object_ids(project, &layer_id);
-                PendingSelection::Object { layer_id, previous }
-            }
-            Self::NewSource(layer_id) => {
-                let previous = source_nodes(project, &layer_id);
-                PendingSelection::Source { layer_id, previous }
-            }
+            Self::NewItem(layer_id, item) => PendingSelection::Item { layer_id, item },
         }
     }
 }
@@ -164,21 +74,10 @@ impl PendingSelection {
                 .iter()
                 .find(|layer| !previous.contains(&layer.layer_id))
                 .map(|layer| EditSelection::Layer(layer.layer_id.clone())),
-            Self::Light { layer_id, previous } => light_ids(project, &layer_id)
-                .into_iter()
-                .find(|id| !previous.contains(id))
-                .map(|light| EditSelection::Light { layer_id, light }),
-            Self::Object { layer_id, previous } => object_ids(project, &layer_id)
-                .into_iter()
-                .find(|id| !previous.contains(id))
-                .map(|object| EditSelection::Object {
-                    layer_id,
-                    object,
-                }),
-            Self::Source { layer_id, previous } => source_nodes(project, &layer_id)
-                .into_iter()
-                .find(|source| !previous.iter().any(|(_, node)| *node == source.1))
-                .map(|(water, node)| EditSelection::Source { layer_id, water, node }),
+            Self::Item { layer_id, item } => project
+                .scene_of(&layer_id)
+                .is_some_and(|doc| doc.find(&item).is_some())
+                .then_some(EditSelection::Item { layer_id, item }),
         }
     }
 }
@@ -240,39 +139,27 @@ pub(crate) fn apply_update(
             *active_layer = Some(id.clone());
             ui.request_layer_reveal(id.clone());
         }
-        EditSelection::Light { layer_id, light } => {
-            if !light_ids(project, layer_id).contains(light) {
+        EditSelection::Item { layer_id, item } => {
+            let Some(doc) = project.scene_of(layer_id) else {
+                return false;
+            };
+            if doc.find(item).is_none() {
                 return false;
             }
             focus_scene_tab(selection, active_layer, layer_id);
-            ui.scene_setup_panel.set_selection(
-                layer_id.clone(),
-                manifold_ui::panels::scene_setup_panel::SceneSelection::Lighting,
-            );
-        }
-        EditSelection::Object {
-            layer_id,
-            object,
-        } => {
-            if !object_ids(project, layer_id).contains(object) {
-                return false;
+            let mut parents = Vec::new();
+            doc.walk(|found, ancestors| {
+                if &found.id == item {
+                    parents = ancestors.iter().map(|a| a.id.clone()).collect();
+                }
+            });
+            for parent in parents {
+                ui.scene_setup_panel.unfold(layer_id.clone(), parent);
             }
-            focus_scene_tab(selection, active_layer, layer_id);
             ui.scene_setup_panel.set_selection(
                 layer_id.clone(),
-                manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object.clone()),
+                manifold_ui::panels::scene_setup_panel::SceneSelection::Item(item.clone()),
             );
-        }
-        EditSelection::Source { layer_id, water, node } => {
-            if !source_nodes(project, layer_id).iter().any(|(_, source)| source == node) {
-                return false;
-            }
-            focus_scene_tab(selection, active_layer, layer_id);
-            ui.scene_setup_panel.set_selection(
-                layer_id.clone(),
-                manifold_ui::panels::scene_setup_panel::SceneSelection::Source(node.clone()),
-            );
-            ui.scene_setup_panel.unfold(layer_id.clone(), water.clone());
         }
     }
     true

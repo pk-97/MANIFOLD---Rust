@@ -585,22 +585,6 @@ fn tiger_lily_compound_import_preserves_material_sources_and_totals() {
     }).sum();
     let expected_total: u64 = summary.materials.iter().map(|material| u64::from(material.vertex_count)).sum();
     assert_eq!(imported_total, expected_total, "compound scan keeps every material's vertices");
-    let vm = crate::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
-    assert_eq!(vm.header.object_count, 1);
-    assert_eq!(vm.objects.len(), summary.materials.len() + 1);
-    let crate::node_graph::scene_vm::SceneObjectVm::Known(parent) = &vm.objects[0] else { panic!("parent") };
-    assert!(parent.is_group);
-    assert_eq!(parent.visible_addr.param_id, "parent_visible");
-    let parent_transform = parent.transform.as_ref().unwrap().node_doc_id;
-    for row in &vm.objects[1..] {
-        let crate::node_graph::scene_vm::SceneObjectVm::Known(child) = row else { panic!("child") };
-        assert_eq!(child.parent.as_ref(), Some(&parent.address));
-        assert_ne!(child.transform.as_ref().unwrap().node_doc_id, parent_transform);
-        assert_eq!(child.visible_addr.param_id, "visible");
-        assert!(child.physics.is_none());
-        let crate::node_graph::scene_vm::MaterialVm::Known(material) = &child.material else { panic!("child material") };
-        assert_eq!(material.shared_object_count, Some(1));
-    }
 }
 
 
@@ -2126,7 +2110,7 @@ fn rosetta_stone_imports_scene_object_shaped_with_no_migration_needed() {
         return;
     }
 
-    let (mut def, report) = assemble_import_graph(&path).expect("assemble the_rosetta_stone");
+    let (def, report) = assemble_import_graph(&path).expect("assemble the_rosetta_stone");
     println!("the_rosetta_stone import report: object_count={}", report.object_count);
     assert!(report.object_count >= 1, "the_rosetta_stone must import at least one object");
 
@@ -2169,12 +2153,6 @@ fn rosetta_stone_imports_scene_object_shaped_with_no_migration_needed() {
             "the_rosetta_stone must wire zero legacy `{prefix}*` ports into render_scene"
         );
     }
-
-    assert!(
-        !manifold_core::scene_object_migration::migrate_scene_object_wires(&mut def),
-        "a fresh the_rosetta_stone import must already be scene_object-shaped — \
-         migrate_scene_object_wires should be a no-op"
-    );
 }
 
 

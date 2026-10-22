@@ -24,8 +24,6 @@ mod object;
 mod world;
 
 pub(crate) use builder::Builder;
-pub(crate) use light::lamp_node;
-pub(crate) use object::object_wires;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_doc::SceneDoc;
@@ -40,6 +38,14 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     group::emit_tree(&mut b);
     world::emit(&mut b);
     b.finish()
+}
+
+/// The Objects `compile` draws, in render-slot order: slot k is the k-th item.
+pub fn drawn_items(doc: &SceneDoc) -> Vec<manifold_foundation::ItemId> {
+    let mut b = Builder::new(doc);
+    material::emit_all(&mut b);
+    group::emit_tree(&mut b);
+    b.object_items
 }
 
 inventory::submit! {

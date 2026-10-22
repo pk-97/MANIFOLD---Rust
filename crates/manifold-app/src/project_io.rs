@@ -517,9 +517,8 @@ pub(crate) fn prepare_loaded_project(project: &mut Project) -> Vec<String> {
         install_project_preset_overlay(project);
         project.load_report.unresolved_preset_templates = project.reconcile_param_manifests();
     }
-    // D5 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md): the Scene Setup panel reads
-    // a layer's stored graph directly, so legacy wires and card exposures
-    // migrate here, at load, not only at graph instantiation.
+    // Imported material and camera graphs migrate here, at load, not only at
+    // graph instantiation.
     migrate_project_scene_graphs(project)
 }
 
@@ -542,16 +541,13 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         let layer_id = layer.layer_id.clone();
         let Some(host) = layer.gen_params_mut() else { continue; };
         if host.graph.is_none() { continue; }
-        let mut default_moves = Vec::new();
         {
             let graph = host.graph.as_mut().expect("graph checked above");
-            manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
             match manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(graph) {
                 Ok(true) => notices.push("Scene camera controls restored with depth of field and motion blur off.".into()),
                 Ok(false) => {}
                 Err(error) => notices.push(error),
             }
-            manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures_moving(graph, &mut default_moves);
             // A binding id names one value: a saved id that binds several
             // files splits into one id per file (typed identity D5).
             if let Some(meta) = graph.preset_metadata.as_mut() {
@@ -571,9 +567,6 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
             manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         }
         host.refresh_manifest_from_graph();
-        // A card value that sat on a default the repair moved rendered the
-        // node's value; it moves too, so the card shows what renders.
-        manifold_nodes_scene::node_graph::gltf_import::move_repaired_card_values(host, &default_moves);
         // Carried embedded values become host base values now that the
         // minted view bindings exist in the manifest.
         for (macro_id, value) in pending_base_values {
@@ -592,50 +585,7 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         });
     }
     pin_modulated_rows(project);
-    if project.load_report.card_rows_unpinned {
-        pin_rows_the_card_showed(project);
-    }
     notices
-}
-
-/// D-103: before 1.22.0 a scene card showed every Performance control a scene
-/// item owns, unless removed; it now shows only pinned rows. A show saved
-/// before then gets those rows pinned Shown, once, so its card keeps every row
-/// it could show. A row behind a feature switch is pinned whatever the switch,
-/// so switching the feature on later still brings it; the card dims it while
-/// the feature is off.
-fn pin_rows_the_card_showed(project: &mut Project) {
-    use manifold_core::scene_surface::{CardPin, SurfaceRole};
-    use manifold_nodes_scene::node_graph::scene_items::{owner_of, scene_items};
-    let mut pins: Vec<(usize, Vec<String>)> = Vec::new();
-    for (index, layer) in project.timeline.layers.iter().enumerate() {
-        let Some(host) = layer.gen_params() else { continue };
-        if !host.params.iter().any(|param| param.spec.scene.is_some()) {
-            continue;
-        }
-        let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
-        let Some(def) = crate::graph_target::resolve(project, &target) else { continue };
-        let Some(vm) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def) else { continue };
-        let Some(meta) = def.preset_metadata.as_ref() else { continue };
-        let items = scene_items(&def, &vm);
-        let ids = host
-            .params
-            .iter()
-            .filter(|param| param.choices.pin.is_none() && param.exposed)
-            .filter(|param| param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Performance))
-            .filter(|param| owner_of(&items, meta, param.spec.id.as_str()).is_some())
-            .map(|param| param.spec.id.clone())
-            .collect();
-        pins.push((index, ids));
-    }
-    for (index, ids) in pins {
-        let Some(host) = project.timeline.layers[index].gen_params_mut() else { continue };
-        for id in ids {
-            if let Some(param) = host.params.get_mut(&id) {
-                param.choices.pin = Some(CardPin::Shown);
-            }
-        }
-    }
 }
 
 /// A project saved before attaches pinned their rows (SCENE_SURFACES D6
@@ -1296,170 +1246,6 @@ mod tests {
         assert_eq!(project.audio_setup.device, Some(manifold_core::audio_setup::AudioDeviceRef::none()));
     }
 
-    /// An older project's modulated Setup rows get the pin an attach writes
-    /// now; a Remove from Card stands over a switched-off modulator and gives
-    /// way to a live one, and a second load changes nothing.
-    #[test]
-    fn load_pins_modulated_rows_once() {
-        use manifold_core::scene_surface::{CardPin, SurfaceRole};
-        let mut project = Project::default();
-        project.timeline.layers.push(Layer::new_generator(
-            "PhysicsSolids".into(),
-            PresetTypeId::from_string("PhysicsSolids".to_string()),
-            0,
-        ));
-        project.reconcile_param_manifests();
-        let host = project.timeline.layers[0].gen_params_mut().unwrap();
-        let setup: Vec<String> = host
-            .params
-            .iter()
-            .filter(|param| param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Setup))
-            .map(|param| param.spec.id.clone())
-            .take(4)
-            .collect();
-        let driver = |id: &str| manifold_core::effects::ParameterDriver {
-            param_id: std::borrow::Cow::Owned(id.to_string()),
-            beat_division: manifold_core::types::BeatDivision::Quarter,
-            waveform: manifold_core::types::DriverWaveform::Sine,
-            enabled: false,
-            phase: 0.0,
-            base_value: 0.0,
-            trim_min: 0.0,
-            trim_max: 1.0,
-            reversed: false,
-            free_period_beats: None,
-            frame_aligned: false,
-            legacy_param_index: None,
-            is_paused_by_user: false,
-        };
-        let mut live = driver(&setup[2]);
-        live.enabled = true;
-        host.drivers = Some(vec![driver(&setup[0]), driver(&setup[1]), live]);
-        for removed in &setup[1..3] {
-            host.params.get_mut(removed).unwrap().choices.pin = Some(CardPin::Removed);
-        }
-        let pins = |project: &Project| -> Vec<Option<CardPin>> {
-            let host = project.timeline.layers[0].gen_params().unwrap();
-            setup.iter().map(|id| host.params.get(id).unwrap().choices.pin).collect()
-        };
-        migrate_project_scene_graphs(&mut project);
-        let expected = vec![Some(CardPin::Shown), Some(CardPin::Removed), Some(CardPin::Shown), None];
-        assert_eq!(pins(&project), expected);
-        migrate_project_scene_graphs(&mut project);
-        assert_eq!(pins(&project), expected);
-    }
-
-    /// D-103: a show saved before 1.22.0 pins exactly the rows its card could
-    /// show: every exposed Performance row an item owns, the dimmed depth of
-    /// field row and the row folded under depth of field (off here) included.
-    /// A removed row, an unexposed row and Setup rows stay unpinned; a second
-    /// load changes nothing; a show saved now pins nothing.
-    #[test]
-    fn load_keeps_old_show_card_rows() {
-        use manifold_core::scene_surface::{CardPin, Feature, Gate, SurfaceRole};
-        let mut project = Project::default();
-        project.timeline.layers.push(Layer::new_generator(
-            "PhysicsSolids".into(),
-            PresetTypeId::from_string("PhysicsSolids".to_string()),
-            0,
-        ));
-        project.reconcile_param_manifests();
-        let host = project.timeline.layers[0].gen_params_mut().unwrap();
-        let gated = |gate: Gate| {
-            host.params.iter().find(|param| param.spec.scene.is_some_and(|scene| scene.gate == Some(gate))).map(|param| param.spec.id.clone())
-        };
-        let dim = gated(Gate::Dim(Feature::DepthOfField)).expect("a dimmed depth of field row");
-        let fold = gated(Gate::Fold(Feature::DepthOfField)).expect("a folded depth of field row");
-        assert!(
-            !host.params.iter().any(|param| param.spec.scene.is_some_and(|scene| scene.switch == Some(Feature::DepthOfField)) && param.base > 0.5),
-            "depth of field is off"
-        );
-        let ungated: Vec<String> = host
-            .params
-            .iter()
-            .filter(|param| param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Performance && scene.gate.is_none()))
-            .map(|param| param.spec.id.clone())
-            .take(2)
-            .collect();
-        let (removed, unexposed) = (ungated[0].clone(), ungated[1].clone());
-        host.params.get_mut(&removed).unwrap().choices.pin = Some(CardPin::Removed);
-        host.params.get_mut(&unexposed).unwrap().exposed = false;
-
-        let saved_at = |project: &Project, version: &str| {
-            let mut json: serde_json::Value = serde_json::to_value(project).unwrap();
-            json["projectVersion"] = serde_json::Value::String(version.into());
-            let mut loaded = manifold_io::loader::load_project_from_json(&json.to_string()).expect("load");
-            migrate_project_scene_graphs(&mut loaded);
-            loaded
-        };
-        let pinned = |project: &Project, pin: CardPin| -> Vec<String> {
-            let mut ids: Vec<String> = project.timeline.layers[0]
-                .gen_params()
-                .unwrap()
-                .params
-                .iter()
-                .filter(|param| param.choices.pin == Some(pin))
-                .map(|param| param.spec.id.clone())
-                .collect();
-            ids.sort();
-            ids
-        };
-
-        let old = saved_at(&project, "1.21.0");
-        let shown = pinned(&old, CardPin::Shown);
-        assert_eq!(shown, OLD_SHOW_PINS, "exactly the rows the old card could show");
-        assert!(shown.contains(&dim) && shown.contains(&fold), "gated rows are pinned whatever the switch");
-        assert_eq!(pinned(&old, CardPin::Removed), vec![removed.clone()], "a removed row stays off");
-        assert!(!shown.contains(&unexposed), "an unexposed row stays off");
-
-        let resaved = saved_at(&old, manifold_core::project::CURRENT_PROJECT_VERSION);
-        assert_eq!(pinned(&resaved, CardPin::Shown), shown, "a second load changes nothing");
-        let new = saved_at(&project, manifold_core::project::CURRENT_PROJECT_VERSION);
-        assert!(pinned(&new, CardPin::Shown).is_empty(), "a show saved now keeps an empty card (D-72)");
-    }
-
-    /// D-103: the World's Air Resistance (D-114), new since 1.22.0, is stamped
-    /// into an old show on load as a setup row, so its card gains no row.
-    #[test]
-    fn old_show_gains_no_air_resistance_row() {
-        let mut project = Project::default();
-        project.timeline.layers.push(Layer::new_generator(
-            "PhysicsSolids".into(),
-            PresetTypeId::from_string("PhysicsSolids".to_string()),
-            0,
-        ));
-        project.reconcile_param_manifests();
-        let mut json: serde_json::Value = serde_json::to_value(&project).unwrap();
-        json["projectVersion"] = serde_json::Value::String("1.21.0".into());
-        let mut old = manifold_io::loader::load_project_from_json(&json.to_string()).expect("load");
-        migrate_project_scene_graphs(&mut old);
-        let host = old.timeline.layers[0].gen_params().unwrap();
-        let target = manifold_core::GraphTarget::Generator(old.timeline.layers[0].layer_id.clone());
-        let def = crate::graph_target::resolve(&old, &target)
-            .expect("the show's graph");
-        let world = def.nodes.iter().find(|node| node.type_id == "node.physics_world").expect("a Physics World").node_id.clone();
-        let meta = def.preset_metadata.as_ref().expect("metadata");
-        let row = meta
-            .bindings
-            .iter()
-            .find(|binding| matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if *node_id == world && param == "air_resistance"))
-            .map(|binding| binding.id.clone())
-            .expect("the World's Air Resistance is stamped on load");
-        let param = host.params.get(&row).expect("the Air Resistance row");
-        assert!(param.exposed, "the row is offered on the scene tab");
-        assert_eq!(param.choices.pin, None, "an old show's card gains no Air Resistance row");
-    }
-
-    /// PhysicsSolids' exposed Performance rows its items own, less the two the
-    /// test above removes and unexposes: camera, depth of field and motion
-    /// blur (switches and their gated rows), exposure and the three lights.
-    const OLD_SHOW_PINS: &[&str] = &[
-        "155_exposure_ev", "155_f_stop", "155_focus_distance", "155_shutter_angle",
-        "158_enabled", "158_max_radius", "161_enabled", "161_max_blur_px",
-        "1_distance", "1_fov_y", "1_look_y", "1_tilt",
-        "3_intensity", "4_intensity", "5_intensity",
-    ];
-
     #[test]
     fn audio_extensions_recognized_and_others_rejected() {
         for ok in ["a.wav", "a.MP3", "a.flac", "a.aiff", "a.ogg", "a.m4a"] {
@@ -1565,84 +1351,6 @@ mod tests {
             notice.contains("overlapping clip"),
             "notice must name the overlap repair: {notice}"
         );
-    }
-
-    // ── P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): load migration ──
-    //
-    // An old-shape scene generator graph (saved before the exposure-stamping
-    // convergence, or hand-edited to strip `preset_metadata`) must gain
-    // working card exposures on open, same idempotent per-layer posture as
-    // `migrate_scene_object_wires` right above it in the real load path.
-    // Real save→load through the production seam, same recipe as
-    // `open_project_from_path_surfaces_repairs_as_a_notice` above.
-
-    #[test]
-    fn open_project_from_path_migrates_scene_exposures_for_old_shape_generator_graph() {
-        use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, EFFECT_GRAPH_VERSION};
-        use std::collections::BTreeMap;
-
-        let mut project = Project::default();
-        project.settings.bpm = Bpm(120.0);
-
-        let mut layer = Layer::new("Scene 1".into(), LayerType::Generator, 0);
-        let old_shape_def = EffectGraphDef {
-            version: EFFECT_GRAPH_VERSION,
-            name: None,
-            description: None,
-            preset_metadata: None, // pre-P1 shape: no exposures stamped at all
-            scene_modifiers: Vec::new(),
-            nodes: vec![EffectGraphNode {
-                id: 1,
-                node_id: manifold_core::NodeId::new("sun"),
-                type_id: "node.light".to_string(),
-                handle: Some("Sun".to_string()),
-                params: BTreeMap::new(),
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            }],
-            wires: vec![],
-        };
-        layer.gen_params_mut().unwrap().graph = Some(old_shape_def);
-        project.timeline.insert_layer(0, layer);
-
-        let fixture_path = std::env::temp_dir().join(format!(
-            "manifold-scene-exposure-migration-{}.manifold",
-            std::process::id()
-        ));
-        manifold_io::saver::save_project_v1(&project, &fixture_path)
-            .expect("write V1 fixture with an old-shape scene generator graph");
-
-        let mut prefs = UserPrefs::for_test();
-        let mut service = ProjectIOService::new(&prefs);
-        let action = service.open_project_from_path(&fixture_path, &mut prefs);
-
-        let _ = std::fs::remove_file(&fixture_path);
-
-        let loaded = action.apply_project.expect("a valid fixture must open");
-        let (_, loaded_layer) = loaded
-            .timeline
-            .find_layer_by_id(&loaded.timeline.layers[0].layer_id)
-            .expect("the generator layer round-trips");
-        let graph = loaded_layer.generator_graph().expect("the generator graph override round-trips");
-
-        let meta = graph
-            .preset_metadata
-            .as_ref()
-            .expect("P1 load migration stamped exposures into the def's preset_metadata");
-        let sun = graph.nodes.iter().find(|n| n.type_id == "node.light").unwrap();
-        assert!(
-            meta.bindings.iter().any(|b| matches!(
-                &b.target,
-                BindingTarget::Node { node_id, .. } if *node_id == sun.node_id
-            )),
-            "the sun's params are exposed after load, targeting its bare NodeId"
-        );
-        assert!(!meta.params.is_empty(), "at least one ParamSpecDef was stamped");
     }
 
     // ── PRESET_LIBRARY_DESIGN D5/P2 — snapshot-on-save ──────────────────

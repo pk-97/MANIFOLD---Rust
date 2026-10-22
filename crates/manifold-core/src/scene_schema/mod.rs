@@ -14,15 +14,25 @@
 //! label, unless the row names the property (a group's Visible is a
 //! `node.value`). Limits are in the param's storage unit (radians for angles).
 
+mod add_menu;
 mod camera;
+mod fields;
+mod force;
 mod group;
 mod light;
 mod material;
 mod object;
 mod scene_level;
+mod swarm;
+mod water_source;
 mod world;
 
+pub use add_menu::{ADD_ENTRIES, AddEntry, add_entry, unique_name};
 pub use camera::CAMERA_ROWS;
+pub use fields::{
+    Choice, FieldControl, FieldRow, FieldValue, applicable_fields, field_for, field_rows, is_camera, is_material,
+    is_object_or_group, set_field,
+};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily};
@@ -71,6 +81,10 @@ pub struct CardFacts {
     pub colour: Option<RgbChannel>,
     pub unit: Option<Unit>,
     pub limit: HardLimit,
+    /// Draw the node param as an on/off switch (a float 0 or 1).
+    pub toggle: bool,
+    /// The slider range where the node param's own is not the right one.
+    pub range: Option<(f32, f32)>,
 }
 
 /// One (kind, property) row.
@@ -121,6 +135,8 @@ const fn facts(role: SurfaceRole) -> CardFacts {
         colour: None,
         unit: None,
         limit: HardLimit::Slider,
+        toggle: false,
+        range: None,
     }
 }
 
@@ -194,6 +210,20 @@ impl PropertyRow {
     const fn switch(mut self, feature: Feature) -> Self {
         if let Exposure::Card(f) = &mut self.exposure {
             f.switch = Some(feature);
+        }
+        self
+    }
+
+    const fn toggle(mut self) -> Self {
+        if let Exposure::Card(f) = &mut self.exposure {
+            f.toggle = true;
+        }
+        self
+    }
+
+    const fn range(mut self, min: f32, max: f32) -> Self {
+        if let Exposure::Card(f) = &mut self.exposure {
+            f.range = Some((min, max));
         }
         self
     }

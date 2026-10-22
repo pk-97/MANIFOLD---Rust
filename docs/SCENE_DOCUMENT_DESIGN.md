@@ -317,7 +317,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 
 ### 7.15 Starters
 
-- A starter is a scene file saved from the app (document plus manifest values), under `crates/manifold-nodes/assets/scene-presets/`, in the closed format.
+- A starter is a scene file saved from the app (document plus manifest values), under `crates/manifold-nodes/assets/scene-presets`, in the closed format.
 - Ocean is the Ocean shape. Lantern is dropped unless it rebuilds from normal items.
 - Changing a layer's generator always works, as in Resolume and Ableton: the old scene goes with the old generator, one undo step; one undo brings both back. There is nothing to transfer, so `scene_modifier_transfer`'s refusal cannot occur.
 
@@ -489,7 +489,7 @@ Peter tests a branch build after wave 2 (base scene, objects, lights, groups, im
 **L10 (Sonnet; BUG-elwvu.10): starters, the starter test, docs.**
 - Does: build the starters in the app (or with the same commands) and save them: Scene, Swarm, Swarm Cloud, Rubble Pile, Physics Boxes, Physics Solids, Water in a Photoscan, the water set, Ocean Cliff, Ocean (as the Ocean shape); Lantern only if it rebuilds from normal items; the small starter test; docs sweep (mark superseded docs, update maps, regenerate the node catalog and docs index); the deletion proof.
 - Deletes: the old preset JSON files, any remaining dead scene code the deletion proof finds, docs text that describes the deleted path.
-- Files: `crates/manifold-nodes/assets/scene-presets/`, `crates/manifold-nodes/tests/`, `docs/`.
+- Files: `crates/manifold-nodes/assets/scene-presets`, `crates/manifold-nodes/tests/`, `docs/`.
 - Tests: fundamental 12.
 - Depends on: L3, L6, L7, L8, L9 (and so L2, L4, L5).
 

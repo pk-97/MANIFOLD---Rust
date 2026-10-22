@@ -669,6 +669,22 @@ pub(crate) fn past_slider_end(value: f32, spec: &crate::param_surface::RowSpec) 
     value < spec.min.min(spec.max) || value > spec.max.max(spec.min)
 }
 
+/// Put a row's hover text on `nodes`: its manifest tooltip, then the reason it
+/// does nothing right now (`inactive_reason`), so a disabled row explains
+/// itself without standing text.
+pub(crate) fn set_row_hover(tree: &mut UITree, nodes: impl IntoIterator<Item = NodeId>, info: &ParamRow) {
+    let hover = match (info.spec.tooltip.as_deref(), info.spec.inactive_reason.as_deref()) {
+        (Some(tip), Some(reason)) => Some(format!("{tip}\n{reason}")),
+        (Some(text), None) | (None, Some(text)) => Some(text.to_owned()),
+        (None, None) => None,
+    };
+    for node in nodes {
+        if let Some(node) = tree.get_node_mut(node) {
+            node.tooltip.clone_from(&hover);
+        }
+    }
+}
+
 
 // ── Shared per-parameter slider row ─────────────────────────────────
 

@@ -24,6 +24,8 @@ const SURFACE_FACTS: CardFacts = CardFacts {
     colour: None,
     unit: None,
     limit: HardLimit::Slider,
+    toggle: false,
+    range: None,
 };
 
 /// Emit every Material item, in tree order.

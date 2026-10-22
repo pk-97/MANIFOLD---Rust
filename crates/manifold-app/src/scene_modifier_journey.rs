@@ -9,8 +9,6 @@ mod periodic;
 mod angular;
 mod consolidation;
 mod resize;
-mod scene_add;
-mod object_cards;
 mod notices;
 
 use std::path::{Path, PathBuf};

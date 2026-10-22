@@ -167,12 +167,6 @@ impl SceneLines {
     pub fn lines(&self) -> &[WorldLine] {
         &self.lines
     }
-
-    /// Where the handles sit in the lines last composed.
-    #[cfg(all(test, feature = "gpu-proofs"))]
-    pub fn handle_origin(&self) -> Option<[f32; 3]> {
-        self.chosen.as_ref()?.selection.handles.as_ref().map(|target| target.origin)
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -369,18 +363,6 @@ mod capture {
                 &mut self.scratch,
             );
             self.pass.borrow_mut().draw(device, enc, target, self.frame_depth.as_ref(), &frame.camera, &self.scratch, self.overlay.mode);
-        }
-
-        /// Where this frame's output handles sit.
-        #[cfg(all(test, feature = "gpu-proofs"))]
-        pub fn output_handle_origin(&self) -> Option<[f32; 3]> {
-            self.output_ready.then(|| self.output.handle_origin()).flatten()
-        }
-
-        /// Where this frame's viewport handles sit.
-        #[cfg(all(test, feature = "gpu-proofs"))]
-        pub fn viewport_handle_origin(&self) -> Option<[f32; 3]> {
-            self.viewport_ready.then(|| self.viewport.handle_origin()).flatten()
         }
     }
 }

@@ -20,7 +20,7 @@ impl SceneScale {
     /// Derive from a `(min, max)` bbox — delegates to the shared
     /// `scene_radius_from_bounds` in manifold-core.
     pub fn from_bbox(min: [f32; 3], max: [f32; 3]) -> Self {
-        Self { radius: manifold_core::scene_exposure::scene_radius_from_bounds((min, max)) }
+        Self { radius: manifold_core::param_lookup::scene_radius_from_bounds((min, max)) }
     }
 }
 

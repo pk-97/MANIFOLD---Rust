@@ -173,3 +173,79 @@ fn adding_a_light_keeps_physics_running_and_speed_clamps() {
     let after = frame(&mut rebuilt, 0.5);
     assert!(after.pos[1] < before.pos[1], "the world froze at Speed 4: {before:?} then {after:?}");
 }
+
+/// Every param of every node the compiler emits is in the scene table, for
+/// the base scene plus one item of every Add menu entry. A new node, or a new
+/// param on an existing node, with no row fails here instead of reaching the
+/// screen unplaced. A row that does not apply to an item's fields (a cone
+/// angle on a Sun) still counts: it names the param and why it is left alone.
+mod every_param_has_a_row {
+    use manifold_core::effect_graph_def::EffectGraphNode;
+    use manifold_core::scene_doc::{Item, ItemId, ItemKind, SceneDoc};
+    use manifold_core::scene_schema::{self, ADD_ENTRIES, MATERIAL_FAMILY, Reach, SCENE_LEVEL_ROWS};
+    use manifold_nodes_scene::node_graph::node_param_source::declared_params_for_node;
+    use manifold_nodes_scene::node_graph::scene_compile::compile;
+
+    fn doc_with_every_kind() -> SceneDoc {
+        let mut doc = SceneDoc::base();
+        for (k, entry) in ADD_ENTRIES.iter().enumerate() {
+            let item = Item::new(ItemId::new(format!("added{k}")), entry.name, (entry.fields)());
+            let at = doc.items.len();
+            doc.insert(None, at, item).unwrap();
+        }
+        doc
+    }
+
+    fn flatten<'a>(nodes: &'a [EffectGraphNode], into: &mut Vec<&'a EffectGraphNode>) {
+        for node in nodes {
+            into.push(node);
+            if let Some(body) = node.group.as_deref() {
+                flatten(&body.nodes, into);
+            }
+        }
+    }
+
+    /// Whether some row accounts for `param` on the node `node_id` (`<owner>:<role>`).
+    fn has_row(doc: &SceneDoc, node_id: &str, param: &str) -> bool {
+        let Some((owner, role)) = node_id.split_once(':') else {
+            return false;
+        };
+        let mut found = false;
+        doc.walk(|item, _| {
+            for row in scene_schema::rows(item.kind()) {
+                found |= row.param == param
+                    && match row.reach {
+                        Reach::Own(r) => item.id.as_str() == owner && r == role,
+                        Reach::Scene(r) => owner == "scene" && r == role,
+                        Reach::EveryCameraLens => role == "lens",
+                    };
+            }
+        });
+        let family = doc.find(&ItemId::new(owner)).is_some_and(|item| item.kind() == ItemKind::Material)
+            && role == MATERIAL_FAMILY.node;
+        let plain_material = owner == "scene" && role == "default_material";
+        let scene_level = SCENE_LEVEL_ROWS.iter().any(|row| matches!(row.reach, Reach::Scene(r) if r == role) && row.param == param);
+        found || family || plain_material || (owner == "scene" && scene_level)
+    }
+
+    #[test]
+    fn every_param_of_every_compiled_node_has_a_table_row() {
+        let doc = doc_with_every_kind();
+        let graph = compile(&doc).unwrap();
+        let mut nodes = Vec::new();
+        flatten(&graph.nodes, &mut nodes);
+        let mut gaps = Vec::new();
+        for node in nodes {
+            // Groups and their ports declare no params of their own.
+            let Some(params) = declared_params_for_node(node) else {
+                continue;
+            };
+            for meta in params {
+                if !has_row(&doc, node.node_id.as_str(), &meta.name) {
+                    gaps.push(format!("{} ({}).{}", node.node_id, node.type_id, meta.name));
+                }
+            }
+        }
+        assert!(gaps.is_empty(), "params with no table row:\n{}", gaps.join("\n"));
+    }
+}

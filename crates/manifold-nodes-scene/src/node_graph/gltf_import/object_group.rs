@@ -12,7 +12,7 @@ use manifold_core::effect_graph_def::{
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
 use crate::node_graph::gltf_load;
-use crate::node_graph::scene_exposure::metadata_for_node_type;
+use crate::node_graph::node_param_source::metadata_for_node_type;
 
 use super::animation::*;
 use super::assembly::*;

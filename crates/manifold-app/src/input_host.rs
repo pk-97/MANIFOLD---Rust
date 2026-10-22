@@ -19,7 +19,6 @@ use crate::ui_root::UIRoot;
 
 pub(crate) mod automation;
 mod card_edit;
-mod object_card_edit;
 mod scene_item_edit;
 
 /// Wrapper implementing TimelineInputHost by borrowing Application fields.
@@ -183,7 +182,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_copy(&mut self) -> bool {
-        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Copy) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Copy) { return true; }
         // An effect selection takes precedence on a scene layer: the modifier
         // scope is also present while the generator card is displayed.
         if self.ui_root.inspector.has_effect_selection() {
@@ -213,7 +212,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_cut(&mut self) -> bool {
-        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Cut) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Cut) { return true; }
         if self.ui_root.inspector.has_effect_selection() {
             self.copy_effect_selection();
             let target = self.card_effect_target();
@@ -270,7 +269,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_paste(&mut self) -> bool {
-        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Paste) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Paste) { return true; }
         // Paste remains in the scene-modifier context, including an empty
         // destination stack. The content thread owns the actual mutation.
         if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
@@ -295,7 +294,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_duplicate(&mut self) -> bool {
-        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Duplicate) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Duplicate) { return true; }
         if self.ui_root.inspector.has_modifier_selection() {
             if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned() {
                 ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
@@ -307,18 +306,16 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.ui_root.inspector.has_effect_selection() { return false; }
         let clipboard = std::mem::take(&mut self.ui_root.effect_clipboard);
         let modifiers = self.ui_root.scene_modifier_clipboard.take();
-        let objects = self.ui_root.object_modifier_clipboard.take();
         let scene_items = self.ui_root.scene_item_clipboard.take();
         if self.copy_effect_selection() { self.paste_effect_selection(); }
         self.ui_root.effect_clipboard = clipboard;
         self.ui_root.scene_modifier_clipboard = modifiers;
-        self.ui_root.object_modifier_clipboard = objects;
         self.ui_root.scene_item_clipboard = scene_items;
         true
     }
 
     fn handle_effect_delete(&mut self) -> bool {
-        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Delete) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Delete) { return true; }
         if self.ui_root.inspector.has_modifier_selection() {
             if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned() {
                 let ids = self.ui_root.inspector.selected_modifier_ids();
@@ -355,7 +352,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_group(&mut self) -> bool {
-        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Group) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Group) { return true; }
         let indices = self.ui_root.inspector.get_selected_effect_indices();
         if indices.is_empty() {
             return false;
@@ -375,7 +372,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_ungroup(&mut self) -> bool {
-        if self.edit_object_cards(manifold_ui::panels::actions::CardEditAction::Ungroup) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Ungroup) { return true; }
         if !self.ui_root.inspector.has_effect_selection() { return false; }
         let target = self.card_effect_target();
         let selected = self.ui_root.inspector.selected_effect_ids();
@@ -1815,54 +1812,6 @@ mod automation_clipboard_host_tests {
         }
     }
 
-    fn prepare_water_family(h: &mut Harness) -> (LayerId, manifold_core::SceneNodeRef, manifold_core::SceneNodeRef, u32) {
-        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-
-        let index = h.project.timeline.add_layer(
-            "Water",
-            manifold_core::types::LayerType::Generator,
-            PresetTypeId::new("WaterDamBreakGpuFlip"),
-        );
-        let layer_id = h.project.timeline.layers[index].layer_id.clone();
-        let default = manifold_nodes::bundled_presets::bundled_preset_def(
-            &PresetTypeId::new("WaterDamBreakGpuFlip"),
-        )
-        .expect("Water preset").as_ref().clone();
-        h.selection.select_layer(layer_id.clone());
-        h.selection.pin_scope(manifold_ui::InspectorTab::Scene);
-        crate::ui_bridge::sync_inspector_data(
-            &mut h.ui_root,
-            &h.project,
-            Some(index),
-            &h.selection,
-            &[],
-            None,
-        );
-        let scene = SceneVm::from_def(&default).expect("Water scene VM");
-        let parent = scene
-            .objects
-            .iter()
-            .find_map(|object| match object {
-                SceneObjectVm::Known(row) if row.is_group && row.liquid_domain.is_some() => {
-                    Some(row.address.clone())
-                }
-                _ => None,
-            })
-            .expect("Water parent");
-        let child = scene
-            .objects
-            .iter()
-            .find_map(|object| match object {
-                SceneObjectVm::Known(row)
-                    if row.parent.as_ref() == Some(&parent) && row.look_node().is_some() =>
-                {
-                    Some((row.address.clone(), row.object_node_id))
-                }
-                _ => None,
-            })
-            .expect("Foam child");
-        (layer_id, parent, child.0, child.1)
-    }
 
     fn drain_batch(h: &Harness, authoritative: &mut manifold_core::project::Project, service: &mut EditingService) {
         match h.rx.try_recv().expect("host must emit one command") {
@@ -2456,96 +2405,6 @@ mod automation_clipboard_host_tests {
         assert!(service.undo(&mut authoritative));
         assert_eq!(points(&authoritative, "amount"), vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8)]);
     }
-    #[test]
-    fn scene_object_shortcuts_copy_snapshot_and_queue_content_owned_edits() {
-        let mut h = Harness::new();
-        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
-        let layer_id = layer.layer_id.clone();
-        layer.gen_params_mut().unwrap().graph = Some(manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene")).unwrap().as_ref().clone());
-        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
-        h.project.timeline.layers.push(layer);
-        h.selection.select_layer(layer_id.clone());
-        h.selection.pin_scope(manifold_ui::InspectorTab::Scene);
-        crate::ui_bridge::sync_inspector_data(&mut h.ui_root, &h.project, Some(0), &h.selection, &[], None);
-        h.ui_root.object_cards_have_focus = true;
-        let before = serde_json::to_value(h.project.timeline.layers[0].gen_params().unwrap()).unwrap();
-        assert!(h.host().handle_effect_copy());
-        assert!(h.ui_root.scene_item_clipboard.is_some());
-        assert!(h.rx.is_empty(), "copy does not edit the project");
-        assert!(h.host().handle_effect_paste());
-        assert_eq!(serde_json::to_value(h.project.timeline.layers[0].gen_params().unwrap()).unwrap(), before, "UI must await the accepted snapshot");
-        let ContentCommand::SceneItem(action) = h.rx.try_recv().unwrap() else { panic!("scene paste"); };
-        let command = crate::scene_item_transfer::build_action(&h.project, action).unwrap();
-        let mut editing = EditingService::new();
-        editing.execute(command, &mut h.project);
-        assert!(editing.take_rejection().is_none());
-        assert!(editing.undo(&mut h.project));
-        assert_eq!(serde_json::to_value(h.project.timeline.layers[0].gen_params().unwrap()).unwrap(), before);
-        assert!(h.host().handle_effect_cut());
-        assert!(h.ui_root.scene_item_clipboard.is_some());
-        assert!(matches!(h.ui_root.pending_keyboard_actions.last(), Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupRemoveObject(..)))));
-    }
-
-    #[test]
-    fn water_family_keyboard_edit_paths_hide_children_and_withhold_duplicate() {
-        let mut h = Harness::new();
-        let (layer_id, parent, child, child_doc_id) = prepare_water_family(&mut h);
-        h.ui_root.scene_setup_panel.set_selection(
-            layer_id.clone(),
-            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(child),
-        );
-        h.ui_root.object_cards_have_focus = true;
-        for action in [
-            manifold_ui::panels::actions::CardEditAction::Copy,
-            manifold_ui::panels::actions::CardEditAction::Cut,
-            manifold_ui::panels::actions::CardEditAction::Duplicate,
-        ] {
-            assert!(h.host().edit_scene_items(action));
-            assert!(h.rx.is_empty(), "withheld child action queued {action:?}");
-            assert!(h.ui_root.pending_keyboard_actions.is_empty());
-        }
-
-        for _ in 0..2 {
-            assert!(h.host().edit_scene_items(manifold_ui::panels::actions::CardEditAction::Delete));
-            assert!(h.rx.is_empty());
-            assert!(matches!(h.ui_root.pending_keyboard_actions.pop(),
-                Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupParamChanged(
-                    ref layer, _, node, ref param, 0.0)))
-                if *layer == layer_id && node == child_doc_id && param == "visible"));
-            assert!(h.ui_root.pending_keyboard_actions.is_empty());
-        }
-
-        h.ui_root.scene_setup_panel.set_selection(
-            layer_id,
-            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(parent),
-        );
-        assert!(h.host().edit_scene_items(
-            manifold_ui::panels::actions::CardEditAction::Duplicate,
-        ));
-        assert!(h.rx.is_empty(), "family-parent duplicate must be withheld");
-        assert!(h.ui_root.pending_keyboard_actions.is_empty());
-        assert!(h.host().edit_scene_items(
-            manifold_ui::panels::actions::CardEditAction::Copy,
-        ));
-        assert!(h.ui_root.scene_item_clipboard.is_none(), "family copy must not populate the clipboard");
-        assert!(h.rx.is_empty());
-        assert!(h.host().edit_scene_items(
-            manifold_ui::panels::actions::CardEditAction::Cut,
-        ));
-        assert!(h.ui_root.scene_item_clipboard.is_none(), "family cut must not populate the clipboard");
-        assert!(h.rx.is_empty(), "family cut must not delete");
-        assert!(h.ui_root.pending_keyboard_actions.is_empty());
-        assert!(h.host().edit_scene_items(
-            manifold_ui::panels::actions::CardEditAction::Delete,
-        ));
-        assert!(matches!(
-            h.ui_root.pending_keyboard_actions.last(),
-            Some(manifold_ui::PanelAction::Project(
-                manifold_ui::ProjectAction::SceneSetupRemoveObject(..)
-            ))
-        ), "family-parent delete remains the group removal path");
-    }
-
     /// Census bug 23 (pasted video plays black): a Finder paste of a video
     /// never writes the screen's copy directly, and the content thread never
     /// gets a clip whose library entry it lacks.

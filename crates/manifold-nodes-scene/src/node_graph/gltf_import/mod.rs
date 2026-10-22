@@ -57,7 +57,7 @@ pub use bounds_probe::repair_project_embedded_scene_bounds;
 pub use merge::{MergePlan, assemble_merge_plan};
 pub use report::ImportReport;
 pub use upgrade::{MaterialUpgradeCache, upgrade_material_graph};
-pub use upgrade::project::{MaterialUpgradeReport, move_repaired_card_values, upgrade_project_materials};
+pub use upgrade::project::{MaterialUpgradeReport, upgrade_project_materials};
 
 
 use scene::build_import_graph;

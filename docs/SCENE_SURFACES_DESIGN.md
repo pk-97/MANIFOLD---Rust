@@ -700,7 +700,7 @@ P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer
 - **Entry:** P7 landed. `rg -n 'ColourSwatch' crates/manifold-ui/src` recorded.
 - **Read-back:** WIDGET_TREE_DESIGN.md section 5b (agent contract and enforcement) recipe; `material_inspector.rs:853-920`.
 - **Deliverables:** the swatch moves into the shared row host (recipe steps 1–5); `RowRole::ColourSwatch` payload widens from `MaterialColour` to a `ColourGroup` enum adding `Light`; the light intensity row carries `rgb_members` of the light's colour params; the material inspector uses the shared swatch.
-- **Gate:** positive — dispatch test: swatch gesture on a light row emits one undoable RGB write to the three colour ids. Negative — `rg -n 'fn .*swatch' crates/manifold-ui/src/panels/scene_setup_panel/material_inspector.rs` → 0; `no_bespoke_row_infra` green.
+- **Gate:** positive — dispatch test: swatch gesture on a light row emits one undoable RGB write to the three colour ids. Negative — `rg -n 'fn .*swatch' material_inspector.rs` → 0; `no_bespoke_row_infra` green.
 - **Demo:** L3 — `scene-light-swatch.json` on gltfscene: pick a colour on a light row, assert the row's colour value changed. Performer gesture: recolour the key light from the card.
 - **Forbidden:** a card-only swatch copy.
 - **Test scope:** `-p manifold-ui -p manifold-app`.

@@ -268,7 +268,7 @@ Paths abbreviated after first use: `R/` = `crates/manifold-nodes/src/node_graph/
 | CPU-mapped ring reuse | `crates/manifold-gpu/src/metal/frame_fence.rs:59` (`is_completed`), `crates/manifold-ui-paint/src/clip_thumb_gpu.rs:258` | Exists for UI rings. Content-thread exposure unverified (P2 entry). |
 | Bounded GPU timing proof | `crates/manifold-nodes-scene/tests/gpu_proofs/rt_dynamic_perf.rs:31-33`, `crates/manifold-nodes/Cargo.toml:161` (`rt-perf-proofs`) | Exists. The surface budget proof copies it. |
 | Headless capture | `crates/manifold-nodes/examples/fluid_capture.rs` | Exists. Produces the L2 artifacts. |
-| Add Fluid authoring | `crates/manifold-editing/src/scene_template.rs` (`InsertSceneTemplateCommand`, the Water template) | Exists. P7 changes what it wires. |
+| Add Fluid authoring | `scene_template.rs` (`InsertSceneTemplateCommand`, the Water template) | Exists. P7 changes what it wires. |
 | Live-only rules | (retired with CPU FLIP; in git history) (roles and fields reject Record/Playback), `:829-830` (coupling) | Exists. GPU-surface graphs follow the same pattern (D12). |
 
 Negative claims were checked with the searches named in the table.
@@ -1483,7 +1483,7 @@ available here.
 
 ### P7 — Add Fluid authors the GPU surface
 
-- **Entry state:** P6 merged. Add Water is now the Water scene template (`gpu_flip_family_template`) inserted by `InsertSceneTemplateCommand` in `crates/manifold-editing/src/scene_template.rs`; `AddSceneFluidCommand` is deleted (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.1 (Shared edit and insertion API)).
+- **Entry state:** P6 merged. Add Water is now the Water scene template (`gpu_flip_family_template`) inserted by `InsertSceneTemplateCommand` in `scene_template.rs`; `AddSceneFluidCommand` is deleted (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.1 (Shared edit and insertion API)).
 - **Read-back:** D9, D12, D13; FLUID_ENGINE_INTEGRATION_PLAN.md section 4 (Scene Panel and creative workflow); GROUPING_GRAPHS.md.
 - **Deliverables:** the Water template inserts the Liquid Surface group between `node.fluid_surface` and the water object, at 30 Hz, with Surface Detail mapped as in P6. Existing scenes are not migrated. Test `scene_physics_add_fluid_gpu_surface_undo_reload`. UI flow `scripts/ui-flows/scene-fluid-gpu-surface.json`: add fluid → play → raise Surface Detail → undo/redo → save/reload → play again, asserting the group exists and the water object's `vertices` producer is `node.volume_surface_mesh`.
 - **Gate:** the test, the new flow and every `scene-fluid-*` flow on disk pass (count them); focused editing/app/renderer clippy clean.

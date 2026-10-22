@@ -61,7 +61,6 @@ mod rt_r2_clamp;
 mod rt_r3_heldout_gltf;
 mod rt_t38_multibounce;
 mod rt_w0_gbuffer;
-mod scene_object_migration_round_trip;
 mod matter_look;
 mod matter_scene;
 mod matter_transfer;

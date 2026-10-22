@@ -92,6 +92,10 @@ pub enum ValueRef {
     /// A grouped material colour. The three ids remain the authoritative
     /// scalar storage and bindings; the UI only gives them one gesture.
     ParamRgb(GraphParamTarget, [ParamId; 3]),
+    /// Three params moved as one gesture: a linked Scale (SCENE_DOCUMENT_DESIGN
+    /// section 7.17). The values ride `ScrubValue::Rgb` on Move; the gesture
+    /// lands as one undo step.
+    ParamLinked(GraphParamTarget, [ParamId; 3]),
     /// The master-opacity slider (master chrome) — was `MasterOpacity{Snapshot,
     /// Changed,Commit}`.
     MasterOpacity,

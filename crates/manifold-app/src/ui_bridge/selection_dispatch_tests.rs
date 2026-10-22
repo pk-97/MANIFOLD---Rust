@@ -130,8 +130,8 @@ fn inspector_tab_click_is_a_selection_change() {
     assert!(!plan.projections.contains(Projection::InspectorSync), "same tab again");
 }
 
-fn scene_ref(node: &str) -> manifold_core::SceneNodeRef {
-    manifold_core::SceneNodeRef { scope: Vec::new(), node: manifold_core::NodeId::new(node) }
+fn item(id: &str) -> manifold_core::scene_doc::ItemId {
+    manifold_core::scene_doc::ItemId::new(id)
 }
 
 /// The Scene panel's own selection re-runs the inspector projection (it fills
@@ -141,9 +141,9 @@ fn scene_selection_reprojects_only_on_change() {
     let mut rig = Rig::new();
     let layer = rig.project.timeline.layers[0].layer_id.clone();
     for (selection, moves) in [
-        (SceneSelection::Object(scene_ref("object-4")), true),
-        (SceneSelection::Object(scene_ref("object-4")), false),
-        (SceneSelection::Light(scene_ref("light-7")), true),
+        (SceneSelection::Item(item("object-4")), true),
+        (SceneSelection::Item(item("object-4")), false),
+        (SceneSelection::Item(item("light-7")), true),
     ] {
         rig.ui.scene_setup_panel.set_selection(layer.clone(), selection.clone());
         let plan = rig.frame(PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer.clone())));

@@ -147,10 +147,6 @@ pub enum MaterialParamRole {
     Sampler(MaterialMapFamily, SamplerComponent),
 }
 
-/// Re-export the action vocabulary beside the surface descriptors for callers
-/// that consume the UI projection as one material-inspector API.
-pub use crate::panels::actions::MaterialLook;
-
 /// Descriptor half of a row — sourced verbatim from the manifest's
 /// `ParamSpecDef` fields by the projection. Never from registry re-reads,
 /// never from hand tables (INV-1).
@@ -331,6 +327,22 @@ pub struct ParamRow {
     /// material feature visibility and seed writes read it. Filled by the
     /// app projection.
     pub modulator_stored: bool,
+    /// What the row is when it is not a manifest param: a scene item's
+    /// structural field or a card editing helper. Such a row has no manifest
+    /// slot, so no value sync and no modulation drawer.
+    pub affordance: Option<RowAffordance>,
+}
+
+/// A row that carries an action instead of a manifest value
+/// (SCENE_DOCUMENT_DESIGN.md section 8): the capability-driven action rows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowAffordance {
+    /// A structural field of a scene item. A pick sends
+    /// `ProjectAction::SceneFieldSet`.
+    Field { item: manifold_foundation::ItemId, field: String, control: crate::panels::scene_setup_panel::FieldControlVm },
+    /// The Scale link switch of an item's Transform section (section 7.17):
+    /// a card editing helper, never a param.
+    ScaleLink { item: manifold_foundation::ItemId },
 }
 
 /// How a row draws. Decided once, by [`ParamRow::kind`]; every row builder,
@@ -370,6 +382,11 @@ impl ParamRow {
     /// row, modulated or not: its fold keeps each channel's slider and lane.
     pub fn kind(&self, scene: bool) -> RowKind {
         let spec = &self.spec;
+        match self.affordance {
+            Some(RowAffordance::Field { .. }) => return RowKind::Choice,
+            Some(RowAffordance::ScaleLink { .. }) => return RowKind::Switch,
+            None => {}
+        }
         if spec.is_trigger {
             return RowKind::Trigger;
         }

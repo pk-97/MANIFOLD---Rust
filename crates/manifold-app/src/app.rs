@@ -1736,7 +1736,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 graph_edit_diagnostic: None,
                 edit_selection_update: None,
                 modifier_selection_update: None,
-                object_modifier_selection_update: None,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };

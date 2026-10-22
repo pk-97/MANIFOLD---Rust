@@ -38,6 +38,7 @@ fn row(id: &'static str, name: &str, value: f32) -> ParamRow {
         mapping: RowMapping { osc_address: None, ableton_display: None, ableton_range: None, mappable: false },
         rgb_members: None,
         modulator_stored: false,
+        affordance: None,
     }
 }
 

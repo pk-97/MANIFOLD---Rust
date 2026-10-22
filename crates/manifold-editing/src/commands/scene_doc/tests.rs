@@ -9,7 +9,8 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effects::{ParameterDriver, PresetInstance};
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{ItemFields, ItemId, ItemKind, PhysicsSetting, SceneCompiler, SceneDoc, param_id};
+use manifold_core::material_inspector::MaterialFeature;
+use manifold_core::scene_doc::{FeatureSetting, ItemFields, ItemId, ItemKind, MaterialFields, PhysicsSetting, SceneCompiler, SceneDoc, param_id};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{LayerId, PresetTypeId};
 
@@ -79,6 +80,21 @@ fn id(s: &str) -> ItemId {
     ItemId::new(s)
 }
 
+/// A Material and a feature added to it, with the feature's seed value, as the
+/// Scene tab sends it: one undo step puts the scene back exactly.
+fn material_feature(layer: &LayerId) -> CompositeCommand {
+    let fields = ItemFields::Material(MaterialFields {
+        features: vec![FeatureSetting { feature: MaterialFeature::Coat, mode: 2 }],
+        ..MaterialFields::default()
+    });
+    let steps: Vec<Box<dyn Command>> = vec![
+        Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Material, None, 0, None, id("mat"))),
+        Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id("mat"), fields)),
+        Box::new(ChangeGraphParamCommand::new(GraphTarget::Generator(layer.clone()), param_id(&id("mat"), "value"), 0.5, 0.9)),
+    ];
+    CompositeCommand::new(steps, "Add Material Feature".into())
+}
+
 #[test]
 fn every_scene_edit_undoes_exactly() {
     let (project, layer) = project();
@@ -95,6 +111,7 @@ fn every_scene_edit_undoes_exactly() {
         ("rename", Box::new(RenameSceneItemCommand::new(layer.clone(), id(CUBE), "Box"))),
         ("set", Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id(CUBE), body))),
         ("group", Box::new(CompositeCommand::new(group_commands(&layer, &doc, &[id(CUBE), id("sun")], id("rig")), "Group".into()))),
+        ("material feature", Box::new(material_feature(&layer))),
     ];
     for (name, edit) in edits {
         let (mut project, _) = self::project();

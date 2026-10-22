@@ -5,6 +5,7 @@
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Unit};
 
+use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::{CameraRig, ItemFields};
 
@@ -117,3 +118,41 @@ pub static CAMERA_ROWS: [PropertyRow; 39] = [
         .unit(Unit::Pixels)
         .limit(AT_LEAST_ZERO),
 ];
+
+const RIGS: &[Choice] = &[
+    Choice { key: "orbit", label: "Orbit" },
+    Choice { key: "free", label: "Free" },
+    Choice { key: "look_at", label: "Look At" },
+];
+
+pub static CAMERA_FIELDS: [FieldRow; 1] = [FieldRow {
+    id: "rig",
+    label: "Rig",
+    section: ControlGroup::Camera,
+    control: FieldControl::Closed(RIGS),
+    applies: always,
+    disabled: enabled,
+    read: |fields| match fields {
+        ItemFields::Camera(c) => FieldValue::Choice(
+            match c.rig {
+                CameraRig::Orbit => "orbit",
+                CameraRig::Free => "free",
+                CameraRig::LookAt => "look_at",
+            }
+            .to_owned(),
+        ),
+        _ => FieldValue::Choice(String::new()),
+    },
+    write: |fields, value| {
+        let (ItemFields::Camera(c), FieldValue::Choice(key)) = (fields, value) else {
+            return Err(wrong_value("rig", value));
+        };
+        c.rig = match key.as_str() {
+            "orbit" => CameraRig::Orbit,
+            "free" => CameraRig::Free,
+            "look_at" => CameraRig::LookAt,
+            _ => return Err(wrong_value("rig", value)),
+        };
+        Ok(())
+    },
+}];

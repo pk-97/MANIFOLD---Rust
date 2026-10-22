@@ -178,39 +178,6 @@ fn all_materials_expose_opacity_and_wiring_survives_round_trip() {
         .expect("reloaded 20-object import graph must build through PresetRuntime::from_def");
 }
 
-#[test]
-fn legacy_compound_import_migrates_to_editable_children_once() {
-    use manifold_node_engine::persistence::EffectGraphDefExt;
-    let path = azalea_fixture_path();
-    let (mut def, _) = assemble_import_graph(&path).unwrap();
-    let group = def.nodes.iter_mut().find(|node| node.node_id.as_str().starts_with("object_") && node.group.is_some()).unwrap().group.as_mut().unwrap();
-    let locals: std::collections::HashSet<_> = group.nodes.iter().filter(|n| n.node_id.as_str().starts_with("part_transform_")).map(|n| n.id).collect();
-    let local_ids: std::collections::HashSet<_> = group.nodes.iter().filter(|n| locals.contains(&n.id)).map(|n| n.node_id.clone()).collect();
-    group.nodes.retain(|n| !locals.contains(&n.id));
-    group.wires.retain(|w| !locals.contains(&w.from_node));
-    for w in &mut group.wires {
-        if w.to_port == "parent_transform" { w.to_port = "transform".into(); }
-    }
-    let metadata = def.preset_metadata.as_mut().unwrap();
-    let local_bindings: std::collections::HashSet<_> = metadata.bindings.iter().filter_map(|b| match &b.target {
-        BindingTarget::Node { node_id, .. } if local_ids.contains(node_id) => Some(b.id.clone()),
-        _ => None,
-    }).collect();
-    metadata.params.retain(|p| !local_bindings.contains(&p.id));
-    metadata.bindings.retain(|b| !local_bindings.contains(&b.id));
-    for binding in &mut metadata.bindings {
-        if let BindingTarget::Node { param, .. } = &mut binding.target && param == "parent_visible" { *param = "visible".into(); }
-    }
-    assert!(manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
-    let saved = def.clone();
-    assert!(!manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
-    assert_eq!(def, saved);
-    let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
-    assert_eq!(vm.header.object_count, 1);
-    assert_eq!(vm.objects.len(), 3);
-    def.into_graph(&PrimitiveRegistry::with_builtin(), &Default::default()).unwrap();
-}
-
 /// Grouping proof, fixture-free: each object's producers must live inside one
 /// named, tinted group, and the grouped graph must flatten to the SAME flat
 /// wiring the ungrouped assembler produced (compared in node_id space) with
@@ -1591,7 +1558,7 @@ fn set_bound_param(def: &mut EffectGraphDef, node_id: &str, param: &str, value: 
             if node.node_id.as_str() == node_id {
                 assert!(
                     node.params.contains_key(param)
-                        || manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(&node.type_id)
+                        || manifold_nodes_scene::node_graph::node_param_source::metadata_for_node_type(&node.type_id)
                             .iter()
                             .any(|m| m.name == param),
                     "node `{node_id}` ({}) has no param `{param}`",

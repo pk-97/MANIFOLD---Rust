@@ -197,13 +197,6 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
     let tree = &mut ui.tree;
     if let Some(update) = &content_state.modifier_selection_update {
         if ui.last_modifier_selection_sequence != Some(update.sequence) {
-            if let Some(id) = update.ids.iter().rev().find(|id| {
-                ui.scene_setup_panel.force_card_info(id)
-                    .is_some_and(|info| info.layer_id == update.layer_id)
-            }) {
-                ui.scene_setup_panel.set_selection(update.layer_id.clone(),
-                    manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
-            }
             ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
             ui.inspector.apply_selection_visuals(tree);
             ui.inspector.reveal_pending_selection(tree);
@@ -213,16 +206,6 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
         ui.last_modifier_selection_sequence = None;
     }
 
-    if let Some(update) = &content_state.object_modifier_selection_update {
-        if ui.last_object_modifier_selection_sequence != Some(update.sequence) {
-            ui.scene_setup_panel.select_object_modifier_by_address(
-                &update.layer_id, &update.owner, update.node_doc_id, tree,
-            );
-            ui.last_object_modifier_selection_sequence = Some(update.sequence);
-        }
-    } else {
-        ui.last_object_modifier_selection_sequence = None;
-    }
 }
 
 /// Content-driven overlay state, taken before the frame is planned so a

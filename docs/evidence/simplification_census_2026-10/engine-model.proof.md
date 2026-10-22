@@ -599,20 +599,20 @@ Claim: `with_forced_def_write` has no caller (removed in 05d1fa10e, 2026-09-12);
 
 Claim: `AddSceneObjectCommand::with_physics_world` is called only by 4 tests; so `physics_body_metadata` is always None in the product and `physics_world_for_scope`, `execute_physics` and `append_physics_scene_object` (physics.rs:6-135) are unreachable except from those tests; e98ddbffe (2026-09-27, scene-object physics made explicit) deleted the two app call sites
 
-- `with_physics_world` (TEST-ONLY fn, crates/manifold-editing/src/commands/graph/scene.rs:172)
-  - RG `with_physics_world` -> 6 hits: the definition; 4 in other files (crates/manifold-editing/src/commands/graph/scene/tests.rs x4); 1 in beads
+- `with_physics_world` (TEST-ONLY fn, scene.rs:172)
+  - RG `with_physics_world` -> 6 hits: the definition; 4 in other files (tests.rs x4); 1 in beads
   - CORPUS `with_physics_world` -> 0 project files (loading check only)
   - GIT `with_physics_world` -> 4+ commits, newest: e98ddbffe 2026-09-27 Make scene object physics an explicit content-owned choice
-- `physics_world_for_scope` (crates/manifold-editing/src/commands/graph/scene.rs:182)
+- `physics_world_for_scope` (scene.rs:182)
   - RG `physics_world_for_scope` -> 2 hits: the definition; 1 in the same file (lines 397)
   - CORPUS `physics_world_for_scope` -> 0 project files (loading check only)
   - GIT `physics_world_for_scope` -> 1 commits, newest: ed326c019 2026-09-23 Build Box3D tick sampling, fast contacts, and linked authoring
-- `execute_physics` (crates/manifold-editing/src/commands/graph/scene.rs:212)
+- `execute_physics` (scene.rs:212)
   - RG `execute_physics` -> 2 hits: the definition; 1 in the same file (lines 399)
   - CORPUS `execute_physics` -> 0 project files (loading check only)
   - GIT `execute_physics` -> 4+ commits, newest: 04f7882ee 2026-10-10 Keep native geometry and sampling policy inside water
-- `append_physics_scene_object` (crates/manifold-editing/src/commands/graph/scene/physics.rs:6)
-  - RG `append_physics_scene_object` -> 4 hits: the definition; 1 in other files (crates/manifold-editing/src/commands/graph/scene.rs); 2 in docs (docs/PHYSICS_ENGINE_BOUNDARY_DESIGN.md x2)
+- `append_physics_scene_object` (physics.rs:6)
+  - RG `append_physics_scene_object` -> 4 hits: the definition; 1 in other files (scene.rs); 2 in docs (docs/PHYSICS_ENGINE_BOUNDARY_DESIGN.md x2)
   - CORPUS `append_physics_scene_object` -> 0 project files (loading check only)
   - GIT `append_physics_scene_object` -> 2 commits, newest: de4ae1be9 2026-09-28 Clear landing checks for grouped imports and fluid assets
 - Why ask: Add Object with physics is the authoring path for physics bodies. BUG-nwjg8 (Physics boundary P6a: rigid add, enable, split, duplicate; OPEN, P3) routes 'rigid add, enable, split and duplicate' through the shared physics transaction under docs/PHYSICS_ENGINE_BOUNDARY_DESIGN.md P6a. Peter decides whether the old path goes or is the base for P6a. `first_free_physics_body_slot` stays (duplicate.rs uses it).

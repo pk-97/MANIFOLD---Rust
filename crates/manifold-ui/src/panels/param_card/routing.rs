@@ -71,24 +71,10 @@ impl ParamCardPanel {
                         ))];
                     }
                 }
-                if let Some(m) = &self.object_modifier {
+                if self.object_modifier.is_some() {
                     if self.chevron_btn_id == Some(id) {
                         self.set_collapsed(!self.is_collapsed());
                         return vec![PanelAction::Params(ParamsAction::SectionFoldToggled)];
-                    }
-                    if self.cog_btn_id == Some(id) {
-                        return vec![PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(
-                            m.layer_id.clone(),
-                        ))];
-                    }
-                    if self.modifier_remove_btn_id == Some(id) {
-                        return vec![PanelAction::Project(
-                            crate::panels::ProjectAction::SceneSetupRemoveModifier(
-                                m.layer_id.clone(),
-                                m.owner.clone(),
-                                m.node_doc_id,
-                            ),
-                        )];
                     }
                     if self.header_bg_id == Some(id)
                         || self.name_label_id == Some(id)

@@ -2,39 +2,39 @@ use std::borrow::Cow;
 
 use manifold_core::NodeId;
 use manifold_core::fluid_domain::DOMAIN_EXTENT_METRES;
-use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
 
 use super::*;
-use crate::node_graph::scene_surface::{fluid_role_shape, scene_shape};
-use crate::node_graph::scene_vm::{ParamAddr, SceneHeaderVm, SceneObjectVm, ShapeWrite, TransformVm, object_shapes};
+use crate::node_graph::scene_surface::{INITIAL_FILL_SHAPES, ITEM_SHAPES, LIQUID_DOMAIN_SHAPES, SWARM_SHAPES, WATER_SOURCE_SHAPES};
+use crate::node_graph::scene_vm::{ParamAddr, ShapeWrite, TransformVm};
 
 fn cam_looking_down_neg_z(pos: [f32; 3]) -> Camera {
     Camera::look_at(pos, [pos[0], pos[1], pos[2] - 1.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0)
 }
 
-fn object_ref(id: u32) -> manifold_core::SceneNodeRef {
-    manifold_core::SceneNodeRef { scope: Vec::new(), node: NodeId::new(format!("object{id}")) }
+fn item_id(id: u32) -> manifold_foundation::ItemId {
+    manifold_foundation::ItemId::new(format!("object{id}"))
 }
 
-fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> SceneObjectVm {
+/// An object's number; [`scene_with`] joins it into an item id.
+fn object_ref(id: u32) -> u32 {
+    id
+}
+
+/// One test object: a transform in a parent's frame.
+struct TestObject {
+    id: u32,
+    is_group: bool,
+    parent: Option<u32>,
+    transform: Option<TransformVm>,
+}
+
+fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> TestObject {
     let addr = |n: &str| ParamAddr { scope_path: Vec::new(), node_doc_id: 99, param_id: n.to_string() };
-    SceneObjectVm::Known(Box::new(crate::node_graph::scene_vm::SceneObjectKnownRow {
+    TestObject {
+        id,
         is_group: false,
         parent: None,
-        index: 0,
-        object_node_id: id,
-        object: NodeId::new(format!("object{id}")),
-        address: object_ref(id),
-        kind: Default::default(),
-        controls: Vec::new(),
-        capabilities: manifold_core::scene_object_model::SceneObjectCapabilities { transform: true, ..Default::default() },
-        group_node_id: None,
-        modifier_owner: object_ref(id),
-        name: "Obj".to_string(),
-        visible_addr: addr("visible"),
-        visible_value: true,
-        visible_driven: false,
         transform: Some(TransformVm {
             node_doc_id: 99,
             node: NodeId::new("transform"),
@@ -48,51 +48,82 @@ fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> Sc
             scale_value: (1.0, 1.0, 1.0),
             scale_driven: (false, false, false),
         }),
-        material: crate::node_graph::scene_vm::MaterialVm::None,
-        transform_chain: Vec::new(),
-        transform_chain_parseable: true,
-        modifier_chain: Vec::new(),
-        modifier_chain_parseable: true,
-        skin: None,
-        physics: None,
-        physics_imported: false,
-        liquid_domain: None,
-        instancer: None,
-        fluid_domain: None,
-        fluid_domain_error: None,
-        fluid_domain_transform: None,
-        placed_sources: Vec::new(),
-    }))
-}
-
-fn scene_with(objects: Vec<SceneObjectVm>) -> SceneVm {
-    let shapes = object_shapes(&objects);
-    scene_of(objects, shapes)
-}
-
-fn scene_of(objects: Vec<SceneObjectVm>, shapes: Vec<SceneShapeVm>) -> SceneVm {
-    SceneVm {
-        scene_root_node_id: 0,
-        multiple_scenes: false,
-        header: SceneHeaderVm::default(),
-        objects,
-        lights: Vec::new(),
-        camera: crate::node_graph::scene_vm::CameraVm::None,
-        camera_nodes: Vec::new(),
-        environment: crate::node_graph::scene_vm::EnvironmentVm::None,
-        atmosphere: crate::node_graph::scene_vm::AtmosphereVm::None,
-        world_nodes: Vec::new(),
-        physics_nodes: Vec::new(),
-        scene_bounds: None,
-        shapes,
-        problems: Vec::new(),
-        setup_anchors: Vec::new(),
-        setup_sites: Vec::new(),
     }
 }
 
+/// The parent space `object`'s own params sit in: every enclosing group's
+/// transform composed, outermost first.
+fn frame_of(objects: &[TestObject], object: &TestObject) -> Option<[[f32; 4]; 4]> {
+    use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Transform};
+    let mut chain = Vec::new();
+    let mut parent = object.parent;
+    while let Some(group) = parent.and_then(|id| objects.iter().find(|candidate| candidate.id == id)) {
+        chain.extend(group.transform.as_ref());
+        parent = group.parent;
+    }
+    chain.iter().rev().fold(None, |frame, t| {
+        let transform = Transform {
+            pos: [t.pos_value.0, t.pos_value.1, t.pos_value.2],
+            rot_euler: [t.rot_value.0, t.rot_value.1, t.rot_value.2],
+            scale: [t.scale_value.0, t.scale_value.1, t.scale_value.2],
+            parent: frame.unwrap_or(IDENTITY_MAT4),
+            ..Transform::default()
+        };
+        Some(transform.world())
+    })
+}
+
+fn scene_with(objects: Vec<TestObject>) -> SceneVm {
+    let mut shapes = Vec::new();
+    for object in &objects {
+        let frame = frame_of(&objects, object);
+        for (index, decl) in ITEM_SHAPES.iter().enumerate() {
+            let params = match &object.transform {
+                Some(t) => decl
+                    .shape
+                    .param_ids()
+                    .map(|id| {
+                        let (addr, value, driven) = match id {
+                            "pos_x" => (&t.pos_addr.0, t.pos_value.0, t.pos_driven.0),
+                            "pos_y" => (&t.pos_addr.1, t.pos_value.1, t.pos_driven.1),
+                            "pos_z" => (&t.pos_addr.2, t.pos_value.2, t.pos_driven.2),
+                            "rot_x" => (&t.rot_addr.0, t.rot_value.0, t.rot_driven.0),
+                            "rot_y" => (&t.rot_addr.1, t.rot_value.1, t.rot_driven.1),
+                            "rot_z" => (&t.rot_addr.2, t.rot_value.2, t.rot_driven.2),
+                            "scale_x" => (&t.scale_addr.0, t.scale_value.0, t.scale_driven.0),
+                            "scale_y" => (&t.scale_addr.1, t.scale_value.1, t.scale_driven.1),
+                            _ => (&t.scale_addr.2, t.scale_value.2, t.scale_driven.2),
+                        };
+                        ShapeParamVm { id: id.to_string(), write: ShapeWrite::Node(addr.clone()), value, wired: driven }
+                    })
+                    .collect(),
+                None => decl
+                    .shape
+                    .param_ids()
+                    .map(|id| ShapeParamVm { id: id.to_string(), write: ShapeWrite::Unplaced, value: 0.0, wired: false })
+                    .collect(),
+            };
+            shapes.push(SceneShapeVm {
+                owner: ShapeOwner::Item(item_id(object.id)),
+                index,
+                decl: decl.clone(),
+                params,
+                frame,
+                anchor: [0.0; 3],
+                row: Some(item_id(object.id)),
+                pickable: object.parent.is_none(),
+            });
+        }
+    }
+    scene_of(shapes)
+}
+
+fn scene_of(shapes: Vec<SceneShapeVm>) -> SceneVm {
+    SceneVm::from_shapes(shapes)
+}
+
 fn object_id(id: u32) -> GizmoTargetId {
-    GizmoTargetId { owner: ShapeOwner::Object(object_ref(id)), shape: 0 }
+    GizmoTargetId { owner: ShapeOwner::Item(item_id(id)), shape: 0 }
 }
 
 /// A node shape whose params live on node 77, valued from `values` by id.
@@ -107,7 +138,7 @@ fn node_shape(owner: ShapeOwner, index: usize, decl: &SceneShapeDecl, values: &[
             wired: wired.contains(&id),
         })
         .collect();
-    SceneShapeVm { owner, index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row: Some(object_ref(4)), pickable: true }
+    SceneShapeVm { owner, index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row: Some(item_id(4)), pickable: true }
 }
 
 /// A force shape over host card params named `host_<id>`.
@@ -183,13 +214,13 @@ fn object_target_derives_from_its_box_declaration() {
 #[test]
 fn child_gizmo_composes_parent_origin_axes_and_drag_units() {
     let mut parent = known_object(7, (2.0, 3.0, -8.0), (false, false, false));
-    let SceneObjectVm::Known(p) = &mut parent else { unreachable!() };
+    let p = &mut parent;
     p.is_group = true;
     let t = p.transform.as_mut().unwrap();
     t.rot_value.2 = std::f32::consts::FRAC_PI_2;
     t.scale_value = (2.0, 1.0, 1.0);
     let mut child = known_object(8, (1.0, 0.0, 0.0), (false, false, false));
-    let SceneObjectVm::Known(c) = &mut child else { unreachable!() };
+    let c = &mut child;
     c.parent = Some(object_ref(7));
     let scene = scene_with(vec![parent, child]);
     let target = gizmo_target_for(&scene, &object_id(8)).unwrap();
@@ -219,7 +250,7 @@ fn wired_param_shows_locked_and_refuses_the_drag() {
 #[test]
 fn unwired_transform_target_is_unplaced_at_the_origin() {
     let mut row = known_object(5, (0.0, 0.0, 0.0), (false, false, false));
-    let SceneObjectVm::Known(r) = &mut row else { unreachable!() };
+    let r = &mut row;
     r.transform = None;
     let scene = scene_with(vec![row]);
     let target = gizmo_target_for(&scene, &object_id(5)).unwrap();
@@ -232,13 +263,13 @@ fn unwired_transform_target_is_unplaced_at_the_origin() {
 
 #[test]
 fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
-    let decls = scene_shape(GPU_FLIP_DOMAIN_TYPE_ID);
+    let decls = &LIQUID_DOMAIN_SHAPES[..];
     assert_eq!(decls.len(), 1, "the domain declares its box alone; the column is an Initial Fill");
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
     let domain = node_shape(owner.clone(), 0, &decls[0], &[("pos_y", 2.0), ("pos_z", -6.0), ("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
     let fill = ShapeOwner::RoleSource { node: NodeId::new("fill"), role: FluidRole::InitialFill };
-    let column = node_shape(fill.clone(), 0, &fluid_role_shape(0)[0], &[("pos_x", -1.0), ("pos_z", -6.0), ("scale_x", 1.0)], &[]);
-    let scene = scene_of(Vec::new(), vec![domain, column]);
+    let column = node_shape(fill.clone(), 0, &INITIAL_FILL_SHAPES[0], &[("pos_x", -1.0), ("pos_z", -6.0), ("scale_x", 1.0)], &[]);
+    let scene = scene_of(vec![domain, column]);
     let targets: Vec<_> = gizmo_targets(&scene).collect();
     assert_eq!(targets.len(), 2, "a domain's box and its Initial Fill are two targets");
     let box_target = &targets[0];
@@ -267,7 +298,7 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
 
 #[test]
 fn role_source_targets_derive_their_kind_from_the_role() {
-    let decl = &scene_shape("node.fluid_role_source")[0];
+    let decl = &WATER_SOURCE_SHAPES[0];
     for (role, kind) in [
         (FluidRole::InitialFill, GizmoTargetKind::InitialFill),
         (FluidRole::Inflow, GizmoTargetKind::Inflow),
@@ -336,7 +367,7 @@ fn vortex_force_rotate_turns_its_axis_and_keeps_its_length() {
 fn uniform_force_without_origin_sits_at_its_anchor() {
     let decl = manifest_decl(r#"{"kind": "axis", "direction": ["direction_x", "direction_y", "direction_z"]}"#);
     let shape = force_shape(decl, &[("direction_y", -1.0)], [0.5, 1.0, -4.0]);
-    let scene = scene_of(Vec::new(), vec![shape]);
+    let scene = scene_of(vec![shape]);
     let target = gizmo_targets(&scene).next().unwrap();
     assert_eq!(target.origin, [0.5, 1.0, -4.0]);
     assert!(!target.supports_mode(GizmoMode::Move), "no origin, no move handle");
@@ -356,7 +387,7 @@ fn plane_rotate_writes_a_unit_normal() {
         extent_limit: None,
         uniform_scale: false,
     };
-    let target = GizmoTarget::from_shape(&node_shape(ShapeOwner::Object(object_ref(1)), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
+    let target = GizmoTarget::from_shape(&node_shape(ShapeOwner::Item(item_id(1)), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
     let o = px(target.origin);
     let HandleValues::Three(n) = drag(&target, GizmoMode::Rotate, GizmoAxis::X, (o.0 + 80.0, o.1 + 10.0), (o.0 + 10.0, o.1 - 80.0)) else {
         panic!("three values")
@@ -571,43 +602,6 @@ fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
     }
 }
 
-/// D-102: an object outlines its own render slot; an imported model's group
-/// row outlines every part's; Water outlines its own slot and its looks'.
-#[test]
-fn outline_slots_cover_an_object_or_every_part_of_its_group() {
-    let row = |id: u32, index: usize, group: Option<u32>, is_group: bool| {
-        let SceneObjectVm::Known(mut row) = known_object(id, (0.0, 0.0, 0.0), (false, false, false)) else { unreachable!() };
-        row.index = index;
-        row.parent = group.map(object_ref);
-        row.is_group = is_group;
-        SceneObjectVm::Known(row)
-    };
-    // An imported model's group row is a copy of its first part (scene_vm),
-    // so it shares that part's slot. Water (20) is a real slot of its own,
-    // with its looks (21, 22) as parts.
-    let scene = scene_with(vec![
-        row(1, 0, None, false),
-        row(10, 1, None, true),
-        row(11, 1, Some(10), false),
-        row(12, 2, Some(10), false),
-        row(20, 3, None, true),
-        row(21, 4, Some(20), false),
-        row(22, 5, Some(20), false),
-        SceneObjectVm::Custom { index: 6 },
-    ]);
-    let mut slots = vec![99];
-    outline_slots(&scene, &[1].map(object_ref), &mut slots);
-    assert_eq!(slots, [0]);
-    outline_slots(&scene, &[10].map(object_ref), &mut slots);
-    assert_eq!(slots, [1, 2], "every part of the model, its shared slot once");
-    outline_slots(&scene, &[20].map(object_ref), &mut slots);
-    assert_eq!(slots, [3, 4, 5], "the water body and its looks");
-    outline_slots(&scene, &[1, 20, 10].map(object_ref), &mut slots);
-    assert_eq!(slots, [0, 1, 2, 3, 4, 5], "a selection of several outlines each");
-    outline_slots(&scene, &[7].map(object_ref), &mut slots);
-    assert!(slots.is_empty(), "no such object, no outline");
-}
-
 /// Hit tolerances hold in screen points on a 1x display, a 2x display and
 /// a 4K output in a small preview: the same click in points picks the same
 /// handle, and the same miss misses.
@@ -756,11 +750,11 @@ fn the_same_on_screen_scale_drag_scales_alike_near_and_far() {
 fn handles_under_a_scaled_parent_keep_their_size_and_param_units() {
     for parent_scale in [3.0_f32, 0.2] {
         let mut parent = known_object(7, (0.0, 0.0, -8.0), (false, false, false));
-        let SceneObjectVm::Known(p) = &mut parent else { unreachable!() };
+        let p = &mut parent;
         p.is_group = true;
         p.transform.as_mut().unwrap().scale_value = (parent_scale, parent_scale, parent_scale);
         let mut child = known_object(8, (0.5, 0.0, 0.0), (false, false, false));
-        let SceneObjectVm::Known(c) = &mut child else { unreachable!() };
+        let c = &mut child;
         c.parent = Some(object_ref(7));
         let scene = scene_with(vec![parent, child]);
         let target = gizmo_target_for(&scene, &object_id(8)).unwrap();
@@ -808,10 +802,10 @@ fn a_camera_moving_mid_drag_never_shifts_the_grab() {
 
 fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, view: GizmoView, selected: bool) -> (Vec<WorldLine>, usize) {
     use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
-    let decls = scene_shape(GPU_FLIP_DOMAIN_TYPE_ID);
+    let decls = &LIQUID_DOMAIN_SHAPES[..];
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
     let shape = node_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
-    let scene = scene_of(Vec::new(), vec![shape]);
+    let scene = scene_of(vec![shape]);
     let target = gizmo_target_for(&scene, &GizmoTargetId { owner, shape: 0 }).unwrap();
     let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None, uncoupled_bodies: 0 })];
     let selection = GizmoSelection::new(&scene, selected.then(|| target.clone()).into_iter().collect());
@@ -967,12 +961,12 @@ fn edge_px(target: &GizmoTarget) -> (f32, f32) {
 /// A domain box with its fill column inside, the column off to one side:
 /// what Peter's water scene has.
 fn domain_and_column() -> (SceneVm, GizmoTarget, GizmoTarget) {
-    let decls = scene_shape(GPU_FLIP_DOMAIN_TYPE_ID);
+    let decls = &LIQUID_DOMAIN_SHAPES[..];
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
     let domain = node_shape(owner, 0, &decls[0], &[("pos_z", -10.0), ("scale_x", 6.0), ("scale_y", 4.0), ("scale_z", 6.0)], &[]);
     let fill = ShapeOwner::RoleSource { node: NodeId::new("fill"), role: FluidRole::InitialFill };
-    let column = node_shape(fill, 0, &fluid_role_shape(0)[0], &[("pos_x", 1.5), ("pos_y", -1.0), ("pos_z", -10.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
-    let scene = scene_of(Vec::new(), vec![domain, column]);
+    let column = node_shape(fill, 0, &INITIAL_FILL_SHAPES[0], &[("pos_x", 1.5), ("pos_y", -1.0), ("pos_z", -10.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
+    let scene = scene_of(vec![domain, column]);
     let targets: Vec<_> = gizmo_targets(&scene).collect();
     (scene, targets[0].clone(), targets[1].clone())
 }
@@ -1015,14 +1009,14 @@ fn every_declared_shape_is_picked_by_its_own_edges() {
     let source = node_shape(
         ShapeOwner::RoleSource { node: NodeId::new("inflow"), role: FluidRole::Inflow },
         0,
-        &scene_shape("node.fluid_role_source")[0],
+        &WATER_SOURCE_SHAPES[0],
         &[("pos_z", -8.0), ("scale_x", 4.0), ("scale_y", 4.0), ("scale_z", 1.0)],
         &[],
     );
     let swarm = node_shape(
         ShapeOwner::Swarm(NodeId::new("swarm")),
         0,
-        &scene_shape(crate::node_graph::scene_surface::SWARM_FORCES_TYPE_ID)[0],
+        &SWARM_SHAPES[0],
         &[("pos_z", -8.0), ("scale_x", 4.0), ("scale_y", 4.0), ("scale_z", 4.0)],
         &[],
     );
@@ -1037,7 +1031,7 @@ fn every_declared_shape_is_picked_by_its_own_edges() {
         [0.0; 3],
     );
     for shape in [source, swarm, radial, vortex] {
-        let scene = scene_of(Vec::new(), vec![shape]);
+        let scene = scene_of(vec![shape]);
         let target = gizmo_targets(&scene).next().unwrap();
         let edge = edge_px(&target);
         assert!(dist2(edge, px(target.origin)).sqrt() > PICK_RADIUS_PT, "{:?}: the edge is away from the centre", target.kind);
@@ -1149,7 +1143,7 @@ fn the_selection_moves_turns_and_scales_about_its_centre() {
 #[test]
 fn a_copy_group_gizmo_is_at_the_group_transform_and_scales_uniformly() {
     let decl = &crate::node_graph::scene_surface::COPY_GROUP_SHAPES[0];
-    let owner = ShapeOwner::Object(object_ref(7));
+    let owner = ShapeOwner::Item(item_id(7));
     let shape = node_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_y", 2.0), ("pos_z", -3.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
     let target = GizmoTarget::from_shape(&shape);
     assert_eq!(target.origin, [1.0, 2.0, -3.0], "the gizmo is the group transform");
@@ -1170,18 +1164,18 @@ fn a_copy_group_gizmo_is_at_the_group_transform_and_scales_uniformly() {
 /// its own position in its parent's frame.
 fn nested_groups() -> SceneVm {
     let mut outer = known_object(7, (2.0, 3.0, -8.0), (false, false, false));
-    let SceneObjectVm::Known(o) = &mut outer else { unreachable!() };
+    let o = &mut outer;
     o.is_group = true;
     let t = o.transform.as_mut().unwrap();
     t.rot_value.2 = std::f32::consts::FRAC_PI_2;
     t.scale_value = (2.0, 1.0, 1.0);
     let mut inner = known_object(8, (1.0, 0.0, 0.0), (false, false, false));
-    let SceneObjectVm::Known(i) = &mut inner else { unreachable!() };
+    let i = &mut inner;
     i.is_group = true;
     i.parent = Some(object_ref(7));
     i.transform.as_mut().unwrap().rot_value.1 = 0.6;
     let mut object = known_object(9, (0.5, -0.25, 1.0), (false, false, false));
-    let SceneObjectVm::Known(c) = &mut object else { unreachable!() };
+    let c = &mut object;
     c.parent = Some(object_ref(8));
     scene_with(vec![outer, inner, object])
 }
@@ -1212,27 +1206,3 @@ fn an_inner_group_gizmo_sits_at_its_world_place_and_drags_in_its_parent_frame() 
     assert_eq!(written(&target, GizmoMode::Move, GizmoAxis::X), vec![ShapeWrite::Node(ParamAddr { scope_path: Vec::new(), node_doc_id: 99, param_id: "pos_x".into() })]);
 }
 
-#[test]
-fn outline_slots_cover_every_object_inside_nested_groups() {
-    let row = |id: u32, index: usize, group: Option<u32>, is_group: bool| {
-        let SceneObjectVm::Known(mut row) = known_object(id, (0.0, 0.0, 0.0), (false, false, false)) else { unreachable!() };
-        row.index = index;
-        row.parent = group.map(object_ref);
-        row.is_group = is_group;
-        SceneObjectVm::Known(row)
-    };
-    // outer 10 { 11, inner 12 { 13, 14 } }, 1 loose.
-    let scene = scene_with(vec![
-        row(1, 0, None, false),
-        row(10, 1, None, true),
-        row(11, 1, Some(10), false),
-        row(12, 2, Some(10), true),
-        row(13, 2, Some(12), false),
-        row(14, 3, Some(12), false),
-    ]);
-    let mut slots = Vec::new();
-    outline_slots(&scene, &[10].map(object_ref), &mut slots);
-    assert_eq!(slots, [1, 2, 3], "the outer group outlines everything inside, at every depth");
-    outline_slots(&scene, &[12].map(object_ref), &mut slots);
-    assert_eq!(slots, [2, 3], "the inner group outlines only its own");
-}

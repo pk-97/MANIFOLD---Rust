@@ -468,6 +468,7 @@ pub fn problems_with_runtime<'a>(
 /// How a liquid domain's box is laid out, with the params that size it.
 /// Which form it takes depends on wires alone, so a value change never moves
 /// a domain between forms.
+#[allow(dead_code, reason = "the water lane builds setup sites from document Water items")]
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum SiteLayout {
     /// A wire drives the domain's size, transform or billboard: no stable
@@ -595,7 +596,6 @@ impl SetupSite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::scene_surface::scene_shape;
     use crate::node_graph::scene_vm::ShapeParamVm;
     use manifold_core::NodeId;
 
@@ -605,7 +605,7 @@ mod tests {
 
     /// A placed source's box at `centre` of `size`, unturned.
     fn source(centre: [f32; 3], size: [f32; 3], wired: &[&str]) -> SceneShapeVm {
-        let decl = scene_shape("node.fluid_role_source")[0].clone();
+        let decl = crate::node_graph::scene_surface::WATER_SOURCE_SHAPES[0].clone();
         let value = |id: &str| match id {
             "pos_x" => centre[0],
             "pos_y" => centre[1],

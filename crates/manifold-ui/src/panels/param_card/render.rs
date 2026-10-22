@@ -347,7 +347,7 @@ impl ParamCardPanel {
     /// setup warning and the dimmed reason it does nothing right now.
     fn note_lines_height(&self, i: usize) -> f32 {
         let spec = &self.rows[i].spec;
-        let lines = usize::from(spec.setup_warning.is_some()) + usize::from(spec.inactive_reason.is_some());
+        let lines = usize::from(spec.setup_warning.is_some());
         lines as f32 * (ROW_HEIGHT + ROW_SPACING)
     }
 

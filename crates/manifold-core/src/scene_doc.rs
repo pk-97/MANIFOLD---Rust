@@ -16,7 +16,7 @@ mod tree;
 
 
 pub use manifold_foundation::id::ItemId;
-pub use tree::SceneEditError;
+pub use tree::{SceneEditError, can_hold};
 
 use serde::{Deserialize, Serialize};
 
@@ -42,53 +42,7 @@ pub struct Item {
     pub children: Vec<Item>,
 }
 
-/// The ten kinds (ruling 4). A layer plane is an Object; Copies is a section;
-/// an import is a Group whose Source is a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ItemKind {
-    Group,
-    Object,
-    Camera,
-    Light,
-    Material,
-    Water,
-    WaterSource,
-    Swarm,
-    Force,
-    World,
-}
-
-impl ItemKind {
-    pub const ALL: [ItemKind; 10] = [
-        ItemKind::Group,
-        ItemKind::Object,
-        ItemKind::Camera,
-        ItemKind::Light,
-        ItemKind::Material,
-        ItemKind::Water,
-        ItemKind::WaterSource,
-        ItemKind::Swarm,
-        ItemKind::Force,
-        ItemKind::World,
-    ];
-
-    /// The name a new item of this kind takes.
-    pub fn default_name(self) -> &'static str {
-        match self {
-            ItemKind::Group => "Group",
-            ItemKind::Object => "Object",
-            ItemKind::Camera => "Camera",
-            ItemKind::Light => "Light",
-            ItemKind::Material => "Material",
-            ItemKind::Water => "Water",
-            ItemKind::WaterSource => "Water Source",
-            ItemKind::Swarm => "Swarm",
-            ItemKind::Force => "Force",
-            ItemKind::World => "World",
-        }
-    }
-}
+pub use manifold_foundation::scene_surface::ItemKind;
 
 /// An item's structural fields, by kind. Set by commands, never mapped or
 /// modulated (ruling 3).

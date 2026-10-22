@@ -15,7 +15,7 @@ use manifold_core::NodeId;
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
 use crate::node_graph::scene_graph::{bool_val, enum_val, float, plain_node, wire};
-use crate::node_graph::scene_exposure::metadata_for_node_type;
+use crate::node_graph::node_param_source::metadata_for_node_type;
 
 /// The tail's products: the assembled `dof` group node and the top-level
 /// `motion_blur` node (in `nodes`, push-order preserved), plus their ids

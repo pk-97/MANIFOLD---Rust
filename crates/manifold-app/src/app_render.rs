@@ -173,19 +173,6 @@ mod preparation_inversion_tests {
 }
 
 impl Application {
-    /// The graph editor's add-object and add-light buttons: insert `template`
-    /// into the render scene (doc id `render`) under `scope` (group doc ids),
-    /// through the same command the Add menu uses.
-    fn insert_scene_template(&self, scope: &[u32], render: u32, template: manifold_core::scene_template::SceneTemplate) {
-        let (Some(target), Some(default)) = (self.watched_graph_target.as_ref(), self.watched_catalog_default.as_ref()) else {
-            return;
-        };
-        let prepared = crate::scene_insert::prepare(&self.local_project, target, default, scope, render, template);
-        match prepared {
-            Ok(command) => self.send_content_cmd(ContentCommand::Execute(Box::new(command))),
-            Err(message) => self.send_content_cmd(ContentCommand::GraphEditRejected(message)),
-        }
-    }
 
     /// Take the newest state from the content thread: its export notice, its
     /// project snapshot and stamps, its modulation capture and spectrogram
@@ -888,22 +875,14 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
-                PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(layer_id)) => {
+                PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(layer_id, camera)) => {
                     let view = self.graph_editor.as_ref().and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id));
                     if let Some(content_tx) = self.content_tx.as_ref() {
                         crate::scene_view_copy::run(
                             &mut self.local_project.edit(&mut self.ui_edits, content_tx),
-                            &mut self.ws.ui_root, layer_id, view.as_ref(),
+                            &mut self.ws.ui_root, layer_id, camera, view.as_ref(),
                         );
                     }
-                    continue;
-                }
-                PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(layer_id)) => {
-                    // D7 "Open Graph Editor" empty state — same mechanism as
-                    // `OpenGeneratorGraphEditor` below, addressed explicitly by
-                    // the panel's own layer instead of `active_layer_id`.
-                    self.watch_generator_graph(layer_id.clone());
-                    self.pending_open_graph_editor = true;
                     continue;
                 }
                 PanelAction::Root(RootAction::OpenGeneratorGraphEditor) => {
@@ -2231,16 +2210,6 @@ impl Application {
                     // thread to flip the node-preview blit.
                     self.node_preview_normalize = *on;
                     self.send_content_cmd(ContentCommand::SetNodePreviewNormalize(*on));
-                    continue;
-                }
-                manifold_ui::GraphEditCommand::AddSceneObject { scope_path, render_scene_node_id, next_index, centroid } => {
-                    let template = manifold_nodes_scene::node_graph::scene_templates::object_template(*next_index, *centroid);
-                    self.insert_scene_template(scope_path, *render_scene_node_id, template);
-                    continue;
-                }
-                manifold_ui::GraphEditCommand::AddSceneLight { scope_path, render_scene_node_id, pos, .. } => {
-                    let template = manifold_nodes_scene::node_graph::scene_templates::light_template(*pos);
-                    self.insert_scene_template(scope_path, *render_scene_node_id, template);
                     continue;
                 }
             }

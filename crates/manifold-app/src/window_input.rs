@@ -411,9 +411,7 @@ impl Application {
                                 && let Some(node) = self.ws.ui_root.tree.hit_test(self.cursor_pos)
                             {
                                 let ui = &mut self.ws.ui_root;
-                                if !ui.scene_setup_panel.select_outliner_node(node) {
-                                    ui.scene_setup_panel.select_object_modifier_node(node, &mut ui.tree);
-                                }
+                                ui.scene_setup_panel.select_outliner_node(node);
                             }
 
                             if self.ws.ui_root.background_input_blocked() {
@@ -872,7 +870,6 @@ impl Application {
     /// drag-on-an-object doesn't — the usual DCC convention).
     fn editor_viewport_gizmo_press(&mut self, cx: f32, cy: f32) -> bool {
         use crate::scene_gizmo::{GizmoPress, GizmoView};
-        use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
         use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoSelection;
         let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
             return false;
@@ -883,7 +880,7 @@ impl Application {
         {
             return false;
         }
-        let Some(scene) = self.viewport_def_cloned().as_ref().and_then(SceneVm::from_def) else { return false };
+        let Some(scene) = self.viewport_scene() else { return false };
         let (view, mode, selection) = {
             let Some(ed) = self.graph_editor.as_ref() else { return false };
             let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {

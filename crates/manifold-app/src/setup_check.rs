@@ -14,18 +14,14 @@ use std::sync::Arc;
 
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::effects::{ParamConvert, PresetInstance, apply_card_reshape};
+use manifold_core::effects::PresetInstance;
 use manifold_core::fluid_domain::FluidDomainSnapshot;
 use manifold_core::layer::Layer;
-use manifold_core::liquid_domain::liquid_domains_in;
 use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
-use manifold_core::macro_bank::MacroCurve;
 use manifold_core::project::Project;
 use manifold_core::{LayerId, NodeId, PresetTypeId};
-use manifold_node_engine::param_binding::convert_param_value;
-use manifold_node_engine::parameters::ParamValue;
 use manifold_nodes_scene::node_graph::scene_vm::{
-    CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupAnchor, SetupProblem, copies_anchors, copies_problems, problems_with_runtime,
+    CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupProblem, copies_anchors, copies_problems, problems_with_runtime,
 };
 use manifold_ui::param_surface::{ParamRow, ParamSurface};
 
@@ -248,39 +244,52 @@ pub(crate) fn runtime_fits<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId) 
     })
 }
 
-/// The problems of the scene `def` is, with `inst`'s card values folded into
-/// the params they drive so shapes sit where the knobs put them, plus what
-/// the solvers and copy pools reported (`runtime`). A graph with no liquid
-/// domain builds no scene model; its worlds still warn of unmade copies.
-pub(crate) fn problems_of<'a>(def: &EffectGraphDef, inst: &PresetInstance, runtime: impl IntoIterator<Item = RuntimeFit<'a>>) -> Vec<SetupProblem> {
-    let runtime: Vec<RuntimeFit<'a>> = runtime.into_iter().collect();
+/// The problems of the graph `def`: what the copy pools of its Physics Worlds
+/// reported (`runtime`) as unmade copies.
+pub(crate) fn problems_of<'a>(def: &EffectGraphDef, runtime: impl IntoIterator<Item = RuntimeFit<'a>>) -> Vec<SetupProblem> {
     let mut out = Vec::new();
-    if !liquid_domains_in(&def.nodes).is_empty() {
-        let mut authored = def.clone();
-        if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
-            authored = def.clone();
-        }
-        if let Some(vm) = SceneVm::from_def(&authored) {
-            problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime.iter().copied(), &mut out);
-        }
-    }
     copies_problems(&copies_anchors(def), runtime, &mut out);
     out
 }
 
-/// `f` over a generator layer's graph (its own, else the catalog's) and its
-/// card values.
-fn with_layer_def<R>(layer: &Layer, f: impl FnOnce(&EffectGraphDef, &PresetInstance) -> R) -> Option<R> {
-    let inst = layer.gen_params()?;
+/// `f` over a generator layer's graph, its own else the catalog's.
+fn with_layer_def<R>(layer: &Layer, f: impl FnOnce(&EffectGraphDef) -> R) -> Option<R> {
     match layer.generator_graph() {
-        Some(def) => Some(f(def, inst)),
-        None => manifold_nodes::bundled_presets::bundled_preset_def(layer.generator_type()).map(|def| f(&def, inst)),
+        Some(def) => Some(f(def)),
+        None => manifold_nodes::bundled_presets::bundled_preset_def(layer.generator_type()).map(|def| f(&def)),
     }
+}
+
+/// The graph node with doc id `node_doc_id` at `scope_path`, a path of group
+/// doc ids to descend into (empty is the document root).
+fn find_node_by_scope<'a>(def: &'a EffectGraphDef, scope_path: &[u32], node_doc_id: u32) -> Option<&'a manifold_core::effect_graph_def::EffectGraphNode> {
+    let mut nodes = def.nodes.as_slice();
+    for group_id in scope_path {
+        nodes = &nodes.iter().find(|n| n.id == *group_id)?.group.as_ref()?.nodes;
+    }
+    nodes.iter().find(|n| n.id == node_doc_id)
+}
+
+/// The card param bound to a node param, resolved through its group scope.
+/// Recipe-local numeric ids may repeat in nested groups; stable binding
+/// targets do not.
+fn card_binding_id(def: &EffectGraphDef, addr: &ParamAddr) -> Option<String> {
+    let Some(node) = find_node_by_scope(def, &addr.scope_path, addr.node_doc_id) else {
+        return addr.scope_path.is_empty().then(|| manifold_core::effects::binding_id_for_node_param_in(def, addr.node_doc_id, &addr.param_id)).flatten();
+    };
+    let identity = if node.node_id.is_empty() {
+        NodeId::new(node.handle.clone().unwrap_or_else(|| format!("node{}", addr.node_doc_id)))
+    } else {
+        node.node_id.clone()
+    };
+    def.preset_metadata.as_ref()?.bindings.iter().find(|binding| {
+        matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if node_id == &identity && param == &addr.param_id)
+    }).map(|binding| binding.id.clone())
 }
 
 /// Mark a generator layer's card with its problems.
 pub(crate) fn mark_layer_card(card: &mut ParamSurface, layer: &Layer, report: &[SetupFitEntry]) {
-    with_layer_def(layer, |def, inst| mark_rows(&mut card.rows, &problems_of(def, inst, runtime_fits(report, &layer.layer_id)), def));
+    with_layer_def(layer, |def| mark_rows(&mut card.rows, &problems_of(def, runtime_fits(report, &layer.layer_id)), def));
 }
 
 /// Put each problem's warning on the first exposed row that edits one of its
@@ -290,7 +299,7 @@ pub(crate) fn mark_rows(rows: &mut [ParamRow], problems: &[SetupProblem], def: &
     for problem in problems {
         let message = problem.kind.message();
         for addr in &problem.params {
-            let Some(id) = crate::ui_bridge::project::scene_binding_id(def, &addr.scope_path, addr.node_doc_id, &addr.param_id)
+            let Some(id) = card_binding_id(def, addr)
             else {
                 continue;
             };
@@ -302,117 +311,7 @@ pub(crate) fn mark_rows(rows: &mut [ParamRow], problems: &[SetupProblem], def: &
     }
 }
 
-/// A card param that places a setup shape: how its value reaches the node
-/// param the check reads, the same reshape `scene_gizmo::fold_card_values`
-/// folds it with.
-struct BoundParam {
-    addr: ParamAddr,
-    card: String,
-    /// The card param's place in the manifest; the model is rebuilt when the
-    /// manifest's order changes.
-    index: usize,
-    min: f32,
-    max: f32,
-    invert: bool,
-    curve: MacroCurve,
-    scale: f32,
-    offset: f32,
-    convert: ParamConvert,
-    /// A change needs a rebuild ([`SceneVm::setup_params`]).
-    structural: bool,
-}
-
-impl BoundParam {
-    /// The node param value the card's base value puts here. `None` keeps the
-    /// value the scene model was built at (no card value, or one the fold
-    /// does not write either).
-    fn value(&self, inst: &PresetInstance) -> Option<f32> {
-        let param = inst.params.iter().nth(self.index).filter(|param| param.id() == self.card)?;
-        let base = authored_value(inst, param);
-        if !base.is_finite() {
-            return None;
-        }
-        let effective = apply_card_reshape(base, self.min, self.max, self.invert, self.curve, self.scale, self.offset);
-        match convert_param_value(self.convert, effective) {
-            ParamValue::Float(v) if v.is_finite() => Some(v),
-            ParamValue::Enum(v) => Some(v as f32),
-            _ => None,
-        }
-    }
-}
-
-/// One layer's scene model, built once per graph, with the card params that
-/// move its setup shapes, and the worlds that copy bodies.
-struct SlotModel {
-    /// `None` for a graph with no liquid domain.
-    vm: Option<SceneVm>,
-    bound: Vec<BoundParam>,
-    copies: Vec<CopiesAnchor>,
-}
-
-impl SlotModel {
-    /// `None` for a graph with neither a liquid domain nor a world that
-    /// copies bodies, which has no setup to check.
-    fn build(def: &EffectGraphDef, inst: &PresetInstance) -> Option<Self> {
-        let copies = copies_anchors(def);
-        let vm = (!liquid_domains_in(&def.nodes).is_empty())
-            .then(|| {
-                let mut authored = def.clone();
-                if crate::scene_gizmo::fold_card_values(&mut authored, inst).is_none() {
-                    authored = def.clone();
-                }
-                SceneVm::from_def(&authored)
-            })
-            .flatten();
-        if vm.is_none() && copies.is_empty() {
-            return None;
-        }
-        let metadata = def.preset_metadata.as_ref();
-        let mut bound: Vec<BoundParam> = Vec::new();
-        for (addr, structural) in vm.iter().flat_map(SceneVm::setup_params) {
-            if bound.iter().any(|known| &known.addr == addr) {
-                continue;
-            }
-            let Some(card) = crate::ui_bridge::project::scene_binding_id(def, &addr.scope_path, addr.node_doc_id, &addr.param_id) else {
-                continue;
-            };
-            let Some(binding) = metadata.and_then(|m| m.bindings.iter().find(|b| b.id == card)) else { continue };
-            let Some(spec) = metadata.and_then(|m| m.params.iter().find(|spec| spec.id == card)) else { continue };
-            if binding.convert == ParamConvert::Trigger || spec.is_trigger {
-                continue;
-            }
-            // A card param the instance lacks folds its default, never a value.
-            let Some(index) = inst.params.iter().position(|param| param.id() == card) else { continue };
-            bound.push(BoundParam {
-                addr: addr.clone(),
-                card,
-                index,
-                min: spec.min,
-                max: spec.max,
-                invert: spec.invert,
-                curve: spec.curve,
-                scale: binding.scale,
-                offset: binding.offset,
-                convert: binding.convert,
-                structural,
-            });
-        }
-        Some(Self { vm, bound, copies })
-    }
-
-    /// The bound card values of one kind, hashed without allocating.
-    fn hash_values(&self, inst: &PresetInstance, structural: bool, state: &mut impl Hasher) {
-        for param in self.bound.iter().filter(|param| param.structural == structural) {
-            param.value(inst).map(f32::to_bits).hash(state);
-        }
-    }
-
-    fn value(&self, inst: &PresetInstance, addr: &ParamAddr) -> Option<f32> {
-        self.bound.iter().find(|param| !param.structural && &param.addr == addr)?.value(inst)
-    }
-}
-
-/// What can move a shape, a card value or which graph a layer resolves: a
+/// What can move a copy pool's report or which graph a layer resolves: a
 /// frame where none moved skips the per-layer keys.
 const CHECK_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Overrides, Part::Shapes, Part::EmbeddedPresets, Part::Values]);
 
@@ -420,111 +319,58 @@ const CHECK_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part
 #[derive(Default)]
 struct SlotCheck {
     layer: Option<LayerId>,
-    /// The graph, catalog and manifest the model was built from.
+    /// The graph and catalog the copy anchors were read from.
     graph: u64,
-    /// The card values that set the model's form, at build.
-    form: u64,
-    model: Option<SlotModel>,
-    /// Every card's base value: when it holds, no card value moved.
-    card: u64,
-    /// The card values the setup shapes read, at the last check.
-    values: u64,
+    /// The Physics Worlds that copy bodies, read once per graph.
+    copies: Vec<CopiesAnchor>,
     report: Option<SetupFitReport>,
-    authored: Vec<SetupProblem>,
-    anchors: Vec<SetupAnchor>,
     problems: Vec<SetupProblem>,
     /// What the card shows of the problems; 0 when none.
     hash: u64,
-    builds: usize,
-    checks: usize,
 }
 
 impl SlotCheck {
-    fn graph_key(layer: &Layer, inst: &PresetInstance, generation: u64) -> u64 {
+    fn graph_key(layer: &Layer, generation: u64) -> u64 {
         let mut hasher = DefaultHasher::new();
         layer.generator_graph().is_some().hash(&mut hasher);
         layer.generator_graph_version().hash(&mut hasher);
         layer.generator_graph_structure_version().hash(&mut hasher);
         layer.generator_type().hash(&mut hasher);
         generation.hash(&mut hasher);
-        inst.params.topology().hash(&mut hasher);
-        inst.params.len().hash(&mut hasher);
         hasher.finish()
     }
 
-    /// Every card base value in one pass: a manifest lookup per bound param
-    /// costs more than this, so it gates them.
-    fn card_key(inst: &PresetInstance) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        for param in inst.params.iter() {
-            authored_value(inst, param).to_bits().hash(&mut hasher);
-        }
-        hasher.finish()
-    }
-
-    fn model_values(&self, inst: &PresetInstance, structural: bool) -> u64 {
-        self.model.as_ref().map_or(0, |model| {
-            let mut hasher = DefaultHasher::new();
-            model.hash_values(inst, structural, &mut hasher);
-            hasher.finish()
-        })
-    }
-
-    /// Follow `layer`'s graph, card values and solver report. The scene model
-    /// is rebuilt only when the graph or its form changes; a card value the
-    /// setup reads re-checks it; any other card value costs one pass over the
-    /// card's base values. Unless `woke` (a part the check reads moved) or the
-    /// report changed, it costs nothing.
+    /// Follow `layer`'s graph and solver report. The anchors are re-read only
+    /// when the graph changes. Unless `woke` (a part the check reads moved) or
+    /// the report changed, it costs nothing.
     fn follow(&mut self, project: &Project, layer: Option<&LayerId>, report: &SetupFitReport, generation: u64, woke: bool) {
         if !woke && self.layer.as_ref() == layer && self.report.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, report)) {
             return;
         }
-        let found = layer.and_then(|id| project.timeline.find_layer_by_id(id)).and_then(|(_, layer)| Some((layer, layer.gen_params()?)));
-        let Some((layer, inst)) = found else {
+        let Some(layer) = layer.and_then(|id| project.timeline.find_layer_by_id(id)).map(|(_, layer)| layer).filter(|layer| layer.gen_params().is_some()) else {
             if self.layer.take().is_some() || self.hash != 0 {
-                self.model = None;
+                self.copies.clear();
                 self.report = None;
                 self.problems.clear();
                 self.hash = 0;
             }
             return;
         };
-        let graph = Self::graph_key(layer, inst, generation);
-        let card = Self::card_key(inst);
+        let graph = Self::graph_key(layer, generation);
         let same_layer = self.layer.as_ref() == Some(&layer.layer_id);
         let mut moved = false;
-        if !same_layer || graph != self.graph || (card != self.card && self.model_values(inst, true) != self.form) {
+        if !same_layer || graph != self.graph {
             self.layer = Some(layer.layer_id.clone());
-            self.model = with_layer_def(layer, SlotModel::build).flatten();
+            self.copies = with_layer_def(layer, copies_anchors).unwrap_or_default();
             self.graph = graph;
-            self.form = self.model_values(inst, true);
-            self.builds += 1;
             moved = true;
-        }
-        if moved || card != self.card {
-            self.card = card;
-            let values = self.model_values(inst, false);
-            if moved || values != self.values {
-                self.values = values;
-                match self.model.as_ref().and_then(|model| Some((model, model.vm.as_ref()?))) {
-                    Some((model, vm)) => vm.recheck_setup(&|addr| model.value(inst, addr), &mut self.authored, &mut self.anchors),
-                    None => {
-                        self.authored.clear();
-                        self.anchors.clear();
-                    }
-                }
-                self.checks += 1;
-                moved = true;
-            }
         }
         if !moved && self.report.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, report)) {
             return;
         }
         self.report = Some(report.clone());
-        problems_with_runtime(&self.anchors, &self.authored, runtime_fits(report, &layer.layer_id), &mut self.problems);
-        if let Some(model) = &self.model {
-            copies_problems(&model.copies, runtime_fits(report, &layer.layer_id), &mut self.problems);
-        }
+        self.problems.clear();
+        copies_problems(&self.copies, runtime_fits(report, &layer.layer_id), &mut self.problems);
         let mut hasher = DefaultHasher::new();
         for problem in &self.problems {
             problem.hash_card(&mut hasher);
@@ -565,12 +411,6 @@ impl CardCheck {
             slot.hash.hash(&mut hasher);
         }
         hasher.finish()
-    }
-
-    /// Scene model builds and setup checks so far, over both cards.
-    #[cfg(test)]
-    pub fn work(&self) -> (usize, usize) {
-        self.slots.iter().fold((0, 0), |(builds, checks), slot| (builds + slot.builds, checks + slot.checks))
     }
 }
 

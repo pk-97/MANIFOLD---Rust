@@ -19,7 +19,7 @@ use manifold_node_engine::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATO
 use crate::node_graph::gltf_load;
 use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
-use crate::node_graph::scene_exposure::metadata_for_node_type;
+use crate::node_graph::node_param_source::metadata_for_node_type;
 
 use super::ImportReport;
 use super::{HDRI_FILE_PARAM_ID, MODEL_FILE_PARAM_ID};
@@ -730,7 +730,6 @@ pub(super) fn build_import_graph(
         let mut card = card_param(id, label, min, max, default, false, "Environment");
         card.is_toggle = toggle;
         card.whole_numbers = toggle;
-        card.scene = crate::node_graph::scene_surface::background_scene(id);
         card_params.push(card);
         card_bindings.push(card_binding(id, label, default, node, param, 1.0));
     }
@@ -792,14 +791,6 @@ pub(super) fn build_import_graph(
     // A control that fans out over several nodes (the environment intensity
     // also drives the HDRI gain; Ambient drives every material) is placed on
     // the scene surfaces like the node it drives first.
-    for param in card_params.iter_mut().filter(|param| param.scene.is_none()) {
-        let mut bound = card_bindings.iter().filter(|binding| binding.id == param.id);
-        let (Some(first), Some(_)) = (bound.next(), bound.next()) else { continue };
-        let BindingTarget::Node { node_id, param: node_param } = &first.target else { continue };
-        if let Some(type_id) = node_type_in(&nodes, node_id) {
-            param.scene = crate::node_graph::scene_surface::fan_out_scene(type_id, node_param);
-        }
-    }
 
     let metadata = PresetMetadata {
         shape: None,
@@ -872,15 +863,4 @@ pub(super) fn build_import_graph(
 
     Ok((def, report))
 }
-}
-
-/// The type of the node with stable id `id`, group bodies included.
-fn node_type_in<'a>(nodes: &'a [EffectGraphNode], id: &NodeId) -> Option<&'a str> {
-    nodes.iter().find_map(|node| {
-        if &node.node_id == id {
-            Some(node.type_id.as_str())
-        } else {
-            node.group.as_deref().and_then(|group| node_type_in(&group.nodes, id))
-        }
-    })
 }

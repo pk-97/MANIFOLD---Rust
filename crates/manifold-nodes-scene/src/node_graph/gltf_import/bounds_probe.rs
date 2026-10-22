@@ -1,10 +1,8 @@
 //! Cheap scene-bounds backfill for old embedded scene presets.
 //!
 //! Pre-2026-08-15 projects imported their 3D scenes before
-//! `PresetMetadata::scene_bounds` existed. The load-time scene-exposure
-//! repair pass only applies scene-scaled slider bands when that field is
-//! present, so those projects keep the generic bands forever unless we
-//! backfill the bounds.
+//! `PresetMetadata::scene_bounds` existed, so they keep the generic slider
+//! bands unless we backfill the bounds.
 //!
 //! Bounds come from `gltf_import_summary`, the importer's own box, so the
 //! backfilled slider bands equal the ones a fresh import stamps. A cheaper
@@ -15,8 +13,7 @@ use manifold_core::preset_def::PresetKind;
 use manifold_core::project::Project;
 
 /// Backfill `scene_bounds` on every embedded generator preset that carries a
-/// `model_file` string param but no bounds, then re-run the scene-exposure
-/// migration so the stamped slider bands become scene-scaled.
+/// `model_file` string param but no bounds.
 ///
 /// Returns how many presets were changed. The caller must re-install the
 /// preset overlay and re-run `Project::reconcile_param_manifests()` for the
@@ -40,7 +37,6 @@ pub fn repair_project_embedded_scene_bounds(project: &mut Project) -> usize {
         match crate::node_graph::gltf_load::gltf_import_summary(std::path::Path::new(model_path)) {
             Ok(summary) => {
                 meta.scene_bounds = Some((summary.bbox_min, summary.bbox_max));
-                crate::node_graph::scene_exposure::migrate_scene_exposures(&mut preset.def);
                 project.load_report.scene_bounds_backfilled += 1;
                 changed += 1;
             }
@@ -202,9 +198,6 @@ mod tests {
         let (min, max) = meta_after.scene_bounds.unwrap();
         assert!((min[0] - -5.0).abs() < 1e-4);
         assert!((max[0] - 5.0).abs() < 1e-4);
-
-        // Migration should have stamped scene-vocabulary params for the orbit_camera.
-        assert!(!meta_after.params.is_empty());
     }
 
     /// A scene a model was merged into before the merge wrote bounds loads

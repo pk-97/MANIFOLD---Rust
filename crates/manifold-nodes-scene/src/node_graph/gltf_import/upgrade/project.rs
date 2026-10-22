@@ -149,38 +149,10 @@ fn upgrade_def(
         let nested = upgrade_def(&mut modifier.graph, cache, report);
         result.changed |= nested.changed;
     }
-    if contains_pbr_material(def) {
-        let mut moves = Vec::new();
-        result.changed |= crate::node_graph::scene_exposure::migrate_scene_exposures_moving(def, &mut moves);
-        result.binding_updates.extend(moves.into_iter().map(|moved| MaterialBindingUpdate {
-            id: moved.id,
-            old_value: moved.old,
-            new_value: moved.new,
-        }));
-    }
     if result.changed {
         report.changed_graphs += 1;
     }
     result
-}
-
-fn contains_pbr_material(def: &EffectGraphDef) -> bool {
-    fn nodes_contain(nodes: &[manifold_core::effect_graph_def::EffectGraphNode]) -> bool {
-        nodes.iter().any(|node| {
-            matches!(
-                node.type_id.as_str(),
-                "node.pbr_material" | "node.unlit_material"
-            ) || node
-                .group
-                .as_ref()
-                .is_some_and(|group| nodes_contain(&group.nodes))
-        })
-    }
-    nodes_contain(&def.nodes)
-        || def
-            .scene_modifiers
-            .iter()
-            .any(|modifier| contains_pbr_material(&modifier.graph))
 }
 
 fn apply_binding_updates(instance: &mut PresetInstance, updates: &[MaterialBindingUpdate]) {
@@ -253,16 +225,3 @@ pub mod testkit {
     }
 }
 
-/// Move each card value still sitting on a default the scene exposure repair
-/// moved (BUG-c48e6), with the same ownership guard as the material upgrade:
-/// a value a driver, envelope or audio mod owns stays where it is.
-pub fn move_repaired_card_values(
-    instance: &mut PresetInstance,
-    moves: &[manifold_core::scene_exposure::DefaultMove],
-) {
-    let updates: Vec<MaterialBindingUpdate> = moves
-        .iter()
-        .map(|moved| MaterialBindingUpdate { id: moved.id.clone(), old_value: moved.old, new_value: moved.new })
-        .collect();
-    apply_binding_updates(instance, &updates);
-}

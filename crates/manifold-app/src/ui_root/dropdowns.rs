@@ -1008,30 +1008,11 @@ impl UIRoot {
                 // Resolve against the exact card instance that emitted the
                 // click. The card snapshot owns stable object addresses; this
                 // menu never reconstructs them from labels or positions.
-                let force_info = self.scene_setup_panel.force_card_info(instance_id)
-                    .filter(|info| &info.layer_id == layer_id).cloned();
-                let force = force_info.is_some();
-                let Some(info) = force_info.or_else(|| self.inspector.modifier_card_info(instance_id)
-                    .filter(|info| &info.layer_id == layer_id).cloned()) else {
+                let Some(info) = self.inspector.modifier_card_info(instance_id)
+                    .filter(|info| &info.layer_id == layer_id).cloned() else {
                     return true;
                 };
-                let items = if force { scene_target_menu_items(layer_id, &info, true) }
-                    else { modifier_object_menu_items(layer_id, &info) };
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            PanelAction::Root(RootAction::SceneSetupAddClicked(layer_id, group)) => {
-                if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
-                    return true;
-                }
-                let items = self.scene_setup_panel.add_menu(*group).into_iter().map(|entry| {
-                    let item = match (&entry.disabled, entry.action) {
-                        (Some(reason), _) => DropdownItem::disabled(&format!("{} \u{2014} {}", entry.label, reason)),
-                        (None, Some(action)) => DropdownItem::new(&entry.label).with_action(action),
-                        (None, None) => DropdownItem::disabled(&entry.label),
-                    };
-                    if entry.separator_after { item.with_separator() } else { item }
-                }).collect();
+                let items = modifier_object_menu_items(layer_id, &info);
                 self.open_dropdown_typed(items, trigger);
                 true
             }
@@ -1824,39 +1805,30 @@ impl UIRoot {
                 true
             }
             PanelAction::Root(RootAction::SceneItemRightClicked) => {
+                use manifold_ui::panels::actions::CardEditAction;
                 self.object_cards_have_focus = true;
                 let mut items = card_edit_menu_items(self.scene_item_clipboard.is_some(), false, false);
-                let selected = self.scene_setup_panel.selected_scene_item();
-                if let Some(selected) = selected {
-                    let can_copy = self.scene_setup_panel.scene_item_edit_allowed(
-                        manifold_ui::panels::actions::CardEditAction::Copy,
-                    );
-                    let can_cut = self.scene_setup_panel.scene_item_edit_allowed(
-                        manifold_ui::panels::actions::CardEditAction::Cut,
-                    );
-                    let can_duplicate = self.scene_setup_panel.scene_item_edit_allowed(
-                        manifold_ui::panels::actions::CardEditAction::Duplicate,
-                    );
+                if let Some(selected) = self.scene_setup_panel.selected_scene_item() {
+                    let allowed = |action| self.scene_setup_panel.scene_item_edit_allowed(action);
+                    let (can_copy, can_cut, can_duplicate) =
+                        (allowed(CardEditAction::Copy), allowed(CardEditAction::Cut), allowed(CardEditAction::Duplicate));
                     items.retain(|item| match item.label.as_str() {
                         "Copy" => can_copy,
                         "Cut" => can_cut,
-                        // A Water-family child has no graph-removal menu
-                        // item; its permanent Hide action writes visible=0.
-                        "Delete" => selected.capabilities.delete,
+                        "Delete" => selected.removable,
                         "Duplicate" => can_duplicate,
                         _ => true,
                     });
-                    if selected.capabilities.hide {
-                        let hide = match self.scene_setup_panel.hide_selection_action() {
-                            Some(action) => DropdownItem::new("Hide").with_action(action),
-                            None => DropdownItem::disabled("Hide"),
-                        };
-                        items.push(hide.with_separator());
+                    if let Some(group) = self.scene_setup_panel.group_selection_action() {
+                        items.push(DropdownItem::new("Group").with_action(group).with_separator());
+                    }
+                    if let Some(ungroup) = self.scene_setup_panel.ungroup_selection_action() {
+                        items.push(DropdownItem::new("Ungroup").with_action(ungroup));
                     }
                     items.push(DropdownItem::new("Rename").with_action(PanelAction::Root(RootAction::SceneItemRename)));
                     items.push(DropdownItem::new("Move Up").with_action(PanelAction::Root(RootAction::SceneItemMove(-1))));
                     items.push(DropdownItem::new("Move Down").with_action(PanelAction::Root(RootAction::SceneItemMove(1))));
-                    if !selected.is_light {
+                    if !matches!(selected.kind, manifold_core::scene_surface::ItemKind::World | manifold_core::scene_surface::ItemKind::Material | manifold_core::scene_surface::ItemKind::Camera) {
                         items.push(DropdownItem::new("Frame Selected").with_action(PanelAction::Root(RootAction::SceneItemFrame)));
                     }
                 } else {
@@ -1866,37 +1838,16 @@ impl UIRoot {
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::Root(RootAction::ObjectModifierCardRightClicked(address)) => {
-                self.object_cards_have_focus = true;
-                self.scene_setup_panel.select_object_modifier_by_address(
-                    &address.layer_id, &address.owner,
-                    address.node_doc_id, &mut self.tree,
-                );
-                let items = card_edit_menu_items(self.object_modifier_clipboard.is_some(), false, false);
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
-                true
-            }
             PanelAction::Root(RootAction::SceneModifierCardRightClicked(layer, id)) => {
-                let force = self.scene_setup_panel.force_card_info(id)
-                    .is_some_and(|info| &info.layer_id == layer);
-                self.object_cards_have_focus = force;
-                if force {
-                    self.scene_setup_panel.set_selection(layer.clone(),
-                        manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
-                } else {
-                    self.inspector.select_modifier_for_context_menu(layer, id);
-                    self.inspector.apply_selection_visuals(&mut self.tree);
-                }
+                self.object_cards_have_focus = false;
+                self.inspector.select_modifier_for_context_menu(layer, id);
+                self.inspector.apply_selection_visuals(&mut self.tree);
                 let target = manifold_ui::view::UiGraphTarget::SceneModifier {
                     owner: Box::new(manifold_ui::view::UiGraphTarget::Generator(layer.clone())),
                     modifier_id: id.clone(),
                 };
                 let mut items = card_edit_menu_items(self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0), false, false);
-                let modified = if force {
-                    self.scene_setup_panel.force_cards_mut().iter()
-                        .find(|card| card.modifier_info().is_some_and(|info| &info.instance_id == id))
-                        .is_some_and(|card| card.has_graph_mod())
-                } else { self.inspector.modifier_has_graph_mod(layer, id) };
+                let modified = self.inspector.modifier_has_graph_mod(layer, id);
                 items.extend(preset_menu_items(modified,
                     |kind| ParamsAction::PresetAction(target.clone(), kind)));
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
@@ -2038,41 +1989,6 @@ impl UIRoot {
                 }
                 true
             }
-            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D9: click on a 3+-label
-            // enum value cell in the Scene tab opens the shared
-            // dropdown — items = the row's label set, checked at the current
-            // index, each carrying the SAME `SceneSetupParamChanged` write
-            // the tab's steppers already dispatch (no new mutation path).
-            // `cell_node_id` resolves the anchor directly (the panel has no
-            // `&UITree` in `handle_event` to compute it itself).
-            PanelAction::Root(RootAction::SceneSetupEnumClicked {
-                layer_id,
-                scope_path,
-                node_doc_id,
-                param_id,
-                labels,
-                current_index,
-                cell_node_id,
-            }) => {
-                let cell_trigger = self.tree.get_bounds(*cell_node_id);
-                let items: Vec<DropdownItem> = labels
-                    .iter()
-                    .enumerate()
-                    .map(|(i, label)| {
-                        DropdownItem::new(label)
-                            .with_check(i as u32 == *current_index)
-                            .with_action(PanelAction::Project(ProjectAction::SceneSetupParamChanged(
-                                layer_id.clone(),
-                                scope_path.clone(),
-                                *node_doc_id,
-                                param_id.clone(),
-                                i as f32,
-                            )))
-                    })
-                    .collect();
-                self.open_dropdown_typed(items, cell_trigger);
-                true
-            }
             // The shared card row core's enum value-cell click
             // (3+ labels) — same overlay as `SceneSetupEnumClicked`, but
             // generic over `GraphParamTarget` + `ParamId` so inspector card
@@ -2103,7 +2019,14 @@ impl UIRoot {
                 self.open_dropdown_typed(items, cell_trigger);
                 true
             }
-            _ => self.try_open_scene_setup_menu(action),
+            // The Scene tab's menus (Add, field picks, Material features):
+            // each item carries the action it sends.
+            PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id, items }) => {
+                let button = self.tree.get_bounds(*button_node_id);
+                self.open_dropdown_typed(items.clone(), button);
+                true
+            }
+            _ => false,
         }
     }
 

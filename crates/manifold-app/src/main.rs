@@ -82,15 +82,12 @@ mod graph_snapshot;
 mod graph_target;
 mod scene_gizmo;
 mod setup_check;
-mod scene_insert;
 mod gizmo_overlay;
 mod selection_outline;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
-mod scene_item_transfer;
-mod scene_camera_edit;
+mod scene_edit;
 mod scene_view_copy;
-mod object_modifier_transfer;
 mod generator_change;
 mod modifier_preset;
 // Shared headless `ContentThread` construction (PERF_BUDGET_GATE_DESIGN.md

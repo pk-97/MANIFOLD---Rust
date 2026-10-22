@@ -1,21 +1,14 @@
 //! D-102 after render: a scene object far from the camera, selected, as the
 //! preview draws it: the scene's picture, the outline from its selection
-//! mask, then the handles through the camera it rendered with. Writes
-//! `/tmp/d102_gizmo_outline_after.png`. Also A3's water-domain cell grid render.
+//! mask, then the handles through the camera it rendered with.
 
 use half::f16;
-use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, ShapeOwner};
-use manifold_nodes_scene::node_graph::viewport_gizmo::{
-    GizmoAxis, GizmoChrome, GizmoMode, GizmoSelection, GizmoView, HANDLE_VIEW_FRACTION, compose_lines, gizmo_targets, outline_slots,
-};
-
-use super::SelectionOutline;
+use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode;
 
 const W: u32 = 960;
 const H: u32 = 540;
@@ -115,79 +108,6 @@ fn readback_r8(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
 fn build(device: &std::sync::Arc<GpuDevice>) -> PresetRuntime {
     PresetRuntime::from_json_str_with_device(SCENE, &PrimitiveRegistry::with_builtin(), device.clone(), W, H, GpuTextureFormat::Rgba16Float, None)
         .expect("scene builds")
-}
-
-/// The scene's panel object (document id 41), by address.
-fn panel_object() -> manifold_core::SceneNodeRef {
-    let def: EffectGraphDef = serde_json::from_str(SCENE).expect("scene json");
-    manifold_core::SceneNodeRef { scope: Vec::new(), node: def.nodes.iter().find(|node| node.id == 41).expect("the panel").node_id.clone() }
-}
-
-#[test]
-fn a_far_selected_object_shows_readable_handles_and_its_outline() {
-    let device = std::sync::Arc::new(GpuDevice::new_queued("d102 after render"));
-    let def: EffectGraphDef = serde_json::from_str(SCENE).expect("scene json");
-    let scene = SceneVm::from_def(&def).expect("a scene");
-    let panel_ref = manifold_core::SceneNodeRef {
-        scope: Vec::new(),
-        node: def.nodes.iter().find(|node| node.id == 41).expect("the panel").node_id.clone(),
-    };
-    let mut slots = Vec::new();
-    outline_slots(&scene, [&panel_ref], &mut slots);
-    assert_eq!(slots, [1], "the panel draws in render slot 1");
-
-    let mut runtime = build(&device);
-    let picture = target(&device, "d102 picture");
-    for frame in 0..2 {
-        runtime.set_selection_mask(&slots);
-        render(&device, &mut runtime, &picture, frame);
-    }
-    let mut lights = Vec::new();
-    let (_, camera) = runtime.write_rendered_view(&mut lights).expect("the scene reports its camera");
-    let mask = runtime.selection_mask().expect("a selection draws a mask").clone();
-
-    // The preview's chrome over the picture: outline, then the handles.
-    let view = GizmoView::new(camera, W, H);
-    let panel = gizmo_targets(&scene).find(|target| target.id.owner == ShapeOwner::Object(panel_ref.clone())).expect("the panel's target");
-    let selection = GizmoSelection::new(&scene, vec![panel.clone()]);
-    let mut lines = Vec::new();
-    compose_lines(
-        &GizmoChrome { view, lights: &lights, domains: &[], live_columns: &[], physics: &[], problems: &[], selection: &selection, mode: GizmoMode::Move, fade_handles: false },
-        &mut lines,
-    );
-    let composite = target(&device, "d102 composite");
-    let mut enc = device.create_encoder("d102 chrome");
-    enc.copy_texture_to_texture(&picture, &composite, W, H, 1);
-    SelectionOutline::new(&device).draw(&mut enc, &composite, &mask, (0.0, 0.0, W as f32, H as f32), 1.0);
-    manifold_nodes_scene::node_graph::gizmo_pass::GizmoPass::default().draw(
-        &device, &mut enc, &composite, None, &camera, &lines, manifold_core::scene_surface::GizmoDrawMode::OnTop,
-    );
-    enc.commit_and_wait_completed();
-
-    let shown = readback(&device, &composite);
-    let plain = readback(&device, &picture);
-    // The outline colour where the picture had none.
-    let outlined = shown
-        .iter()
-        .zip(&plain)
-        .filter(|(s, p)| (s[0] - p[0]) > 0.3 && s[0] > 0.8 && s[1] > 0.45 && s[1] < 0.8 && s[2] < 0.35)
-        .count();
-    eprintln!("d102: outline pixels {outlined}");
-    assert!(outlined > 40, "the outline shows round the far panel ({outlined} px)");
-    let origin = camera.project_to_pixel(panel.origin, W, H).expect("origin on screen");
-    let tip = camera.project_to_pixel(panel.grip(GizmoMode::Move, GizmoAxis::Y, &view).expect("move y"), W, H).expect("tip on screen");
-    let length = (tip.px - origin.px).hypot(tip.py - origin.py);
-    eprintln!("d102: move Y handle {length:.1} px of {H}");
-    assert!(length > HANDLE_VIEW_FRACTION * H as f32 * 0.5, "the handle stays readable from 70 m: {length} px");
-
-    let mut png = Vec::with_capacity((W * H * 4) as usize);
-    for px in &shown {
-        for (c, v) in px.iter().enumerate() {
-            let v = if c == 3 { 1.0 } else { (v / (1.0 + v)).clamp(0.0, 1.0).powf(1.0 / 2.2) };
-            png.push((v * 255.0).round() as u8);
-        }
-    }
-    image::save_buffer("/tmp/d102_gizmo_outline_after.png", &png, W, H, image::ExtendedColorType::Rgba8).expect("write png");
 }
 
 /// The mask crosses from the content device to the UI device intact: the
@@ -319,80 +239,6 @@ fn an_export_with_a_selection_renders_no_mask() {
     assert_eq!(thread.content_pipeline.take_selection_outline(), (Some(request), None), "the selection is back after the export");
 }
 
-/// A3 after render: the real Water Dam Break scene with its liquid domain
-/// selected the way the Scene panel selects it. The cell grid comes from the
-/// solver's own snapshot, the target from `selected_targets`, the lines from
-/// `compose_lines`. Writes `/tmp/a3_domain_lattice_after.png`.
-#[test]
-fn a_selected_water_domain_draws_its_solvers_cell_grid() {
-    use manifold_core::fluid_domain::FluidDomainState;
-    use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetKind;
-    use manifold_ui::panels::scene_setup_panel::SceneSelection;
-
-    const PRESET: &str = include_str!("../../../manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json");
-    let device = std::sync::Arc::new(GpuDevice::new_queued("a3 lattice render"));
-    let def: EffectGraphDef = serde_json::from_str(PRESET).expect("preset json");
-    let scene = SceneVm::from_def(&def).expect("a scene");
-    let mut runtime = PresetRuntime::from_json_str_with_device(PRESET, &PrimitiveRegistry::with_builtin(), device.clone(), W, H, GpuTextureFormat::Rgba16Float, None)
-        .expect("preset builds");
-    let picture = target(&device, "a3 picture");
-    for frame in 0..6 {
-        render(&device, &mut runtime, &picture, frame);
-    }
-    let mut lights = Vec::new();
-    let (_, camera) = runtime.write_rendered_view(&mut lights).expect("the scene reports its camera");
-    let mut domains = Vec::new();
-    runtime.write_fluid_domains_watched(&mut domains);
-    let (_, snapshot) = domains.first().expect("the solver reports its domain");
-    assert_eq!(snapshot.state, FluidDomainState::Ready);
-    let layout = snapshot.accepted_layout.expect("an accepted layout");
-
-    let row = gizmo_targets(&scene).find(|t| t.kind == GizmoTargetKind::FluidDomain).and_then(|t| t.row).expect("the domain's row");
-    let selected = crate::scene_gizmo::selected_targets(&scene, &[SceneSelection::Object(row)], &[]).pop().expect("the row's target");
-    assert_eq!(selected.kind, GizmoTargetKind::FluidDomain);
-    let view = GizmoView::new(camera, W, H);
-    let chrome = |selection| GizmoChrome { view, lights: &lights, domains: &domains, live_columns: &[], physics: &[], problems: &[], selection, mode: GizmoMode::Move, fade_handles: false };
-    let (mut bare, mut lines) = (Vec::new(), Vec::new());
-    let (none, domain) = (GizmoSelection::new(&scene, Vec::new()), GizmoSelection::new(&scene, vec![selected.clone()]));
-    compose_lines(&chrome(&none), &mut bare);
-    compose_lines(&chrome(&domain), &mut lines);
-    let handles = selected.handles.iter().filter(|h| h.mode == GizmoMode::Move).count();
-    let lattice = lines.len() - bare.len() - handles;
-    eprintln!("a3: cells {:?}, cell {}, lattice lines {lattice}", layout.cells, layout.cell_size);
-    assert!(lattice > 0, "the selected domain draws its cell grid");
-    let cell = layout.cell_size as f32;
-    for line in &lines[bare.len()..bare.len() + lattice] {
-        let along = (0..3).find(|&k| (line.a[k] - line.b[k]).abs() > 1e-6).expect("an axis line");
-        for k in (0..3).filter(|&k| k != along) {
-            let steps = (line.a[k] - layout.min[k]) / cell;
-            let on_wall = line.a[k] == layout.min[k] || line.a[k] == layout.min[k] + layout.size[k];
-            assert!(on_wall || (steps - steps.round()).abs() < 1e-3, "a line off the solver's cells");
-        }
-    }
-
-    let composite = target(&device, "a3 composite");
-    let mut enc = device.create_encoder("a3 chrome");
-    enc.copy_texture_to_texture(&picture, &composite, W, H, 1);
-    manifold_nodes_scene::node_graph::gizmo_pass::GizmoPass::default().draw(
-        &device, &mut enc, &composite, None, &camera, &lines, manifold_core::scene_surface::GizmoDrawMode::OnTop,
-    );
-    enc.commit_and_wait_completed();
-    let shown = readback(&device, &composite);
-    let plain = readback(&device, &picture);
-    let tinted = shown.iter().zip(&plain).filter(|(s, p)| s[0] - p[0] > 0.05 && s[1] - p[1] > 0.03).count();
-    eprintln!("a3: grid-tinted pixels {tinted}");
-    assert!(tinted > 500, "the grid shows over the picture ({tinted} px)");
-
-    let mut png = Vec::with_capacity((W * H * 4) as usize);
-    for px in &shown {
-        for (c, v) in px.iter().enumerate() {
-            let v = if c == 3 { 1.0 } else { (v / (1.0 + v)).clamp(0.0, 1.0).powf(1.0 / 2.2) };
-            png.push((v * 255.0).round() as u8);
-        }
-    }
-    image::save_buffer("/tmp/a3_domain_lattice_after.png", &png, W, H, image::ExtendedColorType::Rgba8).expect("write png");
-}
-
 /// The content thread of a project whose one layer is [`SCENE`], warmed up.
 fn scene_thread(w: u32, h: u32) -> (crate::content_thread::ContentThread, manifold_core::LayerId, crossbeam_channel::Sender<crate::content_command::ContentCommand>, crate::content_state::StateTx) {
     scene_thread_of(SCENE, w, h)
@@ -494,129 +340,3 @@ fn an_export_draws_the_scene_chrome_in_the_set_draw_mode() {
     thread.content_pipeline.end_export_gizmos(previous);
 }
 
-/// Mid-drag the handles and the object are one picture: the content thread
-/// builds the handle lines from the project it renders that frame, so the
-/// frame a move lands in already shows the handles on the moved object.
-/// Compared against the red panel's pixels in the frame itself, before the
-/// move and in the one frame after it; the handles moving by the object's
-/// shift is what a handle trailing the object by a frame would fail.
-#[test]
-fn a_frames_handles_sit_on_that_frames_object_while_it_moves() {
-    use crate::content_command::ContentCommand;
-    use manifold_core::scene_surface::GizmoDrawMode;
-    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
-    use manifold_ui::panels::scene_setup_panel::SceneSelection;
-    const SIZE: (u32, u32) = (480, 270);
-    let scene = SCENE.replace(r#""distance":{"type":"Float","value":70.0}"#, r#""distance":{"type":"Float","value":12.0}"#);
-    assert_ne!(scene, SCENE, "the camera moves in close");
-    let (mut thread, layer_id, _keep, state_tx) = scene_thread_of(&scene, SIZE.0, SIZE.1);
-    thread.handle_command(ContentCommand::SetPhysicsOverlay(Some(layer_id.clone())));
-    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(crate::gizmo_overlay::GizmoOverlay {
-        mode: GizmoDrawMode::OnTop,
-        scene_layer: Some(layer_id.clone()),
-        output: Some((layer_id.clone(), crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[SceneSelection::Object(panel_object())], &[], None))),
-        viewport: None,
-    })));
-    for _ in 0..3 {
-        thread.tick_frame(&state_tx);
-    }
-
-    // Where the panel is in the frame (the centre of its red pixels) and
-    // where the frame's handles sit (their origin through the frame's camera).
-    let measure = |thread: &crate::content_thread::ContentThread| -> ((f32, f32), (f32, f32)) {
-        let pipeline = &thread.content_pipeline;
-        let halves = readback_raw_halves(pipeline.native_device().expect("native device"), pipeline.export_output_texture(), SIZE.0, SIZE.1);
-        let channel = |bytes: &[u8]| f16::from_le_bytes([bytes[0], bytes[1]]).to_f32();
-        let (mut sum, mut count) = ((0.0f64, 0.0f64), 0u32);
-        for (i, px) in halves.chunks_exact(8).enumerate() {
-            let (r, g, b) = (channel(&px[0..2]), channel(&px[2..4]), channel(&px[4..6]));
-            if r > 0.3 && g < 0.5 * r && b < 0.5 * r {
-                sum.0 += f64::from(i as u32 % SIZE.0);
-                sum.1 += f64::from(i as u32 / SIZE.0);
-                count += 1;
-            }
-        }
-        assert!(count > 200, "the panel shows in the frame ({count} red px)");
-        let object = ((sum.0 / f64::from(count)) as f32, (sum.1 / f64::from(count)) as f32);
-        let (origin, camera) = pipeline.output_gizmo_probe().expect("the frame carries handles for the selected panel");
-        let handle = camera.project_to_pixel(origin, SIZE.0, SIZE.1).expect("the handles are on screen");
-        (object, (handle.px, handle.py))
-    };
-    let (object_before, handle_before) = measure(&thread);
-    eprintln!("handles: object {object_before:?} handles {handle_before:?}");
-    assert!((object_before.0 - handle_before.0).abs() < 8.0 && (object_before.1 - handle_before.1).abs() < 8.0,
-        "at rest the handles sit on the panel: object {object_before:?}, handles {handle_before:?}");
-
-    // One move, then exactly one frame. The same frame must show both.
-    let def: EffectGraphDef = serde_json::from_str(&scene).expect("scene json");
-    let moved = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-        manifold_core::GraphTarget::Generator(layer_id.clone()),
-        7,
-        "pos_x".to_string(),
-        manifold_core::effect_graph_def::SerializedParamValue::Float { value: 3.0 },
-        def,
-    );
-    thread.handle_command(ContentCommand::Execute(Box::new(moved)));
-    thread.tick_frame(&state_tx);
-    let (object_after, handle_after) = measure(&thread);
-    eprintln!("handles: object {object_after:?} handles {handle_after:?}");
-    let shift = |after: (f32, f32), before: (f32, f32)| (after.0 - before.0, after.1 - before.1);
-    let (object_shift, handle_shift) = (shift(object_after, object_before), shift(handle_after, handle_before));
-    assert!(object_shift.0.abs() > 20.0, "the panel moved in the frame ({object_shift:?})");
-    assert!((object_shift.0 - handle_shift.0).abs() < 4.0 && (object_shift.1 - handle_shift.1).abs() < 4.0,
-        "the handles moved with the panel in the same frame: object moved {object_shift:?}, handles {handle_shift:?}");
-    assert!((object_after.0 - handle_after.0).abs() < 8.0 && (object_after.1 - handle_after.1).abs() < 8.0,
-        "after the move the handles still sit on the panel: object {object_after:?}, handles {handle_after:?}");
-}
-
-/// Both viewport hosts get their handles from the frame they draw on: the
-/// navigated output preview sits its handles on the panel the output does,
-/// and the graph editor's viewport on the shape it picked.
-#[test]
-fn each_viewport_host_gets_handles_built_from_its_own_frame() {
-    use crate::content_command::ContentCommand;
-    use crate::scene_viewport::{SceneViewportNavigation, ViewportHost};
-    use manifold_core::{GraphTarget, NodeId};
-    use manifold_core::scene_surface::GizmoDrawMode;
-    use manifold_ui::panels::scene_setup_panel::SceneSelection;
-    let (mut thread, layer_id, _keep, state_tx) = scene_thread(160, 90);
-    let bridge = std::sync::Arc::new(crate::shared_texture::SharedTextureBridge::new(160, 90));
-    let textures = {
-        let device = thread.content_pipeline.native_device().expect("native device");
-        std::array::from_fn(|slot| unsafe { bridge.import_texture_native(device, slot) })
-    };
-    thread.content_pipeline.set_scene_viewport_textures(textures, bridge);
-    let target = GraphTarget::Generator(layer_id.clone());
-    let scene = SceneVm::from_def(&serde_json::from_str::<EffectGraphDef>(SCENE).expect("scene json")).expect("a scene");
-    let panel = gizmo_targets(&scene).find(|target| target.id.owner == ShapeOwner::Object(panel_object())).expect("the panel's target");
-    let overlay = |viewport| crate::gizmo_overlay::GizmoOverlay {
-        mode: GizmoDrawMode::OnTop,
-        scene_layer: Some(layer_id.clone()),
-        output: Some((layer_id.clone(), crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[SceneSelection::Object(panel_object())], &[], None))),
-        viewport: Some(viewport),
-    };
-    let request = |host| Some(SceneViewportNavigation::new(host, 160, 90).request(&target, &NodeId::new("scene"), None, None));
-    thread.handle_command(ContentCommand::SetPhysicsOverlay(Some(layer_id.clone())));
-
-    thread.handle_command(ContentCommand::SetSceneViewport(request(ViewportHost::OutputPreview)));
-    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(overlay((
-        ViewportHost::OutputPreview,
-        crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[SceneSelection::Object(panel_object())], &[], None),
-    )))));
-    for _ in 0..3 {
-        thread.tick_frame(&state_tx);
-    }
-    assert_eq!(thread.content_pipeline.viewport_gizmo_origin(), Some(panel.origin), "the navigated preview's handles sit on the panel");
-
-    thread.handle_command(ContentCommand::WatchGraphTarget(Some(target.clone())));
-    thread.handle_command(ContentCommand::SetGraphPreviewNode(Some(NodeId::new("scene"))));
-    thread.handle_command(ContentCommand::SetSceneViewport(request(ViewportHost::GraphEditor)));
-    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(overlay((
-        ViewportHost::GraphEditor,
-        crate::gizmo_overlay::GizmoRequest::ids(GizmoMode::Move, std::slice::from_ref(&panel.id), None),
-    )))));
-    for _ in 0..3 {
-        thread.tick_frame(&state_tx);
-    }
-    assert_eq!(thread.content_pipeline.viewport_gizmo_origin(), Some(panel.origin), "the editor viewport's handles sit on the shape it picked");
-}

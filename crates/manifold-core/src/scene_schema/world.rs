@@ -5,7 +5,9 @@
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
+use super::fields::{FieldControl, FieldRow, FieldValue, enabled, is_camera, is_on, on_off, parse_on, always, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
+use crate::scene_doc::ItemFields;
 
 const PHYSICS: Reach = Reach::Own("physics");
 const FOG: Reach = Reach::Own("fog");
@@ -60,4 +62,43 @@ pub static WORLD_ROWS: [PropertyRow; 29] = [
     ray_tracing("rt_gi"),
     row("rt_firefly_clamp", RENDER, RayTracing, Exposure::Internal("always on; it only guards against fireflies")),
     row("rt_denoise_feed", RENDER, RayTracing, Exposure::Internal("a debug view of the denoiser input")),
+];
+
+pub static WORLD_FIELDS: [FieldRow; 2] = [
+    FieldRow {
+        id: "fog",
+        label: "Fog",
+        section: Fog,
+        control: on_off(),
+        applies: always,
+        disabled: enabled,
+        read: |fields| is_on(matches!(fields, ItemFields::World(w) if w.fog)),
+        write: |fields, value| {
+            let on = parse_on("fog", value)?;
+            match fields {
+                ItemFields::World(w) => w.fog = on,
+                _ => return Err(wrong_value("fog", value)),
+            }
+            Ok(())
+        },
+    },
+    FieldRow {
+        id: "active_camera",
+        label: "Default Camera",
+        section: RenderMode,
+        control: FieldControl::Item { items: is_camera, none: "First camera" },
+        applies: always,
+        disabled: enabled,
+        read: |fields| match fields {
+            ItemFields::World(w) => FieldValue::Item(w.active_camera.clone()),
+            _ => FieldValue::Item(None),
+        },
+        write: |fields, value| match (fields, value) {
+            (ItemFields::World(w), FieldValue::Item(camera)) => {
+                w.active_camera = camera.clone();
+                Ok(())
+            }
+            _ => Err(wrong_value("active_camera", value)),
+        },
+    },
 ];

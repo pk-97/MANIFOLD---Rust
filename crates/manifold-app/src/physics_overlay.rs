@@ -210,10 +210,10 @@ impl PreviewGizmo {
                 let selection = GizmoSelection::new(&key.0, crate::scene_gizmo::selected_targets(&key.0, items, &self.picked));
                 let fade = effect_follows(project, &layer);
                 let objects = items.iter().filter(|_| !fade).filter_map(|item| match item {
-                    SceneSelection::Object(object) => Some(object),
+                    SceneSelection::Item(object) => Some(object),
                     _ => None,
                 });
-                crate::selection_outline::outline_slots(&key.0, objects, &mut self.outline);
+                key.0.outline_slots(objects, &mut self.outline);
                 (key, selection, fade)
             });
             if self.target.is_none() {
@@ -237,7 +237,7 @@ impl PreviewGizmo {
         let (Some(layer), Some(fit), Some(view)) = (layer, fit.filter(|_| inside), self.view()) else { return false };
         let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)) else { return false };
         let graph = GraphTarget::Generator(layer.clone());
-        let Some(scene) = crate::scene_gizmo::authored_def(&ctx.project, &graph).as_ref().and_then(SceneVm::from_def) else {
+        let Some(scene) = crate::scene_gizmo::scene_vm_of(&ctx.project, &graph) else {
             return false;
         };
         let items = ctx.ui.scene_setup_panel.live_selected();

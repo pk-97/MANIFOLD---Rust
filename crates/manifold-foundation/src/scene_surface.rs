@@ -65,16 +65,19 @@ pub enum ControlGroup {
     Light,
     Shadows,
     ShadowsAdvanced,
+    /// An Object's shape and its mesh file.
+    Shape,
     Transform,
     Material,
+    Look,
+    Modifier,
+    /// The physics setting and its rows (titled Physics).
     Body,
     Copies,
     Simulation,
     Whitewater,
     WhitewaterAdvanced,
     Source,
-    Look,
-    Modifier,
     Force,
     PhysicsWorld,
     Environment,
@@ -96,9 +99,10 @@ impl ControlGroup {
             Self::Light => "Light",
             Self::Shadows => "Shadows",
             Self::ShadowsAdvanced => "Advanced · Shadows",
+            Self::Shape => "Shape",
             Self::Transform => "Transform",
             Self::Material => "Material",
-            Self::Body => "Body",
+            Self::Body => "Physics",
             Self::Copies => "Copies",
             Self::Simulation => "Simulation",
             Self::Whitewater => "Whitewater",
@@ -237,78 +241,71 @@ impl Unit {
     }
 }
 
+/// The ten kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer
+/// plane is an Object; Copies is a section; an import is a Group whose Source
+/// is a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ObjectKind {
-    Mesh,
-    Plane,
-    Water,
-    Model,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind", content = "object")]
-pub enum SceneItemKind {
+pub enum ItemKind {
+    Group,
+    Object,
     Camera,
     Light,
-    Object(ObjectKind),
+    Material,
+    Water,
+    WaterSource,
+    Swarm,
     Force,
-    Physics,
     World,
-    /// A placed fluid source, listed under the water it feeds.
-    Source(SourceRole),
 }
 
-/// What a placed fluid source does to its water.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SourceRole {
-    /// The box of water the liquid starts with and resets to.
-    InitialFill,
-    Inflow,
-    Drain,
-    Collider,
+impl ItemKind {
+    pub const ALL: [ItemKind; 10] = [
+        ItemKind::Group,
+        ItemKind::Object,
+        ItemKind::Camera,
+        ItemKind::Light,
+        ItemKind::Material,
+        ItemKind::Water,
+        ItemKind::WaterSource,
+        ItemKind::Swarm,
+        ItemKind::Force,
+        ItemKind::World,
+    ];
+
+    /// The name a new item of this kind takes.
+    pub fn default_name(self) -> &'static str {
+        match self {
+            ItemKind::Group => "Group",
+            ItemKind::Object => "Object",
+            ItemKind::Camera => "Camera",
+            ItemKind::Light => "Light",
+            ItemKind::Material => "Material",
+            ItemKind::Water => "Water",
+            ItemKind::WaterSource => "Water Source",
+            ItemKind::Swarm => "Swarm",
+            ItemKind::Force => "Force",
+            ItemKind::World => "World",
+        }
+    }
 }
 
-/// Where a scene object row sits (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section
-/// 5.2 (One scene-object model)).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum SceneObjectRowKind {
-    /// An ordinary object, a placed fluid source, or an object inside a
-    /// group.
-    #[default]
-    Object,
-    /// Water's real object: it owns the simulation its looks draw.
-    PhysicsParent,
-    /// A group of objects and groups at any depth, placed by its own
-    /// transform: what it is set to applies to everything inside.
-    Group,
-    /// One of Water's looks (Foam, Spray, Bubbles, Physics View's dots): it
-    /// owns its material, Size and visibility only.
-    LookChild,
-}
-
-/// What a scene object row's commands accept. The tree, the header, the
-/// shortcuts and the commands read the same facts, so a shortcut cannot do
-/// what a hidden button would.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct SceneObjectCapabilities {
-    pub rename: bool,
-    /// The header's Hide action (a look child's own eye).
-    pub hide: bool,
-    pub delete: bool,
-    pub duplicate: bool,
-    /// The row has its own placement transform.
-    pub transform: bool,
-    pub enable_physics: bool,
-    /// The row can become a copy group (Make Copies): an ordinary
-    /// single-mesh object. False on Water, a look, a part of a compound
-    /// import and a row that already is a copy group.
-    pub make_copies: bool,
-    /// The row can feed a liquid as a fluid role.
-    pub fluid_role: bool,
-    /// The row takes mesh modifiers.
-    pub modifiers: bool,
+/// What a pick on a structural field row sets (SCENE_DOCUMENT_DESIGN.md
+/// section 8): the UI sends it, the app turns it into the field's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldPick {
+    /// A key of a closed set.
+    Choice(String),
+    /// One item, or none.
+    Item(Option<crate::ItemId>),
+    /// Add the item to the set, or take it out when it is in.
+    Toggle(crate::ItemId),
+    /// Every item: the set is emptied.
+    All,
+    /// A layer's output.
+    Layer(crate::LayerId),
+    /// A picked file.
+    File(String),
 }
 
 /// The most individually wired bodies one Physics World takes. Its `bodies`
@@ -332,22 +329,6 @@ pub const PHYSICS_WORLD_DEFAULT_BODIES: u32 = 64;
 
 /// A Physics World's `copy_groups` when none is saved.
 pub const PHYSICS_WORLD_DEFAULT_COPY_GROUPS: u32 = 1;
-
-/// What the one Add menu inserts into a scene through a template.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SceneTemplateKind {
-    Object,
-    Plane,
-    Light,
-    Water,
-    /// A swarm of GPU instances pushed by the scene's forces.
-    Swarm,
-    /// The placed fluid sources, inserted inside their water.
-    InitialFill,
-    Inflow,
-    Drain,
-    Collider,
-}
 
 /// A user's card pin on one control. `None` on the control follows its role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

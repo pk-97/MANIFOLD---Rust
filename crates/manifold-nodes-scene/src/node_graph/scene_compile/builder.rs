@@ -8,7 +8,8 @@ use manifold_core::effect_graph_def::{
     ParamSpecDef, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::scene_doc::{Item, SceneDoc, param_id};
-use manifold_core::scene_exposure::NodeParamMetadata;
+use manifold_foundation::ItemId;
+use manifold_core::param_lookup::NodeParamMetadata;
 use manifold_core::scene_schema::{self, CardFacts, Exposure, PropertyRow, Reach};
 use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
 
@@ -31,9 +32,15 @@ pub(crate) struct Builder<'d> {
     pub(crate) lenses: Vec<u32>,
     /// The draws and lights the render node takes, in tree order.
     pub(crate) objects: Vec<u32>,
+    /// The item each entry of `objects` draws.
+    pub(crate) object_items: Vec<ItemId>,
     pub(crate) lights: Vec<u32>,
-    /// Whether the camera emitter wired the render's output chain.
-    pub(crate) output_wired: bool,
+    /// The node whose `out` is the finished image: the cinematic tail the
+    /// camera emitter built, or what the Environment put after it. `None`
+    /// sends the render straight out.
+    pub(crate) tail: Option<u32>,
+    /// The active camera's lens, for what draws behind the scene.
+    pub(crate) active_lens: Option<u32>,
 }
 
 impl<'d> Builder<'d> {
@@ -49,8 +56,10 @@ impl<'d> Builder<'d> {
             meta: BTreeMap::new(),
             lenses: Vec::new(),
             objects: Vec::new(),
+            object_items: Vec::new(),
             lights: Vec::new(),
-            output_wired: false,
+            tail: None,
+            active_lens: None,
         };
         b.add(SCENE, "input", "system.generator_input");
         b.add(SCENE, "render", "node.render_scene");
@@ -231,9 +240,10 @@ impl<'d> Builder<'d> {
         for (k, light) in lights.into_iter().enumerate() {
             self.wire(light, "out", render, &format!("light_{k}"));
         }
-        if !self.output_wired {
-            let output = self.scene("output");
-            self.wire(render, "color", output, "in");
+        let output = self.scene("output");
+        match self.tail {
+            Some(tail) => self.wire(tail, "out", output, "in"),
+            None => self.wire(render, "color", output, "in"),
         }
         let def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION_WITH_METADATA,
@@ -270,16 +280,22 @@ pub(crate) fn card_spec(
     section: ControlGroup,
     facts: &CardFacts,
 ) -> ParamSpecDef {
-    let widen = !meta.whole_numbers && !meta.is_toggle && !meta.is_trigger;
-    let (min, max) = if widen { (meta.min.min(default), meta.max.max(default)) } else { (meta.min, meta.max) };
+    let toggle = meta.is_toggle || facts.toggle;
+    let widen = !meta.whole_numbers && !toggle && !meta.is_trigger && facts.range.is_none();
+    let (min, max) = match facts.range {
+        Some(range) => range,
+        None if facts.toggle => (0.0, 1.0),
+        None if widen => (meta.min.min(default), meta.max.max(default)),
+        None => (meta.min, meta.max),
+    };
     ParamSpecDef {
         id,
         name: name.to_owned(),
         min,
         max,
         default_value: default,
-        whole_numbers: meta.whole_numbers,
-        is_toggle: meta.is_toggle,
+        whole_numbers: meta.whole_numbers || facts.toggle,
+        is_toggle: toggle,
         is_trigger: meta.is_trigger,
         value_labels: meta.value_labels.clone(),
         is_angle: meta.is_angle,

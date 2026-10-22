@@ -339,7 +339,7 @@ Stated plainly, per generator, so nobody re-derives it:
 | Stage | Proof |
 |---|---|
 | 1 (Shatter, forces) | `physics_imported_flower_shatter_release_preserves_authored_row_and_materials` (`manifold-app` `renderer_contracts`, `gpu_proofs/physics_solids.rs:26`); the one `liquid_conformance` member that prepares a force modifier (section 1.3 ⚠) |
-| 2 (fragments) | one `rt_dynamic_catalog` member that prepares a fragment preset ⚠ VERIFY-AT-IMPL: `rg -n "fn .*fragment\|SurfacePeel\|OrderedRecon" crates/manifold-app/tests/renderer_contracts/gpu_proofs/rt_dynamic_catalog.rs` |
+| 2 (fragments) | one `rt_dynamic_catalog` member that prepares a fragment preset ⚠ VERIFY-AT-IMPL: `rg -n "fn .*fragment\|SurfacePeel\|OrderedRecon" rt_dynamic_catalog.rs` |
 | 3 (frames) | none — frame capture is CPU; `expand_frames.rs` (5) + snapshots are the oracle. `Demo: none — L1`. |
 | 4 (Math View) | `manifold-nodes/tests/scene_modifier_fragment_masks.rs` (CPU) + snapshots; GPU: the Math View preset thumbnail through `fluid_capture OUT_DIR --preset` is an artifact Peter looks at (L2) |
 

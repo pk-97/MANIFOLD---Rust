@@ -12,7 +12,6 @@ mod gltf_manifest_fetch_coverage;
 mod mosh_presets;
 mod param_wrap_smoke;
 mod photoscan_modifier_plans;
-mod physics_scene;
 mod project_preset_overlay;
 mod scene_document;
 mod scene_force_presets;

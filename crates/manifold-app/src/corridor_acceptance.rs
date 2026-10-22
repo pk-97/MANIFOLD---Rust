@@ -791,6 +791,7 @@ fn spike_corridor_def() -> EffectGraphDef {
             string_bindings: Vec::new(),
             scene_modifier: None,
             scene_bounds: None,
+            shape: None,
         }),
         scene_modifiers: Vec::new(),
         nodes: vec![

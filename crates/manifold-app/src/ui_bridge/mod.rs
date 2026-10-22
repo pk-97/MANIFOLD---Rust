@@ -12,7 +12,6 @@ mod editing;
 mod inspector;
 mod layer;
 mod marker;
-mod material_looks;
 mod material_colour;
 pub(crate) mod project;
 mod projection;
@@ -43,7 +42,6 @@ pub(crate) use state_sync::SceneImpulseToast;
 /// same way the Scene Setup panel's other dispatch arms do.
 pub(crate) use project::generator_catalog_default;
 
-use crate::content_command::ContentCommand;
 use manifold_core::LayerId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
@@ -211,8 +209,6 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             ctx.ui,
             ctx.selection,
             ctx.active_layer,
-            ctx.user_prefs,
-            ctx.dialogs,
         ),
         PanelAction::Browser(a) => dispatch::browser::dispatch_browser(a, ctx),
         PanelAction::Clip(a) => dispatch::clip::dispatch_clip(a, ctx),
@@ -245,22 +241,13 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::BeginColourTextInput { .. }
             | RootAction::OpenColourMenu { .. }
             | RootAction::BeginDriverPeriodTextInput { .. }
-            | RootAction::SceneSetupBeginNumericTextInput { .. }
-            | RootAction::SceneSetupEnumClicked { .. }
             | RootAction::ParamEnumDropdown { .. }
             | RootAction::OpenRtQualityTierDropdown { .. }
             | RootAction::OpenRtQualityResDropdown { .. }
             | RootAction::OpenRtQualityDenoiseDropdown { .. }
-            | RootAction::SceneSetupAddModifierClicked(..)
-            | RootAction::SceneSetupAddClicked(..)
-            | RootAction::SceneSetupFluidRoleClicked { .. }
-            | RootAction::SceneSetupFluidRoleTargetClicked { .. }
-            | RootAction::SceneSetupFluidDomainClicked { .. }
             | RootAction::SceneModifierObjectsClicked(..)
             | RootAction::SceneModifierCardRightClicked(..)
             | RootAction::PreviewSceneModifierObject(..)
-            | RootAction::SceneSetupSkinSourceClicked { .. }
-            | RootAction::SceneSetupSkinTargetMapClicked { .. }
             | RootAction::SceneSetupActionMenuClicked { .. }
             | RootAction::AudioSendGainBeginTextInput(..)
             | RootAction::CopyOscAddress(_)
@@ -268,8 +255,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::OpenGraphTarget(_)
             | RootAction::OpenCardMapping { .. }
             | RootAction::OpenGeneratorGraphEditor
-            | RootAction::SceneSetupOpenGraphEditor(_)
-            | RootAction::SceneSetupCopyViewportCamera(_)
+            | RootAction::SceneSetupCopyViewportCamera(..)
             | RootAction::EffectMappingRangeSnapshot { .. }
             | RootAction::EffectMappingRangeChanged { .. }
             | RootAction::EffectMappingRangeCommit { .. }
@@ -283,20 +269,30 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::EffectMappingCancel { .. }
             | RootAction::EffectMappingGotoNode { .. }
             | RootAction::AudioSendLabelClicked(_)
-            | RootAction::SceneSetupRenameObjectClicked(..)
-            | RootAction::SceneSetupRenameLightClicked(..)
+            | RootAction::SceneRenameClicked(..)
             | RootAction::AudioSendClicked(_)
             | RootAction::AudioDrawerClick(..)
             | RootAction::ClipTriggerDrawerClick(..) => DispatchResult::handled(),
             // The panel already updated its UI-local selection; its selection
             // version rebuilds Properties this frame.
             RootAction::SceneItemRightClicked => DispatchResult::handled(),
+            // The blocking native picker, as every other file field uses; the
+            // picked path is one `SceneFieldSet`.
+            RootAction::SceneFieldFileClicked { layer_id, item, field, .. } => {
+                let picked = crate::file_dialogs::pick_file(crate::file_dialogs::DialogAction::NodeFile, ctx.dialogs, ctx.user_prefs);
+                match picked {
+                    Some(path) => {
+                        let pick = manifold_core::scene_surface::FieldPick::File(path.to_string_lossy().into_owned());
+                        let built = crate::scene_edit::set_field(&ctx.project, layer_id, item, field, &pick);
+                        project::send_scene_edit(ctx.content_tx, layer_id, built)
+                    }
+                    None => DispatchResult::handled(),
+                }
+            }
             RootAction::SceneItemMove(delta) => {
                 if let Some(item) = ctx.ui.scene_setup_panel.selected_scene_item() {
-                    ContentCommand::send(ctx.content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::Move {
-                        layer: item.layer_id, item: item.item, delta: *delta,
-                        kind: if item.is_light { crate::scene_item_transfer::SceneItemKind::Light } else { crate::scene_item_transfer::SceneItemKind::Object },
-                    }));
+                    let built = crate::scene_edit::nudge(&ctx.project, &item.layer_id, &item.item, *delta);
+                    return project::send_scene_edit(ctx.content_tx, &item.layer_id, built);
                 }
                 DispatchResult::handled()
             }
@@ -1011,23 +1007,8 @@ mod command_site_plan_tests {
         );
         let layer_id = project.timeline.layers[idx].layer_id.clone();
         let before = serde_json::to_value(&project).unwrap();
-        for action in [
-            ProjectAction::SceneSetupSkinSourceSet {
-                layer_id: layer_id.clone(),
-                scope_path: Vec::new(),
-                scene_object_id: 1,
-                source_node_id: None,
-                target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::Emissive,
-                source: None,
-            },
-            ProjectAction::SceneSetupSkinTargetMapSet {
-                layer_id: layer_id.clone(),
-                scope_path: Vec::new(),
-                scene_object_id: 1,
-                source_node_id: None,
-                target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::BaseColor,
-            },
-        ] {
+        {
+            let action = ProjectAction::SceneRemove(layer_id.clone(), manifold_core::scene_doc::ItemId::new("cube"));
             let (_, stamps, sent) = dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
             assert_eq!(serde_json::to_value(&project).unwrap(), before, "{action:?}: UI snapshot untouched");
             assert!(plan_after(&stamps).projections == Default::default(), "{action:?}: nothing to project yet");

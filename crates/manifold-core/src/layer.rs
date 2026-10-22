@@ -770,8 +770,12 @@ impl Layer {
         let Some(gp) = self.gen_params.as_mut() else {
             return;
         };
+        // The override and the scene document are shape-specific to the old
+        // type; a Scene type installs its base scene after they are gone.
+        let had_graph = gp.graph.take().is_some();
+        gp.scene = None;
         gp.change_type(new_type.clone());
-        if gp.graph.take().is_some() {
+        if had_graph {
             // Dropping the override swaps in a different def — structural.
             gp.graph_structure_version = gp.graph_structure_version.wrapping_add(1);
             gp.graph_version = gp.graph_version.wrapping_add(1);

@@ -884,6 +884,7 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
     body
 }
 
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 /// The five scene objects the Water family declares: water, foam, spray,
 /// bubbles, then Physics View's dots.
 fn family_group_outputs() -> Vec<manifold_core::effect_graph_def::InterfacePortDef> {
@@ -895,8 +896,10 @@ fn family_group_outputs() -> Vec<manifold_core::effect_graph_def::InterfacePortD
 }
 
 /// The water family group's stable node id in the bundled presets.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 const FAMILY_NODE_ID: &str = "water_family";
 
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 /// The family `body` wrapped as one group node: its interface declares every
 /// object output, so a host routes them by port type.
 fn wrap_family(body: EffectGraphDef, role_input: bool) -> EffectGraphNode {
@@ -921,65 +924,6 @@ fn wrap_family(body: EffectGraphDef, role_input: bool) -> EffectGraphNode {
         tint: None,
     }));
     group
-}
-
-/// What Add Water inserts: the GPU FLIP family as one group plus the card
-/// rows of its own nodes. Handles carry the template's name token: a node
-/// handled `""` takes the bare numbered name ("Water 1"), any other suffix
-/// follows it.
-pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplate {
-    use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
-    use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate};
-    const SHARED_WORLD_CONTROLS: [&str; 5] = ["gravity_x", "gravity", "gravity_z", "speed", "reset"];
-    let mut body = gpu_flip_liquid_body();
-    let mut metadata = body.preset_metadata.take().expect("family recipe metadata");
-    for node in &mut body.nodes {
-        node.handle = node.handle.take().map(|suffix| {
-            if suffix.is_empty() { HANDLE_TOKEN.to_owned() } else { format!("{HANDLE_TOKEN} {suffix}") }
-        });
-    }
-    let stable = |name: &str| find_node(&body.nodes, name).unwrap_or_else(|| panic!("the family has no {name}")).clone();
-    for spec in &mut metadata.params {
-        spec.section = Some(match spec.section.as_deref() {
-            None | Some("Water") => HANDLE_TOKEN.to_owned(),
-            Some(section) => format!("{HANDLE_TOKEN} - {section}"),
-        });
-    }
-    let stamped = |type_id: &str, keep: &dyn Fn(&str) -> bool| -> Vec<_> {
-        manifold_core::param_lookup::stamped_node_params(type_id).into_iter().filter(|meta| keep(&meta.name)).collect()
-    };
-    let domain = stable("domain");
-    let mut rows: Vec<(EffectGraphNode, Option<&str>, Vec<_>)> = vec![
-        (
-            domain.clone(),
-            Some("Simulation"),
-            stamped(&domain.type_id, &|name| {
-                !SHARED_WORLD_CONTROLS.contains(&name) && !matches!(name, "emission" | "inflow_speed")
-            }),
-        ),
-        (
-            stable("initial_column"),
-            Some("Initial Fill"),
-            stamped("node.transform_3d", &|name| {
-                matches!(name, "pos_x" | "pos_y" | "pos_z" | "rot_x" | "rot_y" | "rot_z" | "scale_x" | "scale_y" | "scale_z")
-            }),
-        ),
-        (stable("water_material"), Some("Material"), stamped("node.pbr_material", &|_| true)),
-        (stable("water_object"), None, stamped("node.scene_object", &|_| true)),
-        (stable("whitewater"), Some("Whitewater"), stamped("node.whitewater_step", &|_| true)),
-    ];
-    for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
-        rows.push((stable(&format!("{kind}_material")), Some(section), stamped("node.pbr_material", &|_| true)));
-    }
-    for (node, section, descriptors) in rows {
-        let label = match section {
-            Some(section) => format!("{HANDLE_TOKEN} - {section}"),
-            None => HANDLE_TOKEN.to_owned(),
-        };
-        stamp_scene_node_exposures_into(&mut metadata.params, &mut metadata.bindings, node.id, &node.node_id, &label, &descriptors, &node.params);
-    }
-    metadata.display_name = "Water".into();
-    SceneTemplate { group: wrap_family(body, false), metadata, physics: Default::default() }
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]

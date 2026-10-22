@@ -262,7 +262,7 @@ pub(crate) fn apply_ui_frame_invalidations(
     let rebuilt = rebuild_regions(ui_root, cache, regions);
     // Nodes that moved in place slid under a still cursor; no rebuild
     // cleared their hover, so resolve it again where the pointer is.
-    let cards_moved = ui_root.inspector.take_moved_in_place() | ui_root.scene_setup_panel.take_moved_in_place();
+    let cards_moved = ui_root.inspector.take_moved_in_place();
     if inspector_scrolled || scrolled || moved || cards_moved {
         ui_root.input.refresh_hover(&mut ui_root.tree);
     }

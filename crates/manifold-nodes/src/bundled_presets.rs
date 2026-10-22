@@ -32,7 +32,6 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 
-use manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures;
 use manifold_node_engine::load::preset_loader::{
     EFFECT_CATALOG, GENERATOR_CATALOG, PresetCatalog, SCENE_MODIFIER_CATALOG,
     catalog_generation,
@@ -74,16 +73,15 @@ fn catalog_for_kind(kind: PresetKind) -> &'static ArcSwap<PresetCatalog> {
 }
 
 /// Parse one catalog entry and apply the migration policy for its kind.
-/// Effects and generators carry scene exposures; scene modifier recipes use
-/// their own vocabulary and deliberately skip that migration.
+/// Effects and generators get their camera plumbing prepared; scene modifier
+/// recipes use their own vocabulary and skip it.
 fn parse_bundled_preset(kind: PresetKind, id: &str, json: &str) -> EffectGraphDef {
     let mut def: EffectGraphDef = serde_json::from_str(json)
         .unwrap_or_else(|e| panic!("bundled {kind:?} preset {id}: parse failed: {e}"));
-    if !kind.is_scene_modifier() {
-        if let Err(error) = manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def) {
-            log::warn!("Scene camera setup for {id}: {error}");
-        }
-        migrate_scene_exposures(&mut def);
+    if !kind.is_scene_modifier()
+        && let Err(error) = manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def)
+    {
+        log::warn!("Scene camera setup for {id}: {error}");
     }
     def
 }
@@ -162,8 +160,7 @@ pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::Pre
     loaded_preset_metadata(PresetKind::Effect)
 }
 
-/// Loader for the dedicated scene-modifier metadata inventory bucket. Raw
-/// modifier recipes deliberately skip [`migrate_scene_exposures`].
+/// Loader for the dedicated scene-modifier metadata inventory bucket.
 pub fn loaded_scene_modifier_presets_from_bundled(
 ) -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
     loaded_preset_metadata(PresetKind::SceneModifier)
@@ -264,12 +261,17 @@ mod tests {
                 }
             }
         }
+        fn has_render_scene(nodes: &[manifold_core::effect_graph_def::EffectGraphNode]) -> bool {
+            nodes.iter().any(|node| {
+                node.type_id == "node.render_scene" || node.group.as_deref().is_some_and(|group| has_render_scene(&group.nodes))
+            })
+        }
         let mut scenes = 0;
         let mut faults = Vec::new();
         for kind in [PresetKind::Generator, PresetKind::SceneModifier] {
             for type_id in bundled_preset_type_ids(kind) {
                 let def = bundled_preset_def(&type_id).expect("registered preset has a parsed def");
-                if kind == PresetKind::Generator && manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).is_none() {
+                if kind == PresetKind::Generator && !has_render_scene(&def.nodes) {
                     continue;
                 }
                 scenes += 1;
@@ -355,121 +357,6 @@ mod tests {
         let unknown = PresetTypeId::new("DefinitelyNotARealEffect");
         assert!(bundled_preset_def(&unknown).is_none());
         assert!(bundled_preset_json(&unknown).is_none());
-    }
-
-    /// BUG-7k1z regression: `bundled_preset_def` must carry scene-vocabulary
-    /// bindings (rt_gi et al.) stamped by `migrate_scene_exposures`
-    /// at cache-build time. The runtime def resolution path in
-    /// generators/registry.rs must go through the migrated cache, never raw
-    /// catalog JSON, or the live flip of a load-time-stamped exposure is inert
-    /// (the binding list stays empty and `apply_bindings` falls back to the
-    /// binding default forever).
-    ///
-    /// The real-world case BUG-7k1z caught is a project-overlay preset — a
-    /// generator embedded in a `.manifold` save whose JSON predates the
-    /// scene-exposure stamp. The def cache includes overlay entries
-    /// (preset_loader merges them into the catalog at `apply_reload` time) and
-    /// invalidates on generation bump, so a project-overlay preset that lacks
-    /// `presetMetadata` in its raw JSON gets the same migration as any bundled
-    /// one when the def cache rebuilds.
-    ///
-    /// This test asserts the end-to-end path on a bundled scene generator
-    /// (Scene, whose raw JSON already carries the stamped metadata from
-    /// authoring time — the migration is idempotent) and separately proves the
-    /// migration itself on a synthetic pre-stamp shape (a lone render_scene
-    /// node with no preset_metadata). Together they prove the cache path works
-    /// and the stamping logic is correct, which covers the project-overlay
-    /// case by construction: the overlay JSON is parsed through the same
-    /// `rebuild_def_cache` pipeline as stock JSON.
-    #[test]
-    fn bundled_preset_def_carries_migrated_scene_bindings() {
-        let id = PresetTypeId::new("Scene");
-
-        // Migrated cache carries the stamped bindings.
-        let migrated = bundled_preset_def(&id).expect("Scene must be a bundled generator");
-        let meta = migrated
-            .preset_metadata
-            .as_ref()
-            .expect("Scene def cache entry must have preset_metadata");
-        let binding_names: Vec<&str> = meta
-            .bindings
-            .iter()
-            .filter_map(|b| match &b.target {
-                manifold_core::effect_graph_def::BindingTarget::Node { param, .. } => {
-                    Some(param.as_str())
-                }
-                _ => None,
-            })
-            .collect();
-        assert!(
-            binding_names.contains(&"rt_gi"),
-            "bundled_preset_def(Scene) must carry rt_gi binding; \
-             migrate_scene_exposures stamps it at cache-build time. \
-             Got: {binding_names:?}"
-        );
-        assert!(
-            binding_names.contains(&"rt_enabled"),
-            "bundled_preset_def(Scene) must carry rt_enabled binding; \
-             Got: {binding_names:?}"
-        );
-
-        // Prove the migration itself stamps the bindings on a pre-stamp shape.
-        // This covers the project-overlay case where the embedded JSON predates
-        // the stamp — the same `migrate_scene_exposures` call in
-        // `rebuild_def_cache` processes both stock and overlay JSON identically.
-        use std::collections::BTreeMap;
-        use manifold_core::NodeId;
-        let pre_stamp = EffectGraphDef {
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            scene_modifiers: Vec::new(),
-            nodes: vec![manifold_core::effect_graph_def::EffectGraphNode {
-                id: 1,
-                node_id: NodeId::new("render"),
-                type_id: "node.render_scene".to_string(),
-                handle: Some("Render".to_string()),
-                params: BTreeMap::new(),
-                exposed_params: Default::default(),
-                editor_pos: None,
-                wgsl_source: None,
-                title: None,
-                output_formats: BTreeMap::new(),
-                output_canvas_scales: BTreeMap::new(),
-                group: None,
-            }],
-            wires: vec![],
-        };
-        let mut stamped = pre_stamp.clone();
-        assert!(
-            migrate_scene_exposures(&mut stamped),
-            "migration must stamp on a pre-stamp render_scene shape"
-        );
-        let stamped_meta = stamped
-            .preset_metadata
-            .as_ref()
-            .expect("migration must produce preset_metadata");
-        let stamped_bindings: Vec<&str> = stamped_meta
-            .bindings
-            .iter()
-            .filter_map(|b| match &b.target {
-                manifold_core::effect_graph_def::BindingTarget::Node { param, .. } => {
-                    Some(param.as_str())
-                }
-                _ => None,
-            })
-            .collect();
-        assert!(
-            stamped_bindings.contains(&"rt_gi"),
-            "migrate_scene_exposures must stamp rt_gi on render_scene; \
-             Got: {stamped_bindings:?}"
-        );
-        assert!(
-            !stamped_bindings.contains(&"rt_denoise_feed"),
-            "RT Denoise Feed has the Hidden role and is never stamped; \
-             Got: {stamped_bindings:?}"
-        );
     }
 
     /// Splicing a bundled preset into a chain via

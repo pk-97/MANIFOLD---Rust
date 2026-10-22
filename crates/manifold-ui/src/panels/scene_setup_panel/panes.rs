@@ -97,26 +97,24 @@ impl ScenePanel {
         let mut settings_top = body.y;
         let mut selected = None;
         if let SceneSetupState::Live(vm) = &state {
-            let tree_top = self.build_tree_header(tree, inner_x, inner_w, body.y, vm);
+            let tree_top = self.build_tree_header(tree, inner_x, inner_w, body.y);
             let sel = self.resolve_selection(vm);
             self.build_tree_pane(tree, body, tree_top, vm, &sel);
             settings_top = self.build_split_strip(tree, outer, body);
             selected = Some(sel);
         }
         let viewport = Rect::new(body.x, settings_top, body.width, (body.y + body.height - settings_top).max(0.0));
-        self.object_modifier_bounds = viewport;
         let start = self.begin_pane(tree, Pane::Settings, viewport);
         let top = if self.panes.two { settings_top + ROW_GAP } else { settings_top };
         let end = match (&state, selected) {
             (SceneSetupState::NoSelection(sentence), _) => self.build_sentence(tree, inner_x, inner_w, top, sentence),
-            (SceneSetupState::NoGenerator { .. }, _) => self.build_no_generator(tree, inner_x, inner_w, top),
             (SceneSetupState::NoScene { .. }, _) => self.build_no_scene(tree, inner_x, inner_w, top),
             (SceneSetupState::Live(vm), Some(sel)) => self.build_properties(tree, inner_x, inner_w, top, vm, sel),
             (SceneSetupState::Live(_), None) => top,
         };
         self.end_pane(tree, Pane::Settings, start, end - settings_top + PAD);
         if self.reveal_properties
-            && let Some(&(_, node, _)) = self.object_name_ids.first()
+            && let Some(&(_, node, _)) = self.header_buttons.names.first()
         {
             let bounds = tree.get_bounds(node);
             self.scroll.reveal_rect(tree, bounds);
@@ -126,19 +124,7 @@ impl ScenePanel {
     }
 
     /// The rows above the tree that never scroll. Returns the tree's top.
-    fn build_tree_header(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
-        if vm.multiple_scenes {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                "This layer has more than one scene; showing the first",
-                label_style(),
-            );
-            cy += ROW_H + ROW_GAP;
-        }
+    fn build_tree_header(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, cy: f32) -> f32 {
         let render_mode = self.render_mode_label();
         let buttons = 2 + usize::from(render_mode.is_some());
         let w = (inner_w - GAP * (buttons - 1) as f32) / buttons as f32;
@@ -349,7 +335,3 @@ impl ScenePanel {
         visible && (self.panes.drag.is_some() || (self.panes.strip.contains(pos) && shown.contains(pos)))
     }
 }
-
-#[cfg(test)]
-#[path = "panes_tests.rs"]
-mod tests;

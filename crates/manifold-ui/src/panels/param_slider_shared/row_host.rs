@@ -1584,6 +1584,9 @@ impl RowHost {
             RowRole::ToggleBtn => {
                 use crate::param_surface::RowKind;
                 let Some(info) = rows.get(row) else { return Vec::new() };
+                if matches!(info.affordance, Some(crate::param_surface::RowAffordance::Field { .. })) {
+                    return field_row_action(&target, info, node);
+                }
                 let pid = info.id.clone();
                 match self.toggle_ids[row].as_ref().map(|ids| ids.kind) {
                     Some(RowKind::Trigger) => vec![PanelAction::Params(ParamsAction::ParamFire(target, pid))],

@@ -242,8 +242,6 @@ pub struct ContentThread {
     /// scene modifiers, retained until a newer update.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
     pub modifier_selection_update: Option<Arc<crate::content_state::ModifierSelectionUpdate>>,
-    pub object_modifier_selection_update:
-        Option<Arc<crate::content_state::ObjectModifierSelectionUpdate>>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
@@ -1536,7 +1534,6 @@ impl ContentThread {
             scene_impulses,
             edit_selection_update: self.edit_selection_update.clone(),
             modifier_selection_update: self.modifier_selection_update.clone(),
-            object_modifier_selection_update: self.object_modifier_selection_update.clone(),
             ableton_session,
             ableton_connected: self.ableton_bridge.is_connected(),
             ableton_transport_enabled: self.ableton_bridge.is_transport_enabled(),

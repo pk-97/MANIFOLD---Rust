@@ -12,6 +12,13 @@ impl Project {
         )
     }
 
+    /// The scene document of `layer`, when it is a scene layer
+    /// (SCENE_DOCUMENT_DESIGN.md section 7.1): the one seam every scene host
+    /// reads the scene through.
+    pub fn scene_of(&self, layer: &crate::LayerId) -> Option<&crate::scene_doc::SceneDoc> {
+        self.timeline.find_layer_by_id(layer.as_str())?.1.gen_params()?.scene.as_ref()
+    }
+
     /// Whether any layer has an enabled [`crate::audio_trigger::LayerClipTrigger`]
     /// — the P2 replacement for `AudioSend::has_active_triggers()`, which now
     /// only ever reads drained (always-empty) legacy storage.

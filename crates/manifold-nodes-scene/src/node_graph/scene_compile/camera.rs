@@ -59,7 +59,6 @@ fn wire_active(b: &mut Builder<'_>, camera: &ItemId) {
     let owner = camera.as_str();
     let lens = b.id(owner, "lens").expect("camera lens");
     let render = b.scene("render");
-    let output = b.scene("output");
     b.wire(lens, "out", render, "camera");
     let tail = build_cinematic_tail(&mut || b.fresh(), 1.0, false);
     for mut node in tail.nodes {
@@ -79,8 +78,8 @@ fn wire_active(b: &mut Builder<'_>, camera: &ItemId) {
     b.wire(dof, "out", blur, "in");
     b.wire(render, "velocity", blur, "velocity");
     b.wire(lens, "out", blur, "camera");
-    b.wire(blur, "out", output, "in");
-    b.output_wired = true;
+    b.tail = Some(blur);
+    b.active_lens = Some(lens);
 }
 
 /// Give the tail's nodes ids from the camera, inside its group too, so two

@@ -262,15 +262,6 @@ impl SceneGraphTransaction {
         self.last_error.as_ref()
     }
 
-    /// What the user reads when the last execute or undo was refused.
-    pub(crate) fn rejection_reason(&self) -> Option<&'static str> {
-        match self.error()? {
-            SceneGraphRejection::MissingOwner => Some("Scene owner is no longer present"),
-            SceneGraphRejection::PresetTypeChanged => Some("Scene type changed while preparing this edit"),
-            SceneGraphRejection::StaleOwner => Some("Scene graph changed while preparing this edit"),
-            SceneGraphRejection::Noop => None,
-        }
-    }
 }
 #[cfg(test)]
 mod tests {

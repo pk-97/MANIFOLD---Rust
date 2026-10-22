@@ -28,7 +28,7 @@ impl ViewportSelection {
 
     /// The outline slots of every selected scene object.
     pub fn outline(&self, out: &mut Vec<u32>) {
-        let objects = self.selection.selected.iter().filter_map(|target| crate::scene_gizmo::selected_object(&self.scene, target));
-        crate::selection_outline::outline_slots(&self.scene, objects, out);
+        let objects = self.selection.selected.iter().filter_map(|target| crate::scene_gizmo::selected_object(target));
+        self.scene.outline_slots(objects, out);
     }
 }

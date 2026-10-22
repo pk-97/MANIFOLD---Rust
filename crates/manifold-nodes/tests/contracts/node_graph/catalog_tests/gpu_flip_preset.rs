@@ -607,21 +607,6 @@ use serde_json::{Value, json};
         }
     }
 
-    #[test]
-    fn gpu_flip_shipped_scene_rows_keep_authored_names() {
-        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(SHIPPED_PRESET)).unwrap();
-        let vm = SceneVm::from_def(def.as_ref()).expect("shipped scene resolves");
-        let names: Vec<_> = vm.objects.iter().filter_map(|object| match object {
-            SceneObjectVm::Known(row) => Some(row.name.as_str()),
-            _ => None,
-        }).collect();
-        for name in ["Water", "Foam", "Spray", "Bubbles", "Obstacle"] {
-            assert_eq!(names.iter().filter(|&&found| found == name).count(), 1, "{name}: {names:?}");
-        }
-        assert!(!names.contains(&""), "scene rows must have authored names");
-    }
-
     /// The shipped `WaterDamBreakGpuFlip.json` is the builder's Dam Break at 64,
     /// so the tests that build it run what ships. `UPDATE_GPU_FLIP_PRESET=1`
     /// rewrites it from the builder.

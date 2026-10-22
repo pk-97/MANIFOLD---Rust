@@ -26,7 +26,7 @@ use crate::app::SelectionState;
 use crate::content_command::ContentCommand;
 use crate::text_input::{
     AnchorRect, AudioSendGainParamCtx, DriverFreePeriodCtx, InspectorParamCtx, MaterialColourCtx,
-    SceneNumericParamCtx, TextInputField, TextInputState, TextSessionOwner,
+    TextInputField, TextInputState, TextSessionOwner,
 };
 use crate::ui_root::{OverlayId, UIRoot};
 
@@ -138,18 +138,11 @@ pub(crate) fn begin_for_action(
     action: &PanelAction,
 ) -> bool {
     match action {
-        PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(layer_id, object, name)) => {
-            if let Some(r) = ui_root.scene_setup_panel.object_name_rect(&ui_root.tree, object) {
+        PanelAction::Root(RootAction::SceneRenameClicked(layer_id, item, name)) => {
+            if let Some(r) = ui_root.scene_setup_panel.item_name_rect(&ui_root.tree, item) {
                 text_input.scene_object_layer_id = Some(layer_id.clone());
-                text_input.scene_item_ref = Some(object.clone());
-                text_input.begin(TextInputField::SceneObjectRename, name, anchor_of(r), 11.0);
-            }
-        }
-        PanelAction::Root(RootAction::SceneSetupRenameLightClicked(layer_id, light, name)) => {
-            if let Some(r) = ui_root.scene_setup_panel.light_name_rect(&ui_root.tree, light) {
-                text_input.scene_object_layer_id = Some(layer_id.clone());
-                text_input.scene_item_ref = Some(light.clone());
-                text_input.begin(TextInputField::SceneLightRename, name, anchor_of(r), 11.0);
+                text_input.scene_item_ref = Some(item.clone());
+                text_input.begin(TextInputField::SceneItemRename, name, anchor_of(r), 11.0);
             }
         }
         PanelAction::Params(ParamsAction::BrowserSearchClicked) => {
@@ -181,27 +174,6 @@ pub(crate) fn begin_for_action(
             text_input.begin(TextInputField::MaterialColour, &initial, anchor_of(*anchor), 11.0);
             text_input.material_colour =
                 Some(MaterialColourCtx { target: target.clone(), param_ids: param_ids.clone() });
-        }
-        PanelAction::Root(RootAction::SceneSetupBeginNumericTextInput {
-            layer_id,
-            scope_path,
-            node_doc_id,
-            param_id,
-            value,
-            cell_node_id,
-            degrees,
-        }) => {
-            // Degrees rows prefill in degrees; the stored value stays radians
-            // (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D10).
-            let r = ui_root.tree.get_bounds(*cell_node_id);
-            let display = if *degrees { value.to_degrees() } else { *value };
-            text_input.begin(TextInputField::SceneNumericParam(*node_doc_id), &format!("{display:.3}"), anchor_of(r), 11.0);
-            text_input.scene_numeric_param = Some(SceneNumericParamCtx {
-                layer_id: layer_id.clone(),
-                scope_path: scope_path.clone(),
-                param_id: param_id.clone(),
-                degrees: *degrees,
-            });
         }
         PanelAction::Root(RootAction::AudioSendGainBeginTextInput(send_id, value, cell_node_id)) => {
             let r = ui_root.tree.get_bounds(*cell_node_id);
@@ -268,15 +240,9 @@ pub(crate) fn begin_for_action(
             }
         }
         PanelAction::Params(ParamsAction::GenStringParamClicked(sp_idx)) => {
-            // The Scene tab's HDRI file row while that tab shows, else the
-            // layer card's string row.
-            let entry = if ui_root.scene_setup_panel.is_open() {
-                ui_root.scene_setup_panel.string_param_entry(&ui_root.tree, *sp_idx)
-            } else {
-                ui_root.inspector.gen_params().and_then(|gp| {
-                    Some((gp.string_param(*sp_idx)?.value.clone(), gp.string_param_rect(&ui_root.tree, *sp_idx)?))
-                })
-            };
+            let entry = ui_root.inspector.gen_params().and_then(|gp| {
+                Some((gp.string_param(*sp_idx)?.value.clone(), gp.string_param_rect(&ui_root.tree, *sp_idx)?))
+            });
             if let Some((value, r)) = entry {
                 text_input.begin(TextInputField::GenStringParam(*sp_idx), &value, anchor_of(r), 11.0);
             }
@@ -665,23 +631,6 @@ pub(crate) fn commit<'a>(
                 }
             }
         }
-        TextInputField::SceneNumericParam(node_doc_id) => {
-            // No clamp (PARAM_RANGE_CONTRACT P1); degrees convert to the
-            // stored radians here only (D10). The dock's own drag write.
-            if let Some(ctx) = text_input.scene_numeric_param.take()
-                && let Some(parsed) = crate::text_input::parse_lenient_numeric(text)
-            {
-                let value = crate::text_input::degrees_commit_value(parsed, ctx.degrees);
-                let act = PanelAction::Project(ProjectAction::SceneSetupParamChanged(
-                    ctx.layer_id,
-                    ctx.scope_path,
-                    node_doc_id,
-                    ctx.param_id,
-                    value,
-                ));
-                let _ = crate::ui_bridge::dispatch(&act, cx);
-            }
-        }
         TextInputField::AudioSendGainParam => {
             if let Some(ctx) = text_input.audio_send_gain_param.take()
                 && let Some(parsed) = crate::text_input::parse_lenient_numeric(text)
@@ -813,41 +762,15 @@ pub(crate) fn commit<'a>(
                 }
             }
         }
-        // The Scene tab addresses the layer directly, so it resolves its own
-        // catalog default; no graph editor needs to be open.
-        TextInputField::SceneObjectRename => {
-            // RenameSceneObjectCommand keeps the group handle and the
-            // object's own handle in step (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6).
-            let new_handle = text.trim().to_string();
-            if !new_handle.is_empty()
-                && let Some(layer_id) = text_input.scene_object_layer_id.take()
-                && let Some(object) = text_input.scene_item_ref.take()
-                && let Some(default) = crate::ui_bridge::generator_catalog_default(&cx.project, &layer_id)
+        TextInputField::SceneItemRename => {
+            if let Some(layer_id) = text_input.scene_object_layer_id.take()
+                && let Some(item) = text_input.scene_item_ref.take()
             {
-                let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
-                    manifold_core::GraphTarget::Generator(layer_id),
-                    object,
-                    new_handle,
-                    default,
-                );
-                ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
-            }
-        }
-        TextInputField::SceneLightRename => {
-            // A light is never wrapped in a group: a plain handle write.
-            let new_handle = text.trim().to_string();
-            if !new_handle.is_empty()
-                && let Some(layer_id) = text_input.scene_object_layer_id.take()
-                && let Some(object) = text_input.scene_item_ref.take()
-                && let Some(default) = crate::ui_bridge::generator_catalog_default(&cx.project, &layer_id)
-            {
-                let cmd = manifold_editing::commands::graph::SetNodeHandleCommand::new(
-                    manifold_core::GraphTarget::Generator(layer_id),
-                    object,
-                    new_handle,
-                    default,
-                );
-                ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+                match crate::scene_edit::rename(&cx.project, &layer_id, &item, text) {
+                    Ok(Some(edit)) => ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(edit.command)),
+                    Ok(None) => {}
+                    Err(reason) => ContentCommand::send(cx.content_tx, ContentCommand::GraphEditRejected(reason)),
+                }
             }
         }
         TextInputField::RenamePreset => {

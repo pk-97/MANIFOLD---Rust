@@ -83,7 +83,6 @@ pub(crate) mod whitewater_scene;
 pub(crate) mod whitewater_emitters;
 
 mod gpu_flip_preset;
-mod swarm_preset;
 
 mod liquid_bricks;
 
@@ -111,9 +110,7 @@ mod seed_particles_from_texture;
 
 
 
-mod scene_vm;
 
-mod scene_exposure;
 
 
 mod gltf_animation_source;

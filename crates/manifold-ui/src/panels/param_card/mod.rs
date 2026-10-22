@@ -578,27 +578,6 @@ impl ParamCardPanel {
         self.modifier.as_ref()
     }
 
-    pub(crate) fn object_modifier_info(
-        &self,
-    ) -> Option<&crate::param_surface::ObjectModifierCardInfo> {
-        self.object_modifier.as_ref()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn modifier_remove_node_id(&self) -> Option<NodeId> {
-        self.modifier_remove_btn_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn modifier_objects_node_id(&self) -> Option<NodeId> {
-        self.modifier_objects_btn_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn toggle_node_id(&self) -> Option<NodeId> {
-        self.toggle_btn_id
-    }
-
     /// The card ROOT's identity key (D4): cards are siblings under the
     /// inspector column, so the root's `View::key` — which now pins the
     /// durable WidgetId — must be the card's stable identity, never a
@@ -1289,6 +1268,7 @@ pub(super) mod tests {
                     },
                     rgb_members: None,
                     modulator_stored: false,
+                    affordance: None,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("strength"),
@@ -1325,6 +1305,7 @@ pub(super) mod tests {
                     },
                     rgb_members: None,
                     modulator_stored: false,
+                    affordance: None,
                 },
             ],
             has_graph_mod: false,
@@ -1373,6 +1354,7 @@ pub(super) mod tests {
             },
             rgb_members: None,
             modulator_stored: false,
+            affordance: None,
         });
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("reset"),
@@ -1409,6 +1391,7 @@ pub(super) mod tests {
             },
             rgb_members: None,
             modulator_stored: false,
+            affordance: None,
         });
         c
     }
@@ -1646,6 +1629,7 @@ pub(super) mod tests {
             },
             rgb_members: None,
             modulator_stored: false,
+            affordance: None,
         });
         let n = c.rows.len();
 
@@ -3480,6 +3464,7 @@ pub(super) mod tests {
                     },
                 rgb_members: None,
                 modulator_stored: false,
+                affordance: None,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("invert"),
@@ -3516,6 +3501,7 @@ pub(super) mod tests {
                     },
                 rgb_members: None,
                 modulator_stored: false,
+                affordance: None,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("scale"),
@@ -3552,6 +3538,7 @@ pub(super) mod tests {
                     },
                 rgb_members: None,
                 modulator_stored: false,
+                affordance: None,
                 },
             ],
             string_params: vec![],

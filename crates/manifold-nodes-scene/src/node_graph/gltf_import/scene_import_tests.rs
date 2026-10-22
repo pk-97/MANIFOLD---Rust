@@ -447,64 +447,6 @@ fn sky_sun_is_the_first_authored_directional_light() {
     assert_eq!(sky_sun(&def), None);
 }
 
-#[test]
-fn imported_light_title_is_glb_name_and_rung_restores_it() {
-    use super::gltf_load::{GltfLightKind, GltfPunctualLight};
-    use crate::node_graph::scene_exposure::migrate_light_titles_for_test;
-
-    let summary = GltfImportSummary {
-        materials: vec![full_material(0, "M", 3)],
-        bbox_min: [-1.0, -1.0, -1.0],
-        bbox_max: [1.0, 1.0, 1.0],
-        camera_count: 0,
-        default_material_vertex_count: 0,
-        animations: Vec::new(),
-        animation_report_lines: Vec::new(),
-        extension_report_lines: Vec::new(),
-        lights: vec![GltfPunctualLight {
-            name: Some("Key Spot".to_string()),
-            kind: GltfLightKind::Point,
-            color: [1.0, 1.0, 1.0],
-            intensity: 100.0,
-            range: None,
-            world_pos: [0.0, 1.0, 0.0],
-            world_forward: [0.0, 0.0, -1.0],
-        }],
-        cameras: Vec::new(),
-        camera_report_lines: Vec::new(),
-        texture_dims: Vec::new(),
-    };
-    let (mut def, _) =
-        build_import_graph(&summary, std::path::Path::new("/tmp/synthetic_title.glb")).expect("build");
-    let title = |def: &manifold_core::effect_graph_def::EffectGraphDef| {
-        def.nodes.iter().find(|n| n.node_id == "light_0").and_then(|n| n.title.clone())
-    };
-    assert_eq!(title(&def).as_deref(), Some("Key Spot"), "importer writes the GLB name into title");
-
-    // An import from before the importer wrote titles: the rung recovers the
-    // name from the intensity stamp's section string, once.
-    def.nodes.iter_mut().find(|n| n.node_id == "light_0").unwrap().title = None;
-    assert!(migrate_light_titles_for_test(&mut def));
-    assert_eq!(title(&def).as_deref(), Some("Key Spot"));
-    assert!(!migrate_light_titles_for_test(&mut def), "rung is idempotent");
-
-    // A hand-built light with no title or handle is stamped with the "Scene"
-    // fallback section; that is no name, so the rung leaves it untitled.
-    let light = def.nodes.iter_mut().find(|n| n.node_id == "light_0").unwrap();
-    light.title = None;
-    light.handle = None;
-    let meta = def.preset_metadata.as_mut().unwrap();
-    let stamp = meta
-        .bindings
-        .iter()
-        .find(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-            if node_id == "light_0" && param == "intensity"))
-        .map(|b| b.id.clone())
-        .unwrap();
-    meta.params.iter_mut().find(|p| p.id == stamp).unwrap().section = Some("Scene".to_string());
-    assert!(!migrate_light_titles_for_test(&mut def), "the stamp fallback is not a light name");
-    assert_eq!(title(&def), None);
-}
 
 /// One Lighting Mode (Gradient, Softbox, HDRI) lives on the bake; the HDRI
 /// feeds it and the visible sky; the old second switch is gone. The sky is off
@@ -512,7 +454,6 @@ fn imported_light_title_is_glb_name_and_rung_restores_it() {
 /// only then.
 #[test]
 fn import_has_one_environment_mode_and_an_off_by_default_hdri_background() {
-    use manifold_core::scene_surface::{ControlGroup, Feature, Gate, Modes, SurfaceRole};
 
     let summary = GltfImportSummary {
         materials: vec![full_material(0, "Solid", 500)],
@@ -567,14 +508,6 @@ fn import_has_one_environment_mode_and_an_off_by_default_hdri_background() {
     assert_eq!(spec("bg_enabled").default_value, 0.0);
     assert!(spec("bg_enabled").is_toggle);
     assert_eq!(spec("bg_brightness").default_value, 1.0);
-
-    let scene = |id: &str| spec(id).scene.unwrap_or_else(|| panic!("`{id}` has no Scene tab placement"));
-    assert_eq!(scene("bg_enabled").switch, Some(Feature::Background));
-    for read_while_on in ["bg_blur", "bg_brightness"] {
-        let placed = scene(read_while_on);
-        assert_eq!(placed.gate, Some(Gate::Only(Feature::Background, Modes(0b10))), "{read_while_on}");
-        assert_eq!((placed.group, placed.role), (ControlGroup::Environment, SurfaceRole::Setup));
-    }
 }
 
 /// A fresh import renders as it always has: the Ray Tracing surface row and

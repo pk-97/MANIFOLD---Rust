@@ -271,12 +271,6 @@ fn shared_scene_cards_draw_by_their_host() {
     }
     assert!(violations.is_empty(), "row kinds come from the card host (`draws_by_kind`): {violations:?}");
 
-    for (relative, host) in [
-        ("scene_setup_panel/forces.rs", "CardHost::SceneTab"),
-        ("scene_setup_panel/object_modifiers.rs", "CardHost::SceneTab"),
-        ("inspector/render.rs", "CardHost::SceneCard"),
-    ] {
-        let source = fs::read_to_string(panels_dir().join(relative)).expect("read card host source");
-        assert!(source.contains(host), "{relative} hosts shared scene cards without {host}");
-    }
+    let source = fs::read_to_string(panels_dir().join("inspector/render.rs")).expect("read card host source");
+    assert!(source.contains("CardHost::SceneCard"), "inspector/render.rs hosts shared scene cards without CardHost::SceneCard");
 }

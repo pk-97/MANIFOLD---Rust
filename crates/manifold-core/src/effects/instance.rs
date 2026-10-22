@@ -1464,6 +1464,14 @@ impl PresetInstance {
             let entries = specs.into_iter().map(crate::params::Param::bundled).collect();
             self.params = crate::params::ParamManifest::from_params(entries);
             self.base_tracked = true;
+            // A scene layer starts from the base scene; any other type has no
+            // document (SCENE_DOCUMENT_DESIGN.md section 7.5).
+            self.scene = None;
+            if self.effect_type == PresetTypeId::SCENE
+                && let Err(error) = self.install_scene_document(crate::scene_doc::SceneDoc::base())
+            {
+                eprintln!("[manifold-core] the base scene did not compile: {error}");
+            }
         }
     }
 

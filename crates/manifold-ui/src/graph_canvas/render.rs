@@ -993,37 +993,6 @@ impl GraphCanvas {
                             ui.draw_text(slider_x, text_y, &label, text_size, TEXT_SECONDARY);
                         }
                     }
-                    NodeRow::Action(kind) => {
-                        // The "+ Object" / "+ Light" one-click gestures
-                        // (D7/D7a) — same rounded-pill chrome + hover state as
-                        // the "Edit Code…" footer below, so a gesture button
-                        // reads as a button anywhere on the node face.
-                        let label = match kind {
-                            NodeActionKind::AddSceneObject => "+ Object",
-                            NodeActionKind::AddSceneLight => "+ Light",
-                        };
-                        let inset = 4.0 * self.zoom;
-                        let bx = sx + inset;
-                        let bw = (sw - 2.0 * inset).max(0.0);
-                        let by = row_y + inset * 0.25;
-                        let bh = (row_h - inset * 0.5).max(0.0);
-                        let (cx, cy) = self.cursor;
-                        let hovered = cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh;
-                        let bg = if hovered {
-                            WGSL_FOOTER_HOVER_BG
-                        } else {
-                            WGSL_FOOTER_BG
-                        };
-                        ui.draw_rounded_rect(bx, by, bw, bh, bg, 3.0 * self.zoom);
-                        let lw = text_width(label, text_size);
-                        ui.draw_text(
-                            bx + (bw - lw) * 0.5,
-                            row_y + (row_h - text_size) * 0.5,
-                            label,
-                            text_size,
-                            TEXT_PRIMARY,
-                        );
-                    }
                 }
             }
             // "Edit Code…" footer for a `wgsl_compute` node — the click target

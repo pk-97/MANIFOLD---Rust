@@ -1,7 +1,6 @@
 pub mod gizmo_pass;
 pub mod material_inspector;
-pub mod scene_exposure;
-pub mod scene_items;
+pub mod node_param_source;
 pub mod scene_surface;
 pub mod viewport_gizmo;
 pub mod viewport_overlay;
@@ -16,7 +15,6 @@ pub mod hdri_sun;
 manifold_core::testkit_visible! { mod gltf_load; }
 pub mod primitives;
 pub mod scene_modifier_authoring;
-pub mod scene_templates;
 pub mod scene_modifier_legacy_migration;
 pub mod scene_vm;
 

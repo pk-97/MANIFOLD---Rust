@@ -13,7 +13,6 @@
 use std::sync::Arc;
 
 use manifold_gpu::{GpuBinding, GpuDevice, GpuEncoder, GpuRenderPipeline, GpuSampler, GpuTexture};
-pub(crate) use manifold_nodes_scene::node_graph::viewport_gizmo::outline_slots;
 
 #[cfg(target_os = "macos")]
 use crate::shared_texture::{SURFACE_COUNT, SharedTextureBridge};

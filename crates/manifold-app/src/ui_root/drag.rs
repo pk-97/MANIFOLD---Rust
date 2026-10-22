@@ -117,7 +117,6 @@ impl UIRoot {
     /// be re-fused (BUG-075).
     pub(crate) fn broadcast_gesture_end(&mut self) {
         self.inspector.cancel_card_drag(&mut self.tree);
-        self.scene_setup_panel.cancel_object_modifier_drag(&mut self.tree);
         self.fire_gesture_end_hooks();
         self.drag_owner = None;
         self.tracks_press_active = false;

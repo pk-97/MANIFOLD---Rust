@@ -108,6 +108,8 @@ impl PresetTypeId {
     pub const TESSERACT: Self = Self(Cow::Borrowed("Tesseract"));
     pub const CONCENTRIC_TUNNEL: Self = Self(Cow::Borrowed("ConcentricTunnel"));
     pub const PLASMA: Self = Self(Cow::Borrowed("Plasma"));
+    /// The scene generator: a layer of it holds a scene document.
+    pub const SCENE: Self = Self(Cow::Borrowed("Scene"));
     pub const LISSAJOUS: Self = Self(Cow::Borrowed("Lissajous"));
     pub const FRACTAL_ZOOM: Self = Self(Cow::Borrowed("FractalZoom"));
     pub const WIREFRAME_ZOO: Self = Self(Cow::Borrowed("Wireframe"));

@@ -13,8 +13,7 @@ fn scene_force_projection_preserves_audio_and_uses_separate_picker() {
     )).unwrap().id.clone();
     host.audio_mods = Some(vec![ParameterAudioMod::new(strength.clone().into(), "drums".into(),
         AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full))]);
-    let vm = SceneVm::from_def(&graph).unwrap();
-    let surfaces = modifier_surfaces(&host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+    let surfaces = modifier_surfaces(&host, &graph, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
     let surface = &surfaces[0];
     assert!(is_force_surface(surface, &graph));
     assert_eq!(surface.title, "Radial Force");
@@ -27,8 +26,7 @@ fn scene_force_projection_preserves_audio_and_uses_separate_picker() {
     assert!(info.targets_all);
     assert!(!info.objects.is_empty());
     assert!(info.objects.iter().all(|object| object.label.ends_with("(no physics)")));
-    assert!(force_picker_entries(&graph, &vm).iter().any(|entry| entry.preset_id == "RadialForce" && entry.disabled.is_none()));
-    assert!(modifier_picker_entries(&graph, &vm).iter().all(|entry| entry.preset_id != "RadialForce"));
+    assert!(modifier_picker_entries(&graph).iter().all(|entry| entry.preset_id != "RadialForce"));
     let mut project = manifold_core::project::Project::default();
     let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), host.generator_type().clone(), 0);
     layer.layer_id = manifold_core::LayerId::new("layer");
@@ -47,13 +45,11 @@ fn scene_force_projection_preserves_audio_and_uses_separate_picker() {
     assert_eq!(route.source_label, "Hits");
     let catalog = super::super::trigger_routing::TriggerRoutingCatalog::project(&project);
     assert_eq!(catalog.targets.iter().filter(|target| target.param_id.as_ref() == strength).count(), 1);
-    assert!(super::super::trigger_routing::response_uses_scene_panel(&project,
-        &manifold_core::GraphTarget::Generator("layer".into()), &strength));
     let saved = serde_json::to_vec(&project).unwrap();
     let mut loaded: manifold_core::project::Project = serde_json::from_slice(&saved).unwrap();
     assert_eq!(loaded.reconcile_param_manifests(), 0);
     let host = loaded.timeline.layers[0].gen_params().unwrap();
-    let reloaded = modifier_surfaces(host, host.graph.as_ref().unwrap(), &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+    let reloaded = modifier_surfaces(host, host.graph.as_ref().unwrap(), "layer", &[], (manifold_core::Bpm(120.0), 0.0));
     assert!(reloaded[0].rows.iter().find(|row| row.id.as_ref() == strength).unwrap().audio.active);
 }
 
@@ -69,8 +65,7 @@ fn radial_force_rows_format_with_their_units() {
     let mut host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
     host.graph = Some(graph.clone());
     host.refresh_manifest_from_graph();
-    let vm = SceneVm::from_def(&graph).unwrap();
-    let surfaces = modifier_surfaces(&host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+    let surfaces = modifier_surfaces(&host, &graph, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
     let readout = |name: &str| {
         let row = surfaces[0].rows.iter().find(|row| row.spec.name == name).unwrap_or_else(|| panic!("row {name}"));
         let spec = &row.spec;
@@ -155,8 +150,7 @@ fn force_saved_with_old_labels_loads_with_the_recipe_labels() {
         assert_eq!(param(id).choices.rename, None, "{id}: a stale label is not a rename");
     }
     let graph = host.graph.as_ref().unwrap();
-    let vm = SceneVm::from_def(graph).unwrap();
-    let surfaces = modifier_surfaces(host, graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+    let surfaces = modifier_surfaces(host, graph, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
     let names: Vec<&str> = surfaces[0].rows.iter().map(|row| row.spec.name.as_str()).collect();
     assert!(names.contains(&"Impulse") && names.contains(&"Impulse Size"), "{names:?}");
     assert!(!names.iter().any(|name| name.starts_with("Kick")), "{names:?}");
@@ -256,8 +250,7 @@ fn force_card_audio_meter_resolves_in_the_producer_capture() {
     let produced = fire_meter_key_for_param(host.id.as_str(), &strength);
     assert!(fire_meters.get(produced).is_some_and(|level| level > 0.0), "the content thread meters the force card's kick");
 
-    let vm = SceneVm::from_def(&graph).unwrap();
-    let surfaces = modifier_surfaces(host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+    let surfaces = modifier_surfaces(host, &graph, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
     let mut tree = manifold_ui::UITree::new();
     let rect = manifold_ui::Rect::new(0.0, 0.0, 320.0, 2000.0);
     let region = tree.begin_region(rect, manifold_ui::ZTier::Base, "force_card", manifold_ui::UIFlags::empty());
@@ -279,7 +272,7 @@ use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, Parame
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-use manifold_nodes_scene::node_graph::{scene_modifier_authoring::prepare_new_scene_modifier, scene_vm::SceneVm};
+use manifold_nodes_scene::node_graph::{scene_modifier_authoring::prepare_new_scene_modifier};
 
 #[test]
 fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reorder() {
@@ -324,8 +317,7 @@ fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reord
             gp.audio_mods.as_mut().unwrap().push(make_mod(&binding.id));
         }
     }
-    let vm = SceneVm::from_def(&graph).unwrap();
-    let surfaces = modifier_surfaces(&gp, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+    let surfaces = modifier_surfaces(&gp, &graph, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
     assert_eq!(surfaces.len(), 2);
     assert_eq!(surfaces[0].rows[4].spec.name, "Turbulence");
     for surface in &surfaces {
@@ -356,7 +348,7 @@ fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reord
     fog_send.id = "fog".into();
     setup.sends = vec![host_send, render_send, fog_send];
     for pass in 0..2 {
-        let mut surfaces = modifier_surfaces(&gp, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        let mut surfaces = modifier_surfaces(&gp, &graph, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
         attach_audio_sends(&mut surfaces, &setup);
         for (index, surface) in surfaces.iter().enumerate() {
             assert_eq!(surface.audio_sends.len(), 3);

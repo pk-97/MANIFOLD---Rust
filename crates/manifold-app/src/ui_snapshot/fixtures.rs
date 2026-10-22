@@ -257,26 +257,13 @@ fn new_scene(preset: &'static str, name: &str) -> SceneData {
 /// so the flows that drive card rows start from a card that has them.
 fn set_up_scene_cards(project: &mut Project) {
     use manifold_core::scene_surface::{CardPin, Gate, SurfaceRole};
-    use manifold_nodes_scene::node_graph::scene_items::{owner_of, scene_items};
-    use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
     for layer in &mut project.timeline.layers {
         let Some(host) = layer.gen_params_mut() else { continue };
-        let Some(def) = host
-            .graph
-            .clone()
-            .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(host.effect_type()).map(|def| (*def).clone()))
-        else {
+        if host.scene.is_none() {
             continue;
-        };
-        let Some(vm) = SceneVm::from_def(&def) else { continue };
-        let items = scene_items(&def, &vm);
-        let Some(meta) = def.preset_metadata.as_ref() else { continue };
+        }
         for param in host.params.iter_mut() {
-            // A control no item owns drives nothing on screen, so a performer
-            // would not put it on the card.
-            let wanted = param.spec.scene.is_some_and(|scene| {
-                scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_)))
-            }) && owner_of(&items, meta, param.id()).is_some();
+            let wanted = param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_))));
             if wanted && param.choices.pin.is_none() {
                 param.choices.pin = Some(CardPin::Shown);
             }

@@ -62,5 +62,6 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         b.wire(frame.visible, "out", object, "parent_visible");
     }
     b.objects.push(object);
+    b.object_items.push(item.id.clone());
     b.rows(item);
 }

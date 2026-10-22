@@ -549,7 +549,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
   - *Scene-modifier cards.* A card's params are host params on the owner generator, and expansion composes them into ordinary node bindings on the owner graph, so they take the same route with no extra path. `modifier_card_kick_forces_per_tick_match_across_frame_rates` proves it on a Uniform Force card.
 ### P9 — Add Fluid authors the default liquid template (seam brief; supersedes MPM P4b)
 
-- **Entry state:** P2b on main. `rg -n 'const FLUID_TYPE_ID' crates/manifold-editing/src/commands/graph/scene/fluid.rs` matches.
+- **Entry state:** P2b on main. `rg -n 'const FLUID_TYPE_ID' fluid.rs` matches.
 - **Read-back:** `edit/commands/graph/scene/fluid.rs` whole; `app/ui_bridge/project.rs:619`; GROUPING_GRAPHS.md.
 - **Old → new:** `AddSceneFluidCommand` builds `node.fluid_surface` from `FLUID_TYPE_ID` (`fluid.rs:23`) with metadata the app looks up for that type (`project.rs:619`) → the command inserts the template graph the app hands it, and the app resolves it from one constant, `DEFAULT_LIQUID_TEMPLATE`, which names `gpu_flip_liquid_template`. ⚠ VERIFY-AT-IMPL: the command's `catalog_default` may already carry the graph; if so, the change is deleting `FLUID_TYPE_ID` and building from it.
 - **Deliverables:** tests `scene_physics_add_fluid_template_undo_reload` for the FLIP template and for a GPU template (Dam Break Matter's Live Matter and Liquid Surface groups) passed in by the test; flow `scripts/ui-flows/scene-physics-template.json`. Another solver's template is its own builder plus its own Add Fluid tests, never a one-line swap.

@@ -701,6 +701,22 @@ pub(crate) fn dispatch_scrub(
             );
             dispatch_rgb_scrub(target, ids, phase, ctx)
         }
+        // Three params moved as one gesture and one undo step: the linked
+        // Scale. The panel sends the three new values on every Move.
+        ValueRef::ParamLinked(gpt, ids) => {
+            let target = resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project);
+            match phase {
+                ScrubPhase::Begin => {
+                    if let Some(target) = target {
+                        begin_param_group(ctx, target, ids.to_vec(), Vec::new(), "Scale");
+                    }
+                }
+                ScrubPhase::Move(manifold_ui::ScrubValue::Rgb(values)) => move_param_group(ctx, values, &[]),
+                ScrubPhase::Move(_) => {}
+                ScrubPhase::Commit => commit_param_group(ctx),
+            }
+            DispatchResult::handled()
+        }
         ValueRef::Param(gpt, param_id) => match phase {
             ScrubPhase::Begin => {
                 if let Some(target) = resolve_graph_target(

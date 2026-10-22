@@ -28,9 +28,7 @@ pub mod param_slider_shared;
 pub mod scrub;
 pub mod perf_hud;
 pub mod rt_quality_panel;
-pub mod scene_setup_actions;
 pub mod scene_setup_panel;
-pub mod scene_setup_skin;
 pub mod settings_popup;
 pub mod popup_shell;
 pub mod toast;
@@ -49,7 +47,7 @@ pub use viewport::HitRegion;
 // call sites reach the domain enums by the same path.
 pub use actions::{
     AudioDrawerClick, ClipTriggerDrawerClick, AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction,
-    MarkerAction, MaterialEditKind, MaterialLook, MaterialParamWrite, ModulationAction, ParamsAction, ProjectAction, RootAction, TransportAction,
+    MarkerAction, ModulationAction, ParamsAction, ProjectAction, RootAction, TransportAction,
 };
 
 // The unified scrub wire (P-I / D4): one `Scrub` arm collapses the

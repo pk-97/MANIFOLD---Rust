@@ -173,7 +173,7 @@ Claim: 41 V1.0 flat fields deserialize, round-trip, and are read by nothing exce
 - `legacy_scene_wires.jq` (wires into `node.render_scene` on a `mesh_k`, `material_k`, `*_map_k`, `transform_k` or `instances_k` port) over 67 files with render_scene → 123_meshImportTests (1.11.0) 42 wires, 072_SceneLadders (1.12.0) 176, 114_glbTestingV2 (1.12.0) 28. All Downloads test projects.
 - `scene_object_migration.rs` added 2026-07-17 (a4f101802). Online-only saved before then: 37.
 - It runs twice: at every graph build (`graph_loader.rs:519-526`) and at app load for layer graphs (`project_io.rs:529`, with a comment explaining why both).
-- Code: `crates/manifold-core/src/scene_object_migration.rs` 744 (about 65 lines of `loose_scene_object_owned_ids` are not migration and stay), `crates/manifold-nodes/tests/gpu_proofs/scene_object_migration_round_trip.rs` 165.
+- Code: `scene_object_migration.rs` 744 (about 65 lines of `loose_scene_object_owned_ids` are not migration and stay), `scene_object_migration_round_trip.rs` 165.
 
 ### fallbacks-017
 
@@ -245,7 +245,7 @@ Starting idioms per crate (lead): `rg -c 'unwrap_or_default\(\)|unwrap_or_else\(
 
 - `sed -n 1431,1575p crates/manifold-editing/src/commands/effects.rs` → the seed graph is installed and the structure version bumped before `host.params.get(&binding_id)?`; undo returns early when `reverse` is None; `was_applied` not overridden.
 - `rg -n 'owner.graph = Some\(owner_default\?.clone\(\)\);' crates/manifold-core/src/project/queries.rs` → line 478, which runs before the closure.
-- `rg -n 'nodes.iter_mut\(\).find\(\|n\| n.id == render_id\)\?' crates/manifold-editing/src/commands/graph/scene.rs` → 450, 793, 1249.
+- `rg -n 'nodes.iter_mut\(\).find\(\|n\| n.id == render_id\)\?' scene.rs` → 450, 793, 1249.
 - Tests pinning the no-op: `effects.rs::tests::edit_mapping_unknown_binding_is_noop`, `::edit_unknown_stock_id_without_seed_is_noop`.
 
 ### fallbacks-027

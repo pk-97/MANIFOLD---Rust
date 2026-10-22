@@ -36,7 +36,7 @@
 
 use std::sync::LazyLock;
 
-use manifold_core::{NodeId, SceneNodeRef};
+use manifold_core::NodeId;
 use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_foundation::param_range::HardLimit;
@@ -45,7 +45,7 @@ use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 use crate::node_graph::primitives::render_scene::model_matrix;
 use crate::node_graph::scene_vm::{
-    FluidRole, SceneObjectVm, SceneShapeVm, SceneVm, SetupProblem, ShapeOwner, ShapeParamVm, ShapeWrite,
+    FluidRole, SceneShapeVm, SceneVm, SetupProblem, ShapeOwner, ShapeParamVm, ShapeWrite,
 };
 use crate::node_graph::viewport_overlay::{
     DOMAIN_BOX_COLOR, PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, box_lines, clip_to_near, fluid_domain_lines, fluid_lattice_lines,
@@ -152,7 +152,7 @@ impl GizmoTargetKind {
     pub fn of(owner: &ShapeOwner) -> Self {
         match owner {
             // A world declares no shape, so no target is ever one.
-            ShapeOwner::Object(_) | ShapeOwner::World(_) => Self::Object,
+            ShapeOwner::Item(_) | ShapeOwner::World(_) => Self::Object,
             ShapeOwner::LiquidDomain(_) => Self::FluidDomain,
             ShapeOwner::RoleSource { role, .. } => match role {
                 FluidRole::InitialFill => Self::InitialFill,
@@ -238,7 +238,7 @@ pub struct GizmoTarget {
     pub unplaced: bool,
     pub pickable: bool,
     /// The scene panel row this target selects, if any.
-    pub row: Option<SceneNodeRef>,
+    pub row: Option<manifold_foundation::ItemId>,
     /// The declared direction, drawn as a line from the origin.
     pub direction: Option<[f32; 3]>,
     /// The shape's own edges in world space: what draws and what is picked.
@@ -1047,42 +1047,6 @@ pub fn rotate_drag_delta(
         d += std::f32::consts::TAU;
     }
     Some(d)
-}
-
-/// The render slots that draw the scene objects `objects`, for
-/// their selection outline (D-102): each one's own slot, plus every object's
-/// inside a group row at any depth. A Water row is a group and a real render
-/// slot, its looks the parts; a scene group's row shares its first object's
-/// slot. Written into `out`, sorted and deduplicated.
-pub fn outline_slots<'a>(scene: &SceneVm, objects: impl IntoIterator<Item = &'a SceneNodeRef>, out: &mut Vec<u32>) {
-    let rows = || {
-        scene.objects.iter().filter_map(|object| match object {
-            SceneObjectVm::Known(row) => Some(row),
-            SceneObjectVm::Custom { .. } => None,
-        })
-    };
-    let inside = |row: &crate::node_graph::scene_vm::SceneObjectKnownRow, group: &SceneNodeRef| {
-        let mut parent = row.parent.as_ref();
-        for _ in 0..scene.objects.len() {
-            let Some(id) = parent else { return false };
-            if id == group {
-                return true;
-            }
-            parent = rows().find(|candidate| &candidate.address == id).and_then(|candidate| candidate.parent.as_ref());
-        }
-        false
-    };
-    out.clear();
-    for object in objects {
-        for row in rows().filter(|row| &row.address == object) {
-            out.push(row.index as u32);
-            if row.is_group {
-                out.extend(rows().filter(|part| !part.is_group && inside(part, object)).map(|part| part.index as u32));
-            }
-        }
-    }
-    out.sort_unstable();
-    out.dedup();
 }
 
 #[cfg(test)]

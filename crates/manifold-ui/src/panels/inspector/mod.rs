@@ -1785,6 +1785,7 @@ mod tests {
             },
             rgb_members: None,
             modulator_stored: false,
+            affordance: None,
         }
     }
 

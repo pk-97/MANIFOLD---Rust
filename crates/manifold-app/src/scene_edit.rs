@@ -1,0 +1,392 @@
+//! The Scene tab's edits as commands (SCENE_DOCUMENT_DESIGN.md section 7.2).
+//! Each builder reads the project it is given and returns the command a click
+//! sends: one undo step, built from the document commands and plain param
+//! writes. Nothing here touches the project.
+
+use manifold_core::effects::PresetInstance;
+use manifold_core::project::Project;
+use manifold_core::scene_doc::{ItemFields, ItemId, ItemKind, LightType, MaterialFields, FeatureSetting, CameraRig, SceneDoc, param_id};
+use manifold_core::scene_schema::{self, FieldControl, FieldValue, add_entry, field_for, unique_name};
+use manifold_core::{GraphTarget, LayerId};
+use manifold_editing::command::{Command, CompositeCommand};
+use manifold_editing::commands::effects::ChangeGraphParamCommand;
+use manifold_editing::commands::scene_doc::{
+    AddSceneItemCommand, RemoveSceneItemCommand, RenameSceneItemCommand, ReparentSceneItemCommand, SetSceneItemFieldsCommand,
+    group_commands,
+    ungroup_commands,
+};
+use manifold_core::scene_surface::FieldPick;
+use manifold_ui::param_surface::MaterialFeature as UiFeature;
+
+/// A built edit: the command and the item the selection should move to.
+pub(crate) struct SceneEdit {
+    pub command: Box<dyn Command>,
+    pub select: Option<ItemId>,
+}
+
+fn doc<'a>(project: &'a Project, layer: &LayerId) -> Result<&'a SceneDoc, String> {
+    project.scene_of(layer).ok_or_else(|| "This layer has no scene".to_owned())
+}
+
+fn instance<'a>(project: &'a Project, layer: &LayerId) -> Option<&'a PresetInstance> {
+    project.timeline.find_layer_by_id(layer.as_str())?.1.gen_params()
+}
+
+fn base(inst: &PresetInstance, item: &ItemId, property: &str) -> Option<f32> {
+    let id = param_id(item, property);
+    inst.params.contains(&id).then(|| inst.get_base_param(&id))
+}
+
+fn write(layer: &LayerId, item: &ItemId, property: &str, old: f32, new: f32) -> Box<dyn Command> {
+    Box::new(ChangeGraphParamCommand::new(GraphTarget::Generator(layer.clone()), param_id(item, property), old, new))
+}
+
+fn batch(commands: Vec<Box<dyn Command>>, description: &str, select: Option<ItemId>) -> SceneEdit {
+    SceneEdit { command: Box::new(CompositeCommand::new(commands, description.to_owned())), select }
+}
+
+fn new_id() -> ItemId {
+    ItemId::new(manifold_core::math::short_id())
+}
+
+/// Add the entry `key` of the Add menu under `parent` (the root when the
+/// parent cannot hold it), named so no other item shares the name.
+pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<&ItemId>) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    let entry = add_entry(key).ok_or_else(|| format!("There is no \"{key}\" to add"))?;
+    let parent = parent.and_then(|id| doc.find(id)).filter(|p| manifold_core::scene_doc::can_hold(Some(p.kind()), entry.kind));
+    let index = parent.map_or(doc.items.len(), |p| p.children.len());
+    let parent = parent.map(|p| p.id.clone());
+    let mut names = Vec::new();
+    doc.walk(|item, _| names.push(item.name.as_str()));
+    let name = unique_name(entry.name, &names);
+    let id = new_id();
+    let commands: Vec<Box<dyn Command>> = vec![
+        Box::new(AddSceneItemCommand::new(layer.clone(), entry.kind, parent, index, None, id.clone())),
+        Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id.clone(), (entry.fields)())),
+        Box::new(RenameSceneItemCommand::new(layer.clone(), id.clone(), name)),
+    ];
+    Ok(batch(commands, &format!("Add {}", entry.label), Some(id)))
+}
+
+pub(crate) fn remove(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
+    let found = doc(project, layer)?.find(item).ok_or("That item is no longer in the scene")?;
+    if found.kind() == ItemKind::World {
+        return Err("The World cannot be removed".to_owned());
+    }
+    Ok(SceneEdit { command: Box::new(RemoveSceneItemCommand::new(layer.clone(), item.clone())), select: None })
+}
+
+/// Duplicate an item and everything under it, right after the original.
+pub(crate) fn duplicate(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    let found = doc.find(item).ok_or("That item is no longer in the scene")?;
+    if found.kind() == ItemKind::World {
+        return Err("The World cannot be duplicated".to_owned());
+    }
+    let (parent, index) = doc.locate(item).ok_or("That item is no longer in the scene")?;
+    let id = new_id();
+    let command = AddSceneItemCommand::new(layer.clone(), found.kind(), parent, index + 1, Some(item.clone()), id.clone());
+    Ok(SceneEdit { command: Box::new(command), select: Some(id) })
+}
+
+pub(crate) fn group(project: &Project, layer: &LayerId, items: &[ItemId]) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    let id = new_id();
+    let commands = group_commands(layer, doc, items, id.clone());
+    if commands.is_empty() {
+        return Err("Select the items to group first".to_owned());
+    }
+    Ok(batch(commands, "Group", Some(id)))
+}
+
+pub(crate) fn ungroup(project: &Project, layer: &LayerId, group: &ItemId) -> Result<SceneEdit, String> {
+    let commands = ungroup_commands(layer, doc(project, layer)?, group);
+    if commands.is_empty() {
+        return Err("Select a group to ungroup".to_owned());
+    }
+    Ok(batch(commands, "Ungroup", None))
+}
+
+/// A structural field set to one of its row's values. `None` when the item
+/// already holds it.
+pub(crate) fn set_field(project: &Project, layer: &LayerId, item: &ItemId, field: &str, pick: &FieldPick) -> Result<Option<SceneEdit>, String> {
+    let doc = doc(project, layer)?;
+    let found = doc.find(item).ok_or("That item is no longer in the scene")?;
+    let row = field_for(&found.fields, field).ok_or_else(|| format!("{field} is not a setting of this item"))?;
+    let value = match pick {
+        FieldPick::Choice(key) => FieldValue::Choice(key.clone()),
+        FieldPick::Item(target) => FieldValue::Item(target.clone()),
+        FieldPick::Layer(target) => FieldValue::Layer(target.clone()),
+        FieldPick::File(path) => FieldValue::File(path.clone()),
+        FieldPick::All => FieldValue::Items(Vec::new()),
+        FieldPick::Toggle(target) => {
+            let FieldValue::Items(mut set) = (row.read)(&found.fields) else {
+                return Err(format!("{field} does not take a set of items"));
+            };
+            match set.iter().position(|member| member == target) {
+                Some(at) => {
+                    set.remove(at);
+                }
+                None => set.push(target.clone()),
+            }
+            FieldValue::Items(set)
+        }
+    };
+    if matches!(row.control, FieldControl::File { .. }) && !matches!(value, FieldValue::File(_)) {
+        return Err(format!("{field} takes a file"));
+    }
+    let fields = scene_schema::set_field(doc, found, row, &value)?;
+    if fields == found.fields {
+        return Ok(None);
+    }
+    Ok(Some(SceneEdit { command: Box::new(SetSceneItemFieldsCommand::new(layer.clone(), item.clone(), fields)), select: None }))
+}
+
+fn core_feature(feature: UiFeature) -> manifold_core::material_inspector::MaterialFeature {
+    use manifold_core::material_inspector::MaterialFeature as Core;
+    match feature {
+        UiFeature::Coat => Core::Coat,
+        UiFeature::Iridescence => Core::Iridescence,
+        UiFeature::Emission => Core::Emission,
+        UiFeature::Glass => Core::Glass,
+        UiFeature::Sheen => Core::Sheen,
+        UiFeature::Anisotropy => Core::Anisotropy,
+        UiFeature::Translucency => Core::Translucency,
+        UiFeature::Subsurface => Core::Subsurface,
+    }
+}
+
+/// What a newly added feature starts at, so it shows when it appears: the
+/// material params its rows edit, set only where the performer has not moved
+/// them.
+fn feature_seeds(feature: UiFeature) -> &'static [(&'static str, f32)] {
+    match feature {
+        UiFeature::Coat => &[("clearcoat", 1.0)],
+        UiFeature::Iridescence => &[("iridescence", 1.0)],
+        UiFeature::Emission => &[("emission_r", 1.0), ("emission_g", 1.0), ("emission_b", 1.0), ("emission_intensity", 1.0)],
+        UiFeature::Glass => &[("transmission", 1.0)],
+        UiFeature::Sheen => &[("sheen_color_r", 0.5), ("sheen_color_g", 0.5), ("sheen_color_b", 0.5)],
+        UiFeature::Anisotropy => &[("anisotropy_strength", 0.5)],
+        UiFeature::Translucency => &[("translucency", 0.5)],
+        UiFeature::Subsurface => &[("subsurface_weight", 0.5)],
+    }
+}
+
+/// Add a feature to a material (with its starting values, in the same undo
+/// step) or remove it.
+pub(crate) fn material_feature(project: &Project, layer: &LayerId, material: &ItemId, feature: UiFeature, add: bool) -> Result<Option<SceneEdit>, String> {
+    let doc = doc(project, layer)?;
+    let found = doc.find(material).ok_or("That material is no longer in the scene")?;
+    let ItemFields::Material(fields) = &found.fields else {
+        return Err("That item is not a material".to_owned());
+    };
+    let core = core_feature(feature);
+    let present = fields.features.iter().any(|setting| setting.feature == core);
+    if present == add {
+        return Ok(None);
+    }
+    let mut features = fields.features.clone();
+    if add {
+        features.push(FeatureSetting { feature: core, mode: 2 });
+    } else {
+        features.retain(|setting| setting.feature != core);
+    }
+    let edited = ItemFields::Material(MaterialFields { features, ..fields.clone() });
+    let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), material.clone(), edited))];
+    if add && let Some(inst) = instance(project, layer) {
+        for &(property, seed) in feature_seeds(feature) {
+            let id = param_id(material, property);
+            let Some(param) = inst.params.get(&id) else { continue };
+            let held = param.base;
+            if (held - param.spec.default_value).abs() <= f32::EPSILON && (held - seed).abs() > f32::EPSILON {
+                commands.push(write(layer, material, property, held, seed));
+            }
+        }
+    }
+    Ok(Some(batch(commands, if add { "Add Material Feature" } else { "Remove Material Feature" }, None)))
+}
+
+/// Give `owner` a copy of the material it shares with others, so edits to it
+/// stop moving them.
+pub(crate) fn make_material_unique(project: &Project, layer: &LayerId, owner: &ItemId) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    let found = doc.find(owner).ok_or("That item is no longer in the scene")?;
+    let material = doc.effective_material(owner).ok_or("This item has no material to copy")?;
+    let (parent, index) = doc.locate(&material).ok_or("That material is no longer in the scene")?;
+    let copy = new_id();
+    let mut fields = found.fields.clone();
+    match &mut fields {
+        ItemFields::Object(object) => object.material = Some(copy.clone()),
+        ItemFields::Group(group) => group.material = Some(copy.clone()),
+        _ => return Err("Only an object or a group draws with a material".to_owned()),
+    }
+    let commands: Vec<Box<dyn Command>> = vec![
+        Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Material, parent, index + 1, Some(material), copy)),
+        Box::new(SetSceneItemFieldsCommand::new(layer.clone(), owner.clone(), fields)),
+    ];
+    Ok(batch(commands, "Make Material Unique", None))
+}
+
+pub(crate) fn rename(project: &Project, layer: &LayerId, item: &ItemId, name: &str) -> Result<Option<SceneEdit>, String> {
+    let found = doc(project, layer)?.find(item).ok_or("That item is no longer in the scene")?;
+    let name = name.trim();
+    if name.is_empty() || name == found.name {
+        return Ok(None);
+    }
+    Ok(Some(SceneEdit { command: Box::new(RenameSceneItemCommand::new(layer.clone(), item.clone(), name)), select: None }))
+}
+
+/// Point the first Sun at the brightest part of the HDRI `file`, keeping its
+/// distance from the point it aims at.
+pub(crate) fn aim_sun_at_hdri(project: &Project, layer: &LayerId, file: &str) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    let inst = instance(project, layer).ok_or("There is no scene to aim")?;
+    let mut sun = None;
+    doc.walk(|item, _| {
+        if sun.is_none() && matches!(&item.fields, ItemFields::Light(light) if light.light == LightType::Sun) {
+            sun = Some(item.id.clone());
+        }
+    });
+    let sun = sun.ok_or("This scene has no Sun light to aim")?;
+    let toward = manifold_nodes_scene::node_graph::hdri_sun::hdri_sun_direction(std::path::Path::new(file))
+        .map_err(|reason| format!("Could not aim the Sun: {reason}"))?;
+    let read = |property: &str| base(inst, &sun, property).unwrap_or(0.0);
+    let aim = ["aim_x", "aim_y", "aim_z"].map(read);
+    let pos = ["pos_x", "pos_y", "pos_z"].map(read);
+    let apart = (0..3).map(|k| (pos[k] - aim[k]).powi(2)).sum::<f32>().sqrt();
+    let distance = if apart > 1e-3 { apart } else { 5.0 };
+    let writes: Vec<Box<dyn Command>> = ["pos_x", "pos_y", "pos_z"]
+        .into_iter()
+        .enumerate()
+        .filter_map(|(k, property)| {
+            let (old, new) = (pos[k], aim[k] + toward[k] * distance);
+            ((old - new).abs() > f32::EPSILON).then(|| write(layer, &sun, property, old, new))
+        })
+        .collect();
+    if writes.is_empty() {
+        return Err("The Sun already points at the brightest part of the HDRI".to_owned());
+    }
+    Ok(batch(writes, "Aim Sun at HDRI", None))
+}
+
+/// The scene's camera: the World's active camera, else the first Camera.
+fn camera_of(doc: &SceneDoc) -> Option<(ItemId, CameraRig)> {
+    let active = doc.world().and_then(|world| match &world.fields {
+        ItemFields::World(fields) => fields.active_camera.clone(),
+        _ => None,
+    });
+    let mut found = None;
+    doc.walk(|item, _| {
+        if let ItemFields::Camera(camera) = &item.fields
+            && (found.is_none() || active.as_ref() == Some(&item.id))
+        {
+            found = Some((item.id.clone(), camera.rig));
+        }
+    });
+    found
+}
+
+/// Pull the camera back to show `item`: an Orbit camera lifts its pivot to
+/// the item's height and backs off; a Look At camera aims at it.
+pub(crate) fn frame(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    let inst = instance(project, layer).ok_or("There is no scene to frame")?;
+    let (camera, rig) = camera_of(doc).ok_or("This scene has no camera")?;
+    let values = |id: &str| inst.params.contains(id).then(|| inst.get_base_param(id));
+    let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_doc(doc, &values);
+    let target = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_targets(&vm)
+        .find(|target| target.row.as_ref() == Some(item))
+        .ok_or("This item has no position to frame")?;
+    let at = target.origin;
+    let radius = 1.0f32;
+    let read = |property: &str| base(inst, &camera, property).unwrap_or(0.0);
+    let mut writes = Vec::new();
+    let mut set = |property: &str, new: f32| {
+        let old = read(property);
+        if (old - new).abs() > f32::EPSILON {
+            writes.push(write(layer, &camera, property, old, new));
+        }
+    };
+    match rig {
+        CameraRig::Orbit => {
+            let offset = (at[0] * at[0] + at[2] * at[2]).sqrt();
+            set("look_y", at[1]);
+            set("distance", 2.2 * (radius + offset));
+        }
+        CameraRig::LookAt => {
+            let pos = ["pos_x", "pos_y", "pos_z"].map(read);
+            let target = ["target_x", "target_y", "target_z"].map(read);
+            let mut dir = [target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]];
+            let len = dir.iter().map(|d| d * d).sum::<f32>().sqrt();
+            dir = if len > 1e-6 { dir.map(|d| d / len) } else { [0.0, 0.0, -1.0] };
+            for (k, property) in ["target_x", "target_y", "target_z"].into_iter().enumerate() {
+                set(property, at[k]);
+            }
+            for (k, property) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
+                set(property, at[k] - dir[k] * 2.2 * radius);
+            }
+        }
+        CameraRig::Free => return Err("Frame is not supported for a free camera".to_owned()),
+    }
+    if writes.is_empty() {
+        return Err("The camera already frames this item".to_owned());
+    }
+    Ok(batch(writes, "Frame camera on item", None))
+}
+
+/// The camera params that put `camera` at the editor viewport's view
+/// (SCENE_SURFACES D14). `None` when the camera already shows it.
+pub(crate) fn copy_view(
+    project: &Project,
+    layer: &LayerId,
+    camera: &ItemId,
+    view: &manifold_node_engine::scene::viewport_camera::ViewportCamera,
+) -> Result<Option<SceneEdit>, String> {
+    use manifold_nodes_scene::node_graph::view_copy::{ViewCopyCamera, camera_writes_from_view};
+    let doc = doc(project, layer)?;
+    let inst = instance(project, layer).ok_or("This layer has no scene")?;
+    let kind = match &doc.find(camera).ok_or("That camera is no longer in the scene")?.fields {
+        ItemFields::Camera(fields) => match fields.rig {
+            CameraRig::Orbit => ViewCopyCamera::Orbit,
+            CameraRig::Free => ViewCopyCamera::Free,
+            CameraRig::LookAt => return Err("Use this view is not supported for this camera type".to_owned()),
+        },
+        _ => return Err("That item is not a camera".to_owned()),
+    };
+    let look_y = base(inst, camera, "look_y").unwrap_or(0.0);
+    let writes: Vec<Box<dyn Command>> = camera_writes_from_view(kind, view, look_y)
+        .into_iter()
+        .filter_map(|(property, new)| {
+            let old = base(inst, camera, property)?;
+            ((old - new).abs() > f32::EPSILON).then(|| write(layer, camera, property, old, new))
+        })
+        .collect();
+    if writes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(batch(writes, "Use this view", None)))
+}
+
+/// Move an item `delta` places among its siblings. `None` at either end.
+pub(crate) fn nudge(project: &Project, layer: &LayerId, item: &ItemId, delta: i32) -> Result<Option<SceneEdit>, String> {
+    let doc = doc(project, layer)?;
+    let (parent, index) = doc.locate(item).ok_or("That item is no longer in the scene")?;
+    let siblings = match &parent {
+        Some(id) => doc.find(id).map_or(0, |p| p.children.len()),
+        None => doc.items.len(),
+    };
+    let target = (index as i64 + i64::from(delta)).clamp(0, siblings.saturating_sub(1) as i64) as usize;
+    if target == index {
+        return Ok(None);
+    }
+    Ok(Some(SceneEdit { command: Box::new(ReparentSceneItemCommand::new(layer.clone(), item.clone(), parent, target)), select: None }))
+}
+
+/// Items copied with Cmd+C in the Scene tab. A paste into the same scene
+/// duplicates them; the document has no cross-scene paste yet.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SceneItemClipboard {
+    pub layer: LayerId,
+    pub items: Vec<ItemId>,
+}

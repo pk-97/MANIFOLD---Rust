@@ -3,14 +3,23 @@
 //! is a field, so a row a type does not read does not exist for it.
 
 use manifold_foundation::param_range::HardLimit;
-use manifold_foundation::scene_surface::{CardBand, CardLabel, ControlGroup, RgbChannel, Unit};
+use manifold_foundation::scene_surface::{CardBand, CardLabel, ControlGroup, Feature, Gate, Modes, RgbChannel, Unit};
 
+use super::fields::{Choice, FieldControl, FieldRow, FieldValue, enabled, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::{EnvironmentSource, ItemFields, LightType, SkyStyle};
 
 const LIGHT: Reach = Reach::Own("light");
 const ENV: Reach = Reach::Own("environment");
 const HDRI: Reach = Reach::Own("hdri");
+// The picture behind the scene, in HDRI mode (SCENE_DOCUMENT_DESIGN.md
+// section 8): the sky the HDRI makes for the active camera, blurred, dimmed
+// or lifted, laid under the finished image when the Background switch is on.
+const BG_BLUR: Reach = Reach::Own("bg_blur");
+const BG_GAIN: Reach = Reach::Own("bg_gain");
+const BG_SELECT: Reach = Reach::Own("bg_select");
+/// The Background switch is a two-mode switch: off 0, on 1.
+const BACKGROUND_ON: Gate = Gate::Only(Feature::Background, Modes(0b10));
 use ControlGroup::{Environment, Lens, Light, Shadows, ShadowsAdvanced};
 
 fn light_type(fields: &ItemFields) -> Option<&LightType> {
@@ -60,7 +69,7 @@ const fn softbox_row(property: &'static str) -> PropertyRow {
     row(property, ENV, Environment, setup()).when(softbox)
 }
 
-pub static LIGHT_ROWS: [PropertyRow; 38] = [
+pub static LIGHT_ROWS: [PropertyRow; 42] = [
     // Sun, Point, Spot. A new light starts where the compiler's lamp body
     // puts it (`scene_compile::light::lamp_params`).
     row("light_type", LIGHT, Light, Exposure::Automatic("the light's type")).param("mode").when(lamp),
@@ -117,4 +126,146 @@ pub static LIGHT_ROWS: [PropertyRow; 38] = [
     row("hdri_file", HDRI, Environment, Exposure::Automatic("the HDRI file field")).param("path").when(hdri),
     row("hdri_width", HDRI, Environment, Exposure::Internal("the file's own size")).param("width").when(hdri),
     row("hdri_height", HDRI, Environment, Exposure::Internal("the file's own size")).param("height").when(hdri),
+    row("bg_enabled", BG_SELECT, Environment, setup()).param("selector").switch(Feature::Background).toggle().default(0.0).when(hdri),
+    row("bg_blur", BG_BLUR, Environment, setup()).param("radius").range(0.0, 64.0).limit(AT_LEAST_ZERO).gate(BACKGROUND_ON).default(0.0).when(hdri),
+    row("bg_brightness", BG_GAIN, Environment, setup()).param("gain").range(0.0, 4.0).limit(AT_LEAST_ZERO).gate(BACKGROUND_ON).default(1.0).when(hdri),
+    row("bg_inputs", BG_SELECT, Environment, Exposure::Automatic("two pictures: the scene, and the scene over the sky")).param("num_inputs").when(hdri),
+];
+
+const LAMPS: &[Choice] = &[
+    Choice { key: "sun", label: "Sun" },
+    Choice { key: "point", label: "Point" },
+    Choice { key: "spot", label: "Spot" },
+];
+
+const SOURCES: &[Choice] = &[
+    Choice { key: "sky", label: "Sky" },
+    Choice { key: "hdri", label: "HDRI File" },
+    Choice { key: "none", label: "None" },
+];
+
+const SKIES: &[Choice] = &[Choice { key: "gradient", label: "Gradient" }, Choice { key: "softbox", label: "Softbox" }];
+
+fn sky_selected(fields: &ItemFields) -> bool {
+    matches!(light_type(fields), Some(LightType::Environment { source: EnvironmentSource::Sky { .. } }))
+}
+
+pub static LIGHT_FIELDS: [FieldRow; 4] = [
+    FieldRow {
+        id: "light_type",
+        label: "Type",
+        section: Light,
+        control: FieldControl::Closed(LAMPS),
+        applies: lamp,
+        disabled: enabled,
+        read: |fields| {
+            FieldValue::Choice(
+                match light_type(fields) {
+                    Some(LightType::Point) => "point",
+                    Some(LightType::Spot) => "spot",
+                    _ => "sun",
+                }
+                .to_owned(),
+            )
+        },
+        write: |fields, value| {
+            let (ItemFields::Light(l), FieldValue::Choice(key)) = (fields, value) else {
+                return Err(wrong_value("light_type", value));
+            };
+            l.light = match key.as_str() {
+                "sun" => LightType::Sun,
+                "point" => LightType::Point,
+                "spot" => LightType::Spot,
+                _ => return Err(wrong_value("light_type", value)),
+            };
+            Ok(())
+        },
+    },
+    FieldRow {
+        id: "environment_source",
+        label: "Source",
+        section: Environment,
+        control: FieldControl::Closed(SOURCES),
+        applies: environment,
+        disabled: enabled,
+        read: |fields| {
+            FieldValue::Choice(
+                match light_type(fields) {
+                    Some(LightType::Environment { source: EnvironmentSource::Hdri { .. } }) => "hdri",
+                    Some(LightType::Environment { source: EnvironmentSource::None }) => "none",
+                    _ => "sky",
+                }
+                .to_owned(),
+            )
+        },
+        write: |fields, value| {
+            let (ItemFields::Light(crate::scene_doc::LightFields { light: LightType::Environment { source } }), FieldValue::Choice(key)) =
+                (fields, value)
+            else {
+                return Err(wrong_value("environment_source", value));
+            };
+            *source = match (key.as_str(), &*source) {
+                ("sky", EnvironmentSource::Sky { .. }) => source.clone(),
+                ("sky", _) => EnvironmentSource::Sky { style: SkyStyle::default() },
+                ("hdri", EnvironmentSource::Hdri { .. }) => source.clone(),
+                ("hdri", _) => EnvironmentSource::Hdri { file: String::new() },
+                ("none", _) => EnvironmentSource::None,
+                _ => return Err(wrong_value("environment_source", value)),
+            };
+            Ok(())
+        },
+    },
+    FieldRow {
+        id: "sky_style",
+        label: "Sky",
+        section: Environment,
+        control: FieldControl::Closed(SKIES),
+        applies: sky_selected,
+        disabled: enabled,
+        read: |fields| {
+            FieldValue::Choice(
+                match light_type(fields) {
+                    Some(LightType::Environment { source: EnvironmentSource::Sky { style: SkyStyle::Gradient } }) => "gradient",
+                    _ => "softbox",
+                }
+                .to_owned(),
+            )
+        },
+        write: |fields, value| {
+            let (ItemFields::Light(crate::scene_doc::LightFields { light: LightType::Environment { source } }), FieldValue::Choice(key)) =
+                (fields, value)
+            else {
+                return Err(wrong_value("sky_style", value));
+            };
+            let style = match key.as_str() {
+                "gradient" => SkyStyle::Gradient,
+                "softbox" => SkyStyle::Softbox,
+                _ => return Err(wrong_value("sky_style", value)),
+            };
+            *source = EnvironmentSource::Sky { style };
+            Ok(())
+        },
+    },
+    // Always on the card in HDRI mode, even with no file picked yet.
+    FieldRow {
+        id: "hdri_file",
+        label: "HDRI File",
+        section: Environment,
+        control: FieldControl::File { extensions: &["exr"] },
+        applies: hdri,
+        disabled: enabled,
+        read: |fields| match light_type(fields) {
+            Some(LightType::Environment { source: EnvironmentSource::Hdri { file } }) => FieldValue::File(file.clone()),
+            _ => FieldValue::File(String::new()),
+        },
+        write: |fields, value| {
+            let (ItemFields::Light(crate::scene_doc::LightFields { light: LightType::Environment { source } }), FieldValue::File(path)) =
+                (fields, value)
+            else {
+                return Err(wrong_value("hdri_file", value));
+            };
+            *source = EnvironmentSource::Hdri { file: path.clone() };
+            Ok(())
+        },
+    },
 ];

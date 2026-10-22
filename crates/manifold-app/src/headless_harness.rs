@@ -134,7 +134,6 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         graph_edit_diagnostic: None,
         edit_selection_update: None,
         modifier_selection_update: None,
-        object_modifier_selection_update: None,
         #[cfg(feature = "profiling")]
         profiler: None,
     }

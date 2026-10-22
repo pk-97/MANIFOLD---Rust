@@ -54,7 +54,7 @@ Instruction to every phase: **extend, don't redesign.**
 | Texture-driven displacement | `push_along_normals.rs:1-13` — optional `field: Texture2D` sampled bilinear at vertex UV, `(sample.r - field_bias)` | exists; "2D texture pushes geometry" needs no new atom, only a texture to wire |
 | Material maps as wires | `scene_object.rs:43-59` — 17 optional `Texture2D` map ports incl. `emissive_map`, `base_color_map` | exists; a 2D texture wires into a map port today |
 | The rack | `scene_vm.rs:66-75` `MODIFIER_TYPE_IDS` (curated 7-atom vocabulary), `modifier_chain` VM `:154`, "Add modifier" affordance gated by `modifier_chain_parseable` `:160-163` | SHIPPED (SCENE_SETUP_PANEL); **the rack exists — new atoms registered in `MODIFIER_TYPE_IDS` appear in the panel's add-modifier menu with zero new UI** |
-| Modifier insertion commands | `crates/manifold-editing/src/commands/graph/modifiers.rs` | exists; the panel edits the graph through commands, undoable |
+| Modifier insertion commands | `modifiers.rs` | exists; the panel edits the graph through commands, undoable |
 | glb drag-drop import | `crates/manifold-app/src/app.rs:2824` `DroppedFile` → `process_dropped_files` | exists; verified end-to-end on the azalea import (SCENE_BUILD wave) |
 | glTF animation | `gltf_animation_source.rs:32-38` — `progress` (0..1) port-shadowed, never clamps; morph weights `gltf_morph_weights.rs`, skeleton `gltf_skeleton_pose.rs` | exists; **time scrub/reverse/stutter is a modulation preset, not a feature** |
 | Transform port type | `ports.rs` (`PortType::Transform`); `transform_3d.rs` produces, `scene_object` consumes | exists; **no Transform→Transform atom exists** (`rg "Transform" primitives/` — producers/consumers only) — camera shake is the first |

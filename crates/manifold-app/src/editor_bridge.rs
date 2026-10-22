@@ -1213,10 +1213,10 @@ impl Application {
             .map(|graph| (*graph).clone())
     }
 
-    /// Authoring values for viewport geometry, including exposed controls.
+    /// The scene the viewport gizmos read, at the layer's card values.
     /// This is a disposable projection, never a project edit or runtime result.
-    pub(crate) fn viewport_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-        crate::scene_gizmo::authored_def(&self.local_project, self.watched_graph_target.as_ref()?)
+    pub(crate) fn viewport_scene(&self) -> Option<manifold_nodes_scene::node_graph::scene_vm::SceneVm> {
+        crate::scene_gizmo::scene_vm_of(&self.local_project, self.watched_graph_target.as_ref()?)
     }
 
     /// Resolve the canvas's current selection into copy-ready data: the selected

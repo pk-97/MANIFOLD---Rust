@@ -18,7 +18,8 @@ use crate::types::{
     PresetTypeId, TonemapCurve,
 };
 use crate::view::{UiGraphTarget, UiSegmentShape};
-use manifold_foundation::{AudioSendId, Beats, ClipId, EffectId, LayerId, NodeId, ParamId};
+use manifold_foundation::scene_surface::FieldPick;
+use manifold_foundation::{AudioSendId, Beats, ClipId, EffectId, ItemId, LayerId, NodeId, ParamId};
 
 /// Card menus and keyboard shortcuts share these editing operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,31 +42,6 @@ pub enum AutomationShape {
     Square,
     HoldLow,
     HoldHigh,
-}
-
-/// Named starter looks. The app owns their numeric recipe and validation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MaterialLook {
-    Default,
-    Matte,
-    Coated,
-    BrushedMetal,
-    Glass,
-}
-
-/// One existing material parameter slot in a compound edit.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MaterialParamWrite {
-    pub param_id: ParamId,
-    pub value: f32,
-}
-
-/// Validation/undo policy for a compound material edit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MaterialEditKind {
-    Feature,
-    Look,
-    Placement,
 }
 
 #[derive(Debug, Clone)]
@@ -228,120 +204,32 @@ pub enum ProjectAction {
     SetAudioInputDevice(String),
     ToggleMonitor,
     EnterPerformMode,
-    /// A Scene Setup panel row write: `(layer_id, scope_path, node_doc_id,
-    /// param_name, new_value)`. Dispatched through the identical
-    /// `SetGraphNodeParamCommand` the graph editor's node face already uses —
-    /// the panel's "fourth surface" (D3: every editable row carries its
-    /// `(scope_path, node_doc_id, param_id)` write address). `scope_path` is
-    /// empty for root-level rows (Environment/Fog, Lights, Camera, object
-    /// transforms) and `[group_node_id]` for a P2 Objects material/modifier
-    /// row living inside the object's own group.
-    SceneSetupParamChanged(LayerId, Vec<u32>, u32, String, f32),
-    /// "Add environment" (D3): spawn `node.bake_environment` wired to the
-    /// scene's `envmap` port. `(layer_id, render_scene_node_doc_id)`.
-    SceneSetupAddEnvironment(LayerId, u32),
+    /// An Add menu entry: add the entry's item to the layer's scene, under
+    /// `parent` when it is a group. One undo step.
+    SceneAdd { layer_id: LayerId, entry: String, parent: Option<ItemId> },
+    /// Remove an item and everything under it. One undo step.
+    SceneRemove(LayerId, ItemId),
+    /// Duplicate an item with everything under it. One undo step.
+    SceneDuplicate(LayerId, ItemId),
+    /// Wrap the items in a new Group (Cmd+G). One undo step.
+    SceneGroup(LayerId, Vec<ItemId>),
+    /// Dissolve a Group, its children taking its place (Cmd+Shift+G). One
+    /// undo step.
+    SceneUngroup(LayerId, ItemId),
+    /// A pick on a structural field row: `SetSceneItemFieldsCommand`.
+    SceneFieldSet { layer_id: LayerId, item: ItemId, field: String, pick: FieldPick },
+    /// Add a feature to a Material, or take it off again: one `Set` of its
+    /// features with the feature's seed values, so one undo reverses it.
+    SceneMaterialFeature { layer_id: LayerId, material: ItemId, feature: crate::param_surface::MaterialFeature, add: bool },
+    /// Give an item a copy of the Material it draws with, for it alone.
+    SceneMakeMaterialUnique(LayerId, ItemId),
     /// "Aim Sun at HDRI": turn the scene's Sun toward the brightest region of
     /// the HDRI file at the given path. `(layer_id, hdri_file)`.
     SceneSetupAimSunAtHdri(LayerId, String),
-    /// "Add fog" (D3): spawn `node.atmosphere` wired to the scene's
-    /// `atmosphere` port. `(layer_id, render_scene_node_doc_id)`.
-    SceneSetupAddFog(LayerId, u32),
-    /// D7 "New 3D Scene" empty-state action: assign the bundled Scene
-    /// Starter generator preset to the selected layer — the SAME
-    /// generator-assignment path the picker's `SetGenType` already uses
-    /// (section 1 VERIFY marker, resolved: `PanelAction::SetGenType`).
-    SceneSetupNewScene(LayerId),
-    /// Restore standard camera dependencies through one undoable content edit.
-    SceneSetupPrepareCamera(LayerId),
-    /// An Add menu entry: insert one template into the layer's scene. The
-    /// app resolves the scene and builds the template.
-    SceneSetupInsertTemplate {
-        layer_id: LayerId,
-        /// The scene the entry was opened on, as Import Model carries it.
-        render_scene_node_id: u32,
-        kind: manifold_foundation::scene_surface::SceneTemplateKind,
-        /// The liquid domain an Inflow, Drain or Collider goes into; `None`
-        /// for every other kind.
-        water: Option<NodeId>,
-    },
-    /// Assign a selected model to an explicit fluid domain. The app resolves
-    /// the domain's stable id to a scoped graph reference before queuing.
-    SceneSetupAssignFluidRole {
-        layer_id: LayerId,
-        object: SceneNodeRef,
-        domain: NodeId,
-        role: u32,
-    },
-    SceneSetupRemoveFluidRole { layer_id: LayerId, source: SceneNodeRef },
-    SceneSetupRetargetFluidRole { layer_id: LayerId, source: SceneNodeRef, domain: NodeId },
-    /// Copy an object N times in one undo step (the header copy button sends
-    /// one): `(layer_id, object, copies)`.
-    SceneSetupDuplicateObject(LayerId, SceneNodeRef),
-    /// The object card's Make Copies: the object becomes a copy group.
-    SceneSetupMakeCopies(LayerId, SceneNodeRef),
-    /// Duplicate one physical child mesh inside a compound scene object:
-    /// `(layer_id, part)`.
-    SceneSetupDuplicateSubmesh(LayerId, SceneNodeRef),
-    /// Enable standard imported-object physics: `(layer_id, object)`.
-    SceneSetupEnablePhysics(LayerId, SceneNodeRef),
-    /// Disable standard imported-object physics.
-    SceneSetupDisablePhysics(LayerId, SceneNodeRef),
-    /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
-    /// Opens the native file dialog (`file_dialogs.rs` in manifold-app) and, on
-    /// a picked `.glb`/`.gltf`, merges its objects into THIS scene via
-    /// `merge_import_into_graph` + `ImportModelIntoSceneCommand` (D5) — a
-    /// second (third, nth) model added to a scene the panel already shows,
-    /// no graph editor trip required.
-    SceneSetupImportModelClicked(LayerId, u32),
-    /// scene-panel-ux lane: "Frame" button in properties header (Object selection).
-    /// `(layer_id, object)`. Computes camera focus
-    /// parameters to frame the selected object and writes them through the same
-    /// param-change path every other slider uses.
-    SceneSetupFrameSelected(LayerId, SceneNodeRef),
-    /// P5 "Add modifier" chip: `(layer_id, owner, type_id)`.
-    /// Dispatches `InsertMeshModifierCommand`, appending the chosen D6 atom
-    /// at the end of the object's stack (no position picker in v1 — D6's
-    /// default: "end of stack, just before the group output").
-    SceneSetupAddModifier(LayerId, SceneNodeRef, String),
-    /// P5 modifier-row remove button: `(layer_id, owner,
-    /// modifier_node_id)`. Dispatches `RemoveMeshModifierCommand`.
-    SceneSetupRemoveModifier(LayerId, SceneNodeRef, u32),
-    /// P5 modifier-row up/down reorder: `(layer_id, owner,
-    /// modifier_node_id, new_position)`. Dispatches
-    /// `MoveMeshModifierCommand` — `new_position` is resolved by the panel
-    /// from the row's own live index in the Vm's stack order (one hop
-    /// forward or back): the live count is read off the Vm.
-    SceneSetupMoveModifier(LayerId, SceneNodeRef, u32, u32),
-    /// per-row "✕" in the Objects section: `(layer_id, object)`. Dispatches the new
-    /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupInsertTemplate`.
-    SceneSetupRemoveObject(LayerId, SceneNodeRef),
-    /// A placed Inflow, Drain or Collider's ✕: `(layer_id, role node)`.
-    /// Removes its group and role wire as one undo entry.
-    SceneSetupRemoveSource(LayerId, manifold_foundation::NodeId),
-    /// Remove one physical child mesh inside a compound scene object:
-    /// `(layer_id, part)`.
-    SceneSetupRemoveSubmesh(LayerId, SceneNodeRef),
-    /// per-row "✕" in the Lights section: `(layer_id, light)`. Dispatches the new
-    /// `RemoveSceneLightCommand` — the inverse of `SceneSetupInsertTemplate`.
-    SceneSetupRemoveLight(LayerId, SceneNodeRef),
-    /// P4b: a project layer was selected from the Skin source dropdown.
-    /// `source: None` clears the skin (the model uses its own texture).
-    SceneSetupSkinSourceSet {
-        layer_id: LayerId,
-        scope_path: Vec<u32>,
-        scene_object_id: u32,
-        source_node_id: Option<u32>,
-        target_map: crate::panels::scene_setup_panel::SkinTargetMap,
-        source: Option<LayerId>,
-    },
-    /// P4b: Emissive/Base Color was selected from the Skin target dropdown.
-    SceneSetupSkinTargetMapSet {
-        layer_id: LayerId,
-        scope_path: Vec<u32>,
-        scene_object_id: u32,
-        source_node_id: Option<u32>,
-        target_map: crate::panels::scene_setup_panel::SkinTargetMap,
-    },
+    /// "New 3D Scene" empty-state action: the layer gets the base scene.
+    SceneNew(LayerId),
+    /// "Frame" in an item's header: point the camera at the item.
+    SceneSetupFrameSelected(LayerId, ItemId),
     MidiTriggerModeClicked(LayerId),
     /// "Clear points" context-menu item: empties the lane's points,
     /// keeping the (now-empty) lane — `ClearLaneCommand`.
@@ -389,23 +277,6 @@ pub enum ProjectAction {
     /// Duplicate the selected scene modifiers, preserving their stable ids in
     /// the command's captured selection.
     SceneModifiersDuplicate(LayerId, Vec<NodeId>),
-    /// Apply one atomic material recipe to the selected material scope.
-    /// Eligibility and numeric writes are owned by the app/editor layer.
-    MaterialLookApply {
-        target: super::GraphParamTarget,
-        object: SceneNodeRef,
-        material: SceneNodeRef,
-        look: MaterialLook,
-    },
-    /// Apply one validated batch to existing material parameter slots.
-    MaterialParamsSet {
-        target: super::GraphParamTarget,
-        object: SceneNodeRef,
-        material: SceneNodeRef,
-        kind: MaterialEditKind,
-        writes: Vec<MaterialParamWrite>,
-        description: String,
-    },
     /// Capture the selected scene modifiers into the UI-owned clipboard.
     SceneModifiersCopy(LayerId, Vec<NodeId>),
     /// Paste the UI-owned scene modifier snapshot through the content thread.
@@ -923,58 +794,17 @@ pub enum RootAction {
     SceneItemMove(i32),
     SceneItemRename,
     SceneItemFrame,
-    /// D7 "Open Graph Editor" empty-state action for a generator layer with
-    /// no `render_scene` — reuses the existing open-editor action.
-    SceneSetupOpenGraphEditor(LayerId),
     /// The Camera header's "Use this view" (SCENE_SURFACES D14): copy the
-    /// editor viewport's view into this layer's scene camera. The app owns
-    /// the viewport camera, so it resolves the pose and builds the command.
-    SceneSetupCopyViewportCamera(LayerId),
-    /// P2 object-name click: `(layer_id, object, current_name)` — opens
-    /// the shared inline text-input session (same mechanics as
-    /// `AudioSendLabelClicked`); commit dispatches `RenameGroupCommand` (the
-    /// SCENE_BUILD P3 rename-sweep command, unchanged).
-    SceneSetupRenameObjectClicked(LayerId, SceneNodeRef, String),
-    /// P5 light-row/properties-header name click: `(layer_id, light,
-    /// current_name)` — same shape as [`Self::SceneSetupRenameObjectClicked`],
-    /// opens the shared inline text-input session over the row's name label;
-    /// commit dispatches the plain `SetNodeHandleCommand` (no group sweep —
-    /// nothing downstream displays light names besides this row).
-    SceneSetupRenameLightClicked(LayerId, SceneNodeRef, String),
-    /// UX-P2 (D6 of SCENE_PANEL_UX_DESIGN.md): the single "+ Add Modifier"
-    /// button click — `(layer_id, group_node_id, button_node_id)`. Replaces
-    /// the old 7-chip grid, each of which dispatched `SceneSetupAddModifier`
-    /// directly; this button doesn't resolve a choice itself, it opens the
-    /// shared `panels::dropdown` overlay (`UIRoot::try_open_dropdown_inner`,
-    /// same resolve-at-open convention as `SceneSetupEnumClicked` —
-    /// `button_node_id` anchors the overlay since the panel has no
-    /// `&UITree` in `handle_event`), listing the SAME
-    /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
-    /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
-    SceneSetupAddModifierClicked(LayerId, SceneNodeRef, crate::node::NodeId),
-    /// Any Scene tab group's "+": the app opens the one Add menu
-    /// (`scene_setup_actions::add_menu`) at the clicked button, starting on
-    /// that group's entries.
-    SceneSetupAddClicked(LayerId, super::scene_setup_panel::SceneGroup),
-    SceneSetupFluidRoleClicked {
-        layer_id: LayerId,
-        object: SceneNodeRef,
-        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
-        button_node_id: crate::node::NodeId,
-    },
-    SceneSetupFluidDomainClicked {
-        layer_id: LayerId,
-        object: SceneNodeRef,
-        role: u32,
-        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
-        anchor: Rect,
-    },
-    SceneSetupFluidRoleTargetClicked {
-        layer_id: LayerId,
-        source: SceneNodeRef,
-        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
-        button_node_id: crate::node::NodeId,
-    },
+    /// editor viewport's view into this camera item. The app owns the
+    /// viewport camera, so it resolves the pose and builds the command.
+    SceneSetupCopyViewportCamera(LayerId, ItemId),
+    /// An item's name was clicked: `(layer_id, item, current_name)`. Opens
+    /// the shared inline text-input session over the name; the commit
+    /// renames the item.
+    SceneRenameClicked(LayerId, ItemId, String),
+    /// A file field's picker: the app opens the file dialog and sends the
+    /// picked path as a `ProjectAction::SceneFieldSet`.
+    SceneFieldFileClicked { layer_id: LayerId, item: ItemId, field: String, extensions: Vec<String> },
     /// Open the object-target and preview menu for a scene modifier card.
     SceneModifierObjectsClicked(LayerId, NodeId),
     /// Open the shared preset menu for one exact scene modifier card.
@@ -990,38 +820,6 @@ pub enum RootAction {
     /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8): double-click on a dock
     /// numeric value cell opens its type-in box. Carries the row's write
     /// address (mirroring `SceneSetupParamChanged`'s tuple shape), the
-    /// cell's own node id (the app resolves its screen rect at open time,
-    /// same convention as `SceneSetupRenameObjectClicked`'s
-    /// `object_name_rect` lookup — the panel has no `&UITree` in
-    /// `handle_event` to resolve bounds itself), the base value to prefill,
-    /// and D10's `degrees` flag (the box prefills/parses degrees for the
-    /// committed row table, radians everywhere else — conversion lives only
-    /// at this boundary). Handled by the app directly (`text_input.begin` +
-    /// `SceneNumericParamCtx`), same shape as `BeginParamTextInput`.
-    SceneSetupBeginNumericTextInput {
-        layer_id: LayerId,
-        scope_path: Vec<u32>,
-        node_doc_id: u32,
-        param_id: String,
-        value: f32,
-        cell_node_id: crate::node::NodeId,
-        degrees: bool,
-    },
-    /// P4 D9: click on a 3+-label enum value cell opens the shared
-    /// `panels::dropdown` overlay, items = the row's label set anchored
-    /// under the cell (`cell_node_id`, same resolve-at-open convention as
-    /// `SceneSetupBeginNumericTextInput`). Selection routes back through
-    /// `SceneSetupParamChanged` (the label's index as the new value) — no
-    /// new mutation path.
-    SceneSetupEnumClicked {
-        layer_id: LayerId,
-        scope_path: Vec<u32>,
-        node_doc_id: u32,
-        param_id: String,
-        labels: Vec<&'static str>,
-        current_index: u32,
-        cell_node_id: crate::node::NodeId,
-    },
     SelectInspectorTab(InspectorTab),
     /// Audio-layer Send dropdown clicked — opens the send picker.
     AudioSendClicked(LayerId),
@@ -1044,7 +842,7 @@ pub enum RootAction {
     /// click on an enum (`value_labels`) row's value cell with 3+
     /// labels opens the shared `panels::dropdown` overlay — items = the
     /// row's label set anchored under the cell (`cell_node_id`, same
-    /// resolve-at-open convention as `SceneSetupEnumClicked`), checked at
+    /// resolve-at-open convention), checked at
     /// `current_index`, each item dispatching [`ParamEnumSet`]. Emitted by
     /// the shared card row core (`enum_value_cell_actions`), so scene rows
     /// (synthesized pids) and inspector card rows (real pids) share the one
@@ -1134,33 +932,6 @@ pub enum RootAction {
     /// node id (the app resolves its screen rect at open time — same
     /// convention as `SceneSetupBeginNumericTextInput`).
     AudioSendGainBeginTextInput(AudioSendId, f32, crate::node::NodeId),
-    /// P4b: click the Skin row's source dropdown — `UIRoot`'s pre-dispatch
-    /// dropdown intercept opens the shared `panels::dropdown` overlay anchored
-    /// to `button_node_id`, listing "None" + every `source_options` entry,
-    /// each item dispatching `SceneSetupSkinSourceSet`. The options ride the
-    /// action (captured from the row's freshly synced `SkinRowVm`) so the
-    /// opener needs no project cache — same self-contained convention as
-    /// `SceneSetupEnumClicked`'s label set.
-    SceneSetupSkinSourceClicked {
-        layer_id: LayerId,
-        scope_path: Vec<u32>,
-        scene_object_id: u32,
-        source_node_id: Option<u32>,
-        target_map: crate::panels::scene_setup_panel::SkinTargetMap,
-        source_options: Vec<(LayerId, String)>,
-        button_node_id: crate::node::NodeId,
-    },
-    /// P4b: click the Skin row's target-map dropdown — app-side opens the
-    /// shared dropdown, listing Emissive / Base Color, each item dispatching
-    /// `SceneSetupSkinTargetMapSet`.
-    SceneSetupSkinTargetMapClicked {
-        layer_id: LayerId,
-        scope_path: Vec<u32>,
-        scene_object_id: u32,
-        source_node_id: Option<u32>,
-        current_target_map: crate::panels::scene_setup_panel::SkinTargetMap,
-        button_node_id: crate::node::NodeId,
-    },
     /// The Material section's preset pick list and "+ Add feature" menu: the
     /// app opens the shared dropdown anchored to `button_node_id`; every item
     /// already carries the action it fires, so the opener holds no material

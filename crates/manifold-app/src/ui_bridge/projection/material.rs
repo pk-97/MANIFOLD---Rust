@@ -1,33 +1,12 @@
 //! Material facts adapted at the engine/UI boundary. No registry descriptor copies.
 use manifold_core::material_inspector as core;
+use manifold_core::effects::{ParamId, PresetInstance};
+use manifold_core::project::Project;
+use manifold_core::scene_doc::split_param_id;
+use manifold_core::GraphTarget;
 use manifold_ui::param_surface as ui;
 
-/// An untextured unlit surface (including a new plane) takes its first
-/// layer skin as base colour. Lit materials retain the emissive default.
-pub(crate) fn default_skin_target(
-    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    material: &manifold_nodes_scene::node_graph::scene_vm::MaterialVm,
-) -> manifold_ui::panels::scene_setup_panel::SkinTargetMap {
-    use manifold_nodes_scene::node_graph::scene_vm::MaterialVm;
-    use manifold_ui::panels::scene_setup_panel::SkinTargetMap;
-    if let (Some(def), MaterialVm::Known(row)) = (def, material) {
-        let is_base_color =
-            node_at(def, &row.scope_path, row.node_doc_id).is_some_and(|(node, _)| {
-                node.type_id == "node.unlit_material"
-                    || (node.type_id == "node.pbr_material"
-                        && matches!(
-                            node.params.get("baked_look"),
-                            Some(SerializedParamValue::Bool { value: true })
-                        ))
-            });
-        if is_base_color {
-            return SkinTargetMap::BaseColor;
-        }
-    }
-    SkinTargetMap::Emissive
-}
-
-fn feature(value: core::MaterialFeature) -> ui::MaterialFeature {
+pub(crate) fn feature(value: core::MaterialFeature) -> ui::MaterialFeature {
     match value {
         core::MaterialFeature::Coat => ui::MaterialFeature::Coat,
         core::MaterialFeature::Iridescence => ui::MaterialFeature::Iridescence,
@@ -107,302 +86,17 @@ pub(super) fn role(value: core::MaterialParamRole) -> ui::MaterialParamRole {
     }
 }
 
-use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
-};
-use manifold_core::effects::PresetInstance;
-use manifold_core::{GraphTarget, NodeId};
-use manifold_core::SceneNodeRef;
-use manifold_ui::param_surface::ParamSurface;
-
-fn node_at<'a>(
-    def: &'a EffectGraphDef,
-    scope: &[u32],
-    id: u32,
-) -> Option<(&'a EffectGraphNode, SceneNodeRef)> {
-    let mut nodes = def.nodes.as_slice();
-    let mut stable_scope = Vec::with_capacity(scope.len());
-    for group_id in scope {
-        let group = nodes.iter().find(|n| n.id == *group_id)?;
-        stable_scope.push(group.node_id.clone());
-        nodes = &group.group.as_ref()?.nodes;
-    }
-    let node = nodes.iter().find(|n| n.id == id)?;
-    Some((
-        node,
-        SceneNodeRef {
-            scope: stable_scope,
-            node: node.node_id.clone(),
-        },
-    ))
-}
-
-pub(super) fn inspector_info(
-    project: &manifold_core::project::Project,
-    def: &EffectGraphDef,
-    object: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow,
-    inst: Option<&PresetInstance>,
-) -> Option<manifold_ui::panels::scene_setup_panel::MaterialInspectorInfo> {
-    use manifold_nodes_scene::node_graph::scene_vm::{MaterialTextureSource, MaterialVm};
-    use manifold_ui::panels::scene_setup_panel::{MaterialInspectorInfo, MaterialTextureInfo};
-    let MaterialVm::Known(material) = &object.material else {
-        return None;
-    };
-    if !material.is_pbr {
-        return None;
-    }
-    let (_, object_ref) = node_at(def, &object.visible_addr.scope_path, object.object_node_id)?;
-    let (_, material_ref) = node_at(def, &material.scope_path, material.node_doc_id)?;
-    let textures = material
-        .texture_slots
-        .iter()
-        .map(|slot| {
-            let source_label = match &slot.source {
-                MaterialTextureSource::Unconnected => "No texture".to_owned(),
-                MaterialTextureSource::GraphSource => "Graph source".to_owned(),
-                MaterialTextureSource::Known {
-                    scope_path,
-                    node_doc_id,
-                    type_id,
-                } => node_at(def, scope_path, *node_doc_id)
-                    .map(|(node, _)| {
-                        let detail =
-                            ["layer", "path"]
-                                .iter()
-                                .find_map(|key| match node.params.get(*key) {
-                                    Some(SerializedParamValue::String { value })
-                                        if !value.is_empty() =>
-                                    {
-                                        Some(value.as_str())
-                                    }
-                                    _ => None,
-                                });
-                        match detail {
-                            Some(layer) if type_id == "node.layer_source" => {
-                                let label = project
-                                    .timeline
-                                    .find_layer_by_id(layer)
-                                    .map(|(_, layer)| layer.name.as_str())
-                                    .unwrap_or(layer);
-                                format!("Connected · {label}")
-                            }
-                            Some(path) => {
-                                format!("Connected · {}", path.rsplit('/').next().unwrap_or(path))
-                            }
-                            None => format!(
-                                "Connected · {}",
-                                node.title
-                                    .as_deref()
-                                    .or(node.handle.as_deref())
-                                    .unwrap_or(type_id)
-                            ),
-                        }
-                    })
-                    .unwrap_or_else(|| "Graph source".to_owned()),
-            };
-            MaterialTextureInfo {
-                port: slot.port.clone(),
-                label: slot.port.trim_end_matches("_map").replace('_', " "),
-                source_label,
-                connected: !matches!(slot.source, MaterialTextureSource::Unconnected),
-                graph_source: matches!(slot.source, MaterialTextureSource::GraphSource),
-            }
-        })
-        .collect();
-    let look = inst.and_then(|inst| {
-        let reference = manifold_core::scene_modifier_preset::SceneNodeRef {
-            scope: material_ref.scope.clone(),
-            node: material_ref.node.clone(),
-        };
-        super::super::material_looks::matching_look(inst, def, &reference)
-    });
-    Some(MaterialInspectorInfo {
-        look,
-        object_gain: def
-            .preset_metadata
-            .as_ref()
-            .into_iter()
-            .flat_map(|meta| &meta.bindings)
-            .find_map(|binding| match &binding.target {
-                BindingTarget::Node { node_id, param }
-                    if node_id == &object_ref.node && param == "emission_strength" =>
-                {
-                    Some(binding.id.clone().into())
-                }
-                _ => None,
-            }),
-        object: object_ref,
-        params: def
-            .preset_metadata
-            .as_ref()
-            .into_iter()
-            .flat_map(|meta| &meta.bindings)
-            .filter_map(|binding| match &binding.target {
-                BindingTarget::Node { node_id, param } if node_id == &material_ref.node => {
-                    Some((param.clone(), binding.id.clone().into()))
-                }
-                _ => None,
-            })
-            .collect(),
-        material: material_ref,
-        shared_object_count: material.shared_object_count,
-        textures,
-    })
-}
-
-fn unique_node<'a>(
-    def: &'a EffectGraphDef,
-    id: &NodeId,
-) -> Option<(&'a EffectGraphNode, &'a [EffectGraphWire])> {
-    fn visit<'a>(
-        nodes: &'a [EffectGraphNode],
-        wires: &'a [EffectGraphWire],
-        id: &NodeId,
-        found: &mut Option<(&'a EffectGraphNode, &'a [EffectGraphWire])>,
-    ) -> bool {
-        for node in nodes {
-            if node.node_id == *id {
-                if found.is_some() {
-                    return false;
-                }
-                *found = Some((node, wires));
-            }
-            if let Some(group) = &node.group
-                && !visit(&group.nodes, &group.wires, id, found)
-            {
-                return false;
-            }
-        }
-        true
-    }
-    let mut found = None;
-    if visit(&def.nodes, &def.wires, id, &mut found) {
-        found
-    } else {
-        None
-    }
-}
-
-fn direct_binding<'a>(
-    inst: &PresetInstance,
-    def: &'a EffectGraphDef,
-    id: &str,
-) -> Option<(&'a NodeId, &'a str)> {
-    let spec = &inst.params.get(id)?.spec;
-    if spec.invert || spec.curve != manifold_core::macro_bank::MacroCurve::Linear {
-        return None;
-    }
-    let meta = def.preset_metadata.as_ref()?;
-    let mut bindings = meta.bindings.iter().filter(|b| b.id == id);
-    let binding = bindings.next()?;
-    if bindings.next().is_some() || binding.scale != 1.0 || binding.offset != 0.0 {
-        return None;
-    }
-    if !matches!(
-        binding.convert,
-        manifold_core::effects::ParamConvert::Float
-            | manifold_core::effects::ParamConvert::EnumRound
-    ) {
-        return None;
-    }
-    let BindingTarget::Node { node_id, param } = &binding.target else {
-        return None;
-    };
-    Some((node_id, param))
-}
-
-pub(super) fn enrich_surface(
-    surface: &mut ParamSurface,
-    inst: &PresetInstance,
-    def: &EffectGraphDef,
-) {
-    use ui::{MaterialParamRole as Role, RgbChannel};
-    let feature_modes: Vec<_> = surface
-        .rows
-        .iter()
-        .filter_map(|row| {
-            let Some(Role::FeatureMode(feature)) = row.spec.material_role else {
-                return None;
-            };
-            let (node, _) = direct_binding(inst, def, &row.id)?;
-            Some((node.clone(), feature, row.value.base))
-        })
-        .collect();
-    let baked: Vec<_> = def
-        .preset_metadata
-        .as_ref()
-        .into_iter()
-        .flat_map(|m| &m.bindings)
-        .filter_map(|binding| match &binding.target {
-            BindingTarget::Node { node_id, param }
-                if param == "baked_look" && inst.get_param(&binding.id) > 0.5 =>
-            {
-                Some(node_id.clone())
-            }
-            _ => None,
-        })
-        .collect();
-    for row in &mut surface.rows {
-        if row.spec.material_role.is_none() {
-            continue;
-        }
-        if let Some((id, param)) = direct_binding(inst, def, &row.id) {
-            if let Some((node, wires)) = unique_node(def, id) {
-                row.value.driven |= wires
-                    .iter()
-                    .any(|w| w.to_node == node.id && w.to_port == param);
-                if row.value.driven {
-                    row.spec.inactive_reason = Some("Driven by a graph wire".into());
-                } else if matches!(row.spec.material_role, Some(Role::Placement(..)))
-                    && row.modulator_stored
-                {
-                    row.spec.inactive_reason =
-                        Some("Mapped placement — edit individual matrix values".into());
-                } else if let Some(feature) = match row.spec.material_role {
-                    Some(Role::Scalar(ui::MaterialGroup::Feature(feature)))
-                    | Some(Role::Colour(ui::MaterialGroup::Feature(feature), ..)) => Some(feature),
-                    _ => None,
-                } {
-                    if feature_modes.iter().any(|(owner, f, mode)| {
-                        owner == id && *f == feature && (*mode == 1.0 || *mode == 3.0)
-                    }) {
-                        row.spec.inactive_reason = Some("Off — settings are retained".into());
-                    } else if feature != ui::MaterialFeature::Emission && baked.contains(id) {
-                        row.spec.inactive_reason = Some("Bypassed by Baked Look".into());
-                    }
-                } else if matches!(param, "metallic" | "roughness" | "specular")
-                    && baked.contains(id)
-                {
-                    row.spec.inactive_reason = Some("Bypassed by Baked Look".into());
-                }
-            } else {
-                row.spec.inactive_reason =
-                    Some("Ambiguous material binding — edit individual parameters".into());
-            }
-        } else {
-            row.spec.inactive_reason = Some("Custom binding — edit individual parameters".into());
-        }
-    }
-    colour_rows(&mut surface.rows, inst, def);
-    for row in &mut surface.rows {
-        let red = matches!(row.spec.material_role, Some(Role::Colour(_, _, RgbChannel::R)));
-        if red && !row.rgb_members.as_ref().is_some_and(|members| members.editable) && row.spec.inactive_reason.is_none() {
-            row.spec.inactive_reason = Some("Colour channels have separate control — edit them individually".into());
-        }
-    }
-}
-
-/// Group each colour's three channel rows: the R row of a colour whose G
-/// and B rows bind to the same node carries all three as `rgb_members`, so
-/// a scene surface draws it as the one colour row. Its `editable` says
-/// whether one RGB write owns them ([`rgb_ids_editable`], no wire-fed row).
-/// A colour with a missing, doubled or split channel stays three rows.
-pub(super) fn colour_rows(rows: &mut [ui::ParamRow], inst: &PresetInstance, def: &EffectGraphDef) {
+/// Group each colour's three channel rows: the R row of a colour whose G and
+/// B rows sit on the same scene item carries all three as `rgb_members`, so a
+/// scene surface draws it as the one colour row. Its `editable` says whether
+/// one RGB write owns them ([`rgb_ids_editable`]). A colour with a missing,
+/// doubled or split channel stays three rows.
+pub(super) fn colour_rows(rows: &mut [ui::ParamRow], inst: &PresetInstance) {
     for index in 0..rows.len() {
         let Some((colour, ui::RgbChannel::R)) = row_rgb_channel(&rows[index].spec) else {
             continue;
         };
-        let Some((node, _)) = direct_binding(inst, def, &rows[index].id) else {
+        let Some(item) = split_param_id(&rows[index].id).map(|(item, _)| item) else {
             continue;
         };
         let mut members: [Option<&ui::ParamRow>; 3] = [None, None, None];
@@ -411,7 +105,7 @@ pub(super) fn colour_rows(rows: &mut [ui::ParamRow], inst: &PresetInstance, def:
             let Some((c, channel)) = row_rgb_channel(&row.spec) else {
                 continue;
             };
-            if c != colour || !direct_binding(inst, def, &row.id).is_some_and(|(n, _)| n == node) {
+            if c != colour || split_param_id(&row.id).map(|(other, _)| other) != Some(item) {
                 continue;
             }
             single &= members[channel.index()].is_none();
@@ -423,7 +117,7 @@ pub(super) fn colour_rows(rows: &mut [ui::ParamRow], inst: &PresetInstance, def:
                 let ids = [r, g, b].map(|row| row.id.clone());
                 Some(ui::RgbMembers {
                     group,
-                    editable: [r, g, b].iter().all(|row| !row.value.driven) && rgb_ids_editable(inst, def, &ids),
+                    editable: [r, g, b].iter().all(|row| !row.value.driven) && rgb_ids_editable(inst, &ids),
                     ids,
                     values: [r, g, b].map(|row| row.value.base),
                 })
@@ -446,26 +140,14 @@ fn row_rgb_channel(spec: &ui::RowSpec) -> Option<(Option<ui::MaterialColour>, ui
 
 /// One swatch over three channel rows, or `None` when the channels cannot
 /// take a single RGB write ([`rgb_ids_editable`]).
-pub(super) fn rgb_members(
-    inst: &PresetInstance,
-    def: &EffectGraphDef,
-    group: ui::ColourGroup,
-    rows: [&ui::ParamRow; 3],
-) -> Option<ui::RgbMembers> {
+pub(super) fn rgb_members(inst: &PresetInstance, group: ui::ColourGroup, rows: [&ui::ParamRow; 3]) -> Option<ui::RgbMembers> {
     let ids = rows.map(|row| row.id.clone());
-    rgb_ids_editable(inst, def, &ids).then(|| ui::RgbMembers {
-        group,
-        ids,
-        values: rows.map(|row| row.value.base),
-        editable: true,
-    })
+    rgb_ids_editable(inst, &ids).then(|| ui::RgbMembers { group, ids, values: rows.map(|row| row.value.base), editable: true })
 }
 
 /// Which colour and channel a param is: a material colour channel, or a
 /// scene item's colour channel (`None` colour). `None` for any other param.
-fn rgb_channel(
-    spec: &manifold_core::effect_graph_def::ParamSpecDef,
-) -> Option<(Option<core::MaterialColour>, core::RgbChannel)> {
+fn rgb_channel(spec: &manifold_core::effect_graph_def::ParamSpecDef) -> Option<(Option<core::MaterialColour>, core::RgbChannel)> {
     match (spec.material_role, spec.scene.and_then(|scene| scene.colour)) {
         (Some(core::MaterialParamRole::Colour(_, colour, channel)), _) => Some((Some(colour), channel)),
         (None, Some(channel)) => Some((None, channel)),
@@ -473,15 +155,11 @@ fn rgb_channel(
     }
 }
 
-/// The three ids are one colour's R, G and B, each bound straight to one
-/// node param with no wire into it and no driver, envelope, audio mod,
-/// automation or mapping on it — so one RGB write owns all three.
-fn rgb_ids_editable(
-    inst: &PresetInstance,
-    def: &EffectGraphDef,
-    ids: &[manifold_core::effects::ParamId; 3],
-) -> bool {
-    let mut owner: Option<&NodeId> = None;
+/// The three ids are one colour's R, G and B on one scene item with no
+/// driver, envelope, audio mod, automation or mapping on them, so one RGB
+/// write owns all three.
+fn rgb_ids_editable(inst: &PresetInstance, ids: &[ParamId; 3]) -> bool {
+    let mut owner: Option<&str> = None;
     let mut colour = None;
     for (index, id) in ids.iter().enumerate() {
         if ids[..index].contains(id) || inst.modulator_stored(id) {
@@ -494,56 +172,22 @@ fn rgb_ids_editable(
             return false;
         }
         colour = Some(c);
-        let Some((node, param)) = direct_binding(inst, def, id) else {
+        let Some((item, _)) = split_param_id(id) else {
             return false;
         };
-        if owner.is_some_and(|n| n != node) {
+        if owner.is_some_and(|known| known != item) {
             return false;
         }
-        owner = Some(node);
-        let Some((n, wires)) = unique_node(def, node) else {
-            return false;
-        };
-        let wrong_material = c.is_some() && n.type_id != "node.pbr_material";
-        if wrong_material || wires.iter().any(|w| w.to_node == n.id && w.to_port == param) {
-            return false;
-        }
+        owner = Some(item);
     }
     true
 }
 
 /// Shared structural/gesture preflight. IDs must still refer to one editable RGB group.
-pub(crate) fn rgb_editable(
-    project: &manifold_core::project::Project,
-    target: &GraphTarget,
-    ids: &[manifold_core::effects::ParamId; 3],
-) -> bool {
+pub(crate) fn rgb_editable(project: &Project, target: &GraphTarget, ids: &[ParamId; 3]) -> bool {
     let Some(inst) = project.preset_instance(target) else {
         return false;
     };
-    let default = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(inst.effect_type());
-    let Some(def) = project.graph_for_target(target, None).or_else(|| {
-        project.graph_for_target(target, default.as_ref().map(|v| v.canonical_def.as_ref()))
-    }) else {
-        return false;
-    };
-    rgb_ids_editable(inst, def, ids)
-        && ids.iter().all(|id| {
-            crate::scene_modifier_edit::macro_parameter_lock_reason(project, target, id).is_none()
-        })
-}
-
-/// Resolve authored/embedded topology before falling back to the catalog.
-pub(crate) fn graph_def(
-    project: &manifold_core::project::Project,
-    target: &GraphTarget,
-) -> Option<EffectGraphDef> {
-    if let Some(def) = project.graph_for_target(target, None) {
-        return Some(def.clone());
-    }
-    let inst = project.preset_instance(target)?;
-    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(inst.effect_type())?;
-    project
-        .graph_for_target(target, Some(view.canonical_def.as_ref()))
-        .cloned()
+    rgb_ids_editable(inst, ids)
+        && ids.iter().all(|id| crate::scene_modifier_edit::macro_parameter_lock_reason(project, target, id).is_none())
 }

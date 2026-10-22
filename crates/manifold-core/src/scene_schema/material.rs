@@ -9,6 +9,7 @@
 
 use manifold_foundation::scene_surface::ControlGroup;
 
+use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, wrong_value};
 use super::{Exposure, PropertyRow, Reach, row};
 use crate::scene_doc::{ItemFields, TextureSource};
 
@@ -52,4 +53,64 @@ pub static MATERIAL_ROWS: [PropertyRow; 8] = [
     row("texture_height", TEXTURE, Material, Exposure::Internal("the file's own size")).param("height").when(file),
     row("repack", TEXTURE, Material, Exposure::Internal("a base colour image is not repacked")).param("mode").when(file),
     row("glossiness_factor", TEXTURE, Material, Exposure::Internal("only a repacked gloss map reads it")).when(file),
+];
+
+const TEXTURE_SOURCES: &[Choice] = &[Choice { key: "none", label: "None" }, Choice { key: "file", label: "File" }];
+
+/// The texture source is a field; the features are set by the feature menu
+/// (one `Set` with the feature's defaults, so one undo removes it).
+pub static MATERIAL_FIELDS: [FieldRow; 2] = [
+    FieldRow {
+        id: "texture",
+        label: "Texture",
+        section: Material,
+        control: FieldControl::ClosedOrLayer(TEXTURE_SOURCES),
+        applies: always,
+        disabled: enabled,
+        read: |fields| match fields {
+            ItemFields::Material(m) => match &m.texture {
+                TextureSource::None => FieldValue::Choice("none".to_owned()),
+                TextureSource::File { .. } => FieldValue::Choice("file".to_owned()),
+                TextureSource::Layer { layer } => FieldValue::Layer(layer.clone()),
+            },
+            _ => FieldValue::Choice("none".to_owned()),
+        },
+        write: |fields, value| {
+            let ItemFields::Material(m) = fields else {
+                return Err(wrong_value("texture", value));
+            };
+            m.texture = match value {
+                FieldValue::Choice(key) if key == "none" => TextureSource::None,
+                FieldValue::Choice(key) if key == "file" => match &m.texture {
+                    TextureSource::File { .. } => m.texture.clone(),
+                    _ => TextureSource::File { path: String::new() },
+                },
+                FieldValue::Layer(layer) => TextureSource::Layer { layer: layer.clone() },
+                other => return Err(wrong_value("texture", other)),
+            };
+            Ok(())
+        },
+    },
+    FieldRow {
+        id: "texture_file",
+        label: "Texture File",
+        section: Material,
+        control: FieldControl::File { extensions: &["png", "jpg", "jpeg", "tga", "bmp", "exr", "hdr"] },
+        applies: file,
+        disabled: enabled,
+        read: |fields| match fields {
+            ItemFields::Material(m) => match &m.texture {
+                TextureSource::File { path } => FieldValue::File(path.clone()),
+                _ => FieldValue::File(String::new()),
+            },
+            _ => FieldValue::File(String::new()),
+        },
+        write: |fields, value| match (fields, value) {
+            (ItemFields::Material(m), FieldValue::File(path)) => {
+                m.texture = TextureSource::File { path: path.clone() };
+                Ok(())
+            }
+            _ => Err(wrong_value("texture_file", value)),
+        },
+    },
 ];

@@ -759,7 +759,7 @@ pub struct BindingDef {
     pub offset: f32,
     /// `true` when `default_value` is a MIRROR of the target node's param
     /// taken at stamp time, not a resting value anyone chose. Only
-    /// [`crate::scene_exposure::stamp_scene_node_exposures_into`] sets it:
+    /// the old exposure stamping sets it:
     /// a GLB import stamps a card over whatever the importer placed, so the
     /// "default" is just a snapshot of the node.
     ///
