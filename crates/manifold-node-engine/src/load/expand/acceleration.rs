@@ -148,12 +148,16 @@ fn trace(
             candidates.push(Candidate { node: body.clone(), port: ACCELERATION_ALIAS.into() });
             continue;
         }
-        let primitive = registry.construct(&def.type_id).ok_or_else(|| {
+        let mut primitive = registry.construct(&def.type_id).ok_or_else(|| {
             unsupported(
                 def.type_id.clone(),
                 "physical source chain contains an unregistered producer",
             )
         })?;
+        // The node's ports as its document shapes them: a fused region (a
+        // `node.wgsl_compute`) takes them from its source, a dynamic node
+        // from its count params, as the loader builds it.
+        crate::load::graph_loader::configure_from_doc(primitive.as_mut(), def);
         // A node that declares where scene forces enter (a swarm's forces
         // node) ends the trace there.
         if let Some(input) = primitive.acceleration_input() {
