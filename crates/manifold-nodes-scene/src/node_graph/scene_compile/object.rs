@@ -43,7 +43,8 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         return;
     };
     let owner = item.id.as_str();
-    let group_copies = frame.and_then(|frame| frame.copies);
+    // Inside a copied group, or drawn as a swarm's particles.
+    let group_copies = frame.and_then(|frame| frame.copies).or_else(|| b.swarm_draws.get(&item.id).copied());
     let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
     let mut center = None;
     let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {

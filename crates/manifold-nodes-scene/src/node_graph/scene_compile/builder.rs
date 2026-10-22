@@ -57,6 +57,14 @@ pub(crate) struct Builder<'d> {
     pub(crate) copy_parts: BTreeMap<u32, Vec<(u32, u32)>>,
     /// The transform each Group's lights and cameras sit in, by group.
     pub(crate) group_frames: BTreeMap<ItemId, u32>,
+    /// The node whose `out` is each Group's visibility, by group.
+    pub(crate) group_visible: BTreeMap<ItemId, u32>,
+    /// The Swarms, in tree order.
+    pub(crate) swarms: Vec<ItemId>,
+    /// The swarm copies node that draws each Object or Group a Swarm draws as.
+    pub(crate) swarm_draws: BTreeMap<ItemId, u32>,
+    /// The emitter transform each swarm copies node is placed in.
+    pub(crate) swarm_frames: BTreeMap<u32, u32>,
     /// The scene modifiers (forces, mesh modifiers), in application order.
     modifiers: Vec<SceneModifierInstanceDef>,
 }
@@ -84,6 +92,10 @@ impl<'d> Builder<'d> {
             copy_bodies: Vec::new(),
             copy_parts: BTreeMap::new(),
             group_frames: BTreeMap::new(),
+            group_visible: BTreeMap::new(),
+            swarms: Vec::new(),
+            swarm_draws: BTreeMap::new(),
+            swarm_frames: BTreeMap::new(),
             modifiers: Vec::new(),
         };
         b.add(SCENE, "input", "system.generator_input");
@@ -144,6 +156,33 @@ impl<'d> Builder<'d> {
             })
             .collect();
         self.bindings.extend(mirrored);
+    }
+
+    /// Drive `to`'s `to_param` from every card row bound to `from`'s
+    /// `from_param`, starting at its value: a second node that follows the
+    /// same control.
+    pub(crate) fn follow(&mut self, from: u32, from_param: &str, to: u32, to_param: &str) {
+        let Some(source) = self.node_mut(from).map(|node| (node.node_id.clone(), node.params.get(from_param).cloned())) else {
+            return;
+        };
+        let Some(target) = self.node_mut(to) else {
+            return;
+        };
+        if let Some(value) = source.1 {
+            target.params.insert(to_param.to_owned(), value);
+        }
+        let target_id = target.node_id.clone();
+        let followed: Vec<BindingDef> = self
+            .bindings
+            .iter()
+            .filter(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if *node_id == source.0 && param == from_param))
+            .map(|binding| {
+                let mut binding = binding.clone();
+                binding.target = BindingTarget::Node { node_id: target_id.clone(), param: to_param.to_owned() };
+                binding
+            })
+            .collect();
+        self.bindings.extend(followed);
     }
 
     pub(crate) fn id(&self, owner: &str, role: &'static str) -> Option<u32> {

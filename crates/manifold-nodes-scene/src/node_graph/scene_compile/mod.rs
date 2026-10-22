@@ -11,7 +11,7 @@
 //! its node param; the (kind, property) table in `manifold_core::scene_schema`
 //! decides which rows exist.
 //!
-//! Kinds whose emitters arrive in later lanes (Water, Water Source, Swarm)
+//! Kinds whose emitters arrive in later lanes (Water, Water Source)
 //! and the Ocean shape compile to nothing yet. Forces and mesh modifiers
 //! compile to scene modifier instances (`forces.rs`); Copies emit a copies
 //! body per item (`copies.rs`); physics emits a body per item (`physics.rs`).
@@ -27,6 +27,7 @@ mod mesh;
 mod model_material;
 mod object;
 mod physics;
+mod swarm;
 mod world;
 
 pub(crate) use builder::Builder;
@@ -41,7 +42,9 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     material::emit_all(&mut b);
     camera::emit_all(&mut b);
     light::emit_all(&mut b);
+    swarm::emit_all(&mut b);
     group::emit_tree(&mut b);
+    swarm::finish(&mut b);
     world::emit(&mut b);
     copies::join_world(&mut b);
     forces::emit_all(&mut b)?;
@@ -52,6 +55,7 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
 pub fn drawn_items(doc: &SceneDoc) -> Vec<manifold_foundation::ItemId> {
     let mut b = Builder::new(doc);
     material::emit_all(&mut b);
+    swarm::emit_all(&mut b);
     group::emit_tree(&mut b);
     b.object_items
 }

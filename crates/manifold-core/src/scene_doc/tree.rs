@@ -227,6 +227,9 @@ impl SceneDoc {
             ItemFields::Group(g) if g.material.as_ref().is_some_and(gone) => g.material = None,
             ItemFields::Object(o) if o.material.as_ref().is_some_and(gone) => o.material = None,
             ItemFields::Swarm(s) => {
+                if s.material.as_ref().is_some_and(gone) {
+                    s.material = None;
+                }
                 if matches!(&s.draw_as, DrawAs::Item(id) if gone(id)) {
                     s.draw_as = DrawAs::default();
                 }
@@ -264,6 +267,7 @@ impl SceneDoc {
                 ItemFields::Group(g) => g.material = g.material.as_ref().map(swap),
                 ItemFields::Object(o) => o.material = o.material.as_ref().map(swap),
                 ItemFields::Swarm(s) => {
+                    s.material = s.material.as_ref().map(swap);
                     if let DrawAs::Item(id) = &mut s.draw_as {
                         *id = swap(id);
                     }
@@ -327,6 +331,13 @@ impl SceneDoc {
     pub fn any_copies(&self) -> bool {
         let mut any = false;
         self.walk(|item, _| any |= item.fields.copies());
+        any
+    }
+
+    /// Whether the scene has a Swarm.
+    pub fn any_swarm(&self) -> bool {
+        let mut any = false;
+        self.walk(|item, _| any |= item.kind() == super::ItemKind::Swarm);
         any
     }
 

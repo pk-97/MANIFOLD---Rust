@@ -51,7 +51,7 @@ const fn entry(
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 20] = [
+pub static ADD_ENTRIES: [AddEntry; 21] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
     entry("object.tetrahedron", "Object", "Tetrahedron", ItemKind::Object, "Tetrahedron", || object(Shape::Tetrahedron)),
@@ -66,6 +66,7 @@ pub static ADD_ENTRIES: [AddEntry; 20] = [
     }),
     entry("group", "Group", "Group", ItemKind::Group, "Group", || ItemFields::default_for(ItemKind::Group)),
     entry("material", "Material", "Material", ItemKind::Material, "Material", || ItemFields::default_for(ItemKind::Material)),
+    entry("swarm", "Swarm", "Swarm", ItemKind::Swarm, "Swarm", || ItemFields::default_for(ItemKind::Swarm)),
     entry("force.radial", "Force", "Radial", ItemKind::Force, "Radial Force", || force(ForceType::Radial)),
     entry("force.uniform", "Force", "Uniform", ItemKind::Force, "Uniform Force", || force(ForceType::Uniform)),
     entry("force.vortex", "Force", "Vortex", ItemKind::Force, "Vortex", || force(ForceType::Vortex)),
