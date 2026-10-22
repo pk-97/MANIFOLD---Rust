@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 396 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 398 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -166,7 +166,7 @@ _Generated from the node registry. Do not hand-edit. 396 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (96)
+### 3D Geometry (98)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -208,12 +208,14 @@ _Generated from the node registry. Do not hand-edit. 396 nodes registered, group
 | Loop Camera | `node.loop_camera` | Source | A camera that flies through a scene in a perfect loop, locked to the beat. |
 | Make Triangles | `node.make_triangles` | Filter | Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render. |
 | Melt | `node.melt_mesh` | Filter | Pulls every vertex downward by a noise-driven amount, making a mesh appear to melt or slump. |
+| Merge Meshes | `node.merge_meshes` | Filter | Joins several meshes into one, each where its own transform puts it. The way a whole group becomes one shape to scatter particles over. |
 | Mesh Edges | `node.mesh_edges` | Filter | Outputs the wireframe edges of a triangle mesh, so any imported model can be drawn as lines. The mesh counterpart of Grid Edges. |
 | Mesh Ramp | `node.mesh_ramp` | Source | Turns a mesh's own positions into a growth mask — a value from 0 to 1 per vertex that sweeps across the mesh along an axis. Feeds any deformer's weight input t… |
 | Mesh Spatial Mask | `node.mesh_spatial_mask` | Source | Makes soft band or sphere weights from mesh positions for driving a staged surface response. |
 | Mesh Stagger Envelope | `node.mesh_stagger_envelope` | Source | Turns elapsed beats into a directional attack/hold/release weight that arrives across a mesh in order. |
 | Morph Mesh | `node.morph_mesh` | Filter | Blends smoothly between two meshes vertex-by-vertex, so one shape dissolves into another. Works best when both meshes share the same vertex count and layout. |
 | Morph Targets Blend | `node.morph_targets_blend` | Filter | Blends an imported mesh's morph targets by their live animated weights — the GPU counterpart to a Morph Weights node's sampled weight vector. |
+| Nest Copies | `node.nest_copies` | Map | Puts a whole set of copies at every copy of another set: copies of copies. |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | Boil | `node.noise_displace` | Filter | Pushes every vertex along its normal by animated simplex noise, so a mesh appears to simmer and bubble. |
 | Normal Wave Mesh | `node.normal_wave_mesh` | Filter | Travels a smooth directional wave across the current textured mesh while carrying its lighting frame. |
@@ -365,7 +367,7 @@ _Generated from the node registry. Do not hand-edit. 396 nodes registered, group
 | Shape Particle Blobs | `node.shape_particle_blobs` | Map | Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads. |
 | Smooth Lattice | `node.smooth_lattice` | Filter | Softens a liquid's density field so its surface comes out smooth instead of lumpy. |
 | Sort Particles Into Cells | `node.sort_particles_into_cells` | Filter | Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly. |
-| Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissol… |
+| Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface or through its volume. The way an… |
 | — | `node.spawn_whitewater` | Filter | Places the new foam, spray and bubble particles around the breaking water that throws them off. |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | — | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |

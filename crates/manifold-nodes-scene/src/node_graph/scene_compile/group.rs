@@ -85,7 +85,13 @@ fn emit(b: &mut Builder<'_>, item: &Item, outer: Option<&Frame>) -> Frame {
     // (its copies node, not a copies body).
     let swarm = b.swarm_draws.get(&item.id).copied().filter(|_| enclosing.is_none());
     let own = match &item.fields {
-        ItemFields::Group(_) if swarm.is_some() => swarm,
+        ItemFields::Group(_) if swarm.is_some() => {
+            // With Copies on, the swarm carries the group's own layout.
+            if let Some(nest) = swarm.filter(|nest| b.nests.contains_key(nest)) {
+                super::swarm::nest_layout(b, item, transform, nest);
+            }
+            swarm
+        }
         ItemFields::Group(group) if group.copies && enclosing.is_none() => {
             Some(copies::emit_group(b, item, transform, group.physics))
         }

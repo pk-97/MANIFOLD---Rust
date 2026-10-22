@@ -36,13 +36,65 @@ pub struct NotFinite;
 /// wind (xyz) and a pad. An impulse node is four floats (xyz, pad).
 pub const FORCE_NODE_FLOATS: usize = 8;
 
+/// Where a lattice sits in the world when its nodes are laid in a frame of
+/// their own (a swarm's emitter): the field is sampled at each node's world
+/// position and its vectors are stored turned back into the frame, so a
+/// wind blows the same way in the world however the frame turns, as
+/// Blender's force fields do.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LatticeFrame {
+    /// The frame's axes in the world (columns of its linear part).
+    axes: [[f32; 3]; 3],
+    origin: [f32; 3],
+    /// The linear part's inverse, by rows: world vectors into the frame.
+    inverse: [[f32; 3]; 3],
+}
+
+impl LatticeFrame {
+    /// The frame whose local x, y and z land on `axes` in the world, with
+    /// its origin at `origin`. `None` when it is not finite or flattens an
+    /// axis (a zero scale), since no field can be turned back into it.
+    pub fn new(axes: [[f32; 3]; 3], origin: [f32; 3]) -> Option<Self> {
+        if axes.iter().flatten().chain(&origin).any(|v| !v.is_finite()) {
+            return None;
+        }
+        let [a, b, c] = axes;
+        let rows = [cross(b, c), cross(c, a), cross(a, b)];
+        let det = dot(a, rows[0]);
+        let size = [a, b, c].iter().map(|v| dot(*v, *v).sqrt()).product::<f32>();
+        if !det.is_finite() || det.abs() <= 1e-6 * size {
+            return None;
+        }
+        Some(Self { axes, origin, inverse: rows.map(|row| row.map(|v| v / det)) })
+    }
+
+    fn point(&self, local: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|d| self.origin[d] + (0..3).map(|i| self.axes[i][d] * local[i]).sum::<f32>())
+    }
+
+    fn vector_to_local(&self, world: [f32; 3]) -> [f32; 3] {
+        self.inverse.map(|row| dot(row, world))
+    }
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
 /// Nodes on a regular grid from `min`, x fastest. A force lattice holds two
 /// `[f32; 4]` per node ([`FORCE_NODE_FLOATS`]), an impulse lattice one.
+/// With a [`LatticeFrame`] the grid and its values are in that frame; the
+/// frame is part of the lattice, so moving it lays the field again.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ForceLattice {
     min: [f32; 3],
     spacing: f32,
     nodes: [u32; 3],
+    frame: Option<LatticeFrame>,
 }
 
 impl ForceLattice {
@@ -54,6 +106,7 @@ impl ForceLattice {
             min,
             spacing: cell_size * FORCE_LATTICE_STRIDE as f32,
             nodes: solver_nodes.map(|n| n.saturating_sub(1).div_ceil(FORCE_LATTICE_STRIDE).max(1) + 1),
+            frame: None,
         }
     }
 
@@ -64,7 +117,22 @@ impl ForceLattice {
     pub fn over_box(min: [f32; 3], size: [f32; 3], detail: u32) -> Self {
         let detail = detail.max(2);
         let spacing = size.into_iter().fold(0.0_f32, f32::max) / (detail - 1) as f32;
-        Self { min, spacing, nodes: size.map(|s| ((s / spacing).ceil().max(1.0) as u32 + 1).min(detail)) }
+        Self { min, spacing, nodes: size.map(|s| ((s / spacing).ceil().max(1.0) as u32 + 1).min(detail)), frame: None }
+    }
+
+    /// This lattice laid in `frame`.
+    pub fn in_frame(self, frame: LatticeFrame) -> Self {
+        Self { frame: Some(frame), ..self }
+    }
+
+    /// Where the node at `local` sits in the world.
+    fn world(&self, local: [f32; 3]) -> [f32; 3] {
+        self.frame.map_or(local, |frame| frame.point(local))
+    }
+
+    /// A world vector as the lattice stores it.
+    fn stored(&self, world: [f32; 3]) -> [f32; 3] {
+        self.frame.map_or(world, |frame| frame.vector_to_local(world))
     }
 
     pub fn min(&self) -> [f32; 3] {
@@ -99,11 +167,15 @@ impl ForceLattice {
         std::array::from_fn(|d| self.min[d] + coord[d] as f32 * self.spacing)
     }
 
-    /// Sample a vector `field` at every node into `values`, one `[f32; 4]` per
-    /// node (an impulse lattice).
+    /// Sample a vector `field` (in the world) at every node into `values`,
+    /// one `[f32; 4]` per node (an impulse lattice).
     pub fn fill(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> [f32; 3]) -> Result<(), NotFinite> {
         for (index, value) in values.iter_mut().enumerate() {
-            let v = field(self.position(index));
+            let v = field(self.world(self.position(index)));
+            if v.iter().any(|c| !c.is_finite()) {
+                return Err(NotFinite);
+            }
+            let v = self.stored(v);
             if v.iter().any(|c| !c.is_finite()) {
                 return Err(NotFinite);
             }
@@ -121,7 +193,13 @@ impl ForceLattice {
 
     fn fill_forces_from(&self, first: usize, values: &mut [[f32; 4]], field: &impl Fn([f32; 3]) -> ForceSample) -> Result<(), NotFinite> {
         for (index, node) in values.chunks_exact_mut(2).enumerate() {
-            let s = field(self.position(first + index));
+            let mut s = field(self.world(self.position(first + index)));
+            if !s.is_finite() {
+                return Err(NotFinite);
+            }
+            // The drag rate is a scalar; push and drag × wind turn into the frame.
+            s.push = self.stored(s.push);
+            s.drag_wind = self.stored(s.drag_wind);
             if !s.is_finite() {
                 return Err(NotFinite);
             }
@@ -393,6 +471,36 @@ mod tests {
         }
         let between = lattice.sample_forces(&values, [-0.6, 0.3, -1.1]);
         assert!((between.drag - 2.0).abs() < 1e-5);
+    }
+
+    /// A lattice in a turned, scaled frame samples the field at each node's
+    /// world position and stores its vectors in the frame: a uniform wind
+    /// keeps its world direction however the frame turns, and a radial
+    /// field about the frame's origin points along each node's own position.
+    #[test]
+    fn force_lattice_in_a_frame_keeps_the_field_in_the_world() {
+        // A quarter turn about y, doubled: local x lands on world -z, local z on world x.
+        let frame = LatticeFrame::new([[0.0, 0.0, -2.0], [0.0, 2.0, 0.0], [2.0, 0.0, 0.0]], [1.0, 2.0, 3.0]).unwrap();
+        let lattice = ForceLattice::over_box([-1.0; 3], [2.0; 3], 3).in_frame(frame);
+        let wind = FieldValue::uniform([1.0, 0.0, 0.0]).unwrap();
+        let mut values = vec![[0.0; 4]; 2 * lattice.node_count()];
+        lattice.fill_forces(&mut values, |x| wind.sample_force(x)).unwrap();
+        for node in values.chunks_exact(2) {
+            assert!(node[0][0].abs() < 1e-6 && node[0][1].abs() < 1e-6 && (node[0][2] - 0.5).abs() < 1e-6, "world +x is local +z at half length: {node:?}");
+        }
+        let radial = FieldValue::radial([1.0, 2.0, 3.0], 10.0, 1.0).unwrap();
+        let mut impulses = vec![[0.0; 4]; lattice.node_count()];
+        lattice.fill(&mut impulses, |x| radial.sample(x)).unwrap();
+        for (index, value) in impulses.iter().enumerate() {
+            let local = lattice.position(index);
+            let (v, l) = ([value[0], value[1], value[2]], dot(local, local).sqrt());
+            if l < 1e-3 {
+                continue;
+            }
+            let along = dot(v, local) / (dot(v, v).sqrt() * l);
+            assert!(along.abs() > 1.0 - 1e-5, "node {local:?} reads {v:?}");
+        }
+        assert_eq!(LatticeFrame::new([[1.0, 0.0, 0.0], [0.0; 3], [0.0, 0.0, 1.0]], [0.0; 3]), None, "a flattened axis has no inverse");
     }
 
     #[test]

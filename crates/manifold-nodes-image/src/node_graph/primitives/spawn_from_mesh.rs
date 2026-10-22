@@ -3,7 +3,7 @@
 //! 3D particle stack (`node.spawn_from_image` → this, sourced from
 //! `Array(MeshVertex)` instead of a `Texture2D`).
 //!
-//! Two modes via the `mode` enum-param:
+//! Three modes via the `mode` enum-param:
 //!
 //! - **vertices** — one particle per vertex: particle `i` gets
 //!   `vertices[i].position` for `i` up to `min(vertex_count, active_count,
@@ -19,6 +19,10 @@
 //!     3. **place** — for each active particle, draw a uniform value
 //!        over `[0, total)`, binary-search the cumulative table for the
 //!        triangle it lands in, barycentric-sample a point inside it.
+//! - **volume** — the same three passes over the tetrahedra each triangle
+//!   makes with the mesh's origin, weighted by volume, so particles fill
+//!   the solid evenly. Exact for a mesh every ray from its origin leaves
+//!   once (every built-in solid about its centre).
 //!
 //! Positions are emitted in the mesh's LOCAL space — no transform is
 //! applied here, matching the mesh itself (a transform upstream of the
@@ -41,7 +45,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-const SPAWN_MODES: &[&str] = &["vertices", "surface"];
+const SPAWN_MODES: &[&str] = &["vertices", "surface", "volume"];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -59,7 +63,7 @@ struct SpawnFromMeshUniforms {
 manifold_node_engine::primitive! {
     name: SpawnFromMesh,
     type_id: "node.spawn_from_mesh",
-    purpose: "Seed particles from a mesh's own geometry (Array<MeshVertex>) so an imported or procedural model can dissolve/explode into the existing 3D particle stack. `vertices` mode: one particle per vertex, exact silhouette. `surface` mode: area-weighted random triangle sampling for uniform surface density regardless of triangulation (three-pass dispatch: per-triangle area, prefix-sum scan, barycentric place). Positions are emitted in the mesh's LOCAL space, same convention as the mesh itself — an upstream transform applies later. Pair with node.apply_radial_burst_3d_to_particles + node.euler_step_particles_3d to blow the seeded cloud apart, crossfading the intact mesh render out as the particles render in.",
+    purpose: "Seed particles from a mesh's own geometry (Array<MeshVertex>) so an imported or procedural model can dissolve/explode into the existing 3D particle stack. `vertices` mode: one particle per vertex, exact silhouette. `surface` mode: area-weighted random triangle sampling for uniform surface density regardless of triangulation (three-pass dispatch: per-triangle area, prefix-sum scan, barycentric place). `volume` mode: the same passes over the tetrahedra each triangle makes with the mesh origin, so particles fill the solid evenly (exact for a mesh every ray from its origin leaves once, as every built-in solid does about its centre). Positions are emitted in the mesh's LOCAL space, same convention as the mesh itself — an upstream transform applies later. Pair with node.apply_radial_burst_3d_to_particles + node.euler_step_particles_3d to blow the seeded cloud apart, crossfading the intact mesh render out as the particles render in.",
     inputs: {
         vertices: Array(MeshVertex) required,
         active_count: ScalarF32 optional,
@@ -113,7 +117,7 @@ manifold_node_engine::primitive! {
     composition_notes: "vertices mode gives an exact silhouette (one particle per vertex) — best for meshes whose vertex density already reads as a point cloud (imported scans, dense procedural geometry). surface mode gives uniform density independent of triangulation — best for low-poly meshes where per-vertex seeding would visibly clump at dense corners and leave large flat faces empty. active_count / frame_seed are port-shadows-param — wire from system.generator_input or a math chain to drive them live. Triangles are read as flat [v0,v1,v2] triples from the vertices array (standard triangle-list layout, matching node.cube_mesh / node.render_mesh's expected input); a trailing partial triangle (vertex_count % 3 != 0) is ignored. Internal per-triangle cumulative-area scratch is sized to vertex_count/3 elements; reallocs when vertex_count changes.",
     examples: [],
     picker: { label: "Spawn From Mesh", category: Atom },
-    summary: "Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissolves into particles.",
+    summary: "Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface or through its volume. The way an imported model dissolves into particles.",
     category: Particles3D,
     role: Source,
     aliases: ["spawn from mesh", "seed particles from mesh", "mesh explode", "mesh dissolve", "mesh particles"],
@@ -265,8 +269,8 @@ impl Primitive for SpawnFromMesh {
             },
         ];
 
-        if mode_idx == 1 {
-            // Surface mode: area → scan → place, each pass reads what the
+        if mode_idx >= 1 {
+            // Surface and volume modes: area → scan → place, each pass reads what the
             // previous wrote, so barrier between every stage.
             if triangle_count > 0 {
                 gpu.native_enc.dispatch_compute(
@@ -366,7 +370,7 @@ mod gpu_tests {
         ];
 
         let mut enc = device.create_encoder("spawn-from-mesh-test");
-        if mode == 1 {
+        if mode >= 1 {
             if triangle_count > 0 {
                 let area = device.create_compute_pipeline(wgsl, "area_main", "spawn-area-test");
                 enc.dispatch_compute(&area, &bindings, [triangle_count.div_ceil(64), 1, 1], "area");
@@ -497,5 +501,55 @@ mod gpu_tests {
 
         assert_eq!(distinct.len(), 8, "cube corners should dedup to exactly 8 distinct positions");
         assert!(distinct.len() <= capacity as usize);
+    }
+
+    /// A cube of half-size `half` centred on its origin, as a triangle list.
+    fn cube_triangles(half: f32) -> Vec<MeshVertex> {
+        let mut out = Vec::new();
+        for axis in 0..3 {
+            for side in [-half, half] {
+                let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+                let corner = |a: f32, b: f32| {
+                    let mut p = [0.0; 3];
+                    p[axis] = side;
+                    p[u] = a;
+                    p[v] = b;
+                    mk_vertex(p)
+                };
+                out.extend([corner(-half, -half), corner(half, -half), corner(half, half), corner(-half, -half), corner(half, half), corner(-half, half)]);
+            }
+        }
+        out
+    }
+
+    /// Volume mode fills a cube evenly: every particle is inside, the mean
+    /// distance from each centre plane is a quarter of the side (uniform),
+    /// and the inner half-size cube holds an eighth of them. Surface mode on
+    /// the same cube leaves every particle on a face.
+    #[test]
+    fn volume_mode_fills_the_cube_evenly() {
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = include_str!("shaders/spawn_from_mesh.wgsl");
+        let vertices = cube_triangles(2.0);
+        let count = 8192u32;
+        let particles = dispatch_spawn(&device, wgsl, &vertices, count, count, 2, 7);
+        let mut inner = 0usize;
+        let mut mean = [0.0f64; 3];
+        for (i, p) in particles.iter().enumerate() {
+            assert_eq!(p.life, 1.0, "particle {i} should be alive");
+            assert!(p.position.iter().all(|c| c.abs() <= 2.0 + 1e-4), "particle {i} at {:?} outside the cube", p.position);
+            inner += usize::from(p.position.iter().all(|c| c.abs() < 1.0));
+            for (total, c) in mean.iter_mut().zip(p.position) {
+                *total += f64::from(c.abs()) / f64::from(count);
+            }
+        }
+        let inner = inner as f64 / f64::from(count);
+        assert!((inner - 0.125).abs() < 0.02, "inner cube holds {inner} of the particles, not an eighth");
+        for (axis, m) in mean.iter().enumerate() {
+            assert!((m - 1.0).abs() < 0.05, "mean |{axis}| is {m}, not a quarter of the side");
+        }
+
+        let shell = dispatch_spawn(&device, wgsl, &vertices, count, count, 1, 7);
+        assert!(shell.iter().all(|p| p.position.iter().any(|c| (c.abs() - 2.0).abs() < 1e-4)), "surface mode stays on the faces");
     }
 }

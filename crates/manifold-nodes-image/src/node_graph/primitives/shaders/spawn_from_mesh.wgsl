@@ -24,6 +24,15 @@
 //                    triangle it lands in, and barycentric-samples a
 //                    point uniformly inside that triangle (sqrt trick).
 //
+//   volume (mode 2) — the same three passes over the tetrahedra each
+//     triangle makes with the mesh's origin: area_main writes the
+//     tetrahedron's volume, place_main picks one by volume and samples a
+//     point uniformly inside it (Rocchini and Cignoni 2000, "Generating
+//     random points in a tetrahedron"). The tetrahedra tile the solid
+//     exactly when every ray from the origin leaves the mesh once (every
+//     built-in solid about its centre); otherwise they also cover what
+//     the origin sees through the mesh.
+//
 // Positions are emitted in the mesh's LOCAL space — no transform is
 // applied here (matches the mesh itself; a transform upstream of the
 // renderer applies later, same convention as every other mesh atom).
@@ -33,7 +42,7 @@
 // vertex_count / 3 (floor — a trailing partial triangle is ignored).
 
 struct Params {
-    mode: u32,          // 0 = vertices, 1 = surface
+    mode: u32,          // 0 = vertices, 1 = surface, 2 = volume
     active_count: u32,
     frame_seed: u32,
     vertex_count: u32,
@@ -115,7 +124,8 @@ fn vertices_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-// Pass 1 (surface mode) — per-triangle area, one thread per triangle.
+// Pass 1 (surface and volume modes) — per-triangle area, or the volume of
+// the triangle's tetrahedron with the origin; one thread per triangle.
 @compute @workgroup_size(64, 1, 1)
 fn area_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let t = id.x;
@@ -125,7 +135,11 @@ fn area_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let v0 = vertices[t * 3u].position;
     let v1 = vertices[t * 3u + 1u].position;
     let v2 = vertices[t * 3u + 2u].position;
-    cumulative[t] = length(cross(v1 - v0, v2 - v0)) * 0.5;
+    if params.mode == 2u {
+        cumulative[t] = abs(dot(v0, cross(v1, v2))) / 6.0;
+    } else {
+        cumulative[t] = length(cross(v1 - v0, v2 - v0)) * 0.5;
+    }
 }
 
 // Pass 2 (surface mode) — single-thread inclusive prefix sum. Sequential,
@@ -195,14 +209,39 @@ fn place_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // w = 1 - u - v gives a uniform point over the triangle's area.
     let h2 = wang_hash(h1);
     let r1 = hash_float(h2);
-    let r2 = hash_float(wang_hash(h2));
-    let sr1 = sqrt(r1);
-    let bary_u = 1.0 - sr1;
-    let bary_v = r2 * sr1;
-    let bary_w = 1.0 - bary_u - bary_v;
+    let h3 = wang_hash(h2);
+    let r2 = hash_float(h3);
+    var position: vec3<f32>;
+    if params.mode == 2u {
+        // Fold the unit cube into the corner tetrahedron, then map it onto
+        // (origin, v0, v1, v2): each fold keeps the density uniform.
+        var s = r1;
+        var t = r2;
+        var u = hash_float(wang_hash(h3));
+        if s + t > 1.0 {
+            s = 1.0 - s;
+            t = 1.0 - t;
+        }
+        if t + u > 1.0 {
+            let held = u;
+            u = 1.0 - s - t;
+            t = 1.0 - held;
+        } else if s + t + u > 1.0 {
+            let held = u;
+            u = s + t + u - 1.0;
+            s = 1.0 - t - held;
+        }
+        position = v0 * s + v1 * t + v2 * u;
+    } else {
+        let sr1 = sqrt(r1);
+        let bary_u = 1.0 - sr1;
+        let bary_v = r2 * sr1;
+        let bary_w = 1.0 - bary_u - bary_v;
+        position = v0 * bary_u + v1 * bary_v + v2 * bary_w;
+    }
 
     var p: Particle;
-    p.position = v0 * bary_u + v1 * bary_v + v2 * bary_w;
+    p.position = position;
     p.velocity = vec3<f32>(0.0, 0.0, 0.0);
     p.life = 1.0;
     p.age = -1.0;

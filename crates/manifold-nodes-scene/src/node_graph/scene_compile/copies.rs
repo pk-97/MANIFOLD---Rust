@@ -64,9 +64,17 @@ pub(crate) fn emit_group(b: &mut Builder<'_>, item: &Item, transform: u32, physi
     add_body(b, item, transform, physics)
 }
 
+/// A Group's copies laid out at rest about its own Transform, for a swarm
+/// that draws the group to carry at every particle.
+pub(crate) fn emit_layout(b: &mut Builder<'_>, item: &Item, transform: u32) -> u32 {
+    add_body(b, item, transform, PhysicsSetting::None)
+}
+
 /// One object inside a copied group: its mesh, placed by its transform inside
 /// one copy, is one part of the copies body's shape.
 pub(crate) fn add_part(b: &mut Builder<'_>, body: u32, mesh: u32, transform: u32) {
+    // A swarm drawing a group with copies sizes the group's own layout.
+    let body = b.nests.get(&body).copied().flatten().unwrap_or(body);
     // A swarm's copies node has no shape to size.
     if b.swarm_frames.contains_key(&body) {
         return;
@@ -80,6 +88,10 @@ pub(crate) fn draw_instances(b: &mut Builder<'_>, body: u32, object: u32, group_
         // A swarm's particles live in its emitter's frame.
         b.wire(body, "copies", object, "instances");
         b.wire(emitter, "transform", object, "parent_transform");
+        // Nested copies say how many of their copies are live.
+        if b.nests.contains_key(&body) {
+            b.wire(body, "count", object, "instance_count");
+        }
     } else {
         b.wire(body, "instances", object, "instances");
         b.wire(body, "active_count", object, "instance_count");

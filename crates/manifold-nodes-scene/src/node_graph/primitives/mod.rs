@@ -93,6 +93,8 @@ mod scene_fx_default_passthrough;
 mod shatter_mesh;
 mod slice_mesh;
 pub mod scatter_on_mesh;
+pub mod merge_meshes;
+pub mod nest_copies;
 mod simplex_per_instance;
 pub(crate) mod camera_orbit;
 pub(crate) mod camera_switch;

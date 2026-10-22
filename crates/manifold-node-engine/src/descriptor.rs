@@ -318,6 +318,16 @@ hand_descriptor!(
     aliases: ["camera switch", "camera mux", "mux camera", "camera cut"],
 );
 
+// Mesh merging (merge_meshes.rs)
+hand_descriptor!(
+    "node.merge_meshes",
+    "Concatenate N triangle-list meshes into one Array<MeshVertex>, each placed by its own transform (`place_k`) inside the frame it is drawn in (`within_k`) and brought into a shared `frame` (each unwired transform is identity): position by the full matrix, normals by its inverse transpose, UVs and colours copied. `parts` sets how many mesh_k/place_k/within_k triples exist, with no cap; output capacity is the sum of the wired meshes. Wire `reset_trigger` to merge only on its integer edges.",
+    summary: "Joins several meshes into one, each where its own transform puts it. The way a whole group becomes one shape to scatter particles over.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["merge meshes", "combine meshes", "join meshes", "mesh union"],
+);
+
 // 3D scene rendering (render_scene.rs)
 hand_descriptor!(
     "node.render_scene",

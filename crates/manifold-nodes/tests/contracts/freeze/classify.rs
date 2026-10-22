@@ -249,6 +249,14 @@ use manifold_node_engine::freeze::classify::FusionKind;
                 "copy_groups",
                 manifold_core::effects::RangeReason::Count,
             ),
+            // node.merge_meshes (merge_meshes.rs) - hand-`impl EffectNode`:
+            // `reconfigure` rounds `parts` to at least 1 before `rebuild_ports`
+            // sizes the mesh/place/within family; no upper bound.
+            (
+                "node.merge_meshes",
+                "parts",
+                manifold_core::effects::RangeReason::Count,
+            ),
         ];
 
         let registry = PrimitiveRegistry::with_builtin();

@@ -121,7 +121,7 @@ pub fn fused_into<T: bytemuck::Pod + KnownItem>(
     enc.commit_and_wait_completed();
     read(&output.1, count)
 }
-pub fn run<P: Primitive, T: bytemuck::Pod + crate::ports::KnownItem>(
+pub fn run<P: Primitive + 'static, T: bytemuck::Pod + crate::ports::KnownItem>(
     harness: &mut Harness,
     prim: &mut P,
     inputs: &[(&'static str, crate::bindings::Slot)],

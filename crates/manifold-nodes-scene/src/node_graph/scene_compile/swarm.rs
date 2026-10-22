@@ -10,9 +10,15 @@
 //! holds its edge value outside it, so the Attractor and the gusts keep their
 //! shape over the whole stirred cloud). Forces are ordinary scene forces: the
 //! load passes lay every force that targets everything onto the swarm's
-//! lattice (`forces.rs` compiles them). The World's gravity, still air and
-//! clock reach the forces node through value nodes that follow the World's
-//! card rows.
+//! lattice (`forces.rs` compiles them). They act in the world: the lattice
+//! samples them where each node sits in the world and turns them into the
+//! emitter's frame, so a Wind blows the same way however the swarm turns
+//! (Blender's force fields). The World's gravity, still air and clock reach
+//! the forces node through value nodes that follow the World's card rows.
+//!
+//! Emit From a Box fills its volume; a Sphere, an Object or a Group emits
+//! from the surface, a Group from every part at its own place. A Group with
+//! Copies on drawn by a swarm keeps them: its layout rides every particle.
 //!
 //! Two phases: [`emit_all`] before the item tree (a Draw As item must know it
 //! is drawn by a swarm), [`finish`] after it (Emit From an item reads that
@@ -26,8 +32,9 @@ use manifold_core::scene_world_controls::WORLD_INPUTS;
 use super::builder::Builder;
 use super::material::surface_for;
 
-/// `node.spawn_from_mesh`'s Mode: surface scatter.
+/// `node.spawn_from_mesh`'s Modes: surface scatter, volume fill.
 const SURFACE: u32 = 1;
+const VOLUME: u32 = 2;
 /// `node.platonic_solid_mesh`'s shapes: Tetrahedron 0, Cube 1, Octahedron 2,
 /// Icosahedron 3.
 const TETRAHEDRON: u32 = 0;
@@ -90,9 +97,14 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     }
     let forces = b.add(owner, "forces", "node.swarm_forces");
     b.wire(bounds, "transform", forces, "bounds");
+    // Forces are laid where the lattice sits in the world and turned into
+    // the emitter's frame, so they act in world space.
+    b.wire(transform, "transform", forces, "frame");
 
     let seed = b.add(owner, "seed", "node.spawn_from_mesh");
-    b.set(seed, "mode", SerializedParamValue::Enum { value: SURFACE });
+    // A Box fills its volume; a Sphere and an item emit from their surface.
+    let mode = if fields.emit_from == EmitFrom::Box { VOLUME } else { SURFACE };
+    b.set(seed, "mode", SerializedParamValue::Enum { value: mode });
     b.set_number(seed, "max_capacity", SWARM_MAX_COUNT);
     match &fields.emit_from {
         EmitFrom::Box => {
@@ -142,8 +154,19 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         }
         None => {
             if let DrawAs::Item(prototype) = &fields.draw_as {
-                b.swarm_draws.insert(prototype.clone(), copies);
-                b.swarm_frames.insert(copies, transform);
+                // A Group with Copies on keeps them: its whole layout rides
+                // every particle ([`nest_layout`] wires the layout in).
+                let draws = match b.doc.find(prototype).map(|item| &item.fields) {
+                    Some(ItemFields::Group(group)) if group.copies => {
+                        let nest = b.add(owner, "nest", "node.nest_copies");
+                        b.wire(copies, "copies", nest, "outer");
+                        b.nests.insert(nest, None);
+                        nest
+                    }
+                    _ => copies,
+                };
+                b.swarm_draws.insert(prototype.clone(), draws);
+                b.swarm_frames.insert(draws, transform);
             }
         }
     }
@@ -171,7 +194,7 @@ pub(crate) fn finish(b: &mut Builder<'_>) {
         if let EmitFrom::Item(target) = &fields.emit_from
             && let Some(target) = doc.find(target)
         {
-            if let Some(mesh) = first_mesh(b, target) {
+            if let Some(mesh) = emit_mesh(b, owner, target) {
                 b.wire(mesh, "vertices", seed, "vertices");
             }
             frame = emit_frame(b, owner, target).or(frame);
@@ -198,14 +221,82 @@ fn nearest_group(doc: &manifold_core::scene_doc::SceneDoc, id: &ItemId) -> Optio
     found
 }
 
-/// The mesh node of the first Object at or below `item` that compiled one.
-fn first_mesh(b: &Builder<'_>, item: &Item) -> Option<u32> {
-    if matches!(item.fields, ItemFields::Object(_))
-        && let Some(mesh) = b.id(item.id.as_str(), "mesh")
-    {
-        return Some(mesh);
+/// The node whose `vertices` a swarm emitting from `target` seeds from: an
+/// Object's own mesh, or every part of a Group merged in the group's frame,
+/// each where it sits in the group.
+fn emit_mesh(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
+    if matches!(target.fields, ItemFields::Object(_)) {
+        return b.id(target.id.as_str(), "mesh");
     }
-    item.children.iter().find_map(|child| first_mesh(b, child))
+    let ItemFields::Group(group) = &target.fields else {
+        return None;
+    };
+    // Where the group's own copies or a swarm place it, everything inside
+    // sits in the group's frame already; otherwise each part is drawn
+    // inside its nearest group's frame, and the merge brings it into this
+    // group's.
+    let in_group = group.copies || b.swarm_draws.contains_key(&target.id);
+    let frame = (!in_group).then(|| b.group_frames.get(&target.id).copied()).flatten();
+    // A group with Combine Meshes on is one shape, placed by its combined
+    // transform inside the group.
+    let parts = match (b.id(target.id.as_str(), "mesh"), b.id(target.id.as_str(), "combined_transform")) {
+        (Some(shape), Some(placed)) => vec![(shape, placed, frame.filter(|_| !b.wired_into(placed, "parent")))],
+        _ => {
+            let mut parts = Vec::new();
+            parts_below(b, target, in_group, &mut parts);
+            parts
+        }
+    };
+    if parts.is_empty() {
+        return None;
+    }
+    let merge = b.add(owner, "emit_parts", "node.merge_meshes");
+    b.set_number(merge, "parts", parts.len() as f32);
+    for (k, (mesh, placed, within)) in parts.into_iter().enumerate() {
+        b.wire(mesh, "vertices", merge, &format!("mesh_{k}"));
+        b.wire(placed, "transform", merge, &format!("place_{k}"));
+        if let Some(within) = within {
+            b.wire(within, "transform", merge, &format!("within_{k}"));
+        }
+    }
+    if let Some(frame) = frame {
+        b.wire(frame, "transform", merge, "frame");
+    }
+    // Merge only when the seed reads it.
+    if let Some(forces) = b.id(owner, "forces") {
+        b.wire(forces, "epoch", merge, "reset_trigger");
+    }
+    Some(merge)
+}
+
+/// Every Object at or below `item` with a mesh: (mesh node, transform node,
+/// the frame it is drawn in when its transform does not already carry it).
+fn parts_below(b: &Builder<'_>, item: &Item, in_group: bool, out: &mut Vec<(u32, u32, Option<u32>)>) {
+    if matches!(item.fields, ItemFields::Object(_))
+        && let (Some(mesh), Some(placed)) = (b.id(item.id.as_str(), "mesh"), b.id(item.id.as_str(), "transform"))
+    {
+        let within = if in_group || b.wired_into(placed, "parent") {
+            None
+        } else {
+            nearest_group(b.doc, &item.id).and_then(|group| b.group_frames.get(&group).copied())
+        };
+        out.push((mesh, placed, within));
+    }
+    for child in &item.children {
+        parts_below(b, child, in_group, out);
+    }
+}
+
+/// Lay out a Group's own copies for the swarm that draws it: a copies body
+/// at rest about the group's own `transform`, so the group's offset, turn
+/// and scale ride with every particle as a Blender instanced collection's
+/// objects keep theirs. The particles move the copies, so the body runs no
+/// simulation of its own. `nest` places its instances at every particle.
+pub(crate) fn nest_layout(b: &mut Builder<'_>, item: &Item, transform: u32, nest: u32) {
+    let body = super::copies::emit_layout(b, item, transform);
+    b.wire(body, "instances", nest, "inner");
+    b.wire(body, "active_count", nest, "inner_count");
+    b.nests.insert(nest, Some(body));
 }
 
 /// The frame an emit-from item's mesh sits in: an Object's own Transform
