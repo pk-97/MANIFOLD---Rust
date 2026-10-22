@@ -287,7 +287,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 
 ### 7.10 Water, Water Source, Ocean
 
-- **Water** is a kind: Domain (its Transform is the box), Resolution, Simulation dials, Whitewater; its looks and sources as children. The water family template in `manifold-nodes-water` is the emitter.
+- **Water** is a kind: Domain (its Transform is the box: Position and Size on the card, moved and resized by its gizmo), Resolution, Simulation dials, Whitewater; its looks and sources as children. Today the Water card has no domain placement rows; this is the fix. The water family template in `manifold-nodes-water` is the emitter.
 - **Water Source** is a child item with Role Fill, Inflow or Drain; Shape Box or Sphere; Transform; Inflow speed. The role is shown in the header. The Collider role is gone (section 7.8).
 - **Ocean** is an Object Shape. Its rows (the surface dials) appear on the Object card when Shape is Ocean.
 - BUG-fbwu6 (Initial Fill refusal is not named by the domain setup warning) is fixed by design: Fill on a source that cannot fill is a disabled control with its reason.
@@ -344,7 +344,7 @@ One table keyed by (kind, property) replaces the per-node scene table (`scene_su
 | Group | Transform (with the Scale link toggle); Visible; Material (applies to children with none); Physics (Body here is one compound body); Copies; when Source is a file, Model File and Combine Meshes |
 | Material | Surface rows; texture source (None, file, layer); used by N; Make Unique |
 | Swarm | Emit From; Draw As; Count; Size; Air Drag; Material; Look; Transform places the emitter |
-| Water | Domain, Resolution, Simulation dials, Whitewater |
+| Water | Domain: Position and Size (with the Scale link toggle), moved and resized by its gizmo in the viewport; Resolution; Simulation dials; Whitewater |
 | Water Source | Role (header); Shape; Transform; Inflow speed |
 | Force | Its type's rows; Targets; Impulse |
 | World | Physics (Gravity, Speed, Reset, Air Resistance); Fog; Render (ray tracing, temporal upscale, render mode); default active camera |
