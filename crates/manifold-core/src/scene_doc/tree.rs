@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::{
-    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, ModifierTargets, ModifierType, SceneDoc,
+    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, LightType, ModifierTargets, ModifierType, SceneDoc,
 };
 
 /// Why a document edit was refused. The document is untouched.
@@ -44,6 +44,13 @@ impl std::fmt::Display for SceneEditError {
             SceneEditError::SecondOfType(reason) => f.write_str(reason),
         }
     }
+}
+
+/// Why a scene refuses a second Environment light.
+pub const ONE_ENVIRONMENT: &str = "A scene has one Environment";
+
+fn is_environment(item: &Item) -> bool {
+    matches!(&item.fields, ItemFields::Light(light) if matches!(light.light, LightType::Environment { .. }))
 }
 
 /// Whether an item of `kind` may sit under `parent` (None is the top).
@@ -201,18 +208,27 @@ impl SceneDoc {
             return Err(SceneEditError::CannotHold { parent: self.parent_kind(parent)?, kind });
         }
         let mut incoming = Vec::new();
-        let mut worlds = 0;
+        let (mut worlds, mut environments) = (0, 0);
         item.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| {
             incoming.push(inner.id.clone());
             worlds += usize::from(inner.kind() == ItemKind::World);
+            environments += usize::from(is_environment(inner));
         });
         if let Some(id) = incoming.iter().find(|id| self.find(id).is_some()) {
             return Err(SceneEditError::DuplicateId(id.clone()));
         }
-        let mut existing_worlds = 0;
-        self.walk(|inner, _| existing_worlds += usize::from(inner.kind() == ItemKind::World));
+        let (mut existing_worlds, mut existing_environments) = (0, 0);
+        self.walk(|inner, _| {
+            existing_worlds += usize::from(inner.kind() == ItemKind::World);
+            existing_environments += usize::from(is_environment(inner));
+        });
         if worlds + existing_worlds > 1 {
             return Err(SceneEditError::SecondWorld);
+        }
+        // A second Environment would compile to nothing: the scene lights
+        // from one environment.
+        if environments + existing_environments > 1 {
+            return Err(SceneEditError::SecondOfType(ONE_ENVIRONMENT));
         }
         if let Some(reason) = self.second_of_type(item) {
             return Err(SceneEditError::SecondOfType(reason));

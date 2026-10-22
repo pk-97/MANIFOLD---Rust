@@ -110,3 +110,45 @@ fn a_disabled_field_row_does_nothing_and_keeps_its_reason_on_hover() {
     assert!(click(&mut panel, &mut tree, button).is_empty());
     assert_eq!(tree.get_node(button).unwrap().tooltip.as_deref(), Some("A group above is already a Body"));
 }
+
+/// A panel showing the World and two Modifier cards.
+fn chain_panel() -> (ScenePanel, UITree) {
+    let vm = SceneSetupVm {
+        layer_id: LayerId::new("layer-1"),
+        items: vec![
+            item("world", ItemKind::World, "World", 0, None),
+            item("bend", ItemKind::Modifier, "Bend", 0, None),
+            item("twist", ItemKind::Modifier, "Twist", 0, None),
+        ],
+        add_entries: Vec::new(),
+    };
+    let mut panel = ScenePanel::new();
+    panel.open();
+    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    let mut tree = UITree::new();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    (panel, tree)
+}
+
+fn drag_begin(node_id: Option<NodeId>, pos: Vec2) -> UIEvent {
+    UIEvent::DragBegin { node_id, pos, origin: pos, modifiers: Modifiers::default() }
+}
+
+/// Closing the tab mid card drag ends the drag: the release the panel never
+/// saw cannot reorder the chain when the tab is next open.
+#[test]
+fn closing_the_tab_mid_card_drag_drops_the_drag() {
+    let (mut panel, mut tree) = chain_panel();
+    let row = panel.chain_rows[0].0;
+    let bounds = tree.get_bounds(row);
+    let at = Vec2::new(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
+    assert!(panel.handle_event(&drag_begin(Some(row), at), &mut tree).0, "the card drag begins");
+    panel.close();
+    panel.open();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: Vec2::new(at.x, 2000.0) }, &mut tree);
+    assert!(
+        !actions.iter().any(|action| matches!(action, PanelAction::Project(ProjectAction::SceneChainMove { .. }))),
+        "a stale card drag reordered the chain: {actions:?}"
+    );
+}

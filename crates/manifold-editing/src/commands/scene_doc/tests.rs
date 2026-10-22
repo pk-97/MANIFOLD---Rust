@@ -273,6 +273,21 @@ fn rename_and_move_keep_an_items_params_attached() {
     assert_eq!(scene(&project).scene.as_ref().unwrap().find(&id(CUBE)).unwrap().name, "Box");
 }
 
+/// A second Environment would light nothing, so Duplicate refuses it with
+/// the reason and leaves the scene as it was; the one Environment still moves.
+#[test]
+fn a_second_environment_is_refused_with_its_reason() {
+    let (mut project, layer) = project();
+    let before = state(&project);
+    let mut duplicate = AddSceneItemCommand::new(layer.clone(), ItemKind::Light, None, 0, Some(id("environment")), id("environment2"));
+    duplicate.execute(&mut project);
+    assert!(!duplicate.was_applied());
+    assert_eq!(duplicate.rejection_reason(), Some(manifold_core::scene_doc::ONE_ENVIRONMENT));
+    assert_eq!(state(&project), before, "a refused duplicate changes nothing");
+    let mut undo = UndoRedoManager::new();
+    assert!(undo.execute(Box::new(ReparentSceneItemCommand::new(layer, id("environment"), None, 3)), &mut project), "the one Environment still moves");
+}
+
 /// A param write changes a value, never the scene's structure.
 #[test]
 fn a_param_write_never_recompiles() {

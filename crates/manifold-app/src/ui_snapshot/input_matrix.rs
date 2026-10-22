@@ -126,7 +126,7 @@ fn push(ui: &mut UIRoot, data: &SceneData, which: Projection) {
             data.active,
             LiveGroups { values: false, shapes: true },
         ),
-        Projection::SceneEyes => crate::ui_bridge::sync_scene_outliner_eyes(ui, &data.project),
+        Projection::SceneEyes => crate::ui_bridge::sync_scene_row_values(ui, &data.project),
         other => unreachable!("{other:?} is not a push"),
     }
 }

@@ -32,7 +32,8 @@ impl ScenePanel {
             }
             // An eye follows its item's Visible.
             if id.ends_with(".visible")
-                && let Some((eye_id, _, shown)) = self.outliner_eye_ids.iter_mut().find(|(_, param, _)| param == id)
+                && let Some(&eye) = self.outliner_eye_index.get(id)
+                && let Some((eye_id, _, shown)) = self.outliner_eye_ids.get_mut(eye)
             {
                 if (slot.base > 0.5) != (*shown > 0.5) {
                     tree.set_text(*eye_id, if slot.base > 0.5 { "\u{1F441}" } else { "\u{2013}" });

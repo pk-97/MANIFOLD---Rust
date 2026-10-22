@@ -303,6 +303,9 @@ pub struct ScenePanel {
     outliner_row_ids: Vec<(NodeId, SceneSelection)>,
     /// Every row's eye toggle this frame: `(node, visible param id, value)`.
     outliner_eye_ids: Vec<(NodeId, String, f32)>,
+    /// Where each visible param id sits in `outliner_eye_ids`: the value sync
+    /// finds an eye without a scan.
+    outliner_eye_index: ahash::AHashMap<String, usize>,
     /// Every group's chevron this frame.
     group_toggle_ids: Vec<(NodeId, ItemId)>,
     /// Groups the user folded, per layer. Groups start open.
@@ -355,6 +358,7 @@ impl Default for ScenePanel {
             focus_cleared: false,
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
+            outliner_eye_index: ahash::AHashMap::new(),
             group_toggle_ids: Vec::new(),
             collapsed_groups: std::collections::HashMap::new(),
             scale_unlinked: ahash::AHashSet::new(),
@@ -393,11 +397,18 @@ impl ScenePanel {
     }
 
     pub fn toggle(&mut self) {
-        self.open = !self.open;
+        if self.open {
+            self.close();
+        } else {
+            self.open = true;
+        }
     }
 
+    /// Close the tab. A drag in flight ends with it: the panel never sees
+    /// its release, so a held drag would swallow the next one.
     pub fn close(&mut self) {
         self.open = false;
+        self.chain_drag = None;
     }
 
     /// Update the data the panel renders. Called from `state_sync` on a
@@ -531,6 +542,7 @@ impl ScenePanel {
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
+        self.outliner_eye_index.clear();
         self.material_block.clear();
         self.chain_rows.clear();
         // The properties card's old ids would otherwise register intents on
@@ -541,9 +553,16 @@ impl ScenePanel {
         self.reveal_pending_parameter_response(tree);
     }
 
-    fn build_sentence(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, cy: f32, sentence: &str) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H * 2.0, sentence, wrapped_label_style());
-        cy + ROW_H * 2.0 + ROW_GAP
+    /// `sentence` wrapped to the pane's width, one label per line.
+    fn build_sentence(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, sentence: &str) -> f32 {
+        let style = label_style();
+        let width = tree.text_width(sentence, style.font_size, style.font_weight).max(1.0);
+        let max_chars = (sentence.chars().count() as f32 * inner_w / width).floor() as usize;
+        for line in crate::graph_canvas::wrap_text(sentence, max_chars) {
+            tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &line, style);
+            cy += ROW_H;
+        }
+        cy + ROW_GAP
     }
 
     fn build_no_scene(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
@@ -891,7 +910,11 @@ impl ScenePanel {
                 self.chain_drag = self.chain_rows.iter().find(|(row, _)| row == node_id).map(|(_, card)| card.clone());
                 (true, Vec::new())
             }
-            UIEvent::DragBegin { .. } => (self.properties_card.row_host.is_dragging(), Vec::new()),
+            UIEvent::DragBegin { .. } => {
+                // A drag that began elsewhere means no card drag is live.
+                self.chain_drag = None;
+                (self.properties_card.row_host.is_dragging(), Vec::new())
+            }
             UIEvent::Drag { .. } if self.chain_drag.is_some() => (true, Vec::new()),
             UIEvent::DragEnd { pos, .. } if self.chain_drag.is_some() => {
                 let card = self.chain_drag.take().expect("a chain drag");
@@ -975,10 +998,6 @@ pub(crate) fn label_style() -> UIStyle {
         text_align: TextAlign::Left,
         ..UIStyle::default()
     }
-}
-
-fn wrapped_label_style() -> UIStyle {
-    label_style()
 }
 
 fn header_label_style() -> UIStyle {

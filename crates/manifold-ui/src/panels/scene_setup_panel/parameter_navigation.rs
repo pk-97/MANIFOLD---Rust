@@ -21,7 +21,7 @@ impl ScenePanel {
     }
 
     fn has_param(&self, param: &manifold_foundation::ParamId) -> bool {
-        self.full_params.as_ref().is_some_and(|surface| surface.rows.iter().any(|row| row.id == *param))
+        self.full_params.is_some() && self.full_param_id_index.contains_key(param.as_ref())
     }
 
     /// The layer whose scene this tab shows, when it holds `param`.

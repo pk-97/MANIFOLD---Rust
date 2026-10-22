@@ -302,7 +302,7 @@ impl ScenePanel {
             .row_id_index
             .get(id.as_ref())
             .and_then(|&slot| self.properties_card.current_values.get(slot).copied())
-            .or_else(|| self.full_params.as_ref().and_then(|surface| surface.rows.iter().find(|row| row.id == *id).map(|row| row.value.base)))
+            .or_else(|| self.full_params.as_ref().and_then(|surface| surface.rows.get(*self.full_param_id_index.get(id.as_ref())?)).map(|row| row.value.base))
             .unwrap_or(0.0)
             .clamp(0.0, 1.0)
     }

@@ -1046,8 +1046,8 @@ impl Application {
             if let Some((kind, id, source, initial_name)) = result.begin_rename_preset {
                 self.begin_rename_preset_prompt(kind, id, source, initial_name);
             }
-            if let Some((path, layer)) = result.import_model {
-                self.import_model_into_layer(&path, &layer);
+            if let Some((path, target)) = result.import_model {
+                self.queue_import(&path, target);
             }
         }
 

@@ -314,9 +314,3 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
         crate::ui_translate::with_param_slots(&gp.params, |slots| ui.scene_setup_panel.sync_properties_values(&mut ui.tree, slots));
     }
 }
-
-/// The outliner eyes follow each item's Visible between structural syncs: the
-/// eyes are rows of the same value channel the properties read.
-pub fn sync_scene_outliner_eyes(ui: &mut UIRoot, project: &Project) {
-    sync_scene_row_values(ui, project);
-}

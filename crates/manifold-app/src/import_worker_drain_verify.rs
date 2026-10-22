@@ -78,8 +78,7 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
             file: path.clone(),
             model: Box::new(model),
             conversion_report_line: None,
-            drop_beat: 0.0,
-            layer_under_cursor: None,
+            target: crate::import_worker::ImportTarget::Drop { beat: 0.0, under: None },
         })
         .unwrap();
     app.drain_import_progress();
@@ -127,5 +126,31 @@ fn a_second_drop_while_busy_is_queued_not_run_in_parallel() {
     assert!(app.import_worker_busy, "still busy — the queued request didn't spawn");
     assert_eq!(app.import_queue.len(), 1, "the drop while busy must be queued FIFO");
     assert_eq!(app.import_queue[0].path, path);
-    assert_eq!(app.import_queue[0].drop_beat, 4.0);
+    assert_eq!(app.import_queue[0].target, crate::import_worker::ImportTarget::Drop { beat: 4.0, under: None });
+}
+
+/// The import's layer travels by id: a layer removed while the file parsed
+/// drops the import with a toast, never landing it on whatever layer took
+/// its place in the stack.
+#[test]
+fn an_import_whose_layer_went_is_dropped_with_a_toast() {
+    let path = small_fixture_path();
+    let model = manifold_nodes_scene::node_graph::gltf_import::import_model(&path)
+        .unwrap_or_else(|e| panic!("import_model({}) failed: {e}", path.display()));
+    let mut app = headless_application();
+    let layers_before = app.local_project.timeline.layers.len();
+    let gone = manifold_core::LayerId::new("removed-while-parsing");
+    for target in [
+        crate::import_worker::ImportTarget::Drop { beat: 0.0, under: Some(gone.clone()) },
+        crate::import_worker::ImportTarget::Into { layer: gone.clone(), parent: None },
+    ] {
+        app.import_worker_busy = true;
+        app.import_progress_tx
+            .send(ImportProgress::Done { path: path.clone(), file: path.clone(), model: Box::new(model.clone()), conversion_report_line: None, target })
+            .unwrap();
+        app.drain_import_progress();
+        assert_eq!(app.local_project.timeline.layers.len(), layers_before, "the import landed although its layer is gone");
+        assert!(app.ws.ui_root.toast.is_open(), "a dropped import says why");
+        assert!(!app.import_worker_busy);
+    }
 }

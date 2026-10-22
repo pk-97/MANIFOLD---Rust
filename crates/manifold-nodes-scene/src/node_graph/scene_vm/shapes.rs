@@ -10,7 +10,6 @@ use manifold_foundation::ItemId;
 use manifold_foundation::scene_surface::SceneShapeDecl;
 use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Mat4, Transform};
 
-use super::ParamAddr;
 use crate::node_graph::scene_surface::{CENTRED_FORCE_SHAPES, DIRECTED_FORCE_SHAPES, ITEM_SHAPES, LAMP_SHAPES};
 
 /// The roles a placed fluid source plays (`node.fluid_role_source`'s
@@ -40,12 +39,10 @@ pub enum ShapeOwner {
     World(NodeId),
 }
 
-/// Where a shape param is written.
+/// Where a shape param is written: always a card row, never the compiled
+/// graph (SCENE_DOCUMENT_DESIGN.md ruling 18).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShapeWrite {
-    /// A graph node param. The host writes it through its card when a card
-    /// binds it, as that card's knob does.
-    Node(ParamAddr),
     /// A host card param. `scale` and `offset` compose the host and modifier
     /// bindings; with the card's own range, curve and invert they map the
     /// card value to the shape value.

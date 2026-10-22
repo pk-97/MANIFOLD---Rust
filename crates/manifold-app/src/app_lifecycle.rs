@@ -632,32 +632,30 @@ impl Application {
         drop_beat: f32,
         layer_under_cursor: Option<usize>,
     ) {
+        let under = layer_under_cursor
+            .and_then(|i| self.local_project.timeline.layers.get(i))
+            .map(|layer| layer.layer_id.clone());
+        self.queue_import(path, crate::import_worker::ImportTarget::Drop { beat: drop_beat, under });
+    }
+
+    /// Start the worker on `path` for `target`, or queue it behind the one
+    /// in flight.
+    pub(crate) fn queue_import(&mut self, path: &std::path::Path, target: crate::import_worker::ImportTarget) {
         if self.content_tx.is_none() {
             return;
         }
-
         let req = crate::import_worker::ImportRequest {
             path: path.to_path_buf(),
-            drop_beat,
-            layer_under_cursor,
+            target,
             blender_path_pref: self
                 .user_prefs
                 .get_string(crate::blender_import::BLENDER_PATH_PREF_KEY, ""),
         };
-
         if self.import_worker_busy {
             self.import_queue.push_back(req);
             return;
         }
         self.spawn_import_worker(req);
-    }
-
-    /// Import a model the Scene tab's Add menu picked into scene layer
-    /// `layer`, through the same worker and tail a drop on that layer takes.
-    pub(crate) fn import_model_into_layer(&mut self, path: &std::path::Path, layer: &manifold_core::LayerId) {
-        let index = self.local_project.timeline.layer_index_for_id(layer);
-        let beat = self.content_state.current_beat.as_f32();
-        self.import_model_file(path, beat, index);
     }
 
     /// Spawn `import_worker::run_import_worker` on a background thread for
@@ -717,17 +715,9 @@ impl Application {
                     file,
                     model,
                     conversion_report_line,
-                    drop_beat,
-                    layer_under_cursor,
+                    target,
                 }) => {
-                    self.finish_import_model(
-                        &path,
-                        &file,
-                        *model,
-                        conversion_report_line,
-                        drop_beat,
-                        layer_under_cursor,
-                    );
+                    self.finish_import_model(&path, &file, *model, conversion_report_line, target);
                     self.import_worker_busy = false;
                     if let Some(next) = self.import_queue.pop_front() {
                         self.spawn_import_worker(next);
@@ -754,21 +744,22 @@ impl Application {
         }
     }
 
-    /// The UI-thread tail of a successful import: add the model to a scene
-    /// layer (SCENE_DOCUMENT_DESIGN.md section 7.7 (Imports)). A scene layer
-    /// under the drop, else the active one, takes the model as one undo step;
-    /// with no scene layer a new one is made holding the base scene's camera,
-    /// sun, sky and world around the model, with a default clip so it plays
-    /// at once. A failure toasts.
+    /// The UI-thread tail of a successful parse (SCENE_DOCUMENT_DESIGN.md
+    /// section 7.7 (Imports)). A swap reconciles the import's parts. A new
+    /// model joins its scene layer as one undo step and is selected, as every
+    /// Add is; a drop with no scene layer to take it makes a new one holding
+    /// the base scene's camera, sun, sky and world around the model, with a
+    /// default clip so it plays at once. A layer that went while the file
+    /// parsed drops the import with a toast.
     fn finish_import_model(
         &mut self,
         path: &std::path::Path,
         file: &std::path::Path,
         model: manifold_core::scene_doc::ImportedModel,
         conversion_report_line: Option<String>,
-        drop_beat: f32,
-        layer_under_cursor: Option<usize>,
+        target: crate::import_worker::ImportTarget,
     ) {
+        use crate::import_worker::ImportTarget;
         // A model is a scene element you hold, not a one-shot — default to four
         // 4/4 bars. Trim/extend like any other clip afterwards.
         const DEFAULT_MODEL_DURATION_BEATS: f32 = 16.0;
@@ -780,43 +771,90 @@ impl Application {
 
         let file_name = path.file_name().map_or_else(|| "model".to_string(), |n| n.to_string_lossy().to_string());
         let file_str = file.to_string_lossy().into_owned();
-        let group = manifold_core::scene_doc::ItemId::new(manifold_core::math::short_id());
+        let layer_gone = |app: &mut Self| {
+            log::warn!("[Import] {file_name} was dropped: its layer is gone");
+            app.ws.ui_root.toast.show_with_accent(
+                format!("Couldn't import {file_name}: its layer is gone"),
+                manifold_ui::color::RED_BASE,
+            );
+        };
         let is_scene = |layer: &manifold_core::layer::Layer| layer.gen_params().is_some_and(|fx| fx.scene.is_some());
-        let layers = &self.local_project.timeline.layers;
-        let target = layer_under_cursor
-            .and_then(|i| layers.get(i))
-            .filter(|layer| is_scene(layer))
-            .or_else(|| {
-                self.active_layer_id
-                    .as_ref()
-                    .and_then(|id| self.local_project.timeline.layer_index_for_id(id))
+
+        let (into, insert_index, drop_beat) = match target {
+            ImportTarget::Swap { layer, item } => {
+                let swapped = crate::scene_import::swap_model_file(&self.local_project, &layer, &item, &file_str, &model);
+                match swapped {
+                    Ok(swap) => {
+                        self.local_project.edit(&mut self.ui_edits, &content_tx).execute_batch(swap.commands, "Swap Model File".to_string());
+                        if let Some(toast) = swap.toast {
+                            self.ws.ui_root.toast.show(toast);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[Scene Setup] Model File swap failed for {}: {e}", path.display());
+                        self.ws
+                            .ui_root
+                            .toast
+                            .show_with_accent(format!("Couldn't swap the model file: {e}"), manifold_ui::color::RED_BASE);
+                    }
+                }
+                return;
+            }
+            ImportTarget::Into { layer, parent } => {
+                let Some(doc) = self.local_project.scene_of(&layer) else {
+                    return layer_gone(self);
+                };
+                // Under the selected Group, else at the top, as every Add.
+                let parent = parent
+                    .and_then(|id| doc.find(&id))
+                    .filter(|item| manifold_core::scene_doc::can_hold(Some(item.kind()), manifold_core::scene_doc::ItemKind::Group))
+                    .map(|item| item.id.clone());
+                (Some((layer, parent)), 0, 0.0)
+            }
+            ImportTarget::Drop { beat, under } => {
+                let layers = &self.local_project.timeline.layers;
+                let under_index = match &under {
+                    Some(id) => match layers.iter().position(|layer| layer.layer_id == *id) {
+                        Some(index) => Some(index),
+                        None => return layer_gone(self),
+                    },
+                    None => None,
+                };
+                let into = under_index
                     .and_then(|i| layers.get(i))
                     .filter(|layer| is_scene(layer))
-            })
-            .map(|layer| layer.layer_id.clone());
+                    .or_else(|| {
+                        self.active_layer_id
+                            .as_ref()
+                            .and_then(|id| layers.iter().find(|layer| layer.layer_id == *id))
+                            .filter(|layer| is_scene(layer))
+                    })
+                    .map(|layer| (layer.layer_id.clone(), None));
+                (into, under_index.unwrap_or(0), beat)
+            }
+        };
 
         match &conversion_report_line {
             Some(line) => log::warn!("[Import] Added 3D model '{file_name}' ({line})"),
             None => log::warn!("[Import] Added 3D model '{file_name}'"),
         }
 
-        let mut local = self.local_project.edit(&mut self.ui_edits, &content_tx);
-        if let Some(layer_id) = target {
-            let commands = manifold_editing::commands::scene_doc::import_model_commands(
-                &layer_id,
-                None,
-                usize::MAX,
-                group,
-                &file_str,
-                &model,
+        let group = manifold_core::scene_doc::ItemId::new(manifold_core::math::short_id());
+        if let Some((layer_id, parent)) = into {
+            let commands =
+                manifold_editing::commands::scene_doc::import_model_commands(&layer_id, parent, usize::MAX, group.clone(), &file_str, &model);
+            let command = Box::new(manifold_editing::command::CompositeCommand::new(commands, "Import 3D Model".to_string()));
+            ContentCommand::send(
+                &content_tx,
+                ContentCommand::ExecuteSelecting(command, crate::edit_selection::SelectAfterEdit::NewItem(layer_id, group)),
             );
-            local.execute_batch(commands, "Import 3D Model".to_string());
             return;
         }
 
+        let mut local = self.local_project.edit(&mut self.ui_edits, &content_tx);
         // Insert above the layer under the cursor, or at the top when dropped
         // outside the tracks area.
-        let insert_index = layer_under_cursor.unwrap_or(0).min(local.timeline.layers.len());
+        let insert_index = insert_index.min(local.timeline.layers.len());
         let doc = model.scene_doc(&file_str, group.clone());
         let values = model
             .placement()
