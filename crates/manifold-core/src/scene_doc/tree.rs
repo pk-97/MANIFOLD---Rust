@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::{
-    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, ModifierTargets, SceneDoc,
+    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, ModifierTargets, ModifierType, SceneDoc,
 };
 
 /// Why a document edit was refused. The document is untouched.
@@ -21,6 +21,8 @@ pub enum SceneEditError {
     SecondWorld,
     /// A field set may not change an item's kind.
     KindChange { from: ItemKind, to: ItemKind },
+    /// A scene holds one card of this modifier type; the text says which.
+    SecondOfType(&'static str),
 }
 
 impl std::fmt::Display for SceneEditError {
@@ -39,6 +41,7 @@ impl std::fmt::Display for SceneEditError {
             SceneEditError::KindChange { from, to } => {
                 write!(f, "a {from:?} cannot become a {to:?}; remove it and add a {to:?}")
             }
+            SceneEditError::SecondOfType(reason) => f.write_str(reason),
         }
     }
 }
@@ -211,7 +214,29 @@ impl SceneDoc {
         if worlds + existing_worlds > 1 {
             return Err(SceneEditError::SecondWorld);
         }
+        if let Some(reason) = self.second_of_type(item) {
+            return Err(SceneEditError::SecondOfType(reason));
+        }
         Ok(())
+    }
+
+    /// Why `item` would be a second card of a type a scene holds one of.
+    fn second_of_type(&self, item: &Item) -> Option<&'static str> {
+        let ItemFields::Modifier(card) = &item.fields else {
+            return None;
+        };
+        self.second_modifier(card.modifier, Some(&item.id))
+    }
+
+    /// Why the scene cannot take a card of `modifier` beside the one it
+    /// holds, other than `except` (the card being changed). Modifier cards sit
+    /// at the top of the scene only.
+    pub fn second_modifier(&self, modifier: ModifierType, except: Option<&ItemId>) -> Option<&'static str> {
+        let reason = modifier.once_per_scene()?;
+        self.items
+            .iter()
+            .any(|other| Some(&other.id) != except && matches!(&other.fields, ItemFields::Modifier(m) if m.modifier == modifier))
+            .then_some(reason)
     }
 
     /// Put `item` under `parent` at `index` (clamped to the end).

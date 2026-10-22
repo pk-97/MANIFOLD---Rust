@@ -17,6 +17,10 @@ const BOKEH: Reach = Reach::Own("bokeh");
 const BLUR: Reach = Reach::Own("motion_blur");
 use ControlGroup::{Camera, DepthOfField, MotionBlur, Shake};
 const SHAKE: Reach = Reach::Own("shake");
+const PHASE: Reach = Reach::Own("phase");
+
+/// What sets the Loop rig's corridor params.
+const FROM_LOOP: &str = "the scene's Scene Loop";
 
 /// Field of view, 1° to 179°, in radians.
 const FIELD_OF_VIEW: HardLimit = HardLimit::Between(0.017_453_292, 3.124_139_4);
@@ -45,6 +49,10 @@ fn look_at(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Camera(c) if c.rig == CameraRig::LookAt)
 }
 
+fn loop_rig(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Camera(c) if c.rig == CameraRig::Loop)
+}
+
 const fn metres(property: &'static str, order: u8) -> PropertyRow {
     row(property, RIG, Camera, perform(CardBand::Camera, order)).unit(Unit::Metres).limit(HardLimit::Unlimited)
 }
@@ -62,7 +70,7 @@ const fn place(property: &'static str) -> PropertyRow {
     row(property, RIG, Camera, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited)
 }
 
-pub static CAMERA_ROWS: [PropertyRow; 44] = [
+pub static CAMERA_ROWS: [PropertyRow; 66] = [
     // Orbit: a three-quarter view of the origin through a 50 mm lens, framed
     // as the old base scene framed its cube.
     row("orbit", RIG, Camera, perform(CardBand::Camera, 0)).limit(HardLimit::Unlimited).default(0.7).when(orbit),
@@ -141,12 +149,39 @@ pub static CAMERA_ROWS: [PropertyRow; 44] = [
     row("shake_position", SHAKE, Shake, perform(CardBand::Camera, 22)).param("position_strength").default(0.25),
     row("shake_rotation", SHAKE, Shake, perform(CardBand::Camera, 23)).param("rotation_strength").default(1.0),
     row("shake_time", SHAKE, Shake, Exposure::Automatic("the playback clock")).param("time"),
+    // Loop: the flight through the corridor; the corridor itself (its
+    // spacing, pattern, stride, start and clipping) and the loop length are
+    // the Scene Loop card's.
+    row("height", RIG, Camera, perform(CardBand::Camera, 0)).unit(Unit::Metres).limit(HardLimit::Unlimited).default(0.0).when(loop_rig),
+    row("lateral", RIG, Camera, perform(CardBand::Camera, 1)).unit(Unit::Metres).limit(HardLimit::Unlimited).when(loop_rig),
+    row("fov_y", RIG, Camera, perform(CardBand::Camera, 2)).limit(FIELD_OF_VIEW).when(loop_rig),
+    row("yaw", RIG, Camera, perform(CardBand::Camera, 3)).when(loop_rig),
+    row("pitch", RIG, Camera, perform(CardBand::Camera, 4)).when(loop_rig),
+    row("roll", RIG, Camera, perform(CardBand::Camera, 5)).when(loop_rig),
+    row("flow", RIG, Camera, perform(CardBand::Camera, 6)).when(loop_rig),
+    row("sway_amp", RIG, Camera, perform(CardBand::Camera, 7)).name("Sway").when(loop_rig),
+    row("sway_cycles", RIG, Camera, perform(CardBand::Camera, 8)).name("Sway Rate").when(loop_rig),
+    row("look_sweep_amp", RIG, Camera, perform(CardBand::Camera, 9)).name("Look Sway").when(loop_rig),
+    row("zoom_pulse_amp", RIG, Camera, perform(CardBand::Camera, 10)).name("Zoom Pulse").when(loop_rig),
+    row("look_sweep_cycles", RIG, Camera, Exposure::Internal("the look sway turns once a loop")).when(loop_rig),
+    row("axis", RIG, Camera, Exposure::Internal("the corridor runs along Z")).when(loop_rig),
+    row("cell_size", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    row("pattern_length", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    row("patterns_per_loop", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    row("home", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    row("near", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    row("far", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    // The loop's clock: one even ramp from 0 to 1 per loop of Beats.
+    row("bars", PHASE, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    row("rate", PHASE, Camera, Exposure::Internal("Beats sets the loop's rate")).when(loop_rig),
+    row("attack", PHASE, Camera, Exposure::Internal("one even ramp per loop")).default(1.0).when(loop_rig),
 ];
 
 const RIGS: &[Choice] = &[
     Choice { key: "orbit", label: "Orbit" },
     Choice { key: "free", label: "Free" },
     Choice { key: "look_at", label: "Look At" },
+    Choice { key: "loop", label: "Loop" },
 ];
 
 pub static CAMERA_FIELDS: [FieldRow; 2] = [FieldRow {
@@ -162,6 +197,7 @@ pub static CAMERA_FIELDS: [FieldRow; 2] = [FieldRow {
                 CameraRig::Orbit => "orbit",
                 CameraRig::Free => "free",
                 CameraRig::LookAt => "look_at",
+                CameraRig::Loop => "loop",
             }
             .to_owned(),
         ),
@@ -175,6 +211,7 @@ pub static CAMERA_FIELDS: [FieldRow; 2] = [FieldRow {
             "orbit" => CameraRig::Orbit,
             "free" => CameraRig::Free,
             "look_at" => CameraRig::LookAt,
+            "loop" => CameraRig::Loop,
             _ => return Err(wrong_value("rig", value)),
         };
         Ok(())
@@ -198,3 +235,9 @@ pub static CAMERA_FIELDS: [FieldRow; 2] = [FieldRow {
         _ => Err(wrong_value("target", value)),
     },
 }];
+
+/// Why the camera's `field` cannot take `key` right now: the Loop rig rides
+/// the scene's Scene Loop, so it waits for one.
+pub(super) fn choice_unavailable(doc: &crate::scene_doc::SceneDoc, field: &str, key: &str) -> Option<&'static str> {
+    (field == "rig" && key == "loop" && super::scene_loop(doc).is_none()).then_some(super::NO_SCENE_LOOP)
+}

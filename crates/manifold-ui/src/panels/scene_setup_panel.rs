@@ -759,6 +759,11 @@ impl ScenePanel {
             if entry.group == entry.label {
                 item.label = entry.label.clone();
             }
+            // The menu has no hover, so a refused entry says why in its label.
+            if let Some(reason) = &entry.disabled {
+                item.label = format!("{} ({reason})", item.label);
+                item.enabled = false;
+            }
             item.action = Some(PanelAction::Project(ProjectAction::SceneAdd {
                 layer_id: vm.layer_id.clone(),
                 entry: entry.key.clone(),

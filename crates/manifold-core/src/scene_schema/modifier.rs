@@ -237,6 +237,13 @@ const CORE_TYPES: [ModifierTypeEntry; 7] = [
     entry(ModifierType::Shatter, "shatter", "Shatter", "Shatter", false, &SHATTER_ROWS),
 ];
 
+/// The scene-wide types: they act on the whole scene and have no Targets row.
+const SCENE_WIDE_TYPES: [ModifierTypeEntry; 3] = [
+    entry(ModifierType::SceneLoop, "scene_loop", "Scene Loop", "SceneLoop", false, &super::scene_wide::SCENE_LOOP_ROWS),
+    entry(ModifierType::MathView, "math_view", "Math View", "MathView", false, &super::scene_wide::MATH_VIEW_ROWS),
+    entry(ModifierType::SceneMirror, "scene_mirror", "Scene Mirror", "SceneMirror", false, &super::scene_wide::SCENE_MIRROR_ROWS),
+];
+
 const fn concat<const A: usize, const B: usize, const N: usize>(
     a: [ModifierTypeEntry; A],
     b: [ModifierTypeEntry; B],
@@ -256,7 +263,10 @@ const fn concat<const A: usize, const B: usize, const N: usize>(
 }
 
 /// Every modifier type, in menu order.
-pub static MODIFIER_TYPES: [ModifierTypeEntry; 30] = concat::<26, 4, 30>(concat::<7, 19, 26>(CORE_TYPES, DEFORMER_TYPES), COPY_FIELD_TYPES);
+pub static MODIFIER_TYPES: [ModifierTypeEntry; 33] = concat::<30, 3, 33>(
+    concat::<26, 4, 30>(concat::<7, 19, 26>(CORE_TYPES, DEFORMER_TYPES), COPY_FIELD_TYPES),
+    SCENE_WIDE_TYPES,
+);
 
 /// The entry of a modifier type.
 pub fn modifier_type(modifier: ModifierType) -> &'static ModifierTypeEntry {
@@ -320,6 +330,11 @@ fn card_mut<'f>(fields: &'f mut ItemFields, row: &str, value: &FieldValue) -> Re
         ItemFields::Modifier(m) => Ok(m),
         _ => Err(wrong_value(row, value)),
     }
+}
+
+/// A card that names its targets: every type but the scene-wide ones.
+fn aimed(fields: &ItemFields) -> bool {
+    card(fields).is_some_and(|m| !m.modifier.scene_wide())
 }
 
 fn is_shatter(fields: &ItemFields) -> bool {
@@ -400,7 +415,7 @@ pub static MODIFIER_FIELDS: [FieldRow; 6] = [
         label: "Targets",
         section: M,
         control: FieldControl::ItemSet { items: is_object_or_group, all: "Whole scene", refused: target_refused },
-        applies: always,
+        applies: aimed,
         disabled: enabled,
         read: |fields| match card(fields).map(|m| &m.targets) {
             Some(ModifierTargets::Items(ids)) => FieldValue::Items(ids.clone()),

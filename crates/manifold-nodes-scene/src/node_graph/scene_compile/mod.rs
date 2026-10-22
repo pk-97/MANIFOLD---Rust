@@ -32,6 +32,8 @@ mod modifiers;
 mod object;
 mod ocean;
 mod physics;
+mod scene_loop;
+mod scene_mirror;
 mod swarm;
 mod water;
 mod world;
@@ -57,6 +59,7 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     camera::finish_cut(&mut b);
     copies::join_world(&mut b);
     forces::emit_all(&mut b)?;
+    scene_loop::emit(&mut b)?;
     modifiers::emit_all(&mut b)?;
     b.finish()
 }

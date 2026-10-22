@@ -67,7 +67,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 57] = [
+pub static ADD_ENTRIES: [AddEntry; 60] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
@@ -140,6 +140,10 @@ pub static ADD_ENTRIES: [AddEntry; 57] = [
     entry("modifier.copy_jitter", "Modifier", "Copy Jitter", ItemKind::Modifier, "Copy Jitter", || modifier(ModifierType::CopyJitter)),
     entry("modifier.copy_noise", "Modifier", "Copy Noise", ItemKind::Modifier, "Copy Noise", || modifier(ModifierType::CopyNoise)),
     entry("modifier.copy_blend", "Modifier", "Copy Blend", ItemKind::Modifier, "Copy Blend", || modifier(ModifierType::CopyBlend)),
+    // Scene-wide: they act on the whole scene whatever is selected.
+    entry("modifier.scene_loop", "Modifier", "Scene Loop", ItemKind::Modifier, "Scene Loop", || modifier(ModifierType::SceneLoop)),
+    entry("modifier.math_view", "Modifier", "Math View", ItemKind::Modifier, "Math View", || modifier(ModifierType::MathView)),
+    entry("modifier.scene_mirror", "Modifier", "Scene Mirror", ItemKind::Modifier, "Scene Mirror", || modifier(ModifierType::SceneMirror)),
     model_file("object.mesh", "Object", "Mesh from file\u{2026}"),
 ];
 
