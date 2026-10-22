@@ -64,14 +64,16 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
     }
 }
 
-fn solid(draw: &DrawAs) -> Option<u32> {
+/// The mesh node each particle draws as, and the platonic solid index where
+/// it is one. `None` when the swarm draws an item.
+fn particle_mesh(draw: &DrawAs) -> Option<(&'static str, Option<u32>)> {
+    const SOLID: &str = "node.platonic_solid_mesh";
     Some(match draw {
-        DrawAs::Tetrahedron => TETRAHEDRON,
-        DrawAs::Cube => CUBE,
-        DrawAs::Octahedron => OCTAHEDRON,
-        // No sphere mesh exists in the node set yet, so a sphere draws as
-        // the nearest solid. Obsolete when a sphere mesh primitive lands.
-        DrawAs::Icosahedron | DrawAs::Sphere => ICOSAHEDRON,
+        DrawAs::Tetrahedron => (SOLID, Some(TETRAHEDRON)),
+        DrawAs::Cube => (SOLID, Some(CUBE)),
+        DrawAs::Octahedron => (SOLID, Some(OCTAHEDRON)),
+        DrawAs::Icosahedron => (SOLID, Some(ICOSAHEDRON)),
+        DrawAs::Sphere => ("node.sphere_mesh", None),
         DrawAs::Item(_) => return None,
     })
 }
@@ -99,9 +101,7 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             b.wire(start, "vertices", seed, "vertices");
         }
         EmitFrom::Sphere => {
-            // A sphere seeds on the nearest solid, as Draw As does.
-            let start = b.add(owner, "start", "node.platonic_solid_mesh");
-            b.set(start, "shape", SerializedParamValue::Enum { value: ICOSAHEDRON });
+            let start = b.add(owner, "start", "node.sphere_mesh");
             b.set_number(start, "radius", SEED_SIZE / 2.0);
             b.wire(start, "vertices", seed, "vertices");
         }
@@ -122,10 +122,12 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         b.wire(forces, port, mover, port);
     }
 
-    match solid(&fields.draw_as) {
-        Some(shape) => {
-            let mesh = b.add(owner, "shape", "node.platonic_solid_mesh");
-            b.set(mesh, "shape", SerializedParamValue::Enum { value: shape });
+    match particle_mesh(&fields.draw_as) {
+        Some((mesh_type, solid)) => {
+            let mesh = b.add(owner, "shape", mesh_type);
+            if let Some(solid) = solid {
+                b.set(mesh, "shape", SerializedParamValue::Enum { value: solid });
+            }
             let object = b.add(owner, "object", "node.scene_object");
             b.wire(mesh, "vertices", object, "vertices");
             b.wire(copies, "copies", object, "instances");

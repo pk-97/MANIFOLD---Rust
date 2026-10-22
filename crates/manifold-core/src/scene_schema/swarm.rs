@@ -38,6 +38,18 @@ fn draws_solid(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Swarm(s) if !matches!(s.draw_as, DrawAs::Item(_)))
 }
 
+fn draws_sphere(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Swarm(s) if s.draw_as == DrawAs::Sphere)
+}
+
+fn draws_platonic(fields: &ItemFields) -> bool {
+    draws_solid(fields) && !draws_sphere(fields)
+}
+
+/// Every particle draws the sphere, so it is a low-detail one: 360 vertices
+/// a particle against the default sphere's 2,880.
+const PARTICLE_SPHERE: &str = "a particle sphere is low detail: up to 100,000 draw each frame";
+
 const BOX_OF_SWARM: &str = "the bounds box is fixed in the emitter's own frame, wider than the seed box";
 const CLOCK: &str = "the forces node's clock and lattice, wired to the mover";
 
@@ -61,7 +73,7 @@ const fn follows(role: &'static str, why: &'static str) -> PropertyRow {
     row(role, Reach::Own(role), Simulation, Exposure::Automatic(why)).param("value")
 }
 
-pub static SWARM_ROWS: [PropertyRow; 68] = [
+pub static SWARM_ROWS: [PropertyRow; 72] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -91,10 +103,15 @@ pub static SWARM_ROWS: [PropertyRow; 68] = [
     row("seed_frame", SEED, Source, Exposure::Internal("a swarm seeds once at its start")).param("frame_seed"),
     row("start_size", START, Source, Exposure::Internal("the seed box is four metres; Scale sizes the emitter")).param("size").default(4.0).when(emits_box),
     row("start_capacity", START, Source, Exposure::Internal("a cube has a fixed vertex count")).param("max_capacity").when(emits_box),
-    row("start_solid", START, Source, Exposure::Automatic("the Emit From field")).param("shape").when(emits_sphere),
     row("start_radius", START, Source, Exposure::Internal("the seed shell is four metres across")).param("radius").default(2.0).when(emits_sphere),
-    row("shape_solid", SHAPE, Source, Exposure::Automatic("the Draw As field")).param("shape").when(draws_solid),
-    row("shape_radius", SHAPE, Source, Exposure::Internal("Size scales each particle")).param("radius").when(draws_solid),
+    row("start_segments", START, Source, Exposure::Internal("a sphere has a fixed vertex count")).param("segments").when(emits_sphere),
+    row("start_rings", START, Source, Exposure::Internal("a sphere has a fixed vertex count")).param("rings").when(emits_sphere),
+    row("shape_solid", SHAPE, Source, Exposure::Automatic("the Draw As field")).param("shape").when(draws_platonic),
+    row("shape_radius", SHAPE, Source, Exposure::Internal("Size scales each particle")).param("radius").when(draws_platonic),
+    // A unit-radius ball, the size of the solids beside it.
+    row("sphere_radius", SHAPE, Source, Exposure::Internal("Size scales each particle")).param("radius").default(1.0).when(draws_sphere),
+    row("sphere_segments", SHAPE, Source, Exposure::Internal(PARTICLE_SPHERE)).param("segments").default(12.0).when(draws_sphere),
+    row("sphere_rings", SHAPE, Source, Exposure::Internal(PARTICLE_SPHERE)).param("rings").default(6.0).when(draws_sphere),
     row("move_capacity", MOVE, Simulation, Exposure::Internal("every particle is stepped; dead ones pass through")).param("active_count"),
     clock("move_ticks", "ticks"),
     clock("move_first_tick", "first_tick"),
