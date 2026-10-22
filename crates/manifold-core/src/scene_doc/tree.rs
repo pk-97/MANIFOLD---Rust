@@ -226,6 +226,7 @@ impl SceneDoc {
         each(&mut self.items, &mut |fields| match fields {
             ItemFields::Group(g) if g.material.as_ref().is_some_and(gone) => g.material = None,
             ItemFields::Object(o) if o.material.as_ref().is_some_and(gone) => o.material = None,
+            ItemFields::Water(w) if w.material.as_ref().is_some_and(gone) => w.material = None,
             ItemFields::Swarm(s) => {
                 if s.material.as_ref().is_some_and(gone) {
                     s.material = None;
@@ -266,6 +267,7 @@ impl SceneDoc {
             match &mut fields {
                 ItemFields::Group(g) => g.material = g.material.as_ref().map(swap),
                 ItemFields::Object(o) => o.material = o.material.as_ref().map(swap),
+                ItemFields::Water(w) => w.material = w.material.as_ref().map(swap),
                 ItemFields::Camera(c) => c.target = c.target.as_ref().map(swap),
                 ItemFields::Swarm(s) => {
                     s.material = s.material.as_ref().map(swap);

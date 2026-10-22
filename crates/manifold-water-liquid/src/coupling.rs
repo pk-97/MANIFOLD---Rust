@@ -699,6 +699,92 @@ fn quaternion_angle(a: [f32; 4], b: [f32; 4]) -> f32 {
     2.0 * (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().atan2(r[3].abs())
 }
 
+/// The solids one Water's rigid owner shares with every other Water in its
+/// scene (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision
+/// shapes)): each Collider's and Body's hull and its row at the first tick
+/// of this frame, held to its motion (no inverse mass or inertia). The other
+/// water flows round them; only the owner's water pushes the bodies back,
+/// since Box3D steps inside one liquid's ticks.
+#[derive(Default)]
+pub struct SharedSolids {
+    geometries: Vec<Arc<PreparedFluidGeometry>>,
+    rows: Vec<LiquidBody>,
+    contacts: Vec<BodySupports>,
+    uncoupled: usize,
+    /// Copied from the owner this frame, before this water runs.
+    fresh: bool,
+    /// Scratch for a later tick's rows.
+    advanced: Vec<LiquidBody>,
+}
+
+impl SharedSolids {
+    /// Take the owner water's solids for this frame, or none.
+    pub fn copy_from(&mut self, owner: Option<&LiquidRigidOwner>) {
+        self.geometries.clear();
+        self.rows.clear();
+        self.contacts.clear();
+        self.uncoupled = 0;
+        self.fresh = true;
+        let Some(owner) = owner else { return };
+        self.geometries.extend(owner.geometries().iter().cloned());
+        self.rows.extend(owner.rows().iter().map(|row| {
+            let mut held = *row;
+            held.position_inv_mass[3] = 0.0;
+            for inertia in [&mut held.inv_inertia_x, &mut held.inv_inertia_y, &mut held.inv_inertia_z] {
+                inertia[..3].fill(0.0);
+            }
+            held
+        }));
+        self.contacts.resize(self.rows.len(), [[0.0; 4]; super::bodies::SUPPORT_VEC4S]);
+        self.uncoupled = owner.uncoupled();
+    }
+
+    /// The hulls this frame, or none when the owner did not run first.
+    pub fn geometries(&self) -> &[Arc<PreparedFluidGeometry>] {
+        if self.fresh { &self.geometries } else { &[] }
+    }
+
+    pub fn rows(&self) -> &[LiquidBody] {
+        if self.fresh { &self.rows } else { &[] }
+    }
+
+    pub fn contacts(&self) -> &[BodySupports] {
+        if self.fresh { &self.contacts } else { &[] }
+    }
+
+    /// Bodies past the owner's capacity, which no water takes.
+    pub fn uncoupled(&self) -> usize {
+        self.uncoupled
+    }
+
+    /// The rows `seconds` after the first tick's start, each body carried
+    /// along its motion: a later tick of this frame starts there.
+    pub fn rows_after(&mut self, seconds: f32) -> &[LiquidBody] {
+        self.advanced.clear();
+        self.advanced.extend(self.rows.iter().map(|row| {
+            let (position, rotation) = super::bodies::body_pose_at(row, seconds);
+            let mut moved = *row;
+            moved.position_inv_mass[..3].copy_from_slice(&position);
+            moved.rotation = rotation;
+            moved
+        }));
+        &self.advanced
+    }
+
+    /// The frame's water has used them; the next frame takes them anew.
+    pub fn used(&mut self) {
+        self.fresh = false;
+    }
+}
+
+/// A liquid domain that owns a rigid world or takes another's solids.
+pub trait SharesSolids {
+    /// The rigid owner, when this water couples its scene's world.
+    fn rigid_owner(&self) -> Option<&LiquidRigidOwner>;
+    /// Where this water takes another water's solids.
+    fn shared_solids_mut(&mut self) -> &mut SharedSolids;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

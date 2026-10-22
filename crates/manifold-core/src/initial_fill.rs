@@ -12,7 +12,7 @@ use crate::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
     GroupInterface, InterfacePortDef, SerializedParamValue,
 };
-use crate::fluid_domain::MAX_FLUID_ROLES;
+use crate::fluid_domain::DEFAULT_ROLE_PORTS;
 use crate::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 use crate::NodeId;
 
@@ -132,11 +132,7 @@ fn migrate_level(
             interface.inputs.iter_mut().find(|input| input.name == column.from_port && matches!(input.port_type.as_str(), "Transform" | "FluidRole"))
         });
         let target = if column.to_port == INITIAL_VOLUME_PORT {
-            let Some(port) = free_role(wires, column.to_node) else {
-                log::warn!("initial fill: the water has no free role input, so its old column is gone");
-                continue;
-            };
-            port
+            free_role(nodes, wires, column.to_node)
         } else {
             column.to_port.clone()
         };
@@ -170,11 +166,23 @@ fn migrate_level(
     (changed, inputs)
 }
 
-/// The first role input of `domain` no wire feeds.
-fn free_role(wires: &[EffectGraphWire], domain: u32) -> Option<String> {
-    (0..MAX_FLUID_ROLES)
-        .map(|k| format!("role_{k}"))
-        .find(|port| !wires.iter().any(|wire| wire.to_node == domain && &wire.to_port == port))
+/// The first role input of `domain` no wire feeds; the domain's `roles`
+/// param grows to hold it.
+fn free_role(nodes: &mut [EffectGraphNode], wires: &[EffectGraphWire], domain: u32) -> String {
+    let free = (0..)
+        .find(|k| !wires.iter().any(|wire| wire.to_node == domain && wire.to_port == format!("role_{k}")))
+        .expect("an unwired role input");
+    if let Some(node) = nodes.iter_mut().find(|node| node.id == domain) {
+        let held = match node.params.get("roles") {
+            Some(SerializedParamValue::Int { value }) => usize::try_from(*value).unwrap_or(0),
+            Some(SerializedParamValue::Float { value }) => value.max(0.0) as usize,
+            _ => DEFAULT_ROLE_PORTS,
+        };
+        if free >= held {
+            node.params.insert("roles".into(), SerializedParamValue::Int { value: free as i32 + 1 });
+        }
+    }
+    format!("role_{free}")
 }
 
 /// Where an Initial Fill's box comes from.
@@ -196,16 +204,16 @@ pub fn document_node_ids(def: &EffectGraphDef) -> BTreeSet<String> {
 
 /// Puts an Initial Fill group over `fill_box` beside `domain` (a doc id in
 /// this level) and wires it into the domain's first free role input.
-/// Returns the group's doc id, or `None` when every role input is taken.
+/// Returns the group's doc id.
 pub fn add_initial_fill(
     nodes: &mut Vec<EffectGraphNode>,
     wires: &mut Vec<EffectGraphWire>,
     domain: u32,
     fill_box: FillBox,
     taken: &mut BTreeSet<String>,
-) -> Option<u32> {
-    let port = free_role(wires, domain)?;
-    Some(place_initial_fill(nodes, wires, (domain, port), fill_box, taken))
+) -> u32 {
+    let port = free_role(nodes, wires, domain);
+    place_initial_fill(nodes, wires, (domain, port), fill_box, taken)
 }
 
 /// An Initial Fill group over `fill_box`, its role wired into `to` (a node

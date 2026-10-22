@@ -320,7 +320,7 @@ impl Primitive for FluidRoleSource {
             ctx.mark_outputs_pending();
             return;
         }
-        let Some(transform) = ctx.inputs.transform("transform") else {
+        let Some(transform) = ctx.inputs.transform("transform").map(crate::world_pose::world_pose) else {
             return self.fail(ctx, "Fluid Role Source needs a transform".into());
         };
         if let Err(error) = validate_transform(transform, "body transform") {

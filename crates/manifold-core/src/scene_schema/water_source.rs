@@ -7,14 +7,15 @@
 //!
 //! A Fill fills an axis-aligned box once, and a Water takes one: the Fill
 //! choice is disabled with its reason on a Sphere or beside another Fill,
-//! and so is Sphere on a Fill (section 7.10).
+//! and so is Sphere on a Fill (section 7.10). MPM only fills, so Inflow and
+//! Drain are disabled in an MPM Water.
 
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
-use crate::scene_doc::{Item, ItemFields, SceneDoc, SourceRole, SourceShape};
+use crate::scene_doc::{Item, ItemFields, SceneDoc, SourceRole, SourceShape, WaterSolver};
 
 const ROLES: &[Choice] = &[
     Choice { key: "fill", label: "Fill" },
@@ -135,6 +136,11 @@ pub fn choice_unavailable(doc: &SceneDoc, item: &Item, field: &str, key: &str) -
             filled.then_some("This Water already has a Fill; a Water takes one")
         }
         ("shape", "sphere") if fields.role == SourceRole::Fill => Some("A Fill fills a box; set Role to Inflow or Drain first"),
+        ("role", "inflow" | "drain")
+            if water_of(doc, item).is_some_and(|water| matches!(&water.fields, ItemFields::Water(w) if w.solver == WaterSolver::Mpm)) =>
+        {
+            Some("MPM fills only; set the Water's Solver to FLIP for Inflow and Drain")
+        }
         _ => None,
     }
 }

@@ -239,8 +239,8 @@ impl MatterScene {
             let fill = add(&mut graph, "node.fluid_role_source");
             graph.set_param(fill, "role", ParamValue::Enum(0)).expect("role");
             wire(&mut graph, (t, "transform"), (fill, "transform"));
-            // The last role, past the colliders.
-            wire(&mut graph, (fill, "role"), (domain, "role_63"));
+            // A role input the default count holds.
+            wire(&mut graph, (fill, "role"), (domain, "role_0"));
         }
 
         let plan = compile(&graph).expect("matter scene compiles");

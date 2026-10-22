@@ -18,7 +18,7 @@ use manifold_physics::clock::TICK;
 use crate::clock::{ClockFrame, LiquidClock};
 use manifold_physics::tick_samples::TickSamples;
 use manifold_physics::PlayedTime;
-use manifold_core::fluid_domain::{MAX_FLUID_ROLES, MAX_LIQUID_BODIES};
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
 use crate::fluid_role::{FluidRole, FluidRoleKind, LatticePlan, PreparedFluidGeometry, scale_steps};
 use manifold_physics::sdf::{DistanceLattice, MAX_LATTICE_NODES};
@@ -256,16 +256,12 @@ pub const REGION_INFLOW: f32 = 2.0;
 pub const REGION_OUTFLOW: f32 = 3.0;
 
 /// Every role slot's controls at one tick's start.
-type Poses = [Controls; MAX_FLUID_ROLES];
+type Poses = Vec<Controls>;
 
-fn controls_of(roles: &[Option<FluidRole>]) -> Poses {
-    let mut controls = [Controls::default(); MAX_FLUID_ROLES];
-    for (slot, role) in roles.iter().enumerate().take(MAX_FLUID_ROLES) {
-        if let Some(role) = role {
-            controls[slot] = Controls::from_role(role);
-        }
-    }
-    controls
+/// `roles`' controls into `out`, one per slot, reusing its storage.
+fn fill_controls(roles: &[Option<FluidRole>], out: &mut Poses) {
+    out.clear();
+    out.extend(roles.iter().map(|role| role.as_ref().map_or_else(Controls::default, Controls::from_role)));
 }
 
 struct BodyRole {
@@ -399,6 +395,8 @@ pub struct LiquidBodies {
     /// The roles' controls at each tick's start, from the oldest tick not
     /// yet run.
     samples: TickSamples<Poses>,
+    /// Scratch for one sample's controls, refilled in place.
+    controls: Poses,
     frame: Option<ClockFrame>,
     clock_obstacles: Vec<GpuFlipBodyVertex>,
     clock_sources: Vec<GpuFlipBodyVertex>,
@@ -712,15 +710,19 @@ impl LiquidBodies {
     /// A history replay sample of the roles at played time `now`, after `clock`
     /// observed this sample's Speed; `None` while a role is still pending.
     pub fn observe_sample(&mut self, clock: &LiquidClock, now: PlayedTime, roles: Option<&[Option<FluidRole>]>) {
-        let controls = roles.map(controls_of);
-        self.samples.observe(clock, now, controls.as_ref());
+        if let Some(roles) = roles {
+            fill_controls(roles, &mut self.controls);
+        }
+        let controls = roles.map(|_| &self.controls);
+        self.samples.observe(clock, now, controls);
     }
 
     /// This frame's roles, right after `clock` advanced to `frame`: they
     /// belong to a tick that starts now.
     pub fn settle(&mut self, roles: &[Option<FluidRole>], clock: &LiquidClock, frame: &ClockFrame) {
         self.frame = Some(frame.clone());
-        self.samples.settle(clock, frame, Some(&controls_of(roles)));
+        fill_controls(roles, &mut self.controls);
+        self.samples.settle(clock, frame, Some(&self.controls));
     }
 
     /// One row per coupled body for each of this frame's ticks,
@@ -768,8 +770,8 @@ impl LiquidBodies {
                 (start, 0.0)
             };
             for (index, role) in self.roles.iter().enumerate() {
-                let from = start[role.slot];
-                let row = body_row(from, end[role.slot], index as f32, duration);
+                let from = start.get(role.slot).copied().unwrap_or_default();
+                let row = body_row(from, end.get(role.slot).copied().unwrap_or_default(), index as f32, duration);
                 self.region_rows.push(region_row(row, role.kind, from));
             }
             self.rows.extend(coupled.iter().map(|row| coupled_row(row, offset)));

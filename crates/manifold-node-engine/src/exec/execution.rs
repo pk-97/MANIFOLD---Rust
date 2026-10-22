@@ -1861,7 +1861,7 @@ impl Executor {
                 return StepFlow::Next;
             }
 
-            if let Some(pair) = plan.node_pairs().iter().find(|pair| pair.first_step == idx) {
+            for pair in plan.node_pairs().iter().filter(|pair| pair.first_step == idx) {
                 self.prepare_node_pair(graph, plan, *pair, time, sample);
             }
 
@@ -2543,7 +2543,7 @@ impl Executor {
 
             // Publish the first result to its paired second step before any
             // consumer can observe either output.
-            if let Some(pair) = plan.node_pairs().iter().find(|pair| pair.first_step == idx) {
+            for pair in plan.node_pairs().iter().filter(|pair| pair.first_step == idx) {
                 let (behavior, first, second) = graph
                     .pair_nodes_mut(pair.pair_index)
                     .expect("compiled pair participants exist");

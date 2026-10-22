@@ -197,6 +197,7 @@ mod tests {
                 fluid: NodeId::new("fluid"),
                 rigid: NodeId::new("world"),
                 colliders: RigidImpulseTargets::body(0).unwrap().union(RigidImpulseTargets::group(0).unwrap()),
+                observers: Vec::new(),
             }]
         );
     }
@@ -227,6 +228,7 @@ mod tests {
                 fluid: NodeId::new("matter"),
                 rigid: NodeId::new("world"),
                 colliders: RigidImpulseTargets::body(0).unwrap(),
+                observers: Vec::new(),
             }]
         );
     }

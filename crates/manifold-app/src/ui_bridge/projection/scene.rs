@@ -85,7 +85,7 @@ fn item_vm(
     let fields = field_rows(doc, item, layers);
     let material_item = match item.kind() {
         ItemKind::Material => Some(item.id.clone()),
-        ItemKind::Object | ItemKind::Group => doc.effective_material(&item.id),
+        ItemKind::Object | ItemKind::Group | ItemKind::Water => doc.effective_material(&item.id),
         _ => None,
     };
     let material = material_item.and_then(|id| doc.find(&id)).map(|mat| material_block(doc, inst, mat, owned, layers));
@@ -161,7 +161,7 @@ fn material_block(
 ) -> MaterialBlockVm {
     let mut used_by = 0;
     doc.walk(|item, _| {
-        if matches!(item.kind(), ItemKind::Object | ItemKind::Group) && doc.effective_material(&item.id).as_ref() == Some(&material.id) {
+        if matches!(item.kind(), ItemKind::Object | ItemKind::Group | ItemKind::Water) && doc.effective_material(&item.id).as_ref() == Some(&material.id) {
             used_by += 1;
         }
     });

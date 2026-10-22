@@ -7,8 +7,9 @@ use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, liquid_dial_params};
 use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds};
 
-use manifold_node_engine::exec::effect_node::EffectNode;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_node_engine::exec::effect_node::{EffectNode, ParamValues};
+use manifold_node_engine::parameters::ParamValue;
+use manifold_core::fluid_domain::DEFAULT_ROLE_PORTS;
 use manifold_node_engine::parameters::ParamType;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_core::scene_impulse::ImpulseTarget;
@@ -64,7 +65,13 @@ fn routes_fluid_impulses(node: &mut dyn EffectNode) -> bool {
 fn is_met(type_id: &str, node: &mut dyn EffectNode, item: SceneItem) -> bool {
     match item {
         SceneItem::RolePorts => {
-            (0..MAX_FLUID_ROLES).all(|index| has_input(node, &format!("role_{index}"), PortType::FluidRole))
+            // The role inputs follow the `roles` param, one per source.
+            let grown = DEFAULT_ROLE_PORTS + 70;
+            let mut params = ParamValues::default();
+            params.insert("roles".into(), ParamValue::Float(grown as f32));
+            node.reconfigure(&params);
+            has_param(node, "roles", ParamType::Int)
+                && (0..grown).all(|index| has_input(node, &format!("role_{index}"), PortType::FluidRole))
         }
         SceneItem::AccelerationField => has_input(node, "acceleration_field", PortType::VectorField),
         SceneItem::Speed => has_param(node, "speed", ParamType::Float),

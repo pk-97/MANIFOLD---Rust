@@ -104,6 +104,7 @@ impl ItemFields {
             ItemFields::Group(g) => g.material.as_ref(),
             ItemFields::Object(o) => o.material.as_ref(),
             ItemFields::Swarm(s) => s.material.as_ref(),
+            ItemFields::Water(w) => w.material.as_ref(),
             _ => None,
         }
     }
@@ -431,7 +432,30 @@ pub struct FeatureSetting {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct WaterFields {}
+pub struct WaterFields {
+    pub solver: WaterSolver,
+    pub draw: WaterDraw,
+    /// What the water draws with; none draws the solver's own water look.
+    pub material: Option<ItemId>,
+}
+
+/// The liquid solver a Water runs: GPU FLIP, or MLS-MPM (Matter).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WaterSolver {
+    #[default]
+    Flip,
+    Mpm,
+}
+
+/// How a Water is drawn: its surface mesh, or its particles as small spheres.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WaterDraw {
+    #[default]
+    Surface,
+    Particles,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
