@@ -246,7 +246,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 ### 7.12 Forces
 
 - Force is a kind: its recipe type (Radial, Uniform, Vortex, Wind, Drag, Attractor, Explosion), the recipe's rows, Targets (everything with physics, or chosen items), Impulse. Forces compile to scene modifier instances and the `load/expand` passes. Drag compiles as the Wind recipe with speed and gusts at 0.
-- A force is an item a user adds, with `Add`. A scene holds at most 16 forces; the seventeenth Add is disabled with that reason.
+- A force is an item a user adds, with `Add`. A scene holds any number of forces (ruling 23).
 - Forces are not modifiers and not a chain: they add up, so their order changes nothing. Force items sit at the top of the scene, in their own section of the tree.
 
 ### 7.13 Cameras
