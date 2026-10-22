@@ -197,23 +197,23 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
 }
 
 #[test]
-fn scene_impulse_routes_refuse_one_hit_when_full_and_never_latch() {
+fn scene_impulse_routes_take_a_burst_past_the_history_and_never_latch() {
     let (def, manifest) = scene_fixture(&["part_a"]);
     let fire = alias(&def, "fire");
     let mut runtime =
         PresetRuntime::from_def_for_render(def, &registry(), Some(&manifest), false).unwrap();
     runtime.execute_frame(time(0.0));
     let mut sequence = 0;
-    for _ in 0..256 {
+    // A rigid world's hit history grows with a burst (ruling 23): one past
+    // the 256 it holds up front is admitted, never refused.
+    for _ in 0..257 {
         assert_eq!(runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence), Ok(ImpulseFire::Admitted));
     }
-    let error = runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence).unwrap_err();
-    assert!(error.contains("refused"), "{error}");
-    // No reset: the queued hits land, their receipts drain, the next Fire lands.
+    // No reset: the queued hits land once, their receipts drain, the next Fire lands.
     runtime.execute_frame(time(DT));
     let mut receipts = 0;
     runtime.water().drain_scene_impulses(|_, _| receipts += 1);
-    assert_eq!(receipts, 256);
+    assert_eq!(receipts, 257);
     assert_eq!(runtime.fire_scene_impulse(&fire, time(DT), &mut sequence), Ok(ImpulseFire::Admitted));
     runtime.execute_frame(time(2.0 * DT));
     let mut landed = Vec::new();
