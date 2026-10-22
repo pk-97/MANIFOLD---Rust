@@ -1510,11 +1510,14 @@ the cap raise's 0–4 — about +2% worst-case rays on today's budget.
   lives inside the existing `rt_ready` dispatch; the native-mode
   byte-identity discipline (T2-B precedent — real `graph-tool render`
   machine diff, never a code-diff argument) is re-run at RS-C's gate.
-- **I-RS6 — sv mask channel count matches `MAX_RT_CASTERS`.** After RS2:
-  `rg` — the shadow-mask textures' channel total (two `Rgba16Float`) and
-  the Rust/MSL `MAX_RT_CASTERS` constants agree at 8; `shadow_factor`'s
-  slot indexing covers 0..7 (the `clamp(..., 0, 3)` at
-  `render_scene.wgsl:649` is gone).
+- **I-RS6 — one caster table, no cap.** Every shadow-casting light gets a
+  slot in one `ShadowCaster` table (`raytrace/params.rs`), filled once per
+  frame after the light table and read by the raster pass, the shaft march
+  and the ray tracer. The MSL struct is generated from the Rust record and
+  the WGSL copies are checked against it by a test. Raster shadow maps are
+  one depth array, a layer per caster; shadow visibility is a texture array,
+  four casters per layer. Both grow with the caster count and are reused
+  otherwise.
 
 ### 15.5 Alternatives (priced)
 

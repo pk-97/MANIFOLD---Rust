@@ -67,19 +67,14 @@ between this doc and execution.
   is invented). Rejected: a `SceneObject` bundle
   port carrying a GPU-buffer reference + CPU material in one wire — new port
   semantics for zero authoring win.
-- **D4 — Shadows v1 = shadow maps for the first `MAX_SHADOW_CASTING_LIGHTS = 4`
-  casters, consumed from the existing Light struct.**
-  **[AMENDED 2026-07-10 (F2) — caster policy decided now that objects=64 and lights are
-  unbounded.]** One depth pass over all objects per shadow-casting light, PCF per the
-  struct's softness/bias/resolution. **The shadow-caster cap is a separate, tighter
-  budget than the object/light sliders:** shadow maps are honored for the first `K` lights
-  **in slot order** whose `cast_shadows == true`, where `K = MAX_SHADOW_CASTING_LIGHTS`
-  (a named constant, `= 4`, bumpable like any cap — the perf HUD shows the cost). Lights
-  beyond the first `K` casters **still illuminate the scene**; they simply cast no shadow.
-  This decouples the shadow bill from the (now-large) object and light counts — Peter's
-  call: cap = K. Worst case is `objects × K` depth-pass draws (64 × 4 = 256), not
-  `objects × lights` (64 × 64 ≈ 4096); the shadow-map cache keyed `(node, light_slot)` is
-  bounded to `K` entries for the same reason. Sun = ortho frustum, Point = single-face
+- **D4 — Every shadow-casting light casts a shadow, consumed from the existing Light
+  struct.** No caster cap, raster or ray traced. One depth
+  pass over all objects per shadow-casting light, PCF per the struct's softness, bias
+  and resolution, into its own layer of one shadow-map array. Cost grows with the number
+  of casting lights, as in Blender; there is no quality dial. The array and the shared
+  caster table grow when the caster count grows and are reused otherwise; if memory
+  refuses a larger array the old maps stay and the failure is logged with its size.
+  Sun = ortho frustum, Point = single-face
   approximation (both already specified in `light.rs` doc comments).
 - **D5 — Atmosphere is a port, like everything else.** New CPU struct + port type
   `Atmosphere` (same plumbing pattern as Material M1) + one atom `node.atmosphere`:
@@ -292,7 +287,7 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   light's caster slot rides the spare `.w` of its colour vec4 (split layout — shadows cost no
   light-budget). Lights also moved to a ring-buffered (`FRAMES_IN_FLIGHT=3`) `@binding(8)`
   storage buffer (killed the 4KB `setBytes` cap). Proof: `gpu_proofs::render_scene_shadows`
-  (occluder darkens ground 3.5%, PNG-confirmed soft shadow; >K casters render finite+lit).
+  (occluder darkens ground 3.5%, PNG-confirmed soft shadow; twelve casters all shadow).
   Original plan:
   Depth pass per casting light (first `K = MAX_SHADOW_CASTING_LIGHTS`
   casters, D4) + PCF consumption per the Light struct. Read-back: `light.rs` whole (the
