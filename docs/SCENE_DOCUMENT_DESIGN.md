@@ -107,7 +107,7 @@ Measured in non-test lines, from the files read.
 
 | Area | Lines now | What it does now | Fate |
 |---|---|---|---|
-| `SceneVm::from_def` and its trace (`scene_vm.rs` 3,202 plus `scene_vm/` 1,447) | 4,650 | Reads cameras, lights, objects, water, physics back out of graph wiring | The view types (about 900) stay, built from the document; the trace is deleted (about 3,750) |
+| `SceneVm::from_def` and its trace (`scene_vm.rs` 3,202 plus `scene_vm/` 1,447) | 4,650 | Reads cameras, lights, objects, water, physics back out of graph wiring | The view types (about 900) stay, built from the document; the setup check and gizmo shapes stay; the rest of the trace is deleted (about 2,400) |
 | `scene_object_model.rs`, `scene_items.rs` | 1,028 + 286 | Derive object rows, kinds, capabilities and the item list from graph shape | Deleted; the item tree replaces them (1,310) |
 | Exposure stamping and its load migrations (`manifold-core/src/scene_exposure.rs`, nodes-scene `scene_exposure.rs`, `compound.rs`, `fluid_objects.rs`) | 2,505 | Copy node params into preset metadata so rows exist | Deleted; rows come from the (kind, property) table |
 | Template insertion (`scene_template.rs`) and scene modifier graph edits (`scene_modifier_edit.rs`) | 2,459 | Splice template groups and force graphs into the scene graph | Builders move into the compiler; splicing deleted (about 2,000) |
@@ -122,7 +122,7 @@ Measured in non-test lines, from the files read.
 
 | Deleted by the end of wave 4 | Lines |
 |---|---|
-| `SceneVm::from_def` trace | 3,750 |
+| `SceneVm::from_def` trace (the setup check and gizmo shape declarations stay) | 2,400 |
 | `scene_object_model.rs`, `scene_items.rs` | 1,310 |
 | Exposure stamping and its load migrations | 2,505 |
 | Template splicing and scene modifier graph edits | 2,000 |
@@ -131,7 +131,7 @@ Measured in non-test lines, from the files read.
 | Importer graph building | 3,000 |
 | `starter_scenes.rs` and the swarm preset builder | 500 |
 | Fluid role collider path, rigid shape enum, refusals | 600 |
-| **Total (Layer Plane path and G2a's UI half not counted)** | **about 22,000** |
+| **Total (Layer Plane path and G2a's UI half not counted)** | **about 20,600** |
 
 | Added | Lines |
 |---|---|
@@ -289,7 +289,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 
 ### 7.10 Water, Water Source, Ocean
 
-- **Water** is a kind: Domain (its Transform is the box: Position and Size on the card, moved and resized by its gizmo), Resolution, Simulation dials, Whitewater; its looks and sources as children. Today the Water card has no domain placement rows; this is the fix. The water family template in `manifold-nodes-water` is the emitter.
+- **Water** is a kind: Domain (its Transform is the box: Position and Size on the card, moved and resized by its gizmo), Resolution, Simulation dials, Surface, Whitewater (section 7.18); its looks and sources as children. Today the Water card has no domain placement rows; this is the fix. The water family template in `manifold-nodes-water` is the emitter.
 - **Water Source** is a child item with Role Fill, Inflow or Drain; Shape Box or Sphere; Transform; Inflow speed. The role is shown in the header. The Collider role is gone (section 7.8).
 - **Ocean** is an Object Shape. Its rows (the surface dials) appear on the Object card when Shape is Ocean.
 - BUG-fbwu6 (Initial Fill refusal is not named by the domain setup warning) is fixed by design: Fill on a source that cannot fill is a disabled control with its reason.
@@ -333,6 +333,18 @@ The renderer apart from the item-id buffer, every primitive, both solvers and Bo
 - It is a card editing helper over the existing three params. It adds no param, so modulation, MIDI and OSC still target each axis as today. The link state is a card setting and is not mapped.
 - Built through the param surface recipe in WIDGET_TREE_DESIGN.md section 5b (Agent contract and enforcement), with no bespoke row infrastructure.
 
+### 7.18 Fit with the water end game
+
+The water end game ([GPU_FLIP_END_GAME_DESIGN.md](GPU_FLIP_END_GAME_DESIGN.md)) changes things below the loader: sparse tiles, no mesh in the live path, a memory budget. This design only fixes how water is set up and shown. These rules keep the two from colliding:
+- **Domain size limit** is never a literal in the table. The row's hard limit comes from the solver's own constant (`manifold-core/src/fluid_domain.rs:16`, 0.5 to 20 m today). When the end game removes the cap for GPU FLIP, only the solver changes. A value past the limit is stopped by the row and never reaches the solver. Today the card row has no upper limit (`scene_surface.rs:592`), so a drag past 20 m reaches the solver and shows red text.
+- **Resolution** is cells across the longest side; the card shows the cell size in metres, read-only. When the end game stores cell size instead, only the Water table row changes.
+- **Whitewater capacity** is one function in the Water emitter, today of Resolution. The end game changes its input, not the card. A full pool replaces its oldest particles and never refuses.
+- **Colliders in water:** water reads items whose bounds touch its domain (its box today, its active tiles later). `CollisionShape` hands water a distance sampler cropped to the domain plus reach, never a lattice over a whole mesh. Past 255 coupled items (`MAX_LIQUID_BODIES`, `fluid_domain.rs:140`) the card says how many are not coupled.
+- **Physics View** is a Render menu mode that draws the particle dots instead of the water surface, plus the hidden things: open and closed faces, colliders as the water sees them, sources and drains. It is not built as a mesh switch.
+- **Surface:** the Water emitter owns the whole surface path behind the Surface rows. When the end game draws the level set directly, it swaps the emitter's output and the node vocabulary in one lane and keeps the row ids. Every pass that writes the water surface also writes the item id for pixel picking (L9).
+- **Water Source** Role and Shape are open lists in the Water Source table, so mesh-shaped fills, an absorb zone and ocean-fed faces are added there later.
+- **Setup check:** `scene_vm/setup_check.rs` and `manifold-app/src/setup_check.rs` (the problem list, red outline and card warning) move onto `scene_of` unchanged; they are not part of the deleted trace. A setup warning (what the solver clipped) is a notice with a red outline on the item, not a refusal.
+
 ## 8. Cards by kind
 
 One table keyed by (kind, property) replaces the per-node scene table (`scene_surface.rs:121-156`) and preset exposures. It carries the same facts: group, role, band, order, gate, unit, limit. Rows go through the param surface recipe: manifest params with ids, plus the existing capability-driven action rows (the physics setting, Draw As, Emit From, Shape, file pickers). No bespoke row, slider or drawer. The table lives in one file per kind so lanes do not collide.
@@ -346,7 +358,7 @@ One table keyed by (kind, property) replaces the per-node scene table (`scene_su
 | Group | Transform (with the Scale link toggle); Visible; Material (applies to children with none); Physics (Body here is one compound body); Copies; when Source is a file, Model File and Combine Meshes |
 | Material | Surface rows; texture source (None, file, layer); used by N; Make Unique |
 | Swarm | Emit From; Draw As; Count; Size; Air Drag; Material; Look; Transform places the emitter |
-| Water | Domain: Position and Size (with the Scale link toggle), moved and resized by its gizmo in the viewport; Resolution; Simulation dials; Whitewater (Amount only: the particle budget, today's "Whitewater Budget", is automatic from Resolution). Physics View is not a card row: it is a Render menu mode in the header beside Solid and Wireframe |
+| Water | Domain: Position and Size (with the Scale link toggle; the size limit comes from the solver, section 7.18), moved and resized by its gizmo in the viewport; Resolution (cells across the longest side, with the cell size in metres shown read-only); Simulation dials; Surface: Surface Detail, Particle Scale, Stretch, Centre Smoothing, Fill Pits, Smoothing (they name the surface, not its mesh); Whitewater: Amount only (capacity is automatic, section 7.18). Physics View is not a card row: it is a Render menu mode in the header (section 7.18) |
 | Water Source | Role (header); Shape; Transform; Inflow speed |
 | Force | Its type's rows; Targets; Impulse |
 | World | Physics (Gravity, Speed, Reset, Air Resistance); Fog; Render (ray tracing, temporal upscale, render mode); default active camera |
@@ -444,7 +456,8 @@ Peter tests a branch build after wave 2 (base scene, objects, lights, groups, im
 - Does: Water and Water Source emitters (Fill, Inflow, Drain); water reads Colliders and Bodies whose bounds touch the domain through `CollisionShape`; Ocean Shape on Object; disabled-with-reason Fill refusal (BUG-fbwu6).
 - Deletes: fluid role wiring, `fluid_objects.rs`, the Water in Scan lifted chain, the bake-size rows.
 - Files: `manifold-nodes-water/`, `scene_compile/water.rs`, `manifold-water-rigid/`, water card tables.
-- Test budget: about 4 tests plus one GPU proof: water with a collider and a body, one frame; a collider outside the domain does not reach the water.
+- Also does (section 7.18): the domain size row's limit from the solver constant; Resolution with read-only cell size; the Surface rows; automatic whitewater capacity; Physics View as a Render menu mode; the setup check moved onto `scene_of`.
+- Test budget: about 5 tests plus one GPU proof: water with a collider and a body, one frame; a collider outside the domain does not reach the water; a domain size past the solver limit is stopped by the row; Inflow adds particles and Drain removes them.
 - Depends on: L2, L4.
 
 **L8 (Sonnet; BUG-elwvu.8): cameras per display.**
