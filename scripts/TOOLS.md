@@ -20,6 +20,7 @@ Landing and gates:
   rt-noise                RT temporal-stability gate on a paused scene (--record to re-baseline)  [scripts/rt_noise_gate.py]  (cost: broad)
   bridge-probe            presentation tear regression gate  [scripts/bridge_probe_gate.py]  (cost: broad)
   docs-index              regenerate docs/README.md after adding or renaming a doc  [scripts/gen_docs_index.py]  (cost: unit)
+  docs-cited-paths        report dead repo paths cited in live docs (nightly report, never a gate)  [scripts/docs_cited_paths.py]  (cost: unit)
   glb-status              regenerate the glTF conformance status doc  [scripts/gen_glb_conformance_status.py]  (cost: unit)
   gate-runner             machine-written verdict trail for lane gates  [scripts/gate_runner.py]  (cost: focused)
 

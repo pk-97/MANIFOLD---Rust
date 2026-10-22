@@ -205,9 +205,13 @@ impl FrameTimer {
 
     /// Returns true if enough time has passed for the next frame.
     pub fn should_tick(&self) -> bool {
+        self.should_tick_at(Instant::now())
+    }
+
+    fn should_tick_at(&self, now: Instant) -> bool {
         match &self.grid {
-            Some(grid) => Instant::now() >= grid.next_deadline(),
-            None => self.last_tick_time.elapsed() >= self.target_frame_duration,
+            Some(grid) => now >= grid.next_deadline(),
+            None => now.saturating_duration_since(self.last_tick_time) >= self.target_frame_duration,
         }
     }
 
@@ -541,20 +545,9 @@ impl FrameTimer {
     /// Simulates a frame with exact delta time, bypassing wall-clock measurement.
     #[cfg(test)]
     fn inject_frame_time(&mut self, dt: f64) {
-        self.last_tick_time = Instant::now();
         self.last_dt = dt;
         self.frame_clock_seconds += dt;
         self.update_fps(dt);
-    }
-
-    /// Test-only: backdate `last_tick_time` so `should_tick` sees exactly
-    /// `elapsed` since the last tick. Sleep-then-assert-negative timing
-    /// tests flake under workspace-wide parallel load (BUG-kedy
-    /// (trunk-health red: nextest workspace): a 17ms sleep overshot the
-    /// 33ms 30fps interval on a loaded machine).
-    #[cfg(test)]
-    fn inject_elapsed_since_tick(&mut self, elapsed: Duration) {
-        self.last_tick_time = Instant::now() - elapsed;
     }
 }
 
@@ -677,10 +670,9 @@ mod tests {
         timer.set_target_fps(30.0);
         assert_eq!(timer.target_fps(), 30.0);
         // 30fps interval is 33.3ms: 17ms elapsed must not tick, 40ms must.
-        timer.inject_elapsed_since_tick(Duration::from_millis(17));
-        assert!(!timer.should_tick());
-        timer.inject_elapsed_since_tick(Duration::from_millis(40));
-        assert!(timer.should_tick());
+        let last = timer.last_tick_time;
+        assert!(!timer.should_tick_at(last + Duration::from_millis(17)));
+        assert!(timer.should_tick_at(last + Duration::from_millis(40)));
     }
 
     #[test]

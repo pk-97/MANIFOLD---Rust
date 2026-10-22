@@ -262,6 +262,8 @@ class LandingTests(unittest.TestCase):
     checks = ["tooling", "design-status", "ignored-tests", "deny",
               "clippy", "tests-build", "test-ownership/manifold-gpu",
               "gpu-proofs-build", "tests", "flow-gate", "gpu-proofs"]
+    # --cheap stops before tests, flows and proofs, and type-checks the proofs.
+    cheap_checks = [{"gpu-proofs-build": "gpu-proofs-check"}.get(c, c) for c in checks[:-3]]
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
                  comment=False, gpu_output=None, proof_cached=False, manifest=None,
@@ -334,6 +336,8 @@ class LandingTests(unittest.TestCase):
                 label = "catalog-fresh"
             if "--no-run" in cmd or "--build-only" in cmd:
                 label += "-build"
+            elif "--check-only" in cmd:
+                label += "-check"
             called.append(label)
             events.append(label)
             if label == "gpu-proofs" and gpu_output is not None:
@@ -494,7 +498,7 @@ class LandingTests(unittest.TestCase):
                 code, called, timings, commands, _, output, _ = self.exercise(
                     extra=['--cheap'], comment=comment)
                 self.assertEqual(code, 0)
-                cheap = self.checks[:-3] if not comment else ['design-status', 'ignored-tests', 'deny']
+                cheap = self.cheap_checks if not comment else ['design-status', 'ignored-tests', 'deny']
                 self.assertEqual(called, cheap)
                 self.assertFalse(any(event.startswith('hold-enter:') for event in self.events))
                 self.assertIn('cheap gate: ', output)
@@ -504,7 +508,7 @@ class LandingTests(unittest.TestCase):
         code, called, timings, commands, _, output, _ = self.exercise(
             extra=['--cheap'], dirty=True, head='base')
         self.assertEqual(code, 0, output)
-        self.assertEqual(called, self.checks[:-3])
+        self.assertEqual(called, self.cheap_checks)
         self.assertIn('gating the uncommitted working tree', output)
         self.assertEqual(self.scope.call_args.kwargs['head'], 'snapshot')
         self.assertIn(['python3', '.claude/hooks/design_status_check.py', 'base', 'snapshot'], commands)
@@ -1730,9 +1734,7 @@ class RepoScanSelectionTests(unittest.TestCase):
     """Tests that read the whole repo run on every landing that changes what they read."""
 
     CORE = "manifold-core"
-    CITED = "(package(=manifold-core) & binary(=docs_cited_paths))"
     INDEX = "(package(=manifold-core) & binary(=docs_index_sync))"
-    LIFECYCLE = "(package(=manifold-core) & binary(=docs_lifecycle))"
     CRATES_WIDE = {
         "(package(=manifold-core) & binary(=bug080_project_deserialize_single_door))",
         "(package(=manifold-core) & test(liquid_type_ids_live_in_one_place))",
@@ -1752,17 +1754,15 @@ class RepoScanSelectionTests(unittest.TestCase):
             with self.subTest(doc=doc):
                 self.assertTrue(gate_policy.repo_scan_doc(doc))
                 plan = self.plan([], scan_paths=[doc])
-                expected = {self.CITED, self.LIFECYCLE}
-                if doc.startswith("docs/"):
-                    expected.add(self.INDEX)
-                self.assertEqual(plan.filters, expected)
-                self.assertEqual(plan.packages, {self.CORE})
+                in_docs = doc.startswith("docs/")
+                self.assertEqual(plan.filters, {self.INDEX} if in_docs else set())
+                self.assertEqual(plan.packages, {self.CORE} if in_docs else set())
                 self.assertEqual(plan.whole, set())
 
     def test_renamed_rs_file_in_another_crate_selects_every_crates_wide_scan(self):
         old, new = "crates/manifold-nodes-water/src/old_name.rs", "crates/manifold-nodes-water/src/new_name.rs"
         plan = self.plan([old, new])
-        self.assertLessEqual({self.CITED} | self.CRATES_WIDE, plan.filters)
+        self.assertLessEqual(self.CRATES_WIDE, plan.filters)
         self.assertNotIn(self.INDEX, plan.filters)
         self.assertEqual(plan.whole, set())
         for package in ("manifold-core", "manifold-gpu", "manifold-editing",
@@ -1771,12 +1771,12 @@ class RepoScanSelectionTests(unittest.TestCase):
 
     def test_new_rs_file_in_another_crate_selects_every_crates_wide_scan(self):
         plan = self.plan(["crates/manifold-nodes-water/src/brand_new.rs"])
-        self.assertLessEqual({self.CITED} | self.CRATES_WIDE, plan.filters)
+        self.assertLessEqual(self.CRATES_WIDE, plan.filters)
         self.assertEqual(plan.whole, set())
 
     def test_file_that_no_scan_reads_stays_narrow(self):
         plan = self.plan(["crates/manifold-nodes-water/assets/blob.png"])
-        self.assertEqual(plan.filters, {self.CITED})
+        self.assertEqual(plan.filters, set())
 
     def test_named_source_files_select_the_tests_that_read_them(self):
         cases = {

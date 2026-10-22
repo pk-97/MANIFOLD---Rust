@@ -395,7 +395,7 @@ def run_check(label, cmd, cwd, timeout, passed=None):
     # Proofs own their canonical per-invocation records (also used by gpu_queue).
     # Build receipts alone cannot guarantee artifacts still exist after reclaim.
     cacheable = (label != 'gpu-proofs' and '--no-run' not in cmd
-                 and '--build-only' not in cmd)
+                 and '--build-only' not in cmd and '--check-only' not in cmd)
     if passed and gate_passes.changed_passes([passed]):
         RAN_EVERY_CHECK.set(False)
         return 1, '', 'inputs changed after planning; rerun the gate\nrerun: ' + rerun_command(
@@ -927,10 +927,15 @@ def _main(stack):
         gpu_args = [arg for path in root_gpu_paths for arg in ("--path", path)]
         if args.base != "origin/main":
             gpu_args += ["--base", base_sha]
+        # --cheap never runs proofs, so it type-checks them instead of
+        # linking binaries; under its own label and flag, nothing it records
+        # stands in for the real landing's build.
+        proof_leg, proof_flag = (("gpu-proofs-check", "--check-only") if args.cheap
+                                 else ("gpu-proofs-build", "--build-only"))
         if proof_cached:
-            skip(results, 'gpu-proofs-build', 'all selected proofs already passed; no artifacts needed')
-        if not proof_cached and build_leg(results, "gpu-proofs-build",
-                     ["python3", "scripts/gpu_proofs_gate.py", *gpu_args, "--build-only"],
+            skip(results, proof_leg, 'all selected proofs already passed; no artifacts needed')
+        if not proof_cached and build_leg(results, proof_leg,
+                     ["python3", "scripts/gpu_proofs_gate.py", *gpu_args, proof_flag],
                      repo) == "FAIL":
             unbuilt.add("gpu-proofs")
             if args.fail_fast:
