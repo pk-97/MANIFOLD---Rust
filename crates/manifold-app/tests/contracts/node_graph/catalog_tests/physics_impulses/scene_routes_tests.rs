@@ -23,10 +23,7 @@ fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
     );
     // No continuous acceleration; isolate velocity changes from Fire.
     def.wires.retain(|wire| wire.from_node != 1);
-    def = manifold_core::scene_modifier_edit::insert_scene_modifier(
-        &def,
-        0,
-        SceneModifierInstanceDef {
+    def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&def, SceneModifierInstanceDef {
             id: NodeId::new("force"),
             scene: reference("scene"),
             targets: SceneTargetSelection::Explicit {
@@ -35,10 +32,8 @@ fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
             mesh_frames: vec![],
             legacy_math_view_carrier: None,
             graph: Box::new(recipe),
-        },
-    )
-    .unwrap()
-    .graph;
+        })
+    .unwrap();
     let mut manifest = ParamManifest::from_params(
         def.preset_metadata
             .as_ref()

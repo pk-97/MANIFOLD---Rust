@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::SceneNodeRef;
+use crate::NodeId;
 use crate::effect_graph_def::{EffectGraphNode, GROUP_TYPE_ID};
 use crate::scene_index::{FlatSceneIndex, SceneIndexError};
 
@@ -93,8 +93,8 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
 /// volume → marching cubes) both reach their domain.
 pub fn liquid_domain_of(
     index: &FlatSceneIndex,
-    object: &SceneNodeRef,
-) -> Result<Option<SceneNodeRef>, SceneIndexError> {
+    object: &NodeId,
+) -> Result<Option<NodeId>, SceneIndexError> {
     let unsupported = |path: String, detail: &str| SceneIndexError::Unsupported {
         path,
         detail: detail.into(),

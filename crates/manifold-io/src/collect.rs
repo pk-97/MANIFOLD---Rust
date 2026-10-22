@@ -944,7 +944,7 @@ pub(crate) fn has_calibrated_scene_asset(project: &Project, layer_id: &LayerId, 
         meta.string_bindings.iter().any(|binding| binding.id == key &&
             matches!(&binding.target, BindingTarget::Node { node_id, param }
                 if param == "path" && graph.scene_modifiers.iter().any(|modifier|
-                    modifier.mesh_frames.iter().any(|frame| &frame.source.node == node_id))))
+                    modifier.mesh_frames.iter().any(|frame| frame.source == *node_id))))
     })
 }
 
@@ -1008,7 +1008,7 @@ mod tests {
     #[test]
     fn scene_modifier_v3_asset_binding_follows_the_local_snapshot() {
         use manifold_core::scene_modifier_preset::{
-            SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+            SceneModifierInstanceDef, SceneTargetSelection,
         };
         let local = path_preset(
             "Local", vec![sp("model", "scan.glb", false)],
@@ -1031,7 +1031,7 @@ mod tests {
         );
         host.def.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("modifier/a:b"),
-            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
@@ -1045,7 +1045,7 @@ mod tests {
     fn scene_modifier_asset_project(host_exposes: bool) -> (Project, LayerId, String) {
         use manifold_core::effect_graph_def::{GroupDef, GroupInterface};
         use manifold_core::scene_modifier_preset::{
-            SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+            SceneModifierInstanceDef, SceneTargetSelection,
         };
 
         // Parse the checked-in authored recipe first so these tests exercise
@@ -1102,7 +1102,7 @@ mod tests {
         host.def.version = 3;
         host.def.scene_modifiers.push(SceneModifierInstanceDef {
             id: modifier_id.clone(),
-            scene: SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![],
             legacy_math_view_carrier: None,

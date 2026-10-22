@@ -127,10 +127,7 @@ fn scene_modifier_expand_conformance_reorder_keeps_generated_identity_set() {
 fn scene_modifier_expand_conformance_rejects_actual_target_and_stage_paths() {
     let mut missing = fixture();
     missing.scene_modifiers[0].targets = SceneTargetSelection::Explicit {
-        objects: vec![manifold_core::SceneNodeRef {
-            scope: vec![NodeId::new("scan_left_group")],
-            node: NodeId::new("does_not_exist"),
-        }],
+        objects: vec![NodeId::new("does_not_exist")],
     };
     assert!(matches!(
         expand_scene_modifiers(&missing, &registry()),

@@ -6,7 +6,6 @@ use manifold_core::effect_graph_def::{
     GroupParamDef, SerializedParamValue,
 };
 use manifold_core::flatten::flatten_groups;
-use manifold_core::scene_modifier_preset::SceneNodeRef;
 
 use super::SceneModifierExpandError;
 
@@ -17,7 +16,7 @@ pub struct SceneModifierValueSourcePlan {
 
 #[derive(Debug, Clone)]
 pub struct SceneModifierValueSource {
-    pub local: SceneNodeRef,
+    pub local: NodeId,
     pub param: String,
     leaf: SourcePath,
     ancestors: Vec<InterfaceSource>,
@@ -59,7 +58,7 @@ impl SceneModifierValueSourcePlan {
 
     pub fn prepare_with_leaf_params(
         graph: &EffectGraphDef,
-        leaf_params: &BTreeMap<SceneNodeRef, Vec<String>>,
+        leaf_params: &BTreeMap<NodeId, Vec<String>>,
     ) -> Result<Self, SceneModifierExpandError> {
         validate_with_core_flatten(graph)?;
         let mut entries = Vec::new();
@@ -113,7 +112,7 @@ impl SceneModifierValueSource {
         }
 
         let leaf = resolve_path(graph, &self.leaf)?;
-        if leaf.group.is_some() || leaf.node_id != self.local.node {
+        if leaf.group.is_some() || leaf.node_id != self.local {
             return Err(structural(&self.local, "prepared leaf path changed"));
         }
         for source in self.ancestors.iter().rev() {
@@ -154,7 +153,7 @@ fn walk_nodes(
     handles: &[String],
     ancestors: &[AncestorGroup],
     group_ids: &mut HashSet<NodeId>,
-    leaf_params: &BTreeMap<SceneNodeRef, Vec<String>>,
+    leaf_params: &BTreeMap<NodeId, Vec<String>>,
     entries: &mut Vec<SceneModifierValueSource>,
 ) -> Result<(), SceneModifierExpandError> {
     if handles.len() > 64 {
@@ -175,19 +174,13 @@ fn walk_nodes(
         if let Some(group) = node.group.as_deref() {
             if node.node_id.is_empty() || !group_ids.insert(node.node_id.clone()) {
                 return Err(structural(
-                    &SceneNodeRef {
-                        scope: scope.to_vec(),
-                        node: node.node_id.clone(),
-                    },
+                    &node.node_id.clone(),
                     "group stable id is empty or duplicated",
                 ));
             }
             let group_handle = node.handle.clone().ok_or_else(|| {
                 structural(
-                    &SceneNodeRef {
-                        scope: scope.to_vec(),
-                        node: node.node_id.clone(),
-                    },
+                    &node.node_id.clone(),
                     "group has no handle",
                 )
             })?;
@@ -215,16 +208,12 @@ fn walk_nodes(
         } else if node.type_id != GROUP_INPUT_TYPE_ID && node.type_id != GROUP_OUTPUT_TYPE_ID {
             if node.node_id.is_empty() {
                 return Err(structural(
-                    &SceneNodeRef {
-                        scope: scope.to_vec(),
-                        node: node.node_id.clone(),
-                    },
+                    &node.node_id.clone(),
                     "primitive leaf has an empty stable id",
                 ));
             }
             add_leaf_entries(
                 node,
-                scope,
                 handles,
                 SourcePath { nodes: path },
                 ancestors,
@@ -238,11 +227,10 @@ fn walk_nodes(
 
 fn add_leaf_entries(
     node: &EffectGraphNode,
-    scope: &[NodeId],
     handles: &[String],
     leaf: SourcePath,
     ancestors: &[AncestorGroup],
-    leaf_params: &BTreeMap<SceneNodeRef, Vec<String>>,
+    leaf_params: &BTreeMap<NodeId, Vec<String>>,
     entries: &mut Vec<SceneModifierValueSource>,
 ) -> Result<(), SceneModifierExpandError> {
     let mut names: BTreeSet<String> = node.params.keys().cloned().collect();
@@ -271,10 +259,7 @@ fn add_leaf_entries(
             }
         }
     }
-    let local = SceneNodeRef {
-        scope: scope.to_vec(),
-        node: node.node_id.clone(),
-    };
+    let local = node.node_id.clone();
     if let Some(supplied) = leaf_params.get(&local) {
         names.extend(supplied.iter().cloned());
     }
@@ -317,7 +302,7 @@ fn resolve_path<'a>(
     current.ok_or_else(|| structural_root("prepared source path is empty"))
 }
 
-fn structural(reference: &SceneNodeRef, detail: impl Into<String>) -> SceneModifierExpandError {
+fn structural(reference: &NodeId, detail: impl Into<String>) -> SceneModifierExpandError {
     SceneModifierExpandError::InvalidRecipe {
         path: format!("{:?}", reference),
         detail: detail.into(),
@@ -464,7 +449,6 @@ mod tests {
         let graph = graph();
         let plan = SceneModifierValueSourcePlan::prepare(&graph).unwrap();
         let entry = entry(&plan, "amount");
-        assert_eq!(entry.local.scope.len(), 2);
         assert_eq!(
             entry.value(&graph).unwrap(),
             Some(&SerializedParamValue::Float { value: 4.0 })
@@ -531,10 +515,7 @@ mod tests {
     #[test]
     fn scene_modifier_value_sources_include_supplied_default_only_params() {
         let graph = graph();
-        let local = SceneNodeRef {
-            scope: vec![NodeId::new("outer"), NodeId::new("inner")],
-            node: NodeId::new("leaf"),
-        };
+        let local = NodeId::new("leaf");
         let mut supplied = BTreeMap::new();
         supplied.insert(local, vec!["late".to_string()]);
         let plan =

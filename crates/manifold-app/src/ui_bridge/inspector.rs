@@ -334,7 +334,7 @@ mod scene_card_convergence_tests {
     fn param_gesture_locked_mid_drag_still_releases_its_hold() {
         use manifold_core::effect_graph_def::BindingTarget;
         use manifold_core::scene_modifier_preset::{
-            SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+            SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
         };
         let (mut project, layer_id, ids) = material_colour_fixture();
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
@@ -354,7 +354,7 @@ mod scene_card_convergence_tests {
                     _ => None,
                 })
                 .unwrap();
-            let node = |node| SceneNodeRef { scope: vec![], node };
+            let node = |node| node;
             let modifier = SceneModifierInstanceDef {
                 id: manifold_core::NodeId::new("modifier"),
                 scene: node(manifold_core::NodeId::new("scene")),
@@ -371,7 +371,7 @@ mod scene_card_convergence_tests {
             };
             graph.scene_modifiers.push(modifier);
         });
-        assert!(crate::scene_modifier_edit::macro_parameter_lock_reason(&project, &target, &ids[0]).is_some());
+        assert!(crate::graph_target::macro_parameter_lock_reason(&project, &target, &ids[0]).is_some());
 
         h.dispatch(&PanelAction::Scrub(value_ref, ScrubPhase::Commit), &mut project);
         let commands = h.drain();

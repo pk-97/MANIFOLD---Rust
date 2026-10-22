@@ -7,10 +7,7 @@
 use manifold_nodes as _;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::params::{Param, ParamManifest};
-use manifold_core::scene_modifier_edit::{delete_scene_modifier, insert_scene_modifier};
-use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::NodeId;
-use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 use manifold_node_engine::runtime::PresetRuntime;
@@ -91,7 +88,7 @@ fn loop_camera_switch_bypass_keeps_shared_pattern_and_spacing_routes() {
         .iter()
         .find(|route| {
             route.modifier_id == NodeId::new("loop-bypass")
-                && route.local.node.as_str() == "loop_cam_switch"
+                && route.local.as_str() == "loop_cam_switch"
         })
         .expect("expanded loop switch route");
     let switch_id = runtime
@@ -131,7 +128,7 @@ fn fog_gate_bypass_retains_atmosphere_output_and_enabled_route() {
         .iter()
         .find(|route| {
             route.modifier_id == NodeId::new("fog-bypass")
-                && route.local.node.as_str() == "fog_enabled"
+                && route.local.as_str() == "fog_enabled"
         })
         .expect("expanded fog enabled route");
     let runtime_enabled_id = runtime
@@ -148,28 +145,4 @@ fn fog_gate_bypass_retains_atmosphere_output_and_enabled_route() {
         }) && wire.to_port == "atmosphere"
     }));
     assert_eq!(binding_id(&attached, "fog-bypass", "enabled"), enabled_id);
-}
-
-#[test]
-fn insert_then_delete_restores_the_complete_owner_graph() {
-    let owner = host();
-    let instance = prepare_new_scene_modifier(
-        &owner,
-        &common::stock_recipe("SceneLoop"),
-        NodeId::new("inverse-loop"),
-        common::render_scene(&owner),
-        SceneTargetSelection::AllObjects,
-    )
-    .expect("loop prepares");
-    let inserted = insert_scene_modifier(&owner, 0, instance)
-        .expect("loop inserts")
-        .graph;
-    let deleted = delete_scene_modifier(&inserted, &NodeId::new("inverse-loop"))
-        .expect("loop deletes")
-        .graph;
-    assert_eq!(deleted.version, owner.version.max(3));
-    assert_eq!(deleted.nodes, owner.nodes);
-    assert_eq!(deleted.wires, owner.wires);
-    assert_eq!(deleted.scene_modifiers, owner.scene_modifiers);
-    assert_eq!(deleted.preset_metadata, owner.preset_metadata);
 }

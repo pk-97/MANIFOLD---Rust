@@ -10,7 +10,7 @@ use crate::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
 };
 use crate::flatten::flatten_groups;
-use crate::{NodeId, SceneNodeRef};
+use crate::NodeId;
 
 const MAX_AUTHORED_NODES: usize = 65_536;
 const MAX_AUTHORED_WIRES: usize = 262_144;
@@ -49,15 +49,15 @@ impl std::error::Error for SceneIndexError {}
 
 pub struct FlatSceneIndex {
     pub flat: EffectGraphDef,
-    pub by_ref: BTreeMap<SceneNodeRef, u32>,
-    pub by_id: BTreeMap<u32, SceneNodeRef>,
+    pub by_ref: BTreeMap<NodeId, u32>,
+    pub by_id: BTreeMap<u32, NodeId>,
 }
 
 impl FlatSceneIndex {
     pub fn build(owner: &EffectGraphDef) -> Result<Self, SceneIndexError> {
         let mut counts = Counts::default();
         let mut leaves = Vec::new();
-        inspect_scope(&owner.nodes, &owner.wires, &[], 0, &mut counts, &mut leaves)?;
+        inspect_scope(&owner.nodes, &owner.wires, 0, &mut counts, &mut leaves)?;
 
         let scratch = EffectGraphDef {
             version: owner.version,
@@ -83,19 +83,19 @@ impl FlatSceneIndex {
             }
         }
         for leaf in leaves {
-            let Some(&flat_id) = flat_ids.get(leaf.node_id.as_str()) else {
+            let Some(&flat_id) = flat_ids.get(leaf.as_str()) else {
                 return Err(missing_target(
-                    &leaf.reference,
+                    &leaf,
                     "leaf is missing from the flattened graph",
                 ));
             };
-            if by_ref.insert(leaf.reference.clone(), flat_id).is_some() {
+            if by_ref.insert(leaf.clone(), flat_id).is_some() {
                 return Err(duplicate(
-                    &leaf.reference,
+                    &leaf,
                     "stable path resolves more than once",
                 ));
             }
-            by_id.insert(flat_id, leaf.reference);
+            by_id.insert(flat_id, leaf);
         }
 
         Ok(Self {
@@ -105,7 +105,7 @@ impl FlatSceneIndex {
         })
     }
 
-    pub fn node(&self, reference: &SceneNodeRef) -> Result<&EffectGraphNode, SceneIndexError> {
+    pub fn node(&self, reference: &NodeId) -> Result<&EffectGraphNode, SceneIndexError> {
         let id = self.flat_id(reference)?;
         self.flat
             .nodes
@@ -116,7 +116,7 @@ impl FlatSceneIndex {
 
     pub fn input(
         &self,
-        reference: &SceneNodeRef,
+        reference: &NodeId,
         port: &str,
     ) -> Result<Option<&EffectGraphWire>, SceneIndexError> {
         let target_id = self.flat_id(reference)?;
@@ -130,13 +130,13 @@ impl FlatSceneIndex {
         };
         if incoming.next().is_some() {
             return Err(SceneIndexError::ConflictingSource {
-                path: reference_path(reference),
+                path: reference.to_string(),
                 detail: format!("more than one wire feeds port '{port}'"),
             });
         }
         if !self.has_node(wire.from_node) || !self.has_node(wire.to_node) {
             return Err(SceneIndexError::MissingInput {
-                path: reference_path(reference),
+                path: reference.to_string(),
                 detail: format!("wire for port '{port}' has a missing endpoint"),
             });
         }
@@ -145,8 +145,8 @@ impl FlatSceneIndex {
 
     pub fn scene_objects(
         &self,
-        reference: &SceneNodeRef,
-    ) -> Result<Vec<SceneNodeRef>, SceneIndexError> {
+        reference: &NodeId,
+    ) -> Result<Vec<NodeId>, SceneIndexError> {
         let scene_id = self.flat_id(reference)?;
         let scene = self
             .flat
@@ -156,7 +156,7 @@ impl FlatSceneIndex {
             .ok_or_else(|| missing_target(reference, "render scene is missing"))?;
         if scene.type_id != "node.render_scene" {
             return Err(SceneIndexError::MissingScene {
-                path: reference_path(reference),
+                path: reference.to_string(),
                 detail: format!("target is '{}', not node.render_scene", scene.type_id),
             });
         }
@@ -171,7 +171,7 @@ impl FlatSceneIndex {
         {
             if !ports.insert(&wire.to_port) {
                 return Err(SceneIndexError::ConflictingSource {
-                    path: reference_path(reference),
+                    path: reference.to_string(),
                     detail: format!("multiple objects feed scene port '{}'", wire.to_port),
                 });
             }
@@ -182,7 +182,7 @@ impl FlatSceneIndex {
                 .is_none()
             {
                 return Err(SceneIndexError::MissingInput {
-                    path: reference_path(reference),
+                    path: reference.to_string(),
                     detail: format!("invalid scene object port '{}'", wire.to_port),
                 });
             }
@@ -195,9 +195,9 @@ impl FlatSceneIndex {
     /// slot is unwired.
     pub fn scene_object_at(
         &self,
-        scene: &SceneNodeRef,
+        scene: &NodeId,
         slot: u32,
-    ) -> Result<Option<SceneNodeRef>, SceneIndexError> {
+    ) -> Result<Option<NodeId>, SceneIndexError> {
         let Some(wire) = self.input(scene, &format!("object_{slot}"))? else {
             return Ok(None);
         };
@@ -206,31 +206,31 @@ impl FlatSceneIndex {
 
     fn scene_object_producer(
         &self,
-        scene: &SceneNodeRef,
+        scene: &NodeId,
         wire: &EffectGraphWire,
-    ) -> Result<&SceneNodeRef, SceneIndexError> {
+    ) -> Result<&NodeId, SceneIndexError> {
         let producer = self
             .flat
             .nodes
             .iter()
             .find(|node| node.id == wire.from_node)
             .ok_or_else(|| SceneIndexError::MissingTarget {
-                path: reference_path(scene),
+                path: scene.to_string(),
                 detail: format!("object wire producer {} is missing", wire.from_node),
             })?;
         if producer.type_id != "node.scene_object" {
             return Err(SceneIndexError::MissingTarget {
-                path: reference_path(scene),
+                path: scene.to_string(),
                 detail: format!("object wire '{}' is produced by '{}'", wire.to_port, producer.type_id),
             });
         }
         self.by_id.get(&producer.id).ok_or_else(|| SceneIndexError::MissingTarget {
-            path: reference_path(scene),
+            path: scene.to_string(),
             detail: format!("scene object {} has no stable reference", producer.id),
         })
     }
 
-    fn flat_id(&self, reference: &SceneNodeRef) -> Result<u32, SceneIndexError> {
+    fn flat_id(&self, reference: &NodeId) -> Result<u32, SceneIndexError> {
         self.by_ref
             .get(reference)
             .copied()
@@ -248,18 +248,12 @@ struct Counts {
     wires: usize,
 }
 
-struct Leaf {
-    reference: SceneNodeRef,
-    node_id: NodeId,
-}
-
 fn inspect_scope(
     nodes: &[EffectGraphNode],
     wires: &[EffectGraphWire],
-    scope: &[NodeId],
     depth: usize,
     counts: &mut Counts,
-    leaves: &mut Vec<Leaf>,
+    leaves: &mut Vec<NodeId>,
 ) -> Result<(), SceneIndexError> {
     counts.nodes = counts.nodes.saturating_add(nodes.len());
     counts.wires = counts.wires.saturating_add(wires.len());
@@ -278,26 +272,20 @@ fn inspect_scope(
     for node in nodes {
         if !doc_ids.insert(node.id) {
             return Err(duplicate(
-                &SceneNodeRef {
-                    scope: scope.to_vec(),
-                    node: node.node_id.clone(),
-                },
+                &node.node_id,
                 &format!("document id {} is duplicated in one scope", node.id),
             ));
         }
         if !node.node_id.is_empty() && !stable_ids.insert(node.node_id.clone()) {
             return Err(duplicate(
-                &SceneNodeRef {
-                    scope: scope.to_vec(),
-                    node: node.node_id.clone(),
-                },
+                &node.node_id,
                 "stable node id is duplicated in one scope",
             ));
         }
 
         // Group boundary nodes are implementation details of the authored
         // group and are folded away by flatten_groups. They are never valid
-        // SceneNodeRef targets, even when an old document gave them a nodeId.
+        // NodeId targets, even when an old document gave them a nodeId.
         if node.type_id == GROUP_INPUT_TYPE_ID || node.type_id == GROUP_OUTPUT_TYPE_ID {
             continue;
         }
@@ -305,66 +293,40 @@ fn inspect_scope(
         if let Some(group) = node.group.as_deref() {
             if node.node_id.is_empty() {
                 return Err(duplicate(
-                    &SceneNodeRef {
-                        scope: scope.to_vec(),
-                        node: node.node_id.clone(),
-                    },
+                    &node.node_id,
                     "group scope has no stable node id",
                 ));
             }
-            let mut child_scope = scope.to_vec();
-            child_scope.push(node.node_id.clone());
             node.handle.as_deref().ok_or_else(|| {
                 invalid(
-                    &reference_path(&SceneNodeRef {
-                        scope: scope.to_vec(),
-                        node: node.node_id.clone(),
-                    }),
+                    node.node_id.as_str(),
                     "group has no handle",
                 )
             })?;
             inspect_scope(
                 &group.nodes,
                 &group.wires,
-                &child_scope,
                 depth + 1,
                 counts,
                 leaves,
             )?;
         } else if !node.node_id.is_empty() {
-            let reference = SceneNodeRef {
-                scope: scope.to_vec(),
-                node: node.node_id.clone(),
-            };
-            leaves.push(Leaf {
-                reference,
-                node_id: node.node_id.clone(),
-            });
+            leaves.push(node.node_id.clone());
         }
     }
     Ok(())
 }
 
-fn reference_path(reference: &SceneNodeRef) -> String {
-    reference
-        .scope
-        .iter()
-        .map(NodeId::as_str)
-        .chain(std::iter::once(reference.node.as_str()))
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn duplicate(reference: &SceneNodeRef, detail: &str) -> SceneIndexError {
+fn duplicate(reference: &NodeId, detail: &str) -> SceneIndexError {
     SceneIndexError::Duplicate {
-        path: reference_path(reference),
+        path: reference.to_string(),
         detail: detail.to_string(),
     }
 }
 
-fn missing_target(reference: &SceneNodeRef, detail: &str) -> SceneIndexError {
+fn missing_target(reference: &NodeId, detail: &str) -> SceneIndexError {
     SceneIndexError::MissingTarget {
-        path: reference_path(reference),
+        path: reference.to_string(),
         detail: detail.to_string(),
     }
 }
@@ -396,11 +358,8 @@ mod tests {
         serde_json::from_str(FIXTURE).expect("nested multimaterial fixture must parse")
     }
 
-    fn reference(scope: &[&str], node: &str) -> SceneNodeRef {
-        SceneNodeRef {
-            scope: scope.iter().map(|id| NodeId::new(*id)).collect(),
-            node: NodeId::new(node),
-        }
+    fn reference(node: &str) -> NodeId {
+        NodeId::new(node)
     }
 
     #[test]
@@ -409,15 +368,15 @@ mod tests {
         let canonical = owner.clone();
         let index = FlatSceneIndex::build(&owner).expect("fixture should index");
 
-        let scene = reference(&[], "scan_render");
+        let scene = reference("scan_render");
         let objects = index
             .scene_objects(&scene)
             .expect("group outputs should route");
         assert_eq!(
             objects,
             vec![
-                reference(&["scan_left_group"], "left_object"),
-                reference(&["scan_right_group"], "right_object"),
+                reference("left_object"),
+                reference("right_object"),
             ]
         );
         assert_eq!(
@@ -433,7 +392,7 @@ mod tests {
     #[test]
     fn scene_index_finds_the_object_in_a_render_slot() {
         let index = FlatSceneIndex::build(&fixture()).expect("fixture should index");
-        let scene = reference(&[], "scan_render");
+        let scene = reference("scan_render");
         let mut slots = Vec::new();
         for slot in 0..8 {
             if let Some(object) = index.scene_object_at(&scene, slot).expect("slot resolves") {
@@ -454,11 +413,11 @@ mod tests {
 
         assert_eq!(
             index
-                .scene_objects(&reference(&[], "scan_render"))
+                .scene_objects(&reference("scan_render"))
                 .expect("renamed group outputs should route"),
             vec![
-                reference(&["scan_left_group"], "left_object"),
-                reference(&["scan_right_group"], "right_object"),
+                reference("left_object"),
+                reference("right_object"),
             ]
         );
     }
@@ -466,7 +425,7 @@ mod tests {
     #[test]
     fn scene_modifier_expand_index_rejects_bad_targets_duplicates_and_conflicts() {
         let index = FlatSceneIndex::build(&fixture()).expect("fixture should index");
-        let missing = reference(&["missing_group"], "object");
+        let missing = reference("object");
         assert!(matches!(
             index.node(&missing),
             Err(SceneIndexError::MissingTarget { .. })
@@ -489,7 +448,7 @@ mod tests {
         conflict.wires.push(camera_wire);
         let index = FlatSceneIndex::build(&conflict).expect("wire conflict is query-time");
         assert!(matches!(
-            index.input(&reference(&[], "scan_render"), "camera"),
+            index.input(&reference("scan_render"), "camera"),
             Err(SceneIndexError::ConflictingSource { .. })
         ));
     }

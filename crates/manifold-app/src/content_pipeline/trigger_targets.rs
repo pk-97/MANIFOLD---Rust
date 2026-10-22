@@ -263,11 +263,33 @@ mod tests {
         use manifold_editing::commands::effect_target::DriverTarget;
         use manifold_editing::service::EditingService;
 
-        let (mut project, layer_id) = crate::scene_modifier_edit::tests::project_with_mushroom();
-        let mut editing = EditingService::new();
-        let modifier = crate::scene_modifier_edit::tests::apply_stock(
-            &mut editing, &mut project, &layer_id, "RadialForce",
+        let host_graph = manifold_nodes::scene_modifier_qualify::mushroom_host()
+            .expect("the mushroom scene must import and compile");
+        let modifier = manifold_core::NodeId::new("force");
+        let scene = host_graph.nodes.iter()
+            .find(|node| node.type_id == "node.render_scene")
+            .map(|node| node.node_id.clone())
+            .expect("the mushroom scene renders");
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
+            &manifold_core::PresetTypeId::new("RadialForce"),
+        ).expect("RadialForce ships");
+        let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+            &host_graph, recipe.as_ref(), modifier.clone(), scene,
+            manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
+        ).expect("RadialForce prepares");
+        let graph = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&host_graph, instance)
+            .expect("RadialForce attaches");
+        let mut layer = manifold_core::layer::Layer::new_generator(
+            "Mushroom".into(), manifold_core::PresetTypeId::new("PhotoscanBaseline"), 0,
         );
+        let layer_id = manifold_core::LayerId::new("admission-layer");
+        layer.layer_id = layer_id.clone();
+        let host = layer.gen_params_mut().unwrap();
+        host.graph = Some(graph);
+        host.refresh_manifest_from_graph();
+        let mut project = manifold_core::project::Project::default();
+        project.timeline.layers.push(layer);
+        let mut editing = EditingService::new();
         let layer = project.timeline.find_layer_by_id(&layer_id).unwrap().1;
         let fire = layer
             .generator_graph()

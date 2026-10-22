@@ -5,8 +5,8 @@ use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scen
 use manifold_node_engine::load::expand::{SceneModifierExpandError, prepare_scene_modifiers};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
-use manifold_core::scene_modifier_edit::insert_scene_modifier;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneNodeRefExt as _, SceneTargetSelection};
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use std::collections::{BTreeMap, BTreeSet};
 
 const PHYSICS_SOLIDS: &str = include_str!(concat!(
@@ -24,48 +24,13 @@ fn host() -> EffectGraphDef {
 fn recipe() -> EffectGraphDef {
     serde_json::from_str(UNIFORM_FORCE).expect("UniformForce fixture parses")
 }
-
-/// Follow scene_modifier_edit::build_action Add and Retarget: prepare and
-/// insert the all-object force, then resolve frames and apply the selection.
-#[test]
-fn scene_modifier_grouped_water_add_and_retarget_expand() {
-    use manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects;
-    use manifold_node_engine::load::expand::resolve_modifier_mesh_frames;
-    use manifold_core::scene_modifier_edit::retarget_scene_modifier;
-    use manifold_core::scene_index::FlatSceneIndex;
-
-    let owner = manifold_nodes::bundled_presets::bundled_preset_def(
-        &manifold_core::PresetTypeId::new("WaterDamBreakGpuFlip"),
-    ).expect("shipped Dam Break after load migrations").as_ref().clone();
-    let scene = scene(&owner);
-    let water = SceneNodeRef::locate(&owner, &NodeId::new("water_object")).unwrap();
-    assert_eq!(water.scope.len(), 1);
-    assert!(scene_modifier_objects(&owner, &scene).unwrap().contains(&water));
-    let owner = attach(&owner, "force", SceneTargetSelection::AllObjects);
-    prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
-        .expect("performer Add Uniform Force expands");
-    manifold_node_engine::runtime::PresetRuntime::from_def(owner.clone(), &PrimitiveRegistry::with_builtin(), None)
-        .expect("performer Add Uniform Force builds a runtime");
-    let mut instance = owner.scene_modifiers[0].clone();
-    instance.targets = SceneTargetSelection::Explicit { objects: vec![water.clone()] };
-    let frames = resolve_modifier_mesh_frames(&owner, &instance).unwrap();
-    let owner = retarget_scene_modifier(&owner, &instance.id, instance.targets, frames).unwrap().graph;
-    assert!(FlatSceneIndex::build(&owner).unwrap().scene_objects(&scene).unwrap().contains(&water));
-    prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
-        .expect("performer retarget to grouped Water expands");
-    manifold_node_engine::runtime::PresetRuntime::from_def(owner, &PrimitiveRegistry::with_builtin(), None)
-        .expect("performer retarget to grouped Water builds a runtime");
-}
-fn reference(def: &EffectGraphDef, ty: &str, id: &str) -> SceneNodeRef {
+fn reference(def: &EffectGraphDef, ty: &str, id: &str) -> NodeId {
     let node = def
         .nodes
         .iter()
         .find(|node| node.type_id == ty && node.node_id.as_str() == id)
         .unwrap_or_else(|| panic!("{ty} {id} exists"));
-    SceneNodeRef {
-        scope: Vec::new(),
-        node: node.node_id.clone(),
-    }
+    node.node_id.clone()
 }
 fn node_id(def: &EffectGraphDef, id: &str) -> u32 {
     def.nodes
@@ -74,7 +39,7 @@ fn node_id(def: &EffectGraphDef, id: &str) -> u32 {
         .unwrap_or_else(|| panic!("node {id} exists"))
         .id
 }
-fn scene(def: &EffectGraphDef) -> SceneNodeRef {
+fn scene(def: &EffectGraphDef) -> NodeId {
     reference(def, "node.render_scene", "scene")
 }
 fn wire(def: &mut EffectGraphDef, from: &str, fp: &str, to: &str, tp: &str) {
@@ -101,9 +66,8 @@ fn attach(owner: &EffectGraphDef, id: &str, targets: SceneTargetSelection) -> Ef
     let instance =
         prepare_new_scene_modifier(owner, &recipe(), NodeId::new(id), scene(owner), targets)
             .unwrap();
-    insert_scene_modifier(owner, owner.scene_modifiers.len(), instance)
+    attach_scene_modifier(owner, instance)
         .unwrap()
-        .graph
 }
 fn prepared(owner: &EffectGraphDef) -> EffectGraphDef {
     prepare_scene_modifiers(owner, &PrimitiveRegistry::with_builtin())
@@ -333,10 +297,7 @@ fn grouped_parts_sharing_world_slot_emit_one_force_clone() {
         .clone();
     let targets = SceneTargetSelection::Explicit {
         objects: ["physics_demo_104", "physics_demo_114"]
-            .map(|node| SceneNodeRef {
-                scope: vec![group.clone()],
-                node: NodeId::new(node),
-            })
+            .map(NodeId::new)
             .to_vec(),
     };
     let mut attached = attach(&owner, "grouped_force", targets);
@@ -569,13 +530,13 @@ fn inactive_force_retains_per_recipient_control_for_later_targets() {
         SceneTargetSelection::Explicit { objects: vec![] },
     )
     .unwrap();
-    let mut attached = insert_scene_modifier(&host, 0, instance).unwrap().graph;
+    let mut attached = attach_scene_modifier(&host, instance).unwrap();
     let inactive = prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin()).unwrap();
     assert!(
         inactive
             .routes
             .iter()
-            .find(|route| route.local.node == "recipient_scale")
+            .find(|route| route.local == "recipient_scale")
             .unwrap()
             .copies
             .is_empty()
@@ -608,10 +569,7 @@ fn stale_target_and_ambiguous_physical_source_are_errors() {
     let owner = host();
     let mut stale_owner = attach(&owner, "stale_force", SceneTargetSelection::AllObjects);
     stale_owner.scene_modifiers[0].targets = SceneTargetSelection::Explicit {
-        objects: vec![SceneNodeRef {
-            scope: Vec::new(),
-            node: NodeId::new("missing_object"),
-        }],
+        objects: vec![NodeId::new("missing_object")],
     };
     assert!(matches!(
         prepare_scene_modifiers(&stale_owner, &PrimitiveRegistry::with_builtin()),
@@ -639,7 +597,7 @@ fn stale_target_and_ambiguous_physical_source_are_errors() {
         },
     )
     .unwrap();
-    let ambiguous_owner = insert_scene_modifier(&ambiguous, 0, force).unwrap().graph;
+    let ambiguous_owner = attach_scene_modifier(&ambiguous, force).unwrap();
     assert!(matches!(
         prepare_scene_modifiers(&ambiguous_owner, &PrimitiveRegistry::with_builtin()),
         Err(SceneModifierExpandError::UnsupportedEndpoint { .. })

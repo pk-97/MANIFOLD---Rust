@@ -6,8 +6,8 @@ use manifold_node_engine::load::expand::testkit::prepare_impulses as prepare;
     use manifold_node_engine::load::expand::{SceneModifierNodeCopy, prepare_scene_modifiers};
     use manifold_node_engine::{graph::Graph, persistence::PrimitiveRegistry};
     use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
-    use manifold_core::scene_modifier_edit::insert_scene_modifier;
-    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
+    use manifold_core::scene_modifier_preset::SceneTargetSelection;
 
     const PHYSICS_SOLIDS: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -23,26 +23,19 @@ use manifold_node_engine::load::expand::testkit::prepare_impulses as prepare;
             serde_json::from_str(PHYSICS_SOLIDS).expect("PhysicsSolids fixture parses");
         let recipe: EffectGraphDef =
             serde_json::from_str(UNIFORM_FORCE).expect("UniformForce fixture parses");
-        let scene = SceneNodeRef {
-            scope: Vec::new(),
-            node: NodeId::new("scene"),
-        };
+        let scene = NodeId::new("scene");
         let instance = prepare_new_scene_modifier(
             &host,
             &recipe,
             NodeId::new("route_uniform"),
             scene,
             SceneTargetSelection::Explicit {
-                objects: vec![SceneNodeRef {
-                    scope: Vec::new(),
-                    node: NodeId::new("physics_demo_114"),
-                }],
+                objects: vec![NodeId::new("physics_demo_114")],
             },
         )
         .expect("stock force attaches");
-        insert_scene_modifier(&host, 0, instance)
+        attach_scene_modifier(&host, instance)
             .expect("stock force inserts")
-            .graph
     }
 
     fn append_host_binding(owner: &mut EffectGraphDef, id: &str, param_id: &str, is_trigger: bool) {
@@ -89,9 +82,9 @@ use manifold_node_engine::load::expand::testkit::prepare_impulses as prepare;
     }
 
     fn manual_route_fixture(
-        field: SceneNodeRef,
+        field: NodeId,
         port: &str,
-        object: Option<SceneNodeRef>,
+        object: Option<NodeId>,
         type_id: &str,
     ) -> (EffectGraphDef, Vec<SceneModifierNodeRoute>, Graph) {
         let mut owner = stock_uniform_force();
@@ -117,10 +110,7 @@ use manifold_node_engine::load::expand::testkit::prepare_impulses as prepare;
             .port = port.into();
         let routes = vec![SceneModifierNodeRoute {
             modifier_id: NodeId::new("route_uniform"),
-            local: SceneNodeRef {
-                scope: vec![NodeId::new("force_source_stage")],
-                node: NodeId::new("force_impulse_gate"),
-            },
+            local: NodeId::new("force_impulse_gate"),
             copies: vec![SceneModifierNodeCopy {
                 object,
                 node_id: NodeId::new("generated_field"),
@@ -168,25 +158,10 @@ use manifold_node_engine::load::expand::testkit::prepare_impulses as prepare;
     }
 
     #[test]
-    fn scene_impulse_route_rejects_missing_local_leaf_or_scope() {
-        let missing_leaf = SceneNodeRef {
-            scope: vec![NodeId::new("force_source_stage")],
-            node: NodeId::new("missing_field"),
-        };
+    fn scene_impulse_route_rejects_missing_local_leaf() {
+        let missing_leaf = NodeId::new("missing_field");
         let (owner, routes, mut graph) =
             manual_route_fixture(missing_leaf, "out", None, "node.uniform_vector_field");
-        assert!(matches!(
-            prepare(&owner, &routes, &mut graph),
-            Err(SceneModifierExpandError::MissingTarget { path, .. })
-                if path.ends_with(".field")
-        ));
-
-        let wrong_scope = SceneNodeRef {
-            scope: vec![NodeId::new("wrong_stage")],
-            node: NodeId::new("force_impulse_gate"),
-        };
-        let (owner, routes, mut graph) =
-            manual_route_fixture(wrong_scope, "out", None, "node.uniform_vector_field");
         assert!(matches!(
             prepare(&owner, &routes, &mut graph),
             Err(SceneModifierExpandError::MissingTarget { path, .. })
@@ -196,10 +171,7 @@ use manifold_node_engine::load::expand::testkit::prepare_impulses as prepare;
 
     #[test]
     fn scene_impulse_route_rejects_missing_port_and_wrong_type() {
-        let field = SceneNodeRef {
-            scope: vec![NodeId::new("force_source_stage")],
-            node: NodeId::new("force_impulse_gate"),
-        };
+        let field = NodeId::new("force_impulse_gate");
         let (owner, routes, mut graph) =
             manual_route_fixture(field.clone(), "missing", None, "node.uniform_vector_field");
         assert!(matches!(
@@ -218,17 +190,11 @@ use manifold_node_engine::load::expand::testkit::prepare_impulses as prepare;
 
     #[test]
     fn scene_impulse_route_rejects_each_object_source() {
-        let field = SceneNodeRef {
-            scope: vec![NodeId::new("force_source_stage")],
-            node: NodeId::new("force_impulse_gate"),
-        };
+        let field = NodeId::new("force_impulse_gate");
         let (owner, routes, mut graph) = manual_route_fixture(
             field,
             "out",
-            Some(SceneNodeRef {
-                scope: Vec::new(),
-                node: NodeId::new("physics_demo_114"),
-            }),
+            Some(NodeId::new("physics_demo_114")),
             "node.uniform_vector_field",
         );
         assert!(matches!(

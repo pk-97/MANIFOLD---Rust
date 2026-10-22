@@ -299,10 +299,7 @@ mod tests {
             .scene_modifiers
             .push(crate::scene_modifier_preset::SceneModifierInstanceDef {
                 id: NodeId::new("same-title"),
-                scene: crate::scene_modifier_preset::SceneNodeRef {
-                    scope: Vec::new(),
-                    node: "scene".into(),
-                },
+                scene: "scene".into(),
                 targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
                 mesh_frames: Vec::new(),
                 legacy_math_view_carrier: None,
@@ -314,10 +311,7 @@ mod tests {
             .scene_modifiers
             .push(crate::scene_modifier_preset::SceneModifierInstanceDef {
                 id: NodeId::new("different-id"),
-                scene: crate::scene_modifier_preset::SceneNodeRef {
-                    scope: Vec::new(),
-                    node: "scene".into(),
-                },
+                scene: "scene".into(),
                 targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
                 mesh_frames: Vec::new(),
                 legacy_math_view_carrier: None,

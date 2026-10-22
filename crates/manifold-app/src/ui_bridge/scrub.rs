@@ -663,7 +663,7 @@ pub(crate) fn dispatch_scrub(
             ctx.selection,
             &ctx.project,
         )
-        && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(
+        && let Some(reason) = crate::graph_target::macro_parameter_lock_reason(
             &ctx.project,
             &target,
             param_id.as_ref(),
@@ -2180,7 +2180,7 @@ pub(crate) fn begin_param_group(
 ) -> bool {
     if let Some(reason) = card_ids
         .iter()
-        .find_map(|id| crate::scene_modifier_edit::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()))
+        .find_map(|id| crate::graph_target::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()))
     {
         ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
         return false;

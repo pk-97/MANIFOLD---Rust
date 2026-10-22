@@ -7,7 +7,6 @@ use std::cell::RefCell;
 pub mod contacts_wire_v1200;
 pub mod reversed_depth_v1160;
 pub mod rigid_body_density_v1170;
-pub mod scene_cinematic_tail_v1130;
 pub mod scene_scale_coc_v1140;
 pub mod scene_transform_v1120;
 pub mod pressure_cap_card_v1190;

@@ -1619,7 +1619,7 @@ mod tests {
         let mut doc: EffectGraphDef = serde_json::from_value(serde_json::json!({
             "version": 3, "nodes": [], "wires": [],
             "sceneModifiers": [{
-                "id": "modifier", "scene": {"node": "scene"},
+                "id": "modifier", "scene": "scene",
                 "targets": "allObjects",
                 "graph": {"version": 3, "nodes": [], "wires": []}
             }]
@@ -1984,7 +1984,7 @@ mod tests {
             "version": 3,
             "nodes": [{"id": 1, "nodeId": "step", "typeId": "node.scalar", "handle": "step",
                 "params": {"top_speed": {"type": "Float", "value": 23.0}}}], "wires": [],
-            "sceneModifiers": [{"id": "modifier", "scene": {"node": "scene"}, "targets": "allObjects",
+            "sceneModifiers": [{"id": "modifier", "scene": "scene", "targets": "allObjects",
                 "graph": {"version": 3, "nodes": [
                     {"id": 1, "nodeId": "step", "typeId": "node.gpu_flip_step", "handle": "step",
                      "params": {"top_speed": {"type": "Float", "value": 137.0}}}], "wires": []}}]

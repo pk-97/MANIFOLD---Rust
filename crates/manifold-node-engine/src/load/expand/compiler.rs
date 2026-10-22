@@ -7,7 +7,7 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
 use manifold_core::scene_modifier_preset::{
-    SceneContextValue, SceneEndpoint, SceneModifierInstanceDef, SceneNodeRef, SceneStageScope,
+    SceneContextValue, SceneEndpoint, SceneModifierInstanceDef, SceneStageScope,
     SceneStageSource, is_force_recipe, validate_scene_modifier_schema,
 };
 use sha2::{Digest, Sha256};
@@ -25,17 +25,14 @@ pub(crate) type PortAddress = (u32, String);
 }
 manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub(crate) type EndpointKey = (SceneNodeRef, String);
+pub(crate) type EndpointKey = (NodeId, String);
 }
-type CloneKey = (u32, Option<SceneNodeRef>);
+type CloneKey = (u32, Option<NodeId>);
 type LeafMap = BTreeMap<String, Vec<NodeId>>;
 manifold_core::testkit_visible! {
 /// Stable identity of a node Math View generates for one sampled object.
-pub(crate) fn math_resource_node_id(modifier: &NodeId, target: &SceneNodeRef, role: &str) -> NodeId {
-    let mut parts = vec!["math_view", modifier.as_str(), role];
-    parts.extend(target.scope.iter().map(NodeId::as_str));
-    parts.push(target.node.as_str());
-    namespace::namespace_node_id(&parts)
+pub(crate) fn math_resource_node_id(modifier: &NodeId, target: &NodeId, role: &str) -> NodeId {
+    namespace::namespace_node_id(&["math_view", modifier.as_str(), role, target.as_str()])
 }
 }
 pub(crate) mod shatter;
@@ -91,7 +88,7 @@ pub fn validate_modifier_runtime(
             continue;
         }
         graph
-            .instance_by_node_id(&instance.scene.node)
+            .instance_by_node_id(&instance.scene)
             .and_then(|id| graph.get_node(id))
             .ok_or_else(|| invalid(instance.id.to_string(), "prepared scene target is absent"))?;
     }
@@ -437,12 +434,12 @@ pub(crate) struct Builder<'a> {
     current: BTreeMap<EndpointKey, Option<PortAddress>>,
     reference: BTreeMap<EndpointKey, Option<PortAddress>>,
     written: BTreeSet<EndpointKey>,
-    camera_anchors: BTreeMap<SceneNodeRef, EndpointKey>,
+    camera_anchors: BTreeMap<NodeId, EndpointKey>,
     contexts: BTreeMap<String, PortAddress>,
     event_routes: Vec<super::SceneModifierEventRoute>,
     /// Per Math View in chain order: the objects it samples and the real
     /// chain state captured at its position.
-    math_captures: Vec<(NodeId, Vec<(SceneNodeRef, MathViewCapture)>)>,
+    math_captures: Vec<(NodeId, Vec<(NodeId, MathViewCapture)>)>,
 }
 }
 
@@ -588,8 +585,8 @@ impl Builder<'_> {
     fn capture_math_view(
         &mut self,
         instance: &SceneModifierInstanceDef,
-        targets: &[SceneNodeRef],
-    ) -> Vec<(SceneNodeRef, MathViewCapture)> {
+        targets: &[NodeId],
+    ) -> Vec<(NodeId, MathViewCapture)> {
         let mut captures = Vec::new();
         for target in targets {
             let key = match self.attachment_key(instance, Some(target), SceneEndpoint::Vertices) {
@@ -686,7 +683,7 @@ impl Builder<'_> {
     fn finish_math_view(
         &mut self,
         modifier: &SceneModifierInstanceDef,
-        objects: Vec<(SceneNodeRef, MathViewCapture)>,
+        objects: Vec<(NodeId, MathViewCapture)>,
         leaf_maps: &BTreeMap<String, LeafMap>,
         input: &PortAddress,
     ) -> Result<Option<PortAddress>, SceneModifierExpandError> {
@@ -730,12 +727,7 @@ impl Builder<'_> {
         let view = modifier.id.as_str();
         let mut diagrams = Vec::with_capacity(resolved.len());
         for (index, (target, capture, transform)) in resolved.into_iter().enumerate() {
-            let parts = |role: &'static str| {
-                let mut parts = vec!["math_view", view, role];
-                parts.extend(target.scope.iter().map(NodeId::as_str));
-                parts.push(target.node.as_str());
-                parts
-            };
+            let parts = |role: &'static str| vec!["math_view", view, role, target.as_str()];
             let current_samples = self.add_math_node(
                 &parts("current_samples"),
                 "node.sample_mesh_triangles",
@@ -1082,8 +1074,8 @@ impl Builder<'_> {
         &mut self,
         owner: &EffectGraphDef,
         instance: &SceneModifierInstanceDef,
-        target: Option<&SceneNodeRef>,
-        targets: &[SceneNodeRef],
+        target: Option<&NodeId>,
+        targets: &[NodeId],
         value: SceneContextValue,
     ) -> Result<PortAddress, SceneModifierExpandError> {
         if matches!(
@@ -1290,7 +1282,7 @@ manifold_core::testkit_visible! {
     pub(crate) fn attachment_key(
         &mut self,
         instance: &SceneModifierInstanceDef,
-        target: Option<&SceneNodeRef>,
+        target: Option<&NodeId>,
         endpoint: SceneEndpoint,
     ) -> Result<EndpointKey, SceneModifierExpandError> {
         let reference = match endpoint_scope(endpoint) {
@@ -1410,7 +1402,7 @@ manifold_core::testkit_visible! {
         &mut self,
         owner: &EffectGraphDef,
         instance: &SceneModifierInstanceDef,
-        targets: &[SceneNodeRef],
+        targets: &[NodeId],
     ) -> Result<LeafMap, SceneModifierExpandError> {
         let local = bindings::seed_local_defaults(&instance.graph, &|_| false)?;
         let recipe = local
@@ -1516,7 +1508,7 @@ manifold_core::testkit_visible! {
                     }
                 }
             }
-            let selected: Vec<Option<&SceneNodeRef>> = if each {
+            let selected: Vec<Option<&NodeId>> = if each {
                 targets.iter().map(Some).collect()
             } else {
                 vec![None]
@@ -1528,8 +1520,7 @@ manifold_core::testkit_visible! {
                     if each { "object" } else { "shared" },
                 ];
                 if let Some(target) = target {
-                    parts.extend(target.scope.iter().map(NodeId::as_str));
-                    parts.push(target.node.as_str());
+                    parts.push(target.as_str());
                 }
                 let (copy, map) = namespace::clone_template_node(node, &parts, &mut self.next_id)?;
                 copies.insert((node.id, target.cloned()), copy.id);
@@ -1561,7 +1552,7 @@ manifold_core::testkit_visible! {
                     "ordinary stage wires must follow recipe order",
                 ));
             }
-            let selected: Vec<Option<&SceneNodeRef>> = if to_each {
+            let selected: Vec<Option<&NodeId>> = if to_each {
                 targets.iter().map(Some).collect()
             } else {
                 vec![None]
@@ -1600,7 +1591,7 @@ manifold_core::testkit_visible! {
                 .iter()
                 .find(|node| node.node_id == stage.group)
                 .expect("stage resolved above");
-            let selected: Vec<Option<&SceneNodeRef>> = if stage.scope == SceneStageScope::EachObject
+            let selected: Vec<Option<&NodeId>> = if stage.scope == SceneStageScope::EachObject
             {
                 targets.iter().map(Some).collect()
             } else {

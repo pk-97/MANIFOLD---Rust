@@ -133,8 +133,32 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         pending_undo_redo_event: None,
         graph_edit_diagnostic: None,
         edit_selection_update: None,
-        modifier_selection_update: None,
         #[cfg(feature = "profiling")]
         profiler: None,
     }
+}
+
+/// Follow LoadProject with the production loop's bounded warmup; calling
+/// `handle_command` alone skips the asynchronous GLB decode.
+#[cfg(all(test, feature = "journey-proofs"))]
+pub(crate) fn warm_project(ct: &mut ContentThread, state_tx: &crate::content_state::StateTx) {
+    let (_command_tx, command_rx) = crossbeam_channel::unbounded();
+    ct.run_warmup(&command_rx, state_tx);
+}
+
+/// Set one generator param through the real undoable command.
+#[cfg(all(test, feature = "journey-proofs"))]
+pub(crate) fn set_generator_param(ct: &mut ContentThread, layer_id: &manifold_core::LayerId, param_id: &str, value: f32) {
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let old = ct
+        .engine
+        .project()
+        .expect("journey project")
+        .preset_instance(&target)
+        .and_then(|instance| instance.params.contains(param_id).then(|| instance.get_base_param(param_id)))
+        .unwrap_or_else(|| panic!("missing generator parameter {param_id}"));
+    assert!(!ct.handle_command(crate::content_command::ContentCommand::Execute(Box::new(
+        manifold_editing::commands::effects::ChangeGraphParamCommand::new(target, param_id.to_string(), old, value),
+    ))));
+    assert!(ct.graph_edit_diagnostic.is_none(), "parameter edit rejected");
 }

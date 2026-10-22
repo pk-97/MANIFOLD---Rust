@@ -3,7 +3,7 @@
 use manifold_nodes as _;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
-use manifold_core::scene_modifier_edit::insert_scene_modifier;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
 use manifold_core::scene_modifier_preset::{
     SceneEndpoint, SceneStageScope, SceneStageSource, SceneTargetSelection,
     validate_scene_modifier_schema,
@@ -154,8 +154,7 @@ fn force_recipes_validate_and_expose_finite_controls() {
         assert_eq!(modifier.impulses.len(), 1);
         let impulse = &modifier.impulses[0];
         assert_eq!(impulse.param_id, "fire");
-        assert_eq!(impulse.field.scope, vec![NodeId::new("force_source_stage")]);
-        assert_eq!(impulse.field.node.as_str(), "force_impulse_gate");
+        assert_eq!(impulse.field.as_str(), "force_impulse_gate");
         assert_eq!(impulse.port, "out");
     }
 }
@@ -282,10 +281,7 @@ fn force_sources_scale_strength_then_enabled_and_apply_additively() {
         .nodes
         .iter()
         .find(|node| node.type_id == "node.render_scene")
-        .map(|node| manifold_core::scene_modifier_preset::SceneNodeRef {
-            scope: Vec::new(),
-            node: node.node_id.clone(),
-        })
+        .map(|node| node.node_id.clone())
         .expect("physics host has render_scene");
     for name in ["UniformForce", "RadialForce", "VortexForce"] {
         let instance = prepare_new_scene_modifier(
@@ -294,16 +290,12 @@ fn force_sources_scale_strength_then_enabled_and_apply_additively() {
             NodeId::new(format!("cpu-{name}")),
             scene.clone(),
             SceneTargetSelection::Explicit {
-                objects: vec![manifold_core::scene_modifier_preset::SceneNodeRef {
-                    scope: Vec::new(),
-                    node: NodeId::new("physics_demo_114"),
-                }],
+                objects: vec![NodeId::new("physics_demo_114")],
             },
         )
         .unwrap_or_else(|error| panic!("{name} attaches to a physics recipient: {error}"));
-        let attached = insert_scene_modifier(&host, 0, instance)
-            .unwrap_or_else(|error| panic!("{name} attaches: {error}"))
-            .graph;
+        let attached = attach_scene_modifier(&host, instance)
+            .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
         prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin())
             .unwrap_or_else(|error| panic!("{name} prepares: {error}"));
     }
@@ -351,7 +343,7 @@ fn force_impulses_are_independent_enabled_gated_and_serializable() {
             .expect("serialized scene modifier recipe");
         assert_eq!(modifier.impulses.len(), 1);
         assert_eq!(modifier.impulses[0].param_id, "fire");
-        assert_eq!(modifier.impulses[0].field.node.as_str(), "force_impulse_gate");
+        assert_eq!(modifier.impulses[0].field.as_str(), "force_impulse_gate");
     }
 }
 
@@ -535,19 +527,13 @@ fn evaluate_force_output(names: &[&str], controls: &[Vec<(&str, f32)>], impulse:
             &host,
             &recipe,
             NodeId::new(format!("force-{index}")),
-            manifold_core::scene_modifier_preset::SceneNodeRef {
-                scope: vec![],
-                node: scene.clone(),
-            },
+            scene.clone(),
             SceneTargetSelection::Explicit {
-                objects: vec![manifold_core::scene_modifier_preset::SceneNodeRef {
-                    scope: vec![],
-                    node: NodeId::new("physics_demo_114"),
-                }],
+                objects: vec![NodeId::new("physics_demo_114")],
             },
         )
         .unwrap();
-        host = insert_scene_modifier(&host, index, instance).unwrap().graph;
+        host = attach_scene_modifier(&host, instance).unwrap();
     }
     let prepared = prepare_scene_modifiers(&host, &registry).unwrap();
     let routes = prepared.routes;
@@ -557,7 +543,7 @@ fn evaluate_force_output(names: &[&str], controls: &[Vec<(&str, f32)>], impulse:
             .iter()
             .find(|route| {
                 route.modifier_id.as_str() == "force-0"
-                    && route.local.node.as_str() == "force_impulse_gate"
+                    && route.local.as_str() == "force_impulse_gate"
             })
             .expect("impulse route resolves the source gate");
         let producer = route
@@ -652,10 +638,7 @@ fn force_recipes_prepare_with_zero_selected_bodies() {
         .nodes
         .iter()
         .find(|node| node.type_id == "node.render_scene")
-        .map(|node| manifold_core::scene_modifier_preset::SceneNodeRef {
-            scope: Vec::new(),
-            node: node.node_id.clone(),
-        })
+        .map(|node| node.node_id.clone())
         .expect("physics host has render_scene");
     for name in ["UniformForce", "RadialForce", "VortexForce"] {
         let instance = prepare_new_scene_modifier(
@@ -668,9 +651,8 @@ fn force_recipes_prepare_with_zero_selected_bodies() {
             },
         )
         .unwrap_or_else(|error| panic!("{name} accepts zero selected bodies: {error}"));
-        let attached = insert_scene_modifier(&host, 0, instance)
-            .unwrap_or_else(|error| panic!("{name} attaches: {error}"))
-            .graph;
+        let attached = attach_scene_modifier(&host, instance)
+            .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
         prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin())
             .unwrap_or_else(|error| panic!("{name} prepares with zero selected bodies: {error}"));
     }
@@ -686,7 +668,7 @@ fn industry_force_recipes_attach_and_evaluate() {
         .nodes
         .iter()
         .find(|node| node.type_id == "node.render_scene")
-        .map(|node| manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() })
+        .map(|node| node.node_id.clone())
         .expect("physics host has render_scene");
     for name in ["Wind", "Attractor", "Explosion"] {
         let def = recipe(name);
@@ -700,10 +682,10 @@ fn industry_force_recipes_attach_and_evaluate() {
         for param in &metadata.params {
             assert_eq!(bound.contains(param.id.as_str()), param.id != "fire", "{name}.{} binding", param.id);
         }
-        for objects in [Vec::new(), vec![manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: NodeId::new("physics_demo_114") }]] {
+        for objects in [Vec::new(), vec![NodeId::new("physics_demo_114")]] {
             let instance = prepare_new_scene_modifier(&host, &def, NodeId::new(format!("set-{name}")), scene.clone(), SceneTargetSelection::Explicit { objects })
                 .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
-            let attached = insert_scene_modifier(&host, 0, instance).unwrap_or_else(|error| panic!("{name} inserts: {error}")).graph;
+            let attached = attach_scene_modifier(&host, instance).unwrap_or_else(|error| panic!("{name} inserts: {error}"));
             prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin()).unwrap_or_else(|error| panic!("{name} prepares: {error}"));
         }
     }
@@ -740,9 +722,9 @@ fn industry_force_recipes_attach_and_evaluate() {
 }
 
 
-fn render_scene(host: &EffectGraphDef) -> manifold_core::scene_modifier_preset::SceneNodeRef {
+fn render_scene(host: &EffectGraphDef) -> manifold_core::NodeId {
     let node = host.nodes.iter().find(|node| node.type_id == "node.render_scene").expect("a render scene");
-    manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() }
+    node.node_id.clone()
 }
 
 /// `host` with the force `name` on every object of its scene.
@@ -753,7 +735,7 @@ fn with_force(host: &EffectGraphDef, name: &str) -> EffectGraphDef {
 fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> EffectGraphDef {
     let instance = prepare_new_scene_modifier(host, recipe, NodeId::new(format!("all-{name}")), render_scene(host), SceneTargetSelection::AllObjects)
         .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
-    insert_scene_modifier(host, 0, instance).unwrap_or_else(|error| panic!("{name} attaches: {error}")).graph
+    attach_scene_modifier(host, instance).unwrap_or_else(|error| panic!("{name} attaches: {error}"))
 }
 
 /// BUG-2bulf (force loads one file into every object): two bodies whose

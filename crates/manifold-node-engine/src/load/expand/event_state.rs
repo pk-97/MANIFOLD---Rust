@@ -363,7 +363,7 @@ mod scene_modifier_event_tests {
             .map(|(id, gate)| {
                 json!({
                     "id": id,
-                    "scene": {"node": "scene"},
+                    "scene": "scene",
                     "targets": "allObjects",
                     "graph": local_modifier(*gate)
                 })

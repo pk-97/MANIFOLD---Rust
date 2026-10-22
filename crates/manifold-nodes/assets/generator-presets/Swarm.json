@@ -12293,12 +12293,7 @@
             "enabledParam": "enabled",
             "impulses": [
               {
-                "field": {
-                  "node": "force_impulse_gate",
-                  "scope": [
-                    "force_source_stage"
-                  ]
-                },
+                "field": "force_impulse_gate",
                 "paramId": "fire",
                 "port": "out"
               }
@@ -12355,19 +12350,11 @@
         "wires": []
       },
       "id": "group_43_force_0",
-      "scene": {
-        "node": "scene",
-        "scope": []
-      },
+      "scene": "scene",
       "targets": {
         "explicit": {
           "objects": [
-            {
-              "node": "swarm_object_41",
-              "scope": [
-                "group_43"
-              ]
-            }
+            "swarm_object_41"
           ]
         }
       }
@@ -12939,12 +12926,7 @@
             "enabledParam": "enabled",
             "impulses": [
               {
-                "field": {
-                  "node": "force_impulse_gate",
-                  "scope": [
-                    "force_source_stage"
-                  ]
-                },
+                "field": "force_impulse_gate",
                 "paramId": "fire",
                 "port": "out"
               }
@@ -13001,19 +12983,11 @@
         "wires": []
       },
       "id": "group_43_force_1",
-      "scene": {
-        "node": "scene",
-        "scope": []
-      },
+      "scene": "scene",
       "targets": {
         "explicit": {
           "objects": [
-            {
-              "node": "swarm_object_41",
-              "scope": [
-                "group_43"
-              ]
-            }
+            "swarm_object_41"
           ]
         }
       }
@@ -13694,19 +13668,11 @@
         "wires": []
       },
       "id": "group_43_force_2",
-      "scene": {
-        "node": "scene",
-        "scope": []
-      },
+      "scene": "scene",
       "targets": {
         "explicit": {
           "objects": [
-            {
-              "node": "swarm_object_41",
-              "scope": [
-                "group_43"
-              ]
-            }
+            "swarm_object_41"
           ]
         }
       }

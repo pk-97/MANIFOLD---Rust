@@ -3,7 +3,7 @@
 //! every tick reads the same gust whichever consumer asks, at any display
 //! rate, live or in export, and across a compatible rebuild.
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::{Beats, NodeId, PlayedTime, Seconds};
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, SimStep};
 use manifold_node_engine::parameters::ParamDef;
@@ -164,7 +164,7 @@ fn windy_scene() -> String {
             binding.default_value = value;
         }
     }
-    let scene = SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
+    let scene = NodeId::new("scene");
     let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         &owner,
         &wind,
@@ -173,7 +173,7 @@ fn windy_scene() -> String {
         SceneTargetSelection::AllObjects,
     )
     .expect("the Wind card prepares on every object");
-    let def = manifold_core::scene_modifier_edit::insert_scene_modifier(&owner, 0, instance).expect("the Wind card attaches").graph;
+    let def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, instance).expect("the Wind card attaches");
     serde_json::to_string(&def).unwrap()
 }
 

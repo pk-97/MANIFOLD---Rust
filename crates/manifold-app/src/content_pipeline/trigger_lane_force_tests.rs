@@ -12,7 +12,7 @@ use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::layer::Layer;
 use manifold_core::params::ClipTriggerSource;
 use manifold_core::project::Project;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::{
     Beats, Bpm, GraphTarget, LayerId, NodeId, PlaybackState, PresetTypeId, Seconds,
 };
@@ -30,11 +30,8 @@ const WIDTH: u32 = 32;
 const HEIGHT: u32 = 32;
 const DATA_VERSION: u64 = 1;
 
-fn reference(id: &str) -> SceneNodeRef {
-    SceneNodeRef {
-        scope: Vec::new(),
-        node: NodeId::new(id),
-    }
+fn reference(id: &str) -> NodeId {
+    NodeId::new(id)
 }
 
 fn scene_fixture() -> EffectGraphDef {
@@ -127,13 +124,8 @@ fn insert_uniform_force(mut owner: EffectGraphDef, id: &str, target: &str) -> Ef
             },
         )
         .expect("prepare UniformForce through production authoring seam");
-    owner = manifold_core::scene_modifier_edit::insert_scene_modifier(
-        &owner,
-        owner.scene_modifiers.len(),
-        instance,
-    )
-    .expect("insert UniformForce through production graph edit")
-    .graph;
+    owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, instance)
+    .expect("insert UniformForce through production graph edit");
     owner
 }
 

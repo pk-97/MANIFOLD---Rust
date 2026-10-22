@@ -79,13 +79,10 @@ pub fn sync_live_shapes(ui: &mut UIRoot, project: &Project, active_layer: Option
             }
         }
     }
-    if let Some(gp) = layer.and_then(|l| l.gen_params()) {
-        if let Some(card) = ui.inspector.gen_params_mut() {
-            card.sync_live_shapes(tree, &mut |id| row_shapes(gp, id));
-        }
-        for card in ui.inspector.modifier_cards_mut() {
-            card.sync_live_shapes(tree, &mut |id| row_shapes(gp, id));
-        }
+    if let Some(gp) = layer.and_then(|l| l.gen_params())
+        && let Some(card) = ui.inspector.gen_params_mut()
+    {
+        card.sync_live_shapes(tree, &mut |id| row_shapes(gp, id));
     }
     if let Some(layer) = layer {
         let mut sensitivities = layer.clip_triggers.iter().map(|t| t.shape.sensitivity);

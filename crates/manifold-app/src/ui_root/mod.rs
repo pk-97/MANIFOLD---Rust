@@ -192,7 +192,6 @@ pub struct UIRoot {
     /// through [`Self::request_layer_reveal`], which moves its version.
     pending_layer_reveal: Option<manifold_core::LayerId>,
     layer_reveal_version: u64,
-    pub last_modifier_selection_sequence: Option<u64>,
 
     /// Load-time warmup progress shown as a centered overlay during project
     /// open. `None` when no warmup is active.
@@ -260,10 +259,6 @@ pub struct UIRoot {
     pub effect_clipboard: manifold_editing::clipboard::EffectClipboard,
     /// Generator clipboard for copy/paste between generator layers.
     pub gen_clipboard: manifold_editing::clipboard::GeneratorClipboard,
-    /// UI-owned immutable scene-modifier snapshot used by copy/paste.
-    /// Written only through `set_scene_modifier_clipboard` so the latest
-    /// copy wins across both clipboards.
-    pub scene_modifier_clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
     pub scene_item_clipboard: Option<crate::scene_edit::SceneItemClipboard>,
     pub object_cards_have_focus: bool,
 
@@ -569,7 +564,6 @@ impl UIRoot {
             last_edit_selection_sequence: None,
             pending_layer_reveal: None,
             layer_reveal_version: 0,
-            last_modifier_selection_sequence: None,
             embedded_presets: Vec::new(),
             built: false,
             screen_width: 1280.0,
@@ -593,7 +587,6 @@ impl UIRoot {
             effect_clipboard_count: 0,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
-            scene_modifier_clipboard: None,
             scene_item_clipboard: None,
             object_cards_have_focus: false,
             cursor_hover_actions: Vec::new(),
@@ -628,20 +621,6 @@ impl UIRoot {
             closed_overlays: smallvec::SmallVec::new(),
             warmup: None,
         }
-    }
-
-    /// Single write path for the scene-modifier clipboard. A successful
-    /// modifier copy supersedes the effect clipboard: the latest copy wins
-    /// across both, in both directions.
-    pub fn set_scene_modifier_clipboard(
-        &mut self,
-        clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
-    ) {
-        if clipboard.is_some() {
-            self.effect_clipboard.clear();
-            self.scene_item_clipboard = None;
-        }
-        self.scene_modifier_clipboard = clipboard;
     }
 
     /// Set detected display resolutions from winit monitors.
@@ -1871,7 +1850,6 @@ mod tick_parity_tests {
             supports_envelopes: true,
             has_graph_mod: false,
             layer_id: None,
-            modifier: None,
             audio_sends: Vec::new(),
         }
     }

@@ -9,7 +9,6 @@
 
 use crate::effect_graph_def::{BindingTarget, EffectGraphDef};
 use crate::effects::ParamConvert;
-use crate::scene_modifier_preset::SceneNodeRef;
 use crate::NodeId;
 
 /// Bundled recipe id of the standalone Math View modifier.
@@ -326,8 +325,8 @@ fn drop_host_bindings(
 }
 
 /// The scenes that contain at least one legacy carrier, in chain order.
-pub fn legacy_math_view_scenes(owner: &EffectGraphDef) -> Vec<SceneNodeRef> {
-    let mut scenes: Vec<SceneNodeRef> = Vec::new();
+pub fn legacy_math_view_scenes(owner: &EffectGraphDef) -> Vec<NodeId> {
+    let mut scenes: Vec<NodeId> = Vec::new();
     for instance in &owner.scene_modifiers {
         if has_legacy_math_view_controls(&instance.graph) && !scenes.contains(&instance.scene) {
             scenes.push(instance.scene.clone());
@@ -634,7 +633,7 @@ mod tests {
         .unwrap();
         owner.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("vortex_a"),
-            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
@@ -687,7 +686,7 @@ mod tests {
         let mut owner = owner_with_carrier();
         owner.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("plain"),
-            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
@@ -699,7 +698,7 @@ mod tests {
         });
         owner.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("vortex_b"),
-            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
@@ -737,7 +736,7 @@ mod tests {
         }
         owner.scene_modifiers.push(SceneModifierInstanceDef {
             id: view.clone(),
-            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
@@ -910,7 +909,7 @@ mod tests {
         .unwrap();
         owner.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("vortex_a"),
-            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,

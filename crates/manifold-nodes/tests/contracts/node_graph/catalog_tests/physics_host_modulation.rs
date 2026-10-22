@@ -149,7 +149,7 @@ fn generator() -> (PresetRuntime, &'static str) {
 /// strength is a host param on the owner, as on stage.
 fn modifier_card() -> (PresetRuntime, String) {
     use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
-    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    use manifold_core::scene_modifier_preset::SceneTargetSelection;
     let owner: EffectGraphDef = serde_json::from_value(serde_json::json!({
         "version": 2, "name": "Kick water",
         "presetMetadata": {
@@ -178,7 +178,7 @@ fn modifier_card() -> (PresetRuntime, String) {
         "/assets/scene-modifier-presets/UniformForce.json"
     )))
     .unwrap();
-    let top = |node: &str| SceneNodeRef { scope: Vec::new(), node: manifold_core::NodeId::new(node) };
+    let top = |node: &str| manifold_core::NodeId::new(node);
     let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         &owner,
         &recipe,
@@ -187,9 +187,8 @@ fn modifier_card() -> (PresetRuntime, String) {
         SceneTargetSelection::Explicit { objects: vec![top("water_object")] },
     )
     .unwrap();
-    let def = manifold_core::scene_modifier_edit::insert_scene_modifier(&owner, 0, instance)
-        .unwrap()
-        .graph;
+    let def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, instance)
+        .unwrap();
     let strength = def
         .preset_metadata
         .as_ref()

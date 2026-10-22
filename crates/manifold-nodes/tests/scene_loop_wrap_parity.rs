@@ -21,12 +21,10 @@ use manifold_nodes as _;
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, GroupDef, GroupInterface,
-    InterfacePortDef, PresetMetadata, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::preset_type_id::PresetTypeId;
 use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame};
-use manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
 fn node(
@@ -321,136 +319,6 @@ fn build_loop_graph_phase_controls() -> EffectGraphDef {
     def
 }
 
-/// INV-EC5: a SAVED pre-corridor loop (count/jitter_period/stride shape, no
-/// scene_array camera wire — the fixed-row graph) run through the real load
-/// migration, then rendered: phase 0 vs phase 1 must be pixel-identical.
-/// The migration lands the corridor shape (pattern_length both nodes,
-/// patterns_per_loop, the D2 camera wire), and the wrap is pure on the
-/// migrated graph.
-fn build_migrated_pre_corridor_graph() -> EffectGraphDef {
-    let mut def = build_loop_graph();
-
-    // The legacy instance route is a group boundary, not a direct
-    // scene_object connection. Preserve that authored shape so migration can
-    // identify the exact instance consumer without inferring ownership.
-    let mut cube = def
-        .nodes
-        .iter()
-        .find(|n| n.node_id.as_str() == "cube_mesh")
-        .cloned()
-        .expect("cube_mesh");
-    let mut material = def
-        .nodes
-        .iter()
-        .find(|n| n.node_id.as_str() == "mat")
-        .cloned()
-        .expect("mat");
-    let mut scene_object = def
-        .nodes
-        .iter()
-        .find(|n| n.node_id.as_str() == "scene_object")
-        .cloned()
-        .expect("scene_object");
-    cube.id = 41;
-    material.id = 42;
-    scene_object.id = 43;
-    let group_input = node(40, "scene_instances", "system.group_input", BTreeMap::new());
-    let group_output = node(44, "scene_object_output", "system.group_output", BTreeMap::new());
-    let mut scene_group = node(6, "scene_object_group", "group", BTreeMap::new());
-    scene_group.group = Some(Box::new(GroupDef {
-        interface: GroupInterface {
-            inputs: vec![InterfacePortDef {
-                name: "instances".to_string(),
-                port_type: "Array(InstanceTransform)".to_string(),
-            }],
-            outputs: vec![InterfacePortDef {
-                name: "object".to_string(),
-                port_type: "Object".to_string(),
-            }],
-            params: Vec::new(),
-        },
-        nodes: vec![group_input, cube, material, scene_object, group_output],
-        wires: vec![
-            wire(41, "vertices", 43, "vertices"),
-            wire(42, "out", 43, "material"),
-            wire(40, "instances", 43, "instances"),
-            wire(43, "object", 44, "object"),
-        ],
-        tint: None,
-    }));
-    def.nodes
-        .retain(|n| !matches!(n.id, 4..=6));
-    def.nodes.push(scene_group);
-    def.wires.retain(|w| {
-        !matches!(w.from_node, 4..=6) && !matches!(w.to_node, 4..=6)
-    });
-    def.wires.push(wire(2, "out", 6, "instances"));
-    def.wires.push(wire(6, "object", 7, "object_0"));
-
-    // The legacy fixed row includes the original camera and camera switch.
-    // Keep the loop camera on the switch's B input so migration can preserve
-    // the pre modifier camera on A instead of guessing its ownership.
-    let mut params_camera = BTreeMap::new();
-    params_camera.insert(
-        "orbit".to_string(),
-        SerializedParamValue::Float { value: 0.0 },
-    );
-    params_camera.insert(
-        "tilt".to_string(),
-        SerializedParamValue::Float { value: 0.0 },
-    );
-    params_camera.insert(
-        "distance".to_string(),
-        SerializedParamValue::Float { value: 5.0 },
-    );
-    params_camera.insert(
-        "fov_y".to_string(),
-        SerializedParamValue::Float { value: 0.9 },
-    );
-    def.nodes
-        .push(node(9, "scene_camera", "node.orbit_camera", params_camera));
-    let mut params_switch = BTreeMap::new();
-    params_switch.insert(
-        "select".to_string(),
-        SerializedParamValue::Enum { value: 1 },
-    );
-    def.nodes.push(node(
-        10,
-        "loop_cam_switch",
-        "node.camera_switch",
-        params_switch,
-    ));
-    def.wires
-        .retain(|w| !(w.from_node == 3 && w.to_node == 7 && w.to_port == "camera"));
-    def.wires.push(wire(9, "out", 10, "a"));
-    def.wires.push(wire(3, "out", 10, "b"));
-    def.wires.push(wire(10, "out", 7, "camera"));
-
-    // Downgrade to the saved P4 shape.
-    let array = def
-        .nodes
-        .iter_mut()
-        .find(|n| n.node_id.as_str() == "scene_array")
-        .expect("scene_array");
-    array.params.remove("pattern_length");
-    array.params.insert("count".to_string(), SerializedParamValue::Float { value: 3.0 });
-    array.params.insert("jitter_period".to_string(), SerializedParamValue::Float { value: 1.0 });
-    let camera = def
-        .nodes
-        .iter_mut()
-        .find(|n| n.node_id.as_str() == "loop_camera")
-        .expect("loop_camera");
-    camera.params.remove("patterns_per_loop");
-    camera.params.remove("pattern_length");
-    camera.params.insert("stride".to_string(), SerializedParamValue::Float { value: 1.0 });
-    def.wires.retain(|w| !(w.from_node == 3 && w.to_node == 2 && w.to_port == "camera"));
-
-    // The app's load-only migration seam (ENDLESS_CORRIDOR D7).
-    let report = migrate_legacy_scene_modifiers(&mut def, &PrimitiveRegistry::with_builtin());
-    assert!(report.changed, "the pre-corridor fixture migrates: {:?}", report.diagnostics);
-    def
-}
-
 /// One device and registry per process: nextest runs each test in its own
 /// process, so every test pays device start once, not once per frame.
 fn renderer() -> &'static (std::sync::Arc<manifold_gpu::GpuDevice>, PrimitiveRegistry) {
@@ -675,24 +543,6 @@ fn wrap_parity_near_seam_measurement() {
         max_pixel_diff(&j_a, &j_again),
         0,
         "jitter must be deterministic per index — same beat, same frame"
-    );
-}
-
-/// INV-EC5: a saved pre-corridor loop migrated at load wraps pure — the
-/// migrated graph (corridor params + the D2 camera wire landed by the
-/// load-only migration) renders phase 0 vs phase 1
-/// pixel-identical. Unclipped far, same demand as the corridor mint gate.
-#[test]
-fn wrap_parity_migrated_pre_corridor_loop() {
-    let def = build_migrated_pre_corridor_graph();
-
-    let frame_a = render_frame(&def, 0.0);
-    let frame_b = render_frame(&def, 8.0);
-
-    let diff = max_pixel_diff(&frame_a, &frame_b);
-    assert_eq!(
-        diff, 0,
-        "INV-EC5: the migrated pre-corridor loop must wrap pure — phase 0 vs phase 1 (beat=8) max pixel diff = {diff}"
     );
 }
 

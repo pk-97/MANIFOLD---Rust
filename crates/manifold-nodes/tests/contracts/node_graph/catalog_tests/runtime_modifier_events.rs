@@ -9,7 +9,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::scene_modifier_preset::{
     SceneContextValue, SceneModifierInstanceDef, SceneModifierRecipe, SceneModifierStageDef,
-    SceneNodeRef, SceneStageInput, SceneStageScope, SceneStageSource, SceneTargetSelection,
+    SceneStageInput, SceneStageScope, SceneStageSource, SceneTargetSelection,
 };
 use manifold_core::{Beats, NodeId, Seconds};
 
@@ -138,10 +138,7 @@ fn canonical_owner() -> EffectGraphDef {
     for (id, gate) in [("event_a", "gate_a"), ("event_b", "gate_b")] {
         owner.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new(id),
-            scene: SceneNodeRef {
-                scope: vec![],
-                node: NodeId::new("scan_render"),
-            },
+            scene: NodeId::new("scan_render"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![],
             legacy_math_view_carrier: None,

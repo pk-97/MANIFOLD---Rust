@@ -17,8 +17,6 @@ mod swarm_hold;
 mod scene_loop_probe;
 mod scene_loop_wrap_parity;
 mod scene_modifier_inv_gate;
-mod scene_modifier_legacy_migration;
-mod scene_modifier_photoscan_migration;
 mod trigger_shadow_class_guard;
 mod uniform_layout_extended;
 mod uniform_layout_proof;

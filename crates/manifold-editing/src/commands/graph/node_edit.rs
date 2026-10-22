@@ -16,7 +16,6 @@ use manifold_core::project::Project;
 use crate::command::Command;
 use crate::commands::preset::RevertToLibraryCommand;
 
-mod modifier;
 
 use super::card_owned_write::card_owned_write_warning;
 use super::{
@@ -184,9 +183,6 @@ pub struct RemoveGraphNodeCommand {
     /// (binding + spec + value slot + automation). Empty when the node backed
     /// no exposed params. Captured for undo; restored before the node is.
     removed_exposures: Vec<manifold_core::effects::RemovedExposure>,
-    /// Scene-modifier targets snapshot their owning graph and instance layer
-    /// because the edited graph is nested inside the generator owner.
-    modifier_removed: Option<modifier::RemovedNode>,
     applied: bool,
 }
 
@@ -228,7 +224,6 @@ impl RemoveGraphNodeCommand {
             scope_path: Vec::new(),
             removed: None,
             removed_exposures: Vec::new(),
-            modifier_removed: None,
             applied: false,
         }
     }
@@ -253,11 +248,7 @@ impl Command for RemoveGraphNodeCommand {
         let node_u32 = self.node_id;
         let scope = self.scope_path.clone();
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            let state = modifier::execute(project, &self.target, node_u32, &scope);
-            if self.modifier_removed.is_none() {
-                self.modifier_removed = state.clone();
-            }
-            self.applied = state.is_some();
+            self.applied = false;
             return;
         }
         let catalog_default = &self.catalog_default;
@@ -310,14 +301,6 @@ impl Command for RemoveGraphNodeCommand {
     }
 
     fn do_undo(&mut self, project: &mut Project) {
-        if let Some(state) = self.modifier_removed.as_ref()
-            && self.applied
-        {
-            if modifier::undo(project, &self.target, state) {
-                self.applied = false;
-            }
-            return;
-        }
         let Some(removed) = self.removed.clone() else {
             return;
         };

@@ -107,17 +107,13 @@ impl SceneViewportNavigation {
         &self,
         target: &GraphTarget,
         node: &NodeId,
-        modifier: Option<&(
-            Vec<NodeId>,
-            Option<manifold_core::scene_modifier_preset::SceneNodeRef>,
-        )>,
+        modifier: Option<&Option<NodeId>>,
         previous: Option<&Arc<SceneViewportRequest>>,
     ) -> Arc<SceneViewportRequest> {
         let modifier_parts = match target {
             GraphTarget::SceneModifier { modifier_id, .. } => Some((
                 modifier_id,
-                modifier.map_or(&[][..], |(scope, _)| scope.as_slice()),
-                modifier.and_then(|(_, object)| object.as_ref()),
+                modifier.and_then(Option::as_ref),
             )),
             _ => None,
         };
@@ -130,7 +126,7 @@ impl SceneViewportNavigation {
             && previous
                 .modifier
                 .as_deref()
-                .map(|m| (&m.modifier_id, m.scope.as_slice(), m.object.as_ref()))
+                .map(|m| (&m.modifier_id, m.object.as_ref()))
                 == modifier_parts
         {
             return previous.clone();
@@ -141,10 +137,9 @@ impl SceneViewportNavigation {
             target: target.clone(),
             node: node.clone(),
             config: self.config,
-            modifier: modifier_parts.map(|(modifier_id, scope, object)| {
+            modifier: modifier_parts.map(|(modifier_id, object)| {
                 Arc::new(ModifierPreviewContext {
                     modifier_id: modifier_id.clone(),
-                    scope: scope.to_vec(),
                     object: object.cloned(),
                 })
             }),

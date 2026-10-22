@@ -228,15 +228,12 @@ fn modifier_control_state_runtime_preserves_gate_when_another_modifier_is_remove
     use manifold_core::NodeId;
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        SceneModifierInstanceDef, SceneTargetSelection,
     };
     let local: EffectGraphDef = serde_json::from_str(&trigger_graph(true)).unwrap();
     let instance = SceneModifierInstanceDef {
         id: NodeId::new("kept"),
-        scene: SceneNodeRef {
-            scope: vec![],
-            node: NodeId::new("scene"),
-        },
+        scene: NodeId::new("scene"),
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: vec![],
         legacy_math_view_carrier: None,
@@ -244,10 +241,7 @@ fn modifier_control_state_runtime_preserves_gate_when_another_modifier_is_remove
     };
     let route = SceneModifierNodeRoute {
         modifier_id: instance.id.clone(),
-        local: SceneNodeRef {
-            scope: vec![],
-            node: NodeId::new("gate"),
-        },
+        local: NodeId::new("gate"),
         copies: vec![SceneModifierNodeCopy {
             object: None,
             node_id: NodeId::new("gate"),

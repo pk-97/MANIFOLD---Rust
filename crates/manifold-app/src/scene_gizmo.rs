@@ -172,7 +172,7 @@ impl GizmoGesture {
                 let Some(knob) = knob(&ctx.project, &target, &param.write) else { continue };
                 let slot = match &knob {
                     Knob::Card { id, .. } => {
-                        if crate::scene_modifier_edit::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()).is_some() {
+                        if crate::graph_target::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()).is_some() {
                             continue;
                         }
                         match cards.iter().position(|card| card == id) {

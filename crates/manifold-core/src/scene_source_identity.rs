@@ -13,9 +13,9 @@ use std::{
 use sha2::{Digest, Sha256};
 
 use crate::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, GroupDef, SerializedParamValue,
+    BindingTarget, EffectGraphDef, EffectGraphNode, GroupDef, SerializedParamValue, leaf_scope,
 };
-use crate::scene_modifier_preset::SceneNodeRef;
+use crate::NodeId;
 
 /// Failure while deriving a source definition identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,7 +160,7 @@ const MAX_RELOCATION_NODES: usize = 65_536;
 
 #[derive(Debug, Clone)]
 struct RelocationSource {
-    reference: SceneNodeRef,
+    reference: NodeId,
     leaf_node_id: crate::NodeId,
     before_params: BTreeMap<String, SerializedParamValue>,
 }
@@ -180,7 +180,7 @@ pub fn relocate_scene_source_asset(
         return Ok(None);
     }
 
-    let mut frame_refs: BTreeMap<SceneNodeRef, Vec<(usize, usize)>> = BTreeMap::new();
+    let mut frame_refs: BTreeMap<NodeId, Vec<(usize, usize)>> = BTreeMap::new();
     for (modifier_index, modifier) in owner.scene_modifiers.iter().enumerate() {
         for (frame_index, frame) in modifier.mesh_frames.iter().enumerate() {
             frame_refs
@@ -219,7 +219,7 @@ pub fn relocate_scene_source_asset(
             return Err(SceneSourceRelocationError::InvalidGraph {
                 detail: format!(
                     "source reference '{}' has no flattened leaf",
-                    reference_path(reference)
+                    reference
                 ),
             });
         };
@@ -234,7 +234,7 @@ pub fn relocate_scene_source_asset(
             let frame = &owner.scene_modifiers[*modifier_index].mesh_frames[*frame_index];
             if frame.source_definition_hash != actual {
                 return Err(SceneSourceRelocationError::StaleSourceHash {
-                    reference: reference_path(reference),
+                    reference: reference.to_string(),
                     expected: frame.source_definition_hash.clone(),
                     actual,
                 });
@@ -256,7 +256,7 @@ pub fn relocate_scene_source_asset(
         affected_ids.insert(source.leaf_node_id.to_string());
         relocate_source_path(
             &mut relocated.nodes,
-            &source.reference.scope,
+            &leaf_scope(&owner.nodes, &source.reference).unwrap_or_default(),
             &source.leaf_node_id,
             old,
             new,
@@ -288,7 +288,7 @@ pub fn relocate_scene_source_asset(
             return Err(SceneSourceRelocationError::InvalidGraph {
                 detail: format!(
                     "source reference '{}' disappeared after relocation",
-                    reference_path(&source.reference)
+                    source.reference
                 ),
             });
         };
@@ -305,7 +305,7 @@ pub fn relocate_scene_source_asset(
             return Err(SceneSourceRelocationError::InvalidGraph {
                 detail: format!(
                     "relocation changed source parameters beyond path for '{}'",
-                    reference_path(&source.reference)
+                    source.reference
                 ),
             });
         }
@@ -339,22 +339,12 @@ fn source_path(params: &BTreeMap<String, SerializedParamValue>) -> Option<&str> 
     }
 }
 
-fn reference_path(reference: &SceneNodeRef) -> String {
-    reference
-        .scope
-        .iter()
-        .map(crate::NodeId::as_str)
-        .chain(std::iter::once(reference.node.as_str()))
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 fn collect_relocation_nodes(
     nodes: &[EffectGraphNode],
     scope: &[crate::NodeId],
     depth: usize,
     count: &mut usize,
-    leaf_ids: &mut BTreeMap<String, SceneNodeRef>,
+    leaf_ids: &mut BTreeMap<String, NodeId>,
 ) -> Result<(), SceneSourceRelocationError> {
     if depth > MAX_RELOCATION_DEPTH {
         return Err(SceneSourceRelocationError::InvalidGraph {
@@ -373,10 +363,7 @@ fn collect_relocation_nodes(
             child_scope.push(node.node_id.clone());
             collect_relocation_nodes(&group.nodes, &child_scope, depth + 1, count, leaf_ids)?;
         } else if !node.node_id.is_empty() {
-            let reference = SceneNodeRef {
-                scope: scope.to_vec(),
-                node: node.node_id.clone(),
-            };
+            let reference = node.node_id.clone();
             if leaf_ids
                 .insert(node.node_id.to_string(), reference.clone())
                 .is_some()
@@ -392,10 +379,11 @@ fn collect_relocation_nodes(
 
 fn resolve_relocation_reference<'a>(
     nodes: &'a [EffectGraphNode],
-    reference: &SceneNodeRef,
+    reference: &NodeId,
 ) -> Result<&'a EffectGraphNode, SceneSourceRelocationError> {
+    let scope = leaf_scope(nodes, reference).unwrap_or_default();
     let mut current = nodes;
-    for scope_id in &reference.scope {
+    for scope_id in &scope {
         let matches: Vec<_> = current
             .iter()
             .filter(|node| node.node_id == *scope_id && node.group.is_some())
@@ -403,8 +391,7 @@ fn resolve_relocation_reference<'a>(
         if matches.len() != 1 {
             return Err(SceneSourceRelocationError::InvalidGraph {
                 detail: format!(
-                    "source reference '{}' has {} matching group scopes",
-                    reference_path(reference),
+                    "source reference '{reference}' has {} matching group scopes",
                     matches.len()
                 ),
             });
@@ -413,13 +400,12 @@ fn resolve_relocation_reference<'a>(
     }
     let matches: Vec<_> = current
         .iter()
-        .filter(|node| node.node_id == reference.node && node.group.is_none())
+        .filter(|node| node.node_id == *reference && node.group.is_none())
         .collect();
     if matches.len() != 1 {
         return Err(SceneSourceRelocationError::InvalidGraph {
             detail: format!(
-                "source reference '{}' has {} matching leaves",
-                reference_path(reference),
+                "source reference '{reference}' has {} matching leaves",
                 matches.len()
             ),
         });
@@ -701,16 +687,10 @@ mod tests {
         }
     }
 
-    fn frame(source: &[&str], source_node: &str, hash: String) -> SceneMeshReferenceFrame {
+    fn frame(source_node: &str, hash: String) -> SceneMeshReferenceFrame {
         SceneMeshReferenceFrame {
-            target: SceneNodeRef {
-                scope: Vec::new(),
-                node: NodeId::new("target"),
-            },
-            source: SceneNodeRef {
-                scope: source.iter().map(|id| NodeId::new(*id)).collect(),
-                node: NodeId::new(source_node),
-            },
+            target: NodeId::new("target"),
+            source: NodeId::new(source_node),
             source_definition_hash: hash,
             source_offset: [1.0, 2.0, 3.0],
             scene_radius: 4.0,
@@ -720,10 +700,7 @@ mod tests {
     fn add_frames(owner: &mut EffectGraphDef, frames: Vec<SceneMeshReferenceFrame>) {
         owner.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("modifier"),
-            scene: SceneNodeRef {
-                scope: Vec::new(),
-                node: NodeId::new("scene"),
-            },
+            scene: NodeId::new("scene"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: frames,
             legacy_math_view_carrier: None,
@@ -856,8 +833,8 @@ mod tests {
         add_frames(
             &mut owner,
             vec![
-                frame(&[], "mesh-source", hash.clone()),
-                frame(&[], "mesh-source", hash),
+                frame("mesh-source", hash.clone()),
+                frame("mesh-source", hash),
             ],
         );
         let before = owner.clone();
@@ -930,7 +907,7 @@ mod tests {
         owner.nodes = vec![group];
         let flat = flatten_relocation_graph(&owner).unwrap();
         let hash = scene_source_definition_hash(&owner, &flat.nodes[0]).unwrap();
-        add_frames(&mut owner, vec![frame(&["group"], "mesh-source", hash)]);
+        add_frames(&mut owner, vec![frame("mesh-source", hash)]);
         let relocated = relocate_scene_source_asset(&owner, "old.glb", "new.glb")
             .unwrap()
             .unwrap();
@@ -954,7 +931,7 @@ mod tests {
         let mut owner = owner();
         owner.preset_metadata = Some(metadata());
         let hash = scene_source_definition_hash(&owner, &owner.nodes[0]).unwrap();
-        add_frames(&mut owner, vec![frame(&[], "mesh-source", hash)]);
+        add_frames(&mut owner, vec![frame("mesh-source", hash)]);
         let mut unrelated = node();
         unrelated.node_id = NodeId::new("other-source");
         unrelated.params.insert(
@@ -985,7 +962,7 @@ mod tests {
     fn scene_source_relocation_rejects_stale_hash_and_selector_change_without_mutation() {
         let mut owner = owner();
         let hash = scene_source_definition_hash(&owner, &owner.nodes[0]).unwrap();
-        add_frames(&mut owner, vec![frame(&[], "mesh-source", hash)]);
+        add_frames(&mut owner, vec![frame("mesh-source", hash)]);
         owner.nodes[0]
             .params
             .insert("fit".into(), SerializedParamValue::Enum { value: 1 });

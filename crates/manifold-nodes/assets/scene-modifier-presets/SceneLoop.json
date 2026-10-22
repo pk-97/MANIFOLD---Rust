@@ -452,12 +452,7 @@
       ],
       "initializers": [
         {
-          "target": {
-            "node": "scene_array",
-            "scope": [
-              "loop_scene_stage"
-            ]
-          },
+          "target": "scene_array",
           "param": "cell_size",
           "value": {
             "multiply": {
@@ -484,12 +479,7 @@
           }
         },
         {
-          "target": {
-            "node": "loop_camera",
-            "scope": [
-              "loop_scene_stage"
-            ]
-          },
+          "target": "loop_camera",
           "param": "cell_size",
           "value": {
             "multiply": {
@@ -516,12 +506,7 @@
           }
         },
         {
-          "target": {
-            "node": "loop_camera",
-            "scope": [
-              "loop_scene_stage"
-            ]
-          },
+          "target": "loop_camera",
           "param": "home",
           "value": {
             "multiply": {
@@ -557,12 +542,7 @@
           }
         },
         {
-          "target": {
-            "node": "loop_camera",
-            "scope": [
-              "loop_scene_stage"
-            ]
-          },
+          "target": "loop_camera",
           "param": "near",
           "value": {
             "max": {
@@ -607,12 +587,7 @@
           }
         },
         {
-          "target": {
-            "node": "loop_camera",
-            "scope": [
-              "loop_scene_stage"
-            ]
-          },
+          "target": "loop_camera",
           "param": "far",
           "value": {
             "multiply": {

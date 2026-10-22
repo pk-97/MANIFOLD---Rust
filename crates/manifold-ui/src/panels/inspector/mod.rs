@@ -76,25 +76,12 @@ const TAB_FONT_SIZE: u16 = 12;
 /// key is reused per column — each [`chrome::materialize`] call returns only its
 /// own button).
 const KEY_ADD_EFFECT_BTN: u64 = 95_001;
-/// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's key —
-/// one per layer scope, below the modifier cards.
-const KEY_ADD_MODIFIER_BTN: u64 = 95_002;
 
 /// Automation name for the group-header add-modifier affordance. There can
 /// be one instance per visible group; callers can use the structural query's
 /// `nth` selector when more than one group is present.
 const GROUP_ADD_MODIFIER_NAME: &str = "inspector.effect_group.add_modifier";
 
-/// The "+ Add Modifier" button as a typed Chrome view — the same neutral kit
-/// button as "+ Add Effect" (`add_effect_button_view`), keyed separately so
-/// the two never alias each other's materialised node id.
-fn add_modifier_button_view() -> View {
-    View::button("+ Add Modifier")
-        .fill()
-        .style(chrome::components::button_secondary_style())
-        .inert()
-        .key(KEY_ADD_MODIFIER_BTN)
-}
 
 /// A section-card background — the outer 1px border panel + the inset inner fill,
 /// as a typed Chrome view. Materialised into the section's rect each frame;
@@ -148,22 +135,9 @@ enum PressedTarget {
     ClipChrome,
     MasterEffect(usize),
     LayerEffect(usize),
-    /// SCENE_MODIFIER_FRAMEWORK section 3.7: one of the layer scope's
-    /// modifier cards. It shares card selection and drag routing while using
-    /// the modifier stack's stable NodeIds for structural actions.
-    Modifier(usize),
     GenParam,
     RackWetDry,
     Scrollbar,
-}
-
-/// The shared card drag lifecycle addresses one ordered stack at a time.
-/// Modifier cards deliberately remain isolated from effect cards even though
-/// both use the same ghost and drop indicator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CardDragStack {
-    Effects(InspectorTab),
-    Modifiers,
 }
 
 // ── InspectorCompositePanel ─────────────────────────────────────
@@ -204,20 +178,6 @@ pub struct InspectorCompositePanel {
     effects: [Vec<ParamCardPanel>; 2],
     rack_groups: [Vec<RackGroupConfig>; 2],
     gen_params: Option<ParamCardPanel>,
-    /// SCENE_MODIFIER_FRAMEWORK section 3.7: the layer scope's modifier
-    /// cards — applied scene-modifier kinds only, in slot order, below the
-    /// generator card. Reconciled by effect identity (the kind-keyed
-    /// synthesized id) exactly like the effect cards, so a removed kind
-    /// plays the delete-collapse exit instead of vanishing.
-    modifier_cards: Vec<ParamCardPanel>,
-    /// The layer whose modifiers `modifier_cards` currently holds —
-    /// same navigation semantics as `layer_scope_id`: a scope switch drops
-    /// instantly (no delete-collapse for a navigated-away layer).
-    modifier_scope_id: Option<LayerId>,
-    /// The "+ Add Modifier" dropdown model — one entry per registry kind,
-    /// rebuilt alongside the cards at the structural sync (applicability is
-    /// app-side knowledge; the UI only renders it).
-    modifier_picker: Vec<crate::param_surface::ModifierPickerEntry>,
     /// D17 "delete collapse" (exit-state pattern, `anim.rs`'s doc comment) —
     /// cards `reconcile_cards` no longer finds a config for, kept alive here
     /// so they keep collapsing/fading instead of vanishing the instant the
@@ -229,9 +189,6 @@ pub struct InspectorCompositePanel {
     /// `update()` once `ParamCardPanel::is_delete_finished` is true.
     master_dying: Vec<ParamCardPanel>,
     layer_dying: Vec<ParamCardPanel>,
-    /// D17 exit state for modifier cards — same delete-collapse machinery as
-    /// `layer_dying`, scoped to the modifier region.
-    modifier_dying: Vec<ParamCardPanel>,
     /// The layer whose effects `effects[SCOPE_LAYER]` currently holds. When
     /// `configure_layer_effects` is called for a DIFFERENT scope (a different
     /// selected layer, or none), that's navigation — not an edit of the
@@ -292,11 +249,6 @@ pub struct InspectorCompositePanel {
     group_add_modifier_btns: Vec<(NodeId, EffectGroupId)>,
     group_nodes: Vec<RackGroupNodes>,
     rack_drag: Option<RackDrag>,
-    /// SCENE_MODIFIER_FRAMEWORK section 3.7: the "+ Add Modifier" button's
-    /// node id (layer scope only), and whether the current layer scope is a
-    /// scene layer at all (the picker needs a live scene to offer kinds).
-    add_modifier_btn: Option<NodeId>,
-    show_add_modifier: bool,
 
     /// The layer the inspector is currently showing. Fed by the app through
     /// `configure_gen_params` on every rebuild; `None` when no layer is
@@ -343,10 +295,8 @@ pub struct InspectorCompositePanel {
     // ── Effect selection state (Unity EffectSelectionManager — per tab) ──
     selected_master_ids: HashSet<EffectId>,
     selected_layer_ids: HashSet<EffectId>,
-    selected_modifier_ids: HashSet<manifold_foundation::NodeId>,
     last_clicked_master: Option<EffectId>,
     last_clicked_layer: Option<EffectId>,
-    last_clicked_modifier: Option<manifold_foundation::NodeId>,
 
     // ── Effect card drag-reorder state (Unity EffectsListBitmapPanel) ──
     card_drag_active: bool,
@@ -355,7 +305,6 @@ pub struct InspectorCompositePanel {
     card_drag_group: Option<EffectGroupId>,
     card_drag_destination_group: Option<EffectGroupId>,
     card_drag_effect_ids: Vec<EffectId>,
-    card_drag_stack: CardDragStack,
     card_drag_tab: InspectorTab,
     card_drag_source_index: usize, // index within the tab's effect cards vec
     card_drag_effect_index: usize, // effect_index in the flat effects list
@@ -427,7 +376,7 @@ impl InspectorCompositePanel {
         param_id: &manifold_foundation::ParamId, click: AudioDrawerClick,
     ) -> Vec<PanelAction> {
         for card in self.effects.iter_mut().flatten()
-            .chain(self.modifier_cards.iter_mut()).chain(self.gen_params.iter_mut())
+            .chain(self.gen_params.iter_mut())
         {
             if card.owns_node(tree, node) {
                 return card.audio_drawer_intent(target, param_id, click);
@@ -465,12 +414,8 @@ impl InspectorCompositePanel {
             effects: [Vec::new(), Vec::new()],
             rack_groups: [Vec::new(), Vec::new()],
             gen_params: None,
-            modifier_cards: Vec::new(),
-            modifier_scope_id: None,
-            modifier_picker: Vec::new(),
             master_dying: Vec::new(),
             layer_dying: Vec::new(),
-            modifier_dying: Vec::new(),
             layer_scope_id: None,
             card_context: CardContext::Perform,
             led_preview: None,
@@ -486,8 +431,6 @@ impl InspectorCompositePanel {
             group_add_modifier_btns: Vec::new(),
             group_nodes: Vec::new(),
             rack_drag: None,
-            add_modifier_btn: None,
-            show_add_modifier: false,
             // Set by `configure_gen_params`, which the app calls with the
             // selected layer's id on every inspector rebuild (video layers
             // included — `config` is what goes None, not the id).
@@ -508,17 +451,14 @@ impl InspectorCompositePanel {
             bg_panel_id: None,
             selected_master_ids: HashSet::new(),
             selected_layer_ids: HashSet::new(),
-            selected_modifier_ids: HashSet::new(),
             last_clicked_master: None,
             last_clicked_layer: None,
-            last_clicked_modifier: None,
             card_drag_active: false,
             card_drag_valid: false,
             card_drag_pos: None,
             card_drag_group: None,
             card_drag_destination_group: None,
             card_drag_effect_ids: Vec::new(),
-            card_drag_stack: CardDragStack::Effects(InspectorTab::Master),
             card_drag_tab: InspectorTab::Master,
             card_drag_source_index: 0,
             card_drag_effect_index: 0,
@@ -561,7 +501,6 @@ impl InspectorCompositePanel {
             .iter_mut()
             .flatten()
             .chain(self.gen_params.as_mut())
-            .chain(self.modifier_cards.iter_mut())
         {
             structural |= card.structural_motion();
             any |= card.skip_to_settled(tree);
@@ -586,7 +525,6 @@ impl InspectorCompositePanel {
             .iter()
             .flatten()
             .chain(self.gen_params.as_ref())
-            .chain(self.modifier_cards.iter())
             .any(ParamCardPanel::structural_motion)
     }
 
@@ -615,10 +553,8 @@ impl InspectorCompositePanel {
         for card in self
             .gen_params
             .iter_mut()
-            .chain(self.modifier_cards.iter_mut())
             .chain(self.effects[Self::SCOPE_LAYER].iter_mut())
             .chain(self.layer_dying.iter_mut())
-            .chain(self.modifier_dying.iter_mut())
         {
             card.take_motion(tree, reflows);
         }
@@ -658,7 +594,6 @@ impl InspectorCompositePanel {
     fn set_active_tab(&mut self, tab: InspectorTab) {
         // Single source of truth — visibility is derived on read, not cached.
         if self.active_tab != tab {
-            self.selected_modifier_ids.clear();
             self.view_version += 1;
         }
         self.active_tab = tab;
@@ -733,9 +668,6 @@ impl InspectorCompositePanel {
         if let Some(gp) = self.gen_params.as_mut() {
             gp.set_compact(c);
         }
-        for card in self.modifier_cards.iter_mut() {
-            card.set_compact(c);
-        }
     }
 
     /// Number of effect cards in the active column (master or layer/clip).
@@ -780,7 +712,6 @@ impl InspectorCompositePanel {
             .iter()
             .flatten()
             .chain(self.gen_params.iter())
-            .chain(self.modifier_cards.iter())
             .find_map(|card| card.mapping_chevron_rect(tree, param_id))
     }
 
@@ -812,40 +743,6 @@ impl InspectorCompositePanel {
         self.gen_params.as_mut()
     }
 
-    /// SCENE_MODIFIER_FRAMEWORK section 3.7: the layer the modifier region is
-    /// scoped to — the app's modifier-picker sync reads it to build the
-    /// "+ Add Modifier" dropdown for exactly this layer.
-    pub fn modifier_scope_id(&self) -> Option<&LayerId> {
-        self.modifier_scope_id.as_ref()
-    }
-
-    /// The "+ Add Modifier" dropdown model (one entry per registry kind),
-    /// configured alongside the modifier cards. Empty when the scope isn't
-    /// a scene layer.
-    pub fn modifier_picker(&self) -> &[crate::param_surface::ModifierPickerEntry] {
-        &self.modifier_picker
-    }
-
-    /// Mutable access to the modifier cards — the per-frame value sync rides
-    /// the layer's generator manifest slot stream (modifier rows ARE manifest
-    /// rows), joined by id exactly like the generator card.
-    pub fn modifier_cards_mut(&mut self) -> &mut Vec<ParamCardPanel> {
-        &mut self.modifier_cards
-    }
-
-    /// Look up one modifier card's current target snapshot by its stable
-    /// instance identity. The app uses this exact address when building the
-    /// object dropdown; labels and card positions are presentation only.
-    pub fn modifier_card_info(
-        &self,
-        instance_id: &manifold_foundation::NodeId,
-    ) -> Option<&crate::param_surface::ModifierCardInfo> {
-        self.modifier_cards
-            .iter()
-            .filter_map(ParamCardPanel::modifier_info)
-            .find(|info| &info.instance_id == instance_id)
-    }
-
     /// D9 widget catalog for the inspector's manifest-backed cards — every LIVE
     /// [`ParamCardPanel`] this panel owns (both effect scopes' cards + the
     /// generator card) as a [`CatalogSurface`], in render order. Only cards
@@ -867,12 +764,6 @@ impl InspectorCompositePanel {
         }
         if let Some(gen_card) = &self.gen_params {
             let surface = gen_card.catalog(tree);
-            if !surface.affordances.is_empty() {
-                out.push(surface);
-            }
-        }
-        for card in &self.modifier_cards {
-            let surface = card.catalog(tree);
             if !surface.affordances.is_empty() {
                 out.push(surface);
             }
@@ -1037,9 +928,6 @@ impl InspectorCompositePanel {
         if let Some(gp) = &self.gen_params {
             gp.update_fire_meters(tree, fire_level, dt);
         }
-        for card in &self.modifier_cards {
-            card.update_fire_meters(tree, fire_level, dt);
-        }
         self.audio_trigger_section.update_fire_meters(tree, fire_level, dt);
     }
 
@@ -1060,11 +948,6 @@ impl InspectorCompositePanel {
         {
             return Some(id);
         }
-        for card in &self.modifier_cards {
-            if let Some(id) = card.open_fire_mode_drawer_send() {
-                return Some(id);
-            }
-        }
         self.audio_trigger_section.open_fire_mode_drawer_send()
     }
 
@@ -1082,11 +965,6 @@ impl InspectorCompositePanel {
         {
             return Some(b);
         }
-        for card in &self.modifier_cards {
-            if let Some(b) = card.open_fire_mode_drawer_band() {
-                return Some(b);
-            }
-        }
         self.audio_trigger_section.open_fire_mode_drawer_band()
     }
 
@@ -1100,7 +978,6 @@ impl InspectorCompositePanel {
             || self.clip_chrome.is_dragging()
             || self.effects.iter().flatten().any(|e| e.is_dragging())
             || self.gen_params.as_ref().is_some_and(|p| p.is_dragging())
-            || self.modifier_cards.iter().any(|c| c.is_dragging())
     }
 
     // ── Scrolling ─────────────────────────────────────────────────
@@ -1152,7 +1029,6 @@ impl InspectorCompositePanel {
             PressedTarget::LayerChrome
             | PressedTarget::LayerEffect(_)
             | PressedTarget::GenParam
-            | PressedTarget::Modifier(_)
             | PressedTarget::AudioTriggers => {
                 self.last_effect_tab = InspectorTab::Layer;
             }
@@ -1207,8 +1083,6 @@ impl InspectorCompositePanel {
             .filter_map(|i| cards.get(i).map(|c| c.effect_id().clone()))
             .collect();
 
-        self.selected_modifier_ids.clear();
-        self.last_clicked_modifier = None;
         let set = self.selection_set_mut(tab);
         set.clear();
         for id in ids {
@@ -1235,12 +1109,7 @@ impl InspectorCompositePanel {
             self.selection_set_mut(tab).clear();
             self.set_last_clicked_for_tab(tab, None);
         }
-        self.selected_modifier_ids.clear();
-        self.last_clicked_modifier = None;
         for card in self.effects.iter_mut().flatten() {
-            card.update_selection_visual(tree, false);
-        }
-        for card in &mut self.modifier_cards {
             card.update_selection_visual(tree, false);
         }
     }
@@ -1271,13 +1140,6 @@ impl InspectorCompositePanel {
                 let selected = set_clone.contains(card.effect_id());
                 card.update_selection_visual(tree, selected);
             }
-        }
-        let modifier_selection = self.selected_modifier_ids.clone();
-        for card in &mut self.modifier_cards {
-            let selected = card
-                .modifier_info()
-                .is_some_and(|info| modifier_selection.contains(&info.instance_id));
-            card.update_selection_visual(tree, selected);
         }
         self.dim_dragged_cards(tree);
     }
@@ -1343,20 +1205,6 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn is_card_target_selected(&self, target: &PressedTarget) -> bool {
-        if self.is_effect_target_selected(target) {
-            return true;
-        }
-        match *target {
-            PressedTarget::Modifier(i) => self
-                .modifier_cards
-                .get(i)
-                .and_then(ParamCardPanel::modifier_info)
-                .is_some_and(|info| self.selected_modifier_ids.contains(&info.instance_id)),
-            _ => false,
-        }
-    }
-
     /// Auto-select an effect card on any interaction (click, pointer down).
     /// Unity: any card interaction implicitly selects it (single-select, no modifiers).
     fn auto_select_effect(&mut self, target: &PressedTarget) {
@@ -1364,13 +1212,6 @@ impl InspectorCompositePanel {
             PressedTarget::MasterEffect(i) => self.select_effect(InspectorTab::Master, i),
             PressedTarget::LayerEffect(i) => self.select_effect(InspectorTab::Layer, i),
             _ => {}
-        }
-    }
-
-    fn auto_select_card(&mut self, target: &PressedTarget) {
-        match *target {
-            PressedTarget::Modifier(i) => self.select_modifier(i),
-            _ => self.auto_select_effect(target),
         }
     }
 
@@ -1418,11 +1259,6 @@ impl Panel for InspectorCompositePanel {
             any |= gp.structural_motion();
             gp.tick_value_flash(tree, dt_ms);
         }
-        for card in self.modifier_cards.iter_mut() {
-            card.tick_drawers(dt_ms);
-            any |= card.structural_motion();
-            card.tick_value_flash(tree, dt_ms);
-        }
         // D17 "delete collapse" (exit-state pattern) — dying cards keep
         // ticking (and forcing the rebuild that reflows what follows them)
         // until their collapse+fade finishes, then get dropped for good. The
@@ -1432,13 +1268,11 @@ impl Panel for InspectorCompositePanel {
             .master_dying
             .iter_mut()
             .chain(self.layer_dying.iter_mut())
-            .chain(self.modifier_dying.iter_mut())
         {
             any |= card.tick_drawers(dt_ms);
         }
         self.master_dying.retain(|c| !c.is_delete_finished());
         self.layer_dying.retain(|c| !c.is_delete_finished());
-        self.modifier_dying.retain(|c| !c.is_delete_finished());
         // Stay "active" one extra frame after the last structural tween
         // settles so its final value gets a build: the settling tick reports
         // nothing in flight, but its new value has not reached the tree yet.
@@ -1546,9 +1380,6 @@ impl Panel for InspectorCompositePanel {
         }
         if let Some(gp) = self.gen_params.as_ref() {
             gp.register_intents(intents);
-        }
-        for card in &self.modifier_cards {
-            card.register_intents(intents);
         }
         for card in &self.effects[Self::SCOPE_LAYER] {
             card.register_intents(intents);
@@ -1818,7 +1649,6 @@ mod tests {
             supports_envelopes: true,
             has_graph_mod: false,
             layer_id: None,
-            modifier: None,
             audio_sends: Vec::new(),
         }
     }
@@ -2694,31 +2524,6 @@ mod tests {
         panic!("card has no drag handle node in its build range");
     }
 
-    fn modifier_fixture() -> (Vec<ParamSurface>, LayerId) {
-        let layer = LayerId::new("scene-layer");
-        let configs = (0..3)
-            .map(|i| {
-                let mut config = mk_config(
-                    super::super::param_card::ParamCardKind::Effect,
-                    &format!("Modifier {i}"),
-                    1,
-                );
-                config.modifier = Some(crate::param_surface::ModifierCardInfo {
-                    instance_id: manifold_foundation::NodeId::new(format!("modifier-{i}")),
-                    layer_id: layer.clone(),
-                    params_owner: Default::default(),
-                    enabled_label: "Enabled".into(),
-                    stack_index: i,
-                    stack_len: 3,
-                    targets_all: true,
-                    objects: Vec::new(),
-                });
-                config
-            })
-            .collect();
-        (configs, layer)
-    }
-
     pub(super) fn grouped_fixture(collapsed: bool) -> (InspectorCompositePanel, UITree) {
         let configs: Vec<_> = (0..3).map(|i| mk_config(super::super::param_card::ParamCardKind::Effect, &format!("FX{i}"), 1)).collect();
         let mut panel = InspectorCompositePanel::new();
@@ -2782,46 +2587,6 @@ mod tests {
             if *before == EffectId::new("FX2")));
     }
 
-    /// BUG-9rai8: scene modifier cards draw labelled params by kind.
-    #[test]
-    fn scene_modifier_cards_draw_choices_by_kind() {
-        let (configs, layer) = modifier_fixture();
-        let mut panel = InspectorCompositePanel::new();
-        panel.configure_modifier_cards(&configs, Some(&layer), true, Vec::new());
-        assert!(!panel.modifier_cards.is_empty());
-        assert!(panel.modifier_cards.iter().all(|card| card.draws_by_kind()));
-    }
-
-    #[test]
-    fn modifier_drag_emits_complete_stable_id_order() {
-        let (configs, layer) = modifier_fixture();
-        let mut tree = UITree::new();
-        let mut panel = InspectorCompositePanel::new();
-        let layout = {
-            let mut l = ScreenLayout::new(1920.0, 1080.0);
-            l.inspector_width = 500.0;
-            l
-        };
-        panel.configure_modifier_cards(&configs, Some(&layer), true, Vec::new());
-        panel.configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
-        panel.build(&mut tree, &layout);
-
-        let handle = find_drag_handle_id(&panel.modifier_cards[1], &tree);
-        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
-        panel.card_drag_target_index = 0;
-        let actions = panel.end_card_drag(&mut tree);
-        assert!(matches!(
-            actions.as_slice(),
-            [PanelAction::Project(crate::panels::ProjectAction::SceneModifiersReorder(id, order))]
-                if *id == layer
-                    && *order == vec![
-                        manifold_foundation::NodeId::new("modifier-1"),
-                        manifold_foundation::NodeId::new("modifier-0"),
-                        manifold_foundation::NodeId::new("modifier-2"),
-                    ]
-        ), "modifier drag must address the complete stack: {actions:?}");
-    }
-
     #[test]
     fn generator_collapse_survives_same_owner_reconfigure_and_resets_for_new_owner() {
         use super::super::param_card::ParamCardKind;
@@ -2838,130 +2603,6 @@ mod tests {
 
         panel.configure_gen_params(Some(&config), Some(second_layer));
         assert!(!panel.gen_params.as_ref().unwrap().is_collapsed());
-    }
-
-    #[test]
-    fn modifier_collapse_is_local_and_survives_same_identity_reconcile() {
-        let (configs, layer) = modifier_fixture();
-        let mut tree = UITree::new();
-        let mut panel = InspectorCompositePanel::new();
-        let layout = {
-            let mut l = ScreenLayout::new(1920.0, 1080.0);
-            l.inspector_width = 500.0;
-            l
-        };
-        panel.configure_modifier_cards(&configs, Some(&layer), true, Vec::new());
-        panel.configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
-        panel.build(&mut tree, &layout);
-
-        let chevron = panel.modifier_cards[0].chevron_node_id().unwrap();
-        let actions = panel.modifier_cards[0].handle_click(chevron, &tree);
-        assert!(matches!(
-            actions.as_slice(),
-            [PanelAction::Params(ParamsAction::SectionFoldToggled)]
-        ));
-        assert!(panel.modifier_cards[0].is_collapsed());
-
-        let mut reordered = configs.clone();
-        reordered[0].modifier.as_mut().unwrap().stack_index = 1;
-        panel.configure_modifier_cards(&reordered, Some(&layer), true, Vec::new());
-        assert!(panel.modifier_cards[0].is_collapsed());
-
-        reordered[0].modifier.as_mut().unwrap().instance_id =
-            manifold_foundation::NodeId::new("replacement");
-        panel.configure_modifier_cards(&reordered, Some(&layer), true, Vec::new());
-        assert!(!panel.modifier_cards[0].is_collapsed());
-    }
-
-    #[test]
-    fn modifier_drag_rejects_generator_and_effect_regions() {
-        use super::super::param_card::ParamCardKind;
-
-        let (configs, layer) = modifier_fixture();
-        let mut panel = InspectorCompositePanel::new();
-        let mut tree = UITree::new();
-        let layout = {
-            let mut l = ScreenLayout::new(1920.0, 1080.0);
-            l.inspector_width = 500.0;
-            l
-        };
-        let generator = mk_config(ParamCardKind::Generator, "Generator", 1);
-        let effect = mk_config(ParamCardKind::Effect, "Effect", 1);
-        panel.configure_gen_params(Some(&generator), Some(layer.clone()));
-        panel.configure_layer_effects(&[effect], Some(&layer));
-        panel.configure_modifier_cards(&configs, Some(&layer), true, Vec::new());
-        panel.configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
-        panel.build(&mut tree, &layout);
-
-        let handle = find_drag_handle_id(&panel.modifier_cards[1], &tree);
-        let second = panel.modifier_cards[2].live_bounds(&tree).unwrap();
-        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
-        panel.update_card_drag(
-            Vec2::new(second.x + 10.0, second.y + second.height * 0.5),
-            &mut tree,
-        );
-        assert!(!panel.end_card_drag(&mut tree).is_empty());
-
-        let handle = find_drag_handle_id(&panel.modifier_cards[1], &tree);
-        let generator_bounds = panel.gen_params.as_ref().unwrap().live_bounds(&tree).unwrap();
-        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
-        panel.update_card_drag(
-            Vec2::new(generator_bounds.x + 10.0, generator_bounds.y + generator_bounds.height * 0.5),
-            &mut tree,
-        );
-        assert!(panel.end_card_drag(&mut tree).is_empty());
-
-        let handle = find_drag_handle_id(&panel.modifier_cards[1], &tree);
-        let effect_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][0]
-            .live_bounds(&tree)
-            .unwrap();
-        assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
-        panel.update_card_drag(
-            Vec2::new(effect_bounds.x + 10.0, effect_bounds.y + effect_bounds.height * 0.5),
-            &mut tree,
-        );
-        assert!(panel.end_card_drag(&mut tree).is_empty());
-    }
-
-    #[test]
-    fn modifier_selection_is_shared_but_domain_isolated() {
-        let (configs, layer) = modifier_fixture();
-        let mut tree = UITree::new();
-        let mut panel = InspectorCompositePanel::new();
-        let layout = {
-            let mut l = ScreenLayout::new(1920.0, 1080.0);
-            l.inspector_width = 500.0;
-            l
-        };
-        panel.configure_layer_effects(&[mk_config(super::super::param_card::ParamCardKind::Effect, "FX", 1)], None);
-        panel.configure_modifier_cards(&configs, Some(&layer), true, Vec::new());
-        panel.configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
-        panel.build(&mut tree, &layout);
-        let first = panel.modifier_cards[0].card_header_node().expect("first header");
-        let second = panel.modifier_cards[1].card_header_node().expect("second header");
-        let _ = panel.route_click(first, Modifiers::NONE, &tree);
-        let _ = panel.route_click(
-            second,
-            Modifiers { ctrl: true, ..Modifiers::NONE },
-            &tree,
-        );
-        assert_eq!(
-            panel.selected_modifier_ids_for(
-                &layer,
-                &manifold_foundation::NodeId::new("modifier-1"),
-            ),
-            vec![
-                manifold_foundation::NodeId::new("modifier-0"),
-                manifold_foundation::NodeId::new("modifier-1"),
-            ]
-        );
-        assert!(panel.selected_effect_count() == 0, "modifier selection must not select effects");
-        assert!(panel
-            .selected_modifier_ids_for(
-                &layer,
-                &manifold_foundation::NodeId::new("unselected")
-            )
-            .is_empty());
     }
 
     #[test]

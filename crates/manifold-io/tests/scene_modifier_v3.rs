@@ -69,7 +69,7 @@ fn scene_modifier_v3_nested_future_definition_is_rejected_before_catalog_install
     future["version"] = 999.into();
     let graph = serde_json::json!({
         "version": 3, "nodes": [], "wires": [],
-        "sceneModifiers": [{"id": "instance", "scene": {"scope": [], "node": "scene"},
+        "sceneModifiers": [{"id": "instance", "scene": "scene",
                             "targets": "allObjects", "graph": future}]
     });
     assert!(deserialize_preset(&graph.to_string()).is_err());
@@ -109,11 +109,11 @@ fn scene_modifier_v3_owner_frames_and_local_snapshot_survive_project_reload() {
     let mut raw = serde_json::json!({
         "version": 3, "nodes": [], "wires": [],
         "sceneModifiers": [{
-            "id": "modifier/a:b", "scene": {"node": "scene"},
-            "targets": {"explicit": {"objects": [{"scope": ["scan/group"], "node": "part:a/b"}]}},
+            "id": "modifier/a:b", "scene": "scene",
+            "targets": {"explicit": {"objects": ["part:a/b"]}},
             "meshFrames": [{
-                "target": {"scope": ["scan/group"], "node": "part:a/b"},
-                "source": {"scope": ["scan/group"], "node": "mesh"},
+                "target": "part:a/b",
+                "source": "mesh",
                 "sourceDefinitionHash": "test-source-fingerprint",
                 "sourceOffset": [-0.75, 0.2, 0.1], "sceneRadius": 3.5
             }],

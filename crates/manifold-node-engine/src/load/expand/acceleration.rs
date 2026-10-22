@@ -2,10 +2,11 @@
 
 use std::collections::BTreeSet;
 
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::{is_liquid_domain, liquid_domain_of};
 use manifold_core::scene_index::FlatSceneIndex;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 
 use crate::persistence::PrimitiveRegistry;
 use manifold_core::physics_members::{
@@ -17,8 +18,8 @@ use super::SceneModifierExpandError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Recipient {
-    pub object: SceneNodeRef,
-    pub node: SceneNodeRef,
+    pub object: NodeId,
+    pub node: NodeId,
     pub port: String,
 }
 
@@ -33,7 +34,7 @@ fn unsupported(path: impl Into<String>, detail: impl Into<String>) -> SceneModif
 /// with no physical producer behind it, which is an inactive force target.
 pub(super) fn resolve(
     index: &FlatSceneIndex,
-    object: &SceneNodeRef,
+    object: &NodeId,
     registry: &PrimitiveRegistry,
 ) -> Result<Option<Recipient>, SceneModifierExpandError> {
     let mut candidates = Vec::new();
@@ -85,13 +86,13 @@ const LIQUID_ACCELERATION_PORT: &str = "acceleration_field";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Candidate {
-    node: SceneNodeRef,
+    node: NodeId,
     port: String,
 }
 
 fn trace(
     index: &FlatSceneIndex,
-    start: &SceneNodeRef,
+    start: &NodeId,
     start_port: &str,
     registry: &PrimitiveRegistry,
 ) -> Result<Vec<Candidate>, SceneModifierExpandError> {
@@ -201,9 +202,9 @@ fn trace(
 /// the compiler before per-recipient stages are cloned.
 pub(super) fn authoring_objects(
     owner: &EffectGraphDef,
-    scene: &SceneNodeRef,
+    scene: &NodeId,
     registry: &PrimitiveRegistry,
-) -> Result<Vec<SceneNodeRef>, SceneModifierExpandError> {
+) -> Result<Vec<NodeId>, SceneModifierExpandError> {
     let index = FlatSceneIndex::build(owner)?;
     let mut eligible = Vec::new();
     for object in index.scene_objects(scene)? {
@@ -217,9 +218,9 @@ pub(super) fn authoring_objects(
 pub(super) fn selected(
     index: &FlatSceneIndex,
     selection: &SceneTargetSelection,
-    scene: &SceneNodeRef,
+    scene: &NodeId,
     registry: &PrimitiveRegistry,
-) -> Result<Vec<SceneNodeRef>, SceneModifierExpandError> {
+) -> Result<Vec<NodeId>, SceneModifierExpandError> {
     let available = index.scene_objects(scene)?;
     let candidates = match selection {
         SceneTargetSelection::AllObjects => available,
@@ -262,9 +263,9 @@ pub(super) fn selected(
 
 pub(super) fn recipient_key(
     index: &FlatSceneIndex,
-    object: &SceneNodeRef,
+    object: &NodeId,
     registry: &PrimitiveRegistry,
-) -> Result<Option<(SceneNodeRef, String)>, SceneModifierExpandError> {
+) -> Result<Option<(NodeId, String)>, SceneModifierExpandError> {
     Ok(resolve(index, object, registry)?.map(|recipient| (recipient.node, recipient.port)))
 }
 
@@ -273,7 +274,7 @@ pub(super) fn recipient_key(
 /// Merge both cases before delivery so one hit reaches each body only once.
 pub fn impulse_recipients(
     owner: &EffectGraphDef,
-    scene: &SceneNodeRef,
+    scene: &NodeId,
     selection: &SceneTargetSelection,
     registry: &PrimitiveRegistry,
 ) -> Result<
@@ -289,7 +290,7 @@ pub fn impulse_recipients(
 
 pub fn impulse_recipients_with_index(
     index: &FlatSceneIndex,
-    scene: &SceneNodeRef,
+    scene: &NodeId,
     selection: &SceneTargetSelection,
     registry: &PrimitiveRegistry,
 ) -> Result<

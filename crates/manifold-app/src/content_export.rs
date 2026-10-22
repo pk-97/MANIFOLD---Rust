@@ -540,7 +540,6 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
         | ContentCommand::ExecuteOnContent(_)
         | ContentCommand::FireParameter { .. }
         | ContentCommand::ExecuteSelecting(..)
-        | ContentCommand::SceneModifier(_)
         | ContentCommand::ChangeGeneratorType { .. }
         | ContentCommand::GeneratorTypeChanged { .. }
         | ContentCommand::ExecuteBatch(..)

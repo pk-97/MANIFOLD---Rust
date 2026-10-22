@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::is_liquid_domain;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::{Beats, NodeId, PlayedTime, Seconds};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::{FieldValue, TickStamp};
@@ -202,7 +202,7 @@ impl WaterRuntimeRef<'_> {
     pub fn prepare_scene_impulse(
         &self,
         owner: &EffectGraphDef,
-        scene: &SceneNodeRef,
+        scene: &NodeId,
         selection: &SceneTargetSelection,
         field_node: &NodeId,
         field_port: &str,

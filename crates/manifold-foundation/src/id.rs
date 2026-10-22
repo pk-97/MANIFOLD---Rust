@@ -41,7 +41,7 @@ pub struct MarkerId(Arc<str>);
 /// the identity that param bindings target, so a card slider keeps driving its
 /// inner node no matter how the graph is reorganized. The node's `handle` is a
 /// display/search name with no addressing role. See `docs/NODE_ID_TARGETING.md`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId(Arc<str>);
 

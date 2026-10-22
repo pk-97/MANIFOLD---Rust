@@ -358,7 +358,7 @@ mod tests {
                 "params": [{"id":"a_gain","name":"Gain","min":0.0,"max":1.0,"defaultValue":0.2}],
                 "bindings": [{"id":"a_gain","label":"Gain","defaultValue":0.2,"target":{"kind":"sceneModifier","modifierId":"a","paramId":"gain"}}]
             },
-            "sceneModifiers": [{"id":"a","scene":{"node":"scene"},"targets":"allObjects","graph": serde_json::to_value(local_graph()).unwrap()}],
+            "sceneModifiers": [{"id":"a","scene":"scene","targets":"allObjects","graph": serde_json::to_value(local_graph()).unwrap()}],
             "nodes": [], "wires": []
         }))
         .unwrap();

@@ -1,6 +1,6 @@
-    //! BUG-ji6q regression: a card-stamped binding's `default_value` is a
-    //! frozen snapshot of `node.params` taken at stamp time
-    //! (`stamp_scene_node_exposures_into`). `instantiate_def` correctly
+    //! BUG-ji6q regression: a card binding whose `default_value` mirrors a
+    //! node param is a frozen snapshot of `node.params` taken when the card
+    //! was built. `instantiate_def` correctly
     //! writes the def's `node.params` onto the live node every rebuild, but
     //! `BoundGraph::new` then calls `apply_binding_defaults`, which
     //! unconditionally replants every binding's `default_value` back over
@@ -14,13 +14,12 @@
     use manifold_core::effect_graph_def::{
         EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, SerializedParamValue,
     };
-    use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
     use manifold_nodes_scene::node_graph::node_param_source::metadata_for_node_type;
     use manifold_node_engine::{param_binding::BindingSource, load::graph_loader::BoundaryHandling, graph::Graph, load::graph_loader::HandleScope, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, param_binding::ResolvedBinding, param_binding::ResolvedTarget, load::graph_loader::instantiate_def};
 
-    /// A single `node.bake_environment` node, its `intensity` param stamped
-    /// to `stamped_intensity` — the card-stamped def a GLB import produces.
+    /// A single `node.bake_environment` node with `intensity` at
+    /// `stamped_intensity`, and a card binding whose default mirrors it.
     fn def_with_stamped_bake_environment(
         stamped_intensity: f32,
     ) -> (EffectGraphDef, manifold_core::effect_graph_def::BindingDef) {
@@ -31,34 +30,25 @@
             "node.bake_environment must be a known primitive for this repro to mean anything"
         );
 
-        // `stamp_scene_node_exposures_into` seeds each binding's
-        // `default_value` from the node's ALREADY-stamped param when
-        // present (BUG-303's fix — an importer-placed value survives the
-        // stamp), falling back to the primitive manifest default only when
-        // absent. So the GLB-import shape is: `node_params` already carries
-        // the imported value at stamp time, and the binding freezes THAT.
         let mut node_params = BTreeMap::new();
         node_params.insert(
             "intensity".to_string(),
             SerializedParamValue::Float { value: stamped_intensity },
         );
-
-        let mut params = Vec::new();
-        let mut bindings = Vec::new();
-        stamp_scene_node_exposures_into(
-            &mut params,
-            &mut bindings,
-            1,
-            &node_id,
-            "Environment",
-            &metadata,
-            &node_params,
-        );
-        let binding = bindings
-            .iter()
-            .find(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if param == "intensity"))
-            .expect("intensity binding stamped")
-            .clone();
+        let binding = manifold_core::effect_graph_def::BindingDef {
+            id: "env.intensity".into(),
+            label: "Intensity".into(),
+            default_value: stamped_intensity,
+            target: manifold_core::effect_graph_def::BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "intensity".into(),
+            },
+            convert: manifold_core::effects::ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
 
         let def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,
@@ -179,14 +169,6 @@
         assert_eq!(
             frozen_default, 2.0,
             "sanity: the binding's frozen default must equal the stamped value"
-        );
-        assert!(
-            stamped_binding.default_mirrors_node_param,
-            "the stamp must mark its defaults as MIRRORS of the node param — that \
-             flag is the whole discriminator. An authored default (a preset's \
-             declared value, which carries the binding's scale/offset fold) still \
-             plants; a mirrored one must not, or it reverts the node param it was \
-             copied from."
         );
 
         let (graph, inst) = build(&def, &registry);

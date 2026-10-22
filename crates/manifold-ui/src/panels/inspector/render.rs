@@ -350,9 +350,6 @@ impl InspectorCompositePanel {
         if let Some(ref gp) = self.gen_params {
             push(ranges, gp.first_node(), gp.node_count());
         }
-        for card in &self.modifier_cards {
-            push(ranges, card.first_node(), card.node_count());
-        }
         for card in &self.effects[Self::SCOPE_LAYER] {
             push(ranges, card.first_node(), card.node_count());
         }
@@ -534,41 +531,6 @@ impl InspectorCompositePanel {
         self.gen_params.as_ref().and_then(|card| card.led_band_rect(tree))
     }
 
-    /// SCENE_MODIFIER_FRAMEWORK section 3.7: configure the layer scope's
-    /// modifier cards (applied kinds only, slot order — the projection
-    /// derives the list from the trace). Same navigation semantics as
-    /// `configure_layer_effects`: a scope switch drops instantly, a same-scope
-    /// reconcile keeps the delete-collapse exit for removed kinds, and a
-    /// reused kind keeps its transient UI state. `show_add` reports whether
-    /// the scoped layer is a scene at all (the "+ Add Modifier" button's
-    /// presence — permanent chrome for scene scopes, absent otherwise), and
-    /// `picker` is the button's dropdown model: one entry per REGISTRY kind,
-    /// applied/inapplicable kinds disabled.
-    pub fn configure_modifier_cards(
-        &mut self,
-        configs: &[ParamSurface],
-        scope: Option<&LayerId>,
-        show_add: bool,
-        picker: Vec<crate::param_surface::ModifierPickerEntry>,
-    ) {
-        if scope != self.modifier_scope_id.as_ref() {
-            self.selected_modifier_ids.clear();
-            self.modifier_cards.clear();
-            self.modifier_dying.clear();
-            self.modifier_scope_id = scope.cloned();
-        }
-        self.show_add_modifier = show_add;
-        self.modifier_picker = picker;
-        let existing = std::mem::take(&mut self.modifier_cards);
-        self.modifier_cards =
-            Self::reconcile_cards(existing, configs, &mut self.modifier_dying, self.card_context);
-        // A scene modifier card is a shared scene card: it draws labelled
-        // params as pick lists and switches (BUG-9rai8).
-        for card in &mut self.modifier_cards {
-            card.set_host(crate::panels::param_card::CardHost::SceneCard);
-        }
-        self.selected_modifier_ids.retain(|id| configs.iter().any(|config| config.modifier.as_ref().is_some_and(|modifier| modifier.instance_id == *id)));
-    }
 
     /// Set the chrome context applied to every card this panel owns —
     /// `CardContext::Author` for the graph-editor window's inspector
@@ -585,10 +547,8 @@ impl InspectorCompositePanel {
             .iter_mut()
             .flatten()
             .chain(self.gen_params.iter_mut())
-            .chain(self.modifier_cards.iter_mut())
             .chain(self.master_dying.iter_mut())
             .chain(self.layer_dying.iter_mut())
-            .chain(self.modifier_dying.iter_mut())
         {
             card.set_context(context);
         }
@@ -626,17 +586,7 @@ impl InspectorCompositePanel {
             .map(|cfg| match existing.iter().position(|c| c.matches_effect_config(cfg)) {
                 Some(pos) => {
                     let mut card = existing.remove(pos);
-                    let preserved_collapse = card
-                        .modifier_info()
-                        .zip(cfg.modifier.as_ref())
-                        .filter(|(old, new)| {
-                            old.instance_id == new.instance_id && old.layer_id == new.layer_id
-                        })
-                        .map(|_| card.is_collapsed());
                     card.configure(cfg);
-                    if let Some(collapsed) = preserved_collapse {
-                        card.set_collapsed(collapsed);
-                    }
                     card
                 }
                 None => {
@@ -684,8 +634,7 @@ impl InspectorCompositePanel {
     }
 
     /// Content height for the layer column (right).
-    /// Order: layer chrome → AUDIO TRIGGERS (P3b) → gen params → modifier
-    /// cards (SCENE_MODIFIER_FRAMEWORK section 3.7) → "+ Add Modifier" →
+    /// Order: layer chrome → AUDIO TRIGGERS (P3b) → gen params →
     /// layer effects → add effect button.
     fn layer_column_height(&self) -> f32 {
         let mut h = 0.0;
@@ -698,14 +647,6 @@ impl InspectorCompositePanel {
                 // Gen params sit above layer effects
                 if let Some(ref gp) = self.gen_params {
                     h += gp.compute_height() + SECTION_GAP;
-                }
-                // Modifier cards + the picker button between the generator
-                // card and the layer's effect cards.
-                for card in &self.modifier_cards {
-                    h += card.compute_height() + SECTION_GAP;
-                }
-                if self.show_add_modifier {
-                    h += ADD_EFFECT_BTN_H + SECTION_GAP;
                 }
                 let groups = &self.rack_groups[Self::SCOPE_LAYER];
                 let cards = &self.effects[Self::SCOPE_LAYER];
@@ -750,7 +691,6 @@ impl InspectorCompositePanel {
         // handle_click run before the range-based find_target_for_node.)
         self.add_master_effect_btn = None;
         self.add_layer_effect_btn = None;
-        self.add_modifier_btn = None;
         self.group_add_modifier_btns.clear();
         self.group_nodes.clear();
 
@@ -771,9 +711,6 @@ impl InspectorCompositePanel {
         self.audio_trigger_section.clear_nodes();
         if let Some(gp) = self.gen_params.as_mut() {
             gp.clear_nodes();
-        }
-        for card in self.modifier_cards.iter_mut() {
-            card.clear_nodes();
         }
         for card in self.effects.iter_mut().flatten() {
             card.clear_nodes();
@@ -1027,26 +964,6 @@ impl InspectorCompositePanel {
                         cy += gp_h + SECTION_GAP;
                     }
 
-                    // SCENE_MODIFIER_FRAMEWORK section 3.7: modifier cards in
-                    // slot order below the scene's generator card, then the
-                    // "+ Add Modifier" picker button, then the layer's
-                    // effect cards.
-                    for card in &mut self.modifier_cards {
-                        let card_h = card.compute_height();
-                        card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
-                        cy += card_h + SECTION_GAP;
-                    }
-                    if self.show_add_modifier {
-                        self.add_modifier_btn = chrome::materialize(
-                            tree,
-                            &add_modifier_button_view(),
-                            Rect::new(inner_x, cy, inner_w, ADD_EFFECT_BTN_H),
-                        )
-                        .into_iter()
-                        .find(|(k, _)| *k == KEY_ADD_MODIFIER_BTN)
-                        .map(|(_, id)| id);
-                        cy += ADD_EFFECT_BTN_H + SECTION_GAP;
-                    }
 
                     let groups = &self.rack_groups[Self::SCOPE_LAYER];
                     let mut card_idx = 0;
@@ -1107,15 +1024,13 @@ impl InspectorCompositePanel {
             }
             // D17 "delete collapse" — see the matching comment in the master
             // column above. `inner_x`/`inner_w` recomputed the same way (out
-            // of scope here, inside `layer_visible()`'s block). Modifier cards
-            // dying collapse in the same column, after the live content.
-            if !self.layer_dying.is_empty() || !self.modifier_dying.is_empty() {
+            // of scope here, inside `layer_visible()`'s block).
+            if !self.layer_dying.is_empty() {
                 let inner_x = right_x + SECTION_INSET;
                 let inner_w = right_content_w - SECTION_INSET * 2.0;
                 for card in self
                     .layer_dying
                     .iter_mut()
-                    .chain(self.modifier_dying.iter_mut())
                 {
                     let card_h = card.compute_height();
                     card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
@@ -1241,7 +1156,6 @@ mod tests {
                 supports_envelopes: true,
                 has_graph_mod: false,
                 layer_id: None,
-                modifier: None,
                 audio_sends: Vec::new(),
             }
         }

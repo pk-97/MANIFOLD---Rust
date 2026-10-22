@@ -8,7 +8,7 @@ mod tests {
     use manifold_core::NodeId;
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        SceneModifierInstanceDef, SceneTargetSelection,
     };
 
     fn local_graph(enable: bool) -> EffectGraphDef {
@@ -35,10 +35,7 @@ mod tests {
                 .iter()
                 .map(|(id, enable)| SceneModifierInstanceDef {
                     id: NodeId::new(*id),
-                    scene: SceneNodeRef {
-                        scope: Vec::new(),
-                        node: NodeId::new("scene"),
-                    },
+                    scene: NodeId::new("scene"),
                     targets: SceneTargetSelection::AllObjects,
                     mesh_frames: Vec::new(),
                     legacy_math_view_carrier: None,
@@ -77,10 +74,7 @@ mod tests {
             .iter()
             .map(|(modifier_id, generated)| SceneModifierNodeRoute {
                 modifier_id: NodeId::new(*modifier_id),
-                local: SceneNodeRef {
-                    scope: Vec::new(),
-                    node: NodeId::new("local-gate"),
-                },
+                local: NodeId::new("local-gate"),
                 copies: generated
                     .iter()
                     .map(|node_id| SceneModifierNodeCopy {

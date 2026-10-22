@@ -201,19 +201,6 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
             ui.mark_overlay_dirty();
         }
     }
-
-    let tree = &mut ui.tree;
-    if let Some(update) = &content_state.modifier_selection_update {
-        if ui.last_modifier_selection_sequence != Some(update.sequence) {
-            ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
-            ui.inspector.apply_selection_visuals(tree);
-            ui.inspector.reveal_pending_selection(tree);
-            ui.last_modifier_selection_sequence = Some(update.sequence);
-        }
-    } else {
-        ui.last_modifier_selection_sequence = None;
-    }
-
 }
 
 /// Content-driven overlay state, taken before the frame is planned so a

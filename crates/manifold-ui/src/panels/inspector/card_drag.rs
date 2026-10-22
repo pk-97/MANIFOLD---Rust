@@ -114,11 +114,6 @@ impl InspectorCompositePanel {
                     .as_mut()
                     .map(|gp| gp.handle_drag(pos, tree, fine))
                     .unwrap_or_default(),
-                PressedTarget::Modifier(i) => self
-                    .modifier_cards
-                    .get_mut(i)
-                    .map(|c| c.handle_drag(pos, tree, fine))
-                    .unwrap_or_default(),
                 PressedTarget::Scrollbar => Vec::new(),
             }
         } else {
@@ -156,11 +151,6 @@ impl InspectorCompositePanel {
                     .as_mut()
                     .map(|gp| gp.handle_drag_end(tree))
                     .unwrap_or_default(),
-                PressedTarget::Modifier(i) => self
-                    .modifier_cards
-                    .get_mut(i)
-                    .map(|c| c.handle_drag_end(tree))
-                    .unwrap_or_default(),
                 PressedTarget::Scrollbar => Vec::new(),
             }
         } else {
@@ -171,7 +161,7 @@ impl InspectorCompositePanel {
         actions
     }
 
-    /// Try to begin a shared effect or modifier card drag on a DragBegin event.
+    /// Try to begin an effect card drag on a DragBegin event.
     /// Returns true if drag started.
     /// Called from ui_root.rs on DragBegin (needs &mut UITree). `node_id` is
     /// `Option` (D9, `docs/DRAG_CAPTURE_DESIGN.md`) — a `None` means the
@@ -188,36 +178,28 @@ impl InspectorCompositePanel {
         let handle = group_drag.as_ref().and_then(|group| {
             self.cards_for_tab(self.active_tab).iter().enumerate()
                 .find(|(_, card)| group.member_ids.contains(card.effect_id()))
-                .map(|(index, card)| (CardDragStack::Effects(self.active_tab), index, card.effect_index(), group.name.clone()))
+                .map(|(index, card)| (self.active_tab, index, card.effect_index(), group.name.clone()))
         }).or_else(|| self.find_drag_handle(node_id));
         if let Some(group) = group_drag.as_ref() {
             self.select_rack_group(&group.id, false);
         }
-        if let Some((stack, card_idx, fx_idx, name)) = handle {
+        if let Some((tab, card_idx, fx_idx, name)) = handle {
             self.card_drag_active = true;
             self.card_drag_valid = true;
             self.card_drag_pos = None;
             self.card_drag_group = group_drag.map(|group| group.id);
             self.card_drag_destination_group = None;
-            self.card_drag_effect_ids.clear();
-            if let CardDragStack::Effects(tab) = stack {
-                let (selection, cards) = self.selection_for_tab(tab);
-                let dragged = cards[card_idx].effect_id();
-                self.card_drag_effect_ids = cards.iter()
-                    .filter(|card| if selection.contains(dragged) { selection.contains(card.effect_id()) } else { card.effect_id() == dragged })
-                    .map(|card| card.effect_id().clone()).collect();
-                let groups = &self.rack_groups[Self::scope_idx(tab)];
-                let selected_groups: Vec<_> = groups.iter().filter(|group|
-                    group.member_ids.iter().any(|id| self.card_drag_effect_ids.contains(id))).collect();
-                if selected_groups.iter().all(|group| group.member_ids.iter().all(|id| self.card_drag_effect_ids.contains(id))) {
-                    self.card_drag_group = selected_groups.first().map(|group| group.id.clone());
-                }
+            let (selection, cards) = self.selection_for_tab(tab);
+            let dragged = cards[card_idx].effect_id();
+            self.card_drag_effect_ids = cards.iter()
+                .filter(|card| if selection.contains(dragged) { selection.contains(card.effect_id()) } else { card.effect_id() == dragged })
+                .map(|card| card.effect_id().clone()).collect();
+            let groups = &self.rack_groups[Self::scope_idx(tab)];
+            let selected_groups: Vec<_> = groups.iter().filter(|group|
+                group.member_ids.iter().any(|id| self.card_drag_effect_ids.contains(id))).collect();
+            if selected_groups.iter().all(|group| group.member_ids.iter().all(|id| self.card_drag_effect_ids.contains(id))) {
+                self.card_drag_group = selected_groups.first().map(|group| group.id.clone());
             }
-            self.card_drag_stack = stack;
-            let tab = match stack {
-                CardDragStack::Effects(tab) => tab,
-                CardDragStack::Modifiers => InspectorTab::Layer,
-            };
             self.card_drag_tab = tab;
             self.card_drag_source_index = card_idx;
             self.card_drag_effect_index = fx_idx;
@@ -241,24 +223,9 @@ impl InspectorCompositePanel {
         if !self.card_drag_active {
             return;
         }
-        let card_idx = self.card_drag_source_index;
-        match self.card_drag_stack {
-            CardDragStack::Effects(tab) => {
-                for card in self.cards_for_tab(tab) {
-                    if self.card_drag_effect_ids.contains(card.effect_id()) {
-                        card.set_drag_dimmed(tree, true);
-                    }
-                }
-            }
-            CardDragStack::Modifiers => {
-                let dragged_id = self.modifier_cards.get(card_idx).and_then(ParamCardPanel::modifier_info).map(|m| m.instance_id.clone());
-                let is_multi = dragged_id.as_ref().is_some_and(|id| self.selected_modifier_ids.len() > 1 && self.selected_modifier_ids.contains(id));
-                for (i, card) in self.modifier_cards.iter().enumerate() {
-                    let selected_card = card.modifier_info().is_some_and(|m| self.selected_modifier_ids.contains(&m.instance_id));
-                    if (is_multi && selected_card) || (!is_multi && i == card_idx) {
-                        card.set_drag_dimmed(tree, true);
-                    }
-                }
+        for card in self.cards_for_tab(self.card_drag_tab) {
+            if self.card_drag_effect_ids.contains(card.effect_id()) {
+                card.set_drag_dimmed(tree, true);
             }
         }
     }
@@ -332,16 +299,6 @@ impl InspectorCompositePanel {
         let vp = self.viewport_rect;
         self.card_drag_pos = Some(pos);
         self.card_drag_valid = vp.contains(pos);
-        if self.card_drag_valid && matches!(self.card_drag_stack, CardDragStack::Modifiers) {
-            // Generator controls and the effect rack are separate destinations.
-            // Releasing there must cancel, not silently move to a stack end.
-            let first = self.modifier_cards.first().and_then(|card| card.live_bounds(tree));
-            let last = self.add_modifier_btn.map(|id| tree.get_bounds(id))
-                .or_else(|| self.modifier_cards.last().and_then(|card| card.live_bounds(tree)));
-            self.card_drag_valid = first.zip(last).is_some_and(|(first, last)| {
-                pos.y >= first.y - SECTION_GAP && pos.y <= last.y + last.height
-            });
-        }
         if !self.card_drag_valid {
             self.hide_card_drag_overlay(tree);
             return;
@@ -370,12 +327,9 @@ impl InspectorCompositePanel {
         // build-time `card_y` snapshot / animated `compute_height()` — those
         // go stale by exactly the scroll delta on the in-place scroll path
         // (BUG-265). Cards without a live rect (never built) are skipped.
-        let stack = self.card_drag_stack;
+        let tab = self.card_drag_tab;
         let (mut target, mut indicator_y) = {
-            let cards: &[ParamCardPanel] = match stack {
-                CardDragStack::Effects(tab) => self.cards_for_tab(tab),
-                CardDragStack::Modifiers => &self.modifier_cards,
-            };
+            let cards: &[ParamCardPanel] = self.cards_for_tab(tab);
             let card_count = cards.len();
             let mut t = card_count; // default: after last card
             for (i, card) in cards.iter().enumerate() {
@@ -402,7 +356,7 @@ impl InspectorCompositePanel {
         };
         self.card_drag_destination_group = None;
         let mut indicator_inset = DRAG_INDICATOR_INSET;
-        if let CardDragStack::Effects(tab) = stack {
+        {
             let cards = self.cards_for_tab(tab);
             for nodes in &self.group_nodes {
                 let bounds = tree.get_bounds(nodes.frame);
@@ -459,61 +413,8 @@ impl InspectorCompositePanel {
             self.cancel_card_drag(tree);
             return Vec::new();
         }
-        let src = self.card_drag_source_index;
-        let stack = self.card_drag_stack;
         let tab = self.card_drag_tab;
         let to_card = self.card_drag_target_index;
-
-        if matches!(stack, CardDragStack::Modifiers) {
-            let Some(layer_id) = self.modifier_scope_id.clone() else {
-                self.cancel_card_drag(tree);
-                return Vec::new();
-            };
-            let cards = &self.modifier_cards;
-            let Some(dragged) = cards.get(src).and_then(ParamCardPanel::modifier_info) else {
-                self.cancel_card_drag(tree);
-                return Vec::new();
-            };
-            let dragged_id = dragged.instance_id.clone();
-            let is_multi = self.selected_modifier_ids.len() > 1
-                && self.selected_modifier_ids.contains(&dragged_id);
-            let selected = self.selected_modifier_ids.clone();
-            for (i, card) in cards.iter().enumerate() {
-                let selected_card = card.modifier_info().is_some_and(|m| selected.contains(&m.instance_id));
-                if (is_multi && selected_card) || (!is_multi && i == src) {
-                    card.set_drag_dimmed(tree, false);
-                }
-            }
-            let mut order: Vec<manifold_foundation::NodeId> = cards
-                .iter()
-                .filter_map(ParamCardPanel::modifier_info)
-                .map(|m| m.instance_id.clone())
-                .collect();
-            let original_order = order.clone();
-            let moving: Vec<manifold_foundation::NodeId> = if is_multi {
-                order.iter().filter(|id| selected.contains(*id)).cloned().collect()
-            } else {
-                vec![dragged_id.clone()]
-            };
-            let moving_set: HashSet<manifold_foundation::NodeId> = moving.iter().cloned().collect();
-            let removed_before = order[..to_card.min(order.len())]
-                .iter()
-                .filter(|id| moving_set.contains(*id))
-                .count();
-            order.retain(|id| !moving_set.contains(id));
-            let insert_at = to_card.saturating_sub(removed_before).min(order.len());
-            order.splice(insert_at..insert_at, moving);
-
-            self.hide_card_drag_overlay(tree);
-            self.card_drag_active = false;
-            self.card_drag_ghost_id = None;
-            self.card_drag_indicator_id = None;
-            self.card_drag_region_root = None;
-            if order == original_order {
-                return Vec::new();
-            }
-            return vec![PanelAction::Project(crate::panels::ProjectAction::SceneModifiersReorder(layer_id, order))];
-        }
 
         let before = self.cards_for_tab(tab).iter().skip(to_card)
             .find(|card| !self.card_drag_effect_ids.contains(card.effect_id()))
@@ -535,7 +436,6 @@ impl InspectorCompositePanel {
         for cards in &self.effects {
             for card in cards { card.set_drag_dimmed(tree, false); }
         }
-        for card in &self.modifier_cards { card.set_drag_dimmed(tree, false); }
         self.hide_card_drag_overlay(tree);
         self.card_drag_active = false;
         self.card_drag_valid = false;
@@ -563,14 +463,14 @@ impl InspectorCompositePanel {
     }
 
     /// Find which card's drag handle matches the given node_id.
-    /// Returns (ordered stack, card index, effect index, display name).
-    fn find_drag_handle(&self, node_id: NodeId) -> Option<(CardDragStack, usize, usize, String)> {
+    /// Returns (tab, card index, effect index, display name).
+    fn find_drag_handle(&self, node_id: NodeId) -> Option<(InspectorTab, usize, usize, String)> {
         // No scope gate: `is_drag_handle` is false on a non-live card, so only the
         // active scope's cards can match (the node range is the source of truth).
         for (i, card) in self.effects[Self::SCOPE_MASTER].iter().enumerate() {
             if card.is_drag_handle(node_id) {
                 return Some((
-                    CardDragStack::Effects(InspectorTab::Master),
+                    InspectorTab::Master,
                     i,
                     card.effect_index(),
                     card.effect_name().to_string(),
@@ -580,16 +480,11 @@ impl InspectorCompositePanel {
         for (i, card) in self.effects[Self::SCOPE_LAYER].iter().enumerate() {
             if card.is_drag_handle(node_id) {
                 return Some((
-                    CardDragStack::Effects(InspectorTab::Layer),
+                    InspectorTab::Layer,
                     i,
                     card.effect_index(),
                     card.effect_name().to_string(),
                 ));
-            }
-        }
-        for (i, card) in self.modifier_cards.iter().enumerate() {
-            if card.is_drag_handle(node_id) {
-                return Some((CardDragStack::Modifiers, i, 0, card.effect_name().to_string()));
             }
         }
         None

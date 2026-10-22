@@ -14,7 +14,7 @@ use manifold_core::scene_doc::{
     ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, MeshModifier, PhysicsSetting, param_id,
 };
 use manifold_core::scene_modifier_preset::{
-    MAX_STAGE_CARRYING_MODIFIERS, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection, force_slots_message,
+    MAX_STAGE_CARRYING_MODIFIERS, SceneModifierInstanceDef, SceneTargetSelection, force_slots_message,
 };
 use manifold_core::scene_schema::{self, Exposure, PropertyRow, modifier_param_id, modifier_rows, modifiers_unavailable};
 use manifold_foundation::scene_surface::SurfaceRole;
@@ -72,8 +72,8 @@ fn node(owner: &str, role: &str) -> NodeId {
 }
 
 /// The scene object node an Object item compiled to, if it did.
-fn object_ref(b: &Builder<'_>, item: &Item) -> Option<SceneNodeRef> {
-    b.id(item.id.as_str(), "object").map(|_| SceneNodeRef { scope: Vec::new(), node: node(item.id.as_str(), "object") })
+fn object_ref(b: &Builder<'_>, item: &Item) -> Option<NodeId> {
+    b.id(item.id.as_str(), "object").map(|_| node(item.id.as_str(), "object"))
 }
 
 fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Placed<'_>]) -> Result<(), String> {
@@ -81,7 +81,7 @@ fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Pl
         ForceTargets::Physics => SceneTargetSelection::AllObjects,
         ForceTargets::Items(ids) => {
             // The objects at or under each chosen item that physics moves, once each.
-            let mut objects: Vec<SceneNodeRef> = Vec::new();
+            let mut objects: Vec<NodeId> = Vec::new();
             for placed in items.iter().filter(|placed| placed.physical) {
                 if ids.iter().any(|chosen| placed.lineage.contains(chosen))
                     && let Some(target) = object_ref(b, placed.item)
@@ -183,7 +183,7 @@ fn attach(
     }
     let instance = SceneModifierInstanceDef {
         id: modifier_id,
-        scene: SceneNodeRef { scope: Vec::new(), node: node(SCENE, "render") },
+        scene: node(SCENE, "render"),
         targets,
         mesh_frames: Vec::new(),
         legacy_math_view_carrier: None,

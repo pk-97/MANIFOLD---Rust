@@ -1,5 +1,5 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::{NodeId, Seconds};
 use manifold_physics::input::EventStamp;
 use manifold_physics::FieldValue;
@@ -151,11 +151,8 @@ fn time(seconds: f64) -> FrameTime {
         frame_count: 0,
     }
 }
-fn reference(id: &str) -> SceneNodeRef {
-    SceneNodeRef {
-        scope: vec![],
-        node: NodeId::new(id),
-    }
+fn reference(id: &str) -> NodeId {
+    NodeId::new(id)
 }
 fn prepare(runtime: &PresetRuntime, def: &EffectGraphDef, ids: &[&str]) -> PreparedSceneImpulse {
     runtime

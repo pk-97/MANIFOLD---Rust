@@ -197,10 +197,7 @@
       "impulses": [
         {
           "paramId": "fire",
-          "field": {
-            "scope": ["force_source_stage"],
-            "node": "force_impulse_gate"
-          },
+          "field": "force_impulse_gate",
           "port": "out"
         }
       ],

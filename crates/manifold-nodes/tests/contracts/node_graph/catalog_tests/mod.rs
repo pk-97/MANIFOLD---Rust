@@ -121,7 +121,6 @@ mod copy_positions;
 
 
 
-mod loop_upgrade;
 
 
 mod surface_mesh_normals;

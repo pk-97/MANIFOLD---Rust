@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_core::scene_modifier_preset::{
-    SceneContextValue, SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef,
-    SceneStageSource, SceneTargetSelection,
+    SceneContextValue, SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneStageSource, SceneTargetSelection,
 };
 use manifold_core::scene_source_identity::{
     SceneSourceIdentityError, scene_source_definition_hash,
@@ -15,7 +15,7 @@ use manifold_core::scene_index::FlatSceneIndex;
 
 use super::SceneModifierExpandError;
 
-fn frame_error(target: &SceneNodeRef, detail: impl Into<String>) -> SceneModifierExpandError {
+fn frame_error(target: &NodeId, detail: impl Into<String>) -> SceneModifierExpandError {
     SceneModifierExpandError::UnsupportedCoordinateFrame {
         path: format!("{target:?}"),
         detail: detail.into(),
@@ -25,7 +25,7 @@ fn frame_error(target: &SceneNodeRef, detail: impl Into<String>) -> SceneModifie
 pub(super) fn selected_objects(
     index: &FlatSceneIndex,
     instance: &SceneModifierInstanceDef,
-) -> Result<Vec<SceneNodeRef>, SceneModifierExpandError> {
+) -> Result<Vec<NodeId>, SceneModifierExpandError> {
     let available = index.scene_objects(&instance.scene)?;
     let selected = match &instance.targets {
         SceneTargetSelection::AllObjects => available,
@@ -50,13 +50,9 @@ pub(super) fn selected_objects(
             // draws. Its shared transform identifies the parts of that object.
             let roots = selected.clone();
             for target in &roots {
-                if target.scope.is_empty() {
-                    continue;
-                }
                 let transform = index.input(target, "parent_transform")?.or(index.input(target, "transform")?);
                 for part in &available {
-                    if part.scope == target.scope
-                        && transform.is_some()
+                    if transform.is_some()
                         && index.input(part, "parent_transform")?.or(index.input(part, "transform")?).map(|w| (w.from_node, &w.from_port))
                             == transform.map(|w| (w.from_node, &w.from_port))
                     {
@@ -270,8 +266,8 @@ fn validate_numbers(frame: &SceneMeshReferenceFrame) -> Result<(), SceneModifier
 
 fn source_route<'a>(
     index: &'a FlatSceneIndex,
-    target: &SceneNodeRef,
-) -> Result<(SceneNodeRef, &'a EffectGraphNode), SceneModifierExpandError> {
+    target: &NodeId,
+) -> Result<(NodeId, &'a EffectGraphNode), SceneModifierExpandError> {
     let wire = index
         .input(target, "vertices")?
         .ok_or_else(|| frame_error(target, "object has no vertices producer"))?;
@@ -318,7 +314,7 @@ fn scalar(
 
 fn static_offset(
     index: &FlatSceneIndex,
-    target: &SceneNodeRef,
+    target: &NodeId,
 ) -> Result<[f64; 3], SceneModifierExpandError> {
     let wire = index.input(target, "transform")?.ok_or_else(|| {
         frame_error(
@@ -374,7 +370,7 @@ fn static_offset(
 fn scene_radius(
     owner: &EffectGraphDef,
     index: &FlatSceneIndex,
-    scene: &SceneNodeRef,
+    scene: &NodeId,
 ) -> Result<f64, SceneModifierExpandError> {
     let radius = if let Some((min, max)) = owner
         .preset_metadata

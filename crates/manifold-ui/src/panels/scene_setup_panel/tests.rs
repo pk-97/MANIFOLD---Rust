@@ -57,7 +57,6 @@ fn live_panel(fields: Vec<FieldRowVm>) -> (ScenePanel, UITree) {
         supports_envelopes: false,
         has_graph_mod: false,
         layer_id: Some(LayerId::new("layer-1")),
-        modifier: None,
         rows: Vec::new(),
         string_params: Vec::new(),
         audio_sends: Vec::new(),

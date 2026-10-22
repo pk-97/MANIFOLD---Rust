@@ -140,69 +140,21 @@ fn pick_list_rows_keep_their_modulation_lane() {
 }
 
 /// Every Scene tab card draws by kind, through the effect body the real
-/// cards build with: an object modifier card (Bend's Axis) and a force
-/// card show the pick list and the switch, and a pick opens the shared
-/// dropdown aimed at the owning layer's generator. An inspector modifier
-/// card, same rows and same target, keeps its sliders.
+/// cards build with: a force card shows the pick list and the switch.
 #[test]
 fn scene_tab_cards_draw_choices_as_pick_lists() {
     use crate::param_surface::RowKind;
     let mut config = gen_config_with_choice_and_float_switch();
     config.kind = ParamCardKind::Effect;
-    config.modifier = Some(crate::param_surface::ModifierCardInfo {
-        instance_id: manifold_foundation::NodeId::new("modifier-1"),
-        layer_id: LayerId::new("layer-1"),
-        params_owner: Default::default(),
-        enabled_label: "Enabled".into(),
-        stack_index: 0,
-        stack_len: 1,
-        targets_all: true,
-        objects: Vec::new(),
-    });
     let rect = Rect::new(0.0, 0.0, 340.0, 300.0);
-    let built = |card: &mut ParamCardPanel| {
-        let mut tree = UITree::new();
-        card.build(&mut tree, rect);
-        let kinds = [0, 2].map(|row| card.row_host.toggle_ids[row].as_ref().map(|ids| ids.kind));
-        (tree, kinds)
-    };
-    let layer = GraphParamTarget::GeneratorOf(LayerId::new("layer-1"));
-
-    let mut object_modifier = ParamCardPanel::new();
-    let mut object_config = config.clone();
-    object_config.modifier = None;
-    object_modifier.configure_object_modifier(
-        &object_config,
-        crate::param_surface::ObjectModifierCardInfo {
-            layer_id: LayerId::new("layer-1"),
-            object: manifold_foundation::SceneNodeRef { scope: Vec::new(), node: manifold_foundation::NodeId::new("object7") },
-            owner: manifold_foundation::SceneNodeRef { scope: Vec::new(), node: manifold_foundation::NodeId::new("group42") },
-            node_doc_id: 70,
-        },
-    );
-    object_modifier.set_host(CardHost::SceneTab);
-    let (tree, kinds) = built(&mut object_modifier);
-    assert_eq!(kinds, [Some(RowKind::Choice), Some(RowKind::Switch)]);
-    let pick = object_modifier.row_host.toggle_ids[0].as_ref().unwrap().button_id;
-    match object_modifier.handle_click(pick, &tree).as_slice() {
-        [PanelAction::Root(RootAction::ParamEnumDropdown { target, param_id, .. })] => {
-            assert_eq!(target, &layer, "the pick writes the owning layer's generator");
-            assert_eq!(param_id.as_ref(), "speed");
-        }
-        other => panic!("expected the shared dropdown, got {other:?}"),
-    }
-
     let mut force = ParamCardPanel::new();
     force.configure(&config);
     force.set_item_hosted(true);
     force.set_host(CardHost::SceneTab);
-    assert_eq!(built(&mut force).1, [Some(RowKind::Choice), Some(RowKind::Switch)]);
-
-    let mut inspector = ParamCardPanel::new();
-    inspector.configure(&config);
-    assert_eq!(inspector.param_target(), layer);
-    assert_eq!(built(&mut inspector).1, [None, None], "an inspector modifier card keeps its sliders");
-    assert!(inspector.row_host.slider_ids[0].is_some() && inspector.row_host.slider_ids[2].is_some());
+    let mut tree = UITree::new();
+    force.build(&mut tree, rect);
+    let kinds = [0, 2].map(|row| force.row_host.toggle_ids[row].as_ref().map(|ids| ids.kind));
+    assert_eq!(kinds, [Some(RowKind::Choice), Some(RowKind::Switch)]);
 }
 
 /// A switch row and a pick-list row keep the right-click mapping menu

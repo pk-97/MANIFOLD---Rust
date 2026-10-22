@@ -4,7 +4,7 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::liquid_domain_of;
 use manifold_core::scene_index::FlatSceneIndex;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::scene_impulse::ImpulseTarget;
 
@@ -12,8 +12,8 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
         serde_json::from_str(json).expect("preset parses")
     }
 
-    fn top(node: &str) -> SceneNodeRef {
-        SceneNodeRef { scope: Vec::new(), node: NodeId::new(node) }
+    fn top(node: &str) -> NodeId {
+        NodeId::new(node)
     }
 
     /// A matter domain is found by the same walk, through its group, and
@@ -25,7 +25,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
         let index = FlatSceneIndex::build(&def).unwrap();
         let water = top("water_object");
         let domain = liquid_domain_of(&index, &water).unwrap().expect("matter water has a domain");
-        assert_eq!(domain.node, NodeId::new("matter_domain"));
+        assert_eq!(domain, NodeId::new("matter_domain"));
         assert_eq!(
             recipient_key(&index, &water, &registry).unwrap(),
             Some((domain, "acceleration_field".to_string()))
@@ -51,7 +51,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
         let group = def.nodes.iter().find(|node| node.type_id == "group").expect("the swarm group");
         let inside = |type_id: &str| {
             let node = group.group.as_deref().unwrap().nodes.iter().find(|node| node.type_id == type_id).expect("swarm node");
-            SceneNodeRef { scope: vec![group.node_id.clone()], node: node.node_id.clone() }
+            node.node_id.clone()
         };
         assert_eq!(
             recipient_key(&index, &inside("node.scene_object"), &registry).unwrap(),

@@ -6,7 +6,6 @@ use crate::{graph::Graph, exec::effect_node::NodeInstanceId};
 use ahash::{AHashMap, AHashSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::scene_modifier_preset::SceneNodeRef;
 use std::collections::BTreeMap;
 
 /// Optional aggregate byte ceiling override, expressed in MiB. This is read
@@ -20,14 +19,14 @@ const DEFAULT_WORKING_SET_FRACTION_DENOMINATOR: u64 = 4;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModifierBufferUsage {
     pub baseline_bytes: u64,
-    pub modifier_bytes: BTreeMap<SceneNodeRef, u64>,
+    pub modifier_bytes: BTreeMap<NodeId, u64>,
     /// Total bytes in fresh physical array roots in this candidate, including
     /// arrays belonging to the unmodified baseline graph.
     pub candidate_bytes: u64,
 }
 
 pub struct PreparedModifierBufferBudget {
-    scenes: BTreeMap<SceneNodeRef, AHashSet<NodeInstanceId>>,
+    scenes: BTreeMap<NodeId, AHashSet<NodeInstanceId>>,
     cutters: AHashMap<NodeInstanceId, &'static crate::exec::resource_allocation::ArrayScratch>,
 }
 
@@ -95,7 +94,7 @@ impl PreparedModifierBufferBudget {
         // for one another's fixed reserve.
         let mut route_scene = AHashMap::new();
         for scene in scenes.keys() {
-            if let Some(runtime) = graph.instance_by_node_id(&scene.node) {
+            if let Some(runtime) = graph.instance_by_node_id(scene) {
                 route_scene.insert(runtime, scene.clone());
             }
         }
@@ -426,10 +425,7 @@ mod tests {
                 port: "map",
                 bytes: fixture_scratch_bytes,
             };
-        let scene = SceneNodeRef {
-            scope: Vec::new(),
-            node: NodeId::new("scene"),
-        };
+        let scene = NodeId::new("scene");
         let cutter = NodeInstanceId(7);
         let budget = PreparedModifierBufferBudget {
             scenes: BTreeMap::from([(scene.clone(), AHashSet::from_iter([cutter]))]),
@@ -462,10 +458,7 @@ mod tests {
 
     #[test]
     fn scene_modifier_buffer_budget_counts_shared_storage_once_and_separates_baseline() {
-        let scene = SceneNodeRef {
-            scope: Vec::new(),
-            node: NodeId::new("scene"),
-        };
+        let scene = NodeId::new("scene");
         let budget = PreparedModifierBufferBudget {
             scenes: BTreeMap::from([(scene.clone(), AHashSet::from_iter([NodeInstanceId(2)]))]),
             cutters: AHashMap::default(),
