@@ -29,7 +29,7 @@ use manifold_core::scene_doc::{DrawAs, EmitFrom, Item, ItemFields, ItemId};
 use manifold_core::scene_schema::SWARM_MAX_COUNT;
 use manifold_core::scene_world_controls::WORLD_INPUTS;
 
-use super::builder::Builder;
+use super::builder::{Builder, Rest};
 use super::material::surface_for;
 
 /// `node.spawn_from_mesh`'s Modes: surface scatter, volume fill.
@@ -45,6 +45,10 @@ const ICOSAHEDRON: u32 = 3;
 const SEED_SIZE: f32 = 4.0;
 /// The lattice box: 1.5 times the seed box.
 const BOUNDS_SIZE: f32 = 6.0;
+
+/// Where a swarm's particles spread, in its emitter's frame: the lattice
+/// box, which the stirred cloud fills. The Scene Loop sizes its cells by it.
+pub(crate) const SPREAD: Rest = Rest { lo: [-0.5 * BOUNDS_SIZE; 3], hi: [0.5 * BOUNDS_SIZE; 3], offset: [0.0; 3], vertices: 0 };
 
 /// The forces node's clock and field scalars go to the mover port for port;
 /// `epoch` also restarts the seed and the particle loop.

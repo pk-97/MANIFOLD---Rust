@@ -45,14 +45,13 @@ fn scene(rig: CameraRig) -> SceneDoc {
 }
 
 /// The scene drawn at `beat` after a few frames there, as sRGB PNG bytes.
-/// World Speed 0 holds the swarm at its seed, so only the camera moves. A
-/// 14 m cell keeps the 3 x 3 grid and the 6 m swarm apart
-/// from the next tile, and the far plane shows eight tiles.
+/// World Speed 0 holds the swarm at its seed, so only the camera moves. The
+/// Loop's Spacing and far plane keep their defaults, measured from the scene.
 fn still(doc: SceneDoc, values: &[(&str, f32)], beat: f64) -> Vec<u8> {
     let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
     layer.gen_params_mut().unwrap().install_scene_document(doc).unwrap();
     let mut fx = layer.gen_params().unwrap().clone();
-    for &(id, value) in [("world.speed", 0.0), ("cube.count", 9.0), ("cube.columns", 3.0), ("swarm.count", 400.0), ("swarm.size", 0.05), ("loop.cell_size", 14.0), ("loop.far", 120.0)]
+    for &(id, value) in [("world.speed", 0.0), ("cube.count", 9.0), ("cube.columns", 3.0), ("swarm.count", 400.0), ("swarm.size", 0.05)]
         .iter()
         .chain(values)
     {

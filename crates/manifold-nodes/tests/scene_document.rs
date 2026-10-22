@@ -869,6 +869,14 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
         }
         doc.insert(None, end + 1 + k, Item::new(ItemId::new(id), id, card)).unwrap();
     }
+    // The default cell holds what is drawn: the swarm's 6 m spread, so its
+    // tiles start apart (twice its depth, one of swarm and one of air).
+    let spacing = |doc: SceneDoc| values(scene_layer(doc).gen_params().unwrap()).into_iter().find(|(id, ..)| id == "loop.cell_size").unwrap().2;
+    assert!((spacing(doc.clone()) - 12.0).abs() < 1e-4, "the swarm's spread sizes the cell");
+    let mut no_swarm = doc.clone();
+    no_swarm.remove(&ItemId::new("swarm")).unwrap();
+    // A Copies row at its defaults lies across the travel axis: one cube deep.
+    assert!((spacing(no_swarm) - 2.0).abs() < 1e-4, "the copies' row sizes the cell");
     let layer = scene_layer(doc);
     let def = layer.gen_params().unwrap().graph.clone().unwrap();
     let mut registry = PrimitiveRegistry::with_builtin();

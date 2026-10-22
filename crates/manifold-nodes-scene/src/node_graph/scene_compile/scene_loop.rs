@@ -42,14 +42,17 @@ const UNMEASURED_CELL: f32 = 10.0;
 
 /// The corridor's scale, from the scene's rest-pose box: a cell is twice the
 /// scene's depth along the travel axis (Z), one depth of scene and one of
-/// open air (SCENE_LOOP_DESIGN.md D4, the gap rule).
+/// open air (SCENE_LOOP_DESIGN.md D4, the gap rule). The box holds every
+/// drawn mesh and every swarm's spread ([`super::swarm::SPREAD`]), so a
+/// swarm's tiles start apart.
 struct Corridor {
     cell: f32,
 }
 
 impl Corridor {
     fn measure(b: &Builder<'_>) -> Self {
-        let depth = rest_box(b.drawn.iter().map(|drawn| &drawn.rest)).map(|(lo, hi)| hi[2] - lo[2]);
+        let swarms = b.swarms.iter().map(|_| &super::swarm::SPREAD);
+        let depth = rest_box(b.drawn.iter().map(|drawn| &drawn.rest).chain(swarms)).map(|(lo, hi)| hi[2] - lo[2]);
         let cell = depth.filter(|depth| *depth > 0.0).map_or(UNMEASURED_CELL, |depth| 2.0 * depth);
         Self { cell }
     }
