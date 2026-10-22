@@ -14,13 +14,12 @@ use super::ParamAddr;
 use crate::node_graph::scene_surface::ITEM_SHAPES;
 
 /// The roles a placed fluid source plays (`node.fluid_role_source`'s
-/// `role` values 0 to 3).
+/// `role` values 0 to 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FluidRole {
     InitialFill,
     Inflow,
     Outflow,
-    Collider,
 }
 
 /// Who declares a shape.
@@ -149,4 +148,31 @@ pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) 
         }
     });
     out
+}
+
+/// One declared shape over `item`'s own card rows, in world space: each param
+/// writes the item's card param and sits at its live value, else at its
+/// row's default. Water and its sources are placed this way.
+pub(super) fn card_shape(owner: ShapeOwner, item: &Item, decl: &SceneShapeDecl, values: &dyn Fn(&str) -> Option<f32>) -> SceneShapeVm {
+    let params = decl
+        .shape
+        .param_ids()
+        .map(|property| {
+            let id = param_id(&item.id, property);
+            ShapeParamVm {
+                value: values(&id).unwrap_or_else(|| resting(item, property)),
+                write: ShapeWrite::Card { id, scale: 1.0, offset: 0.0 },
+                id: property.to_owned(),
+                wired: false,
+            }
+        })
+        .collect();
+    SceneShapeVm { owner, index: 0, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row: Some(item.id.clone()), pickable: true }
+}
+
+/// What `item`'s card row `property` rests at before the manifest has it.
+pub(super) fn resting(item: &Item, property: &str) -> f32 {
+    manifold_core::scene_schema::row_for(&item.fields, property)
+        .and_then(|row| row.default)
+        .unwrap_or_else(|| transform_default(property))
 }

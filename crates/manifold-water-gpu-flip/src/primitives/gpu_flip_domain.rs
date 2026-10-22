@@ -2,7 +2,7 @@
 //! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a, `docs/GPU_FLIP_PRESSURE_SOLVE.md`):
 //! it speaks the shared liquid scene contract (names, types, meanings)
 //! and turns it into the fixed-tick clock, the fill's sites, gravity, the
-//! Collider roles as body rows, shapes and a distance atlas, and the padded
+//! coupled bodies as body rows, shapes and a distance atlas, and the padded
 //! authored lattice descriptor. Separate mesh_min/mesh_nodes outputs carry the native
 //! solver and surface grid for solid sampling; the particle frame derives the same grid. Scene
 //! forces and impulses reach the water through the shared field lattices of
@@ -35,7 +35,7 @@ use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, take_initial_f
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::clock::LiquidClock;
-use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, coupling_capacity, decode_reaction, takes_reaction};
+use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction};
 use {manifold_water_liquid::fields, manifold_physics::force_lattice::ForceLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_physics::tick_samples::TickSamples;
@@ -267,12 +267,12 @@ pub struct Coupling {
     owner: Option<LiquidRigidOwner>,
     /// This frame's domain box and closed faces: the bodies' walls.
     walls: DomainWalls,
-    /// The coupled bodies this frame's roles leave the liquid room for.
+    /// The coupled bodies the liquid has body rows for.
     capacity: usize,
     /// This frame's simulation step, handed to the rigid owner.
     step: manifold_water_rigid::physics::SimStep,
-    /// Rows before the pending tick's first coupled body's (its Collider
-    /// roles'), so its reaction decodes against the bodies it ran with.
+    /// Rows before the pending tick's first coupled body's, so its
+    /// reaction decodes against the bodies it ran with.
     offset: Option<usize>,
     /// The owner was built since the clock last restarted: the next frame
     /// restarts the liquid with it.
@@ -876,7 +876,7 @@ impl GpuFlipDomain {
         }
         let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
         self.coupled.walls = DomainWalls::of(&geometry.layout, closed_faces(ctx.params));
-        self.coupled.capacity = coupling_capacity(roles);
+        self.coupled.capacity = MAX_LIQUID_BODIES;
         if self.coupled.mode && !self.observe_rigid(ctx.played(), speed)? {
             return Ok(None);
         }
@@ -1406,16 +1406,16 @@ mod tests {
 
     /// An Inflow sizes the pool by being there, not by being on: switching
     /// it on live keeps the setup, so the water does not restart (the domain
-    /// restarts exactly when its setup changes). A Collider or Drain alone
+    /// restarts exactly when its setup changes). A Drain alone
     /// keeps the fill's count.
     #[test]
     fn gpu_flip_domain_inflow_switched_on_keeps_the_pool() {
         let geometry = || gpu_flip_geometry(|name, default| if name == "fill_height" { 0.16 } else { default }, None, None).expect("fills");
-        let off = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Collider, true), role(FluidRoleKind::Inflow, false)]));
-        let on = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Collider, true), role(FluidRoleKind::Inflow, true)]));
+        let off = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Outflow, true), role(FluidRoleKind::Inflow, false)]));
+        let on = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Outflow, true), role(FluidRoleKind::Inflow, true)]));
         assert_eq!(on.setup, off.setup, "switching the inflow on restarts nothing");
         assert_eq!(off.setup, geometry().with_inflow().setup, "a disabled inflow already has its room");
-        let none = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Collider, true), role(FluidRoleKind::Outflow, true), None]));
+        let none = geometry().sized_for(role_kinds(&[role(FluidRoleKind::Outflow, true), None]));
         assert_eq!(none.setup, geometry().setup, "no inflow, the fill's count");
     }
 

@@ -16,6 +16,8 @@ pub struct FieldOptionVm {
     pub pick: FieldPick,
     /// The value the field holds now (a set field checks every member).
     pub checked: bool,
+    /// Why this choice cannot be picked now: drawn disabled with the reason.
+    pub disabled: Option<String>,
 }
 
 /// How a field row picks its value, with the choices resolved to names.
@@ -47,6 +49,10 @@ pub struct AddEntryVm {
     /// The menu section it sits under.
     pub group: String,
     pub label: String,
+    /// Whether it can sit at the top of the scene.
+    pub top_level: bool,
+    /// The kinds it can sit inside.
+    pub holders: Vec<ItemKind>,
 }
 
 /// The Material an item draws with, as its card shows it inline.

@@ -121,7 +121,7 @@ impl MatterRun {
 /// run-to-run differences (BUG-qssh, matter render nondeterminism).
 #[test]
 fn matter_face_component_fused_matches_unfused() {
-    let def = matter_dam_break_faces(Some(1), false);
+    let def = matter_dam_break_faces(Some(1));
     let fused = manifold_node_engine::freeze::install::fused_generator_view_for(&def).expect("the scene fuses");
     let mut run = MatterRun::new((*fused.def).clone());
     for _ in 0..3 {

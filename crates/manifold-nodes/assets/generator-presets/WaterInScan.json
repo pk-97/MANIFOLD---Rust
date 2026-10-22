@@ -4601,26 +4601,6 @@
         }
       },
       "typeId": "node.transform_3d"
-    },
-    {
-      "handle": "Scan Collider",
-      "id": 481,
-      "nodeId": "scan_collider",
-      "params": {
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "recenter": {
-          "type": "Bool",
-          "value": true
-        },
-        "role": {
-          "type": "Enum",
-          "value": 3
-        }
-      },
-      "typeId": "node.fluid_role_source"
     }
   ],
   "presetMetadata": {
@@ -5747,18 +5727,6 @@
       "fromPort": "object_4",
       "toNode": 463,
       "toPort": "object_6"
-    },
-    {
-      "fromNode": 480,
-      "fromPort": "transform",
-      "toNode": 481,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 481,
-      "fromPort": "role",
-      "toNode": 473,
-      "toPort": "role_0"
     },
     {
       "fromNode": 474,

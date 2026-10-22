@@ -61,17 +61,6 @@
       "typeId": "node.transform_3d"
     },
     {
-      "id": 3,
-      "nodeId": "obstacle_collider",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
-        }
-      },
-      "typeId": "node.fluid_role_source"
-    },
-    {
       "id": 4,
       "nodeId": "fill",
       "params": {
@@ -3483,18 +3472,6 @@
       "fromPort": "role",
       "toNode": 0,
       "toPort": "role_1"
-    },
-    {
-      "fromNode": 2,
-      "fromPort": "transform",
-      "toNode": 3,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 3,
-      "fromPort": "role",
-      "toNode": 0,
-      "toPort": "role_0"
     },
     {
       "fromNode": 0,

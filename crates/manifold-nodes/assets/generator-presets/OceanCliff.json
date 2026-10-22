@@ -2772,60 +2772,6 @@
       }
     },
     {
-      "id": 2001,
-      "nodeId": "cliff_collider_0",
-      "typeId": "node.fluid_role_source",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "recenter": {
-          "type": "Bool",
-          "value": false
-        },
-        "fragment_count": {
-          "type": "Int",
-          "value": 8
-        },
-        "fragment_index": {
-          "type": "Int",
-          "value": 0
-        }
-      }
-    },
-    {
-      "id": 2002,
-      "nodeId": "cliff_collider_2",
-      "typeId": "node.fluid_role_source",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "recenter": {
-          "type": "Bool",
-          "value": false
-        },
-        "fragment_count": {
-          "type": "Int",
-          "value": 8
-        },
-        "fragment_index": {
-          "type": "Int",
-          "value": 2
-        }
-      }
-    },
-    {
       "id": 2003,
       "nodeId": "paddle_drive",
       "typeId": "node.lfo",
@@ -2884,17 +2830,6 @@
         "scale_z": {
           "type": "Float",
           "value": 3.0
-        }
-      }
-    },
-    {
-      "id": 2005,
-      "nodeId": "paddle",
-      "typeId": "node.fluid_role_source",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
         }
       }
     },
@@ -3106,33 +3041,6 @@
       }
     },
     {
-      "id": 2015,
-      "nodeId": "right_wall_collider_5",
-      "typeId": "node.fluid_role_source",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "recenter": {
-          "type": "Bool",
-          "value": false
-        },
-        "fragment_count": {
-          "type": "Int",
-          "value": 8
-        },
-        "fragment_index": {
-          "type": "Int",
-          "value": 5
-        }
-      }
-    },
-    {
       "id": 2016,
       "nodeId": "right_wall_mesh_4",
       "typeId": "node.gltf_mesh_source",
@@ -3167,33 +3075,6 @@
         "cast_shadows": {
           "type": "Float",
           "value": 0.0
-        }
-      }
-    },
-    {
-      "id": 2018,
-      "nodeId": "right_wall_collider_4",
-      "typeId": "node.fluid_role_source",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "recenter": {
-          "type": "Bool",
-          "value": false
-        },
-        "fragment_count": {
-          "type": "Int",
-          "value": 8
-        },
-        "fragment_index": {
-          "type": "Int",
-          "value": 4
         }
       }
     },
@@ -3259,33 +3140,6 @@
       }
     },
     {
-      "id": 2022,
-      "nodeId": "left_wall_collider_6",
-      "typeId": "node.fluid_role_source",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "recenter": {
-          "type": "Bool",
-          "value": false
-        },
-        "fragment_count": {
-          "type": "Int",
-          "value": 8
-        },
-        "fragment_index": {
-          "type": "Int",
-          "value": 6
-        }
-      }
-    },
-    {
       "id": 2023,
       "nodeId": "left_wall_mesh_7",
       "typeId": "node.gltf_mesh_source",
@@ -3320,33 +3174,6 @@
         "cast_shadows": {
           "type": "Float",
           "value": 0.0
-        }
-      }
-    },
-    {
-      "id": 2025,
-      "nodeId": "left_wall_collider_7",
-      "typeId": "node.fluid_role_source",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
-        },
-        "path": {
-          "type": "String",
-          "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
-        },
-        "recenter": {
-          "type": "Bool",
-          "value": false
-        },
-        "fragment_count": {
-          "type": "Int",
-          "value": 8
-        },
-        "fragment_index": {
-          "type": "Int",
-          "value": 7
         }
       }
     }
@@ -5045,46 +4872,10 @@
       "toPort": "sky"
     },
     {
-      "fromNode": 2000,
-      "fromPort": "transform",
-      "toNode": 2001,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 2001,
-      "fromPort": "role",
-      "toNode": 0,
-      "toPort": "role_0"
-    },
-    {
-      "fromNode": 2000,
-      "fromPort": "transform",
-      "toNode": 2002,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 2002,
-      "fromPort": "role",
-      "toNode": 0,
-      "toPort": "role_1"
-    },
-    {
       "fromNode": 2003,
       "fromPort": "out",
       "toNode": 2004,
       "toPort": "pos_z"
-    },
-    {
-      "fromNode": 2004,
-      "fromPort": "transform",
-      "toNode": 2005,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 2005,
-      "fromPort": "role",
-      "toNode": 0,
-      "toPort": "role_2"
     },
     {
       "fromNode": 2006,
@@ -5159,18 +4950,6 @@
       "toPort": "mr_map"
     },
     {
-      "fromNode": 2012,
-      "fromPort": "transform",
-      "toNode": 2015,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 2015,
-      "fromPort": "role",
-      "toNode": 0,
-      "toPort": "role_3"
-    },
-    {
       "fromNode": 2016,
       "fromPort": "vertices",
       "toNode": 2017,
@@ -5205,18 +4984,6 @@
       "fromPort": "out",
       "toNode": 2017,
       "toPort": "mr_map"
-    },
-    {
-      "fromNode": 2012,
-      "fromPort": "transform",
-      "toNode": 2018,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 2018,
-      "fromPort": "role",
-      "toNode": 0,
-      "toPort": "role_4"
     },
     {
       "fromNode": 2020,
@@ -5255,18 +5022,6 @@
       "toPort": "mr_map"
     },
     {
-      "fromNode": 2019,
-      "fromPort": "transform",
-      "toNode": 2022,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 2022,
-      "fromPort": "role",
-      "toNode": 0,
-      "toPort": "role_5"
-    },
-    {
       "fromNode": 2023,
       "fromPort": "vertices",
       "toNode": 2024,
@@ -5301,18 +5056,6 @@
       "fromPort": "out",
       "toNode": 2024,
       "toPort": "mr_map"
-    },
-    {
-      "fromNode": 2019,
-      "fromPort": "transform",
-      "toNode": 2025,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 2025,
-      "fromPort": "role",
-      "toNode": 0,
-      "toPort": "role_6"
     },
     {
       "fromNode": 1013,
@@ -6207,37 +5950,7 @@
         "label": "Cliff Model",
         "target": {
           "kind": "node",
-          "nodeId": "cliff_collider_0",
-          "param": "path"
-        }
-      },
-      {
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
-        "id": "cliff_file",
-        "label": "Cliff Model",
-        "target": {
-          "kind": "node",
-          "nodeId": "cliff_collider_2",
-          "param": "path"
-        }
-      },
-      {
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
-        "id": "cliff_file",
-        "label": "Cliff Model",
-        "target": {
-          "kind": "node",
           "nodeId": "right_wall_mesh_5",
-          "param": "path"
-        }
-      },
-      {
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
-        "id": "cliff_file",
-        "label": "Cliff Model",
-        "target": {
-          "kind": "node",
-          "nodeId": "right_wall_collider_5",
           "param": "path"
         }
       },
@@ -6257,16 +5970,6 @@
         "label": "Cliff Model",
         "target": {
           "kind": "node",
-          "nodeId": "right_wall_collider_4",
-          "param": "path"
-        }
-      },
-      {
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
-        "id": "cliff_file",
-        "label": "Cliff Model",
-        "target": {
-          "kind": "node",
           "nodeId": "left_wall_mesh_6",
           "param": "path"
         }
@@ -6277,27 +5980,7 @@
         "label": "Cliff Model",
         "target": {
           "kind": "node",
-          "nodeId": "left_wall_collider_6",
-          "param": "path"
-        }
-      },
-      {
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
-        "id": "cliff_file",
-        "label": "Cliff Model",
-        "target": {
-          "kind": "node",
           "nodeId": "left_wall_mesh_7",
-          "param": "path"
-        }
-      },
-      {
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf",
-        "id": "cliff_file",
-        "label": "Cliff Model",
-        "target": {
-          "kind": "node",
-          "nodeId": "left_wall_collider_7",
           "param": "path"
         }
       },

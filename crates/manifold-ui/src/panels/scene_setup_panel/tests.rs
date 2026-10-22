@@ -31,8 +31,8 @@ fn physics_field() -> FieldRowVm {
         control: FieldControlVm::Pick {
             current: "None".into(),
             options: vec![
-                FieldOptionVm { label: "None".into(), pick: FieldPick::Choice("none".into()), checked: true },
-                FieldOptionVm { label: "Body".into(), pick: FieldPick::Choice("body".into()), checked: false },
+                FieldOptionVm { label: "None".into(), pick: FieldPick::Choice("none".into()), checked: true, disabled: None },
+                FieldOptionVm { label: "Body".into(), pick: FieldPick::Choice("body".into()), checked: false, disabled: None },
             ],
         },
         disabled: None,
@@ -45,7 +45,13 @@ fn live_panel(fields: Vec<FieldRowVm>) -> (ScenePanel, UITree) {
     let vm = SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
         items: vec![item("world", ItemKind::World, "World", 0, None), cube],
-        add_entries: vec![AddEntryVm { key: "object.cube".into(), group: "Object".into(), label: "Cube".into() }],
+        add_entries: vec![AddEntryVm {
+            key: "object.cube".into(),
+            group: "Object".into(),
+            label: "Cube".into(),
+            top_level: true,
+            holders: vec![ItemKind::Group],
+        }],
     };
     let surface = ParamSurface {
         kind: crate::ParamCardKind::Generator,

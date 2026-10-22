@@ -729,16 +729,26 @@ impl ScenePanel {
         self.open && self.panel_rect.contains(pos)
     }
 
-    /// The Add menu for the live scene: every entry, a separator between
-    /// menu sections. An entry adds into the selected group, else at the top.
+    /// The Add menu for the live scene, a separator between menu sections.
     fn add_menu_items(&self) -> Vec<super::dropdown::DropdownItem> {
         let Some(vm) = self.state.as_live() else { return Vec::new() };
-        let parent = match self.selection.get(&vm.layer_id) {
-            Some(SceneSelection::Item(id)) => vm.item(id).filter(|item| item.kind == ItemKind::Group).map(|item| item.id.clone()),
+        // An entry goes inside the selected item when that item can hold it
+        // (a Group holds anything, a Water its sources), else at the top;
+        // one that can only sit inside something it is not offered.
+        let selected = match self.selection.get(&vm.layer_id) {
+            Some(SceneSelection::Item(id)) => vm.item(id),
             _ => None,
         };
-        let mut items: Vec<super::dropdown::DropdownItem> = Vec::with_capacity(vm.add_entries.len());
-        for (index, entry) in vm.add_entries.iter().enumerate() {
+        let entries: Vec<_> = vm
+            .add_entries
+            .iter()
+            .filter_map(|entry| match selected.filter(|item| entry.holders.contains(&item.kind)) {
+                Some(holder) => Some((entry, Some(holder.id.clone()))),
+                None => entry.top_level.then_some((entry, None)),
+            })
+            .collect();
+        let mut items: Vec<super::dropdown::DropdownItem> = Vec::with_capacity(entries.len());
+        for (index, &(entry, ref parent)) in entries.iter().enumerate() {
             let mut item = super::dropdown::DropdownItem::new(&format!("{} \u{2014} {}", entry.group, entry.label));
             if entry.group == entry.label {
                 item.label = entry.label.clone();
@@ -748,7 +758,7 @@ impl ScenePanel {
                 entry: entry.key.clone(),
                 parent: parent.clone(),
             }));
-            item.separator_after = vm.add_entries.get(index + 1).is_some_and(|next| next.group != entry.group);
+            item.separator_after = entries.get(index + 1).is_some_and(|(next, _)| next.group != entry.group);
             items.push(item);
         }
         items

@@ -282,12 +282,18 @@ mod every_param_has_a_row {
 
     fn doc_with_every_kind() -> SceneDoc {
         let mut doc = SceneDoc::base();
+        let mut water = None;
         for (k, entry) in ADD_ENTRIES.iter().enumerate() {
             // The model file entry imports a file; the Object it makes is below.
             let Some(fields) = entry.fields else { continue };
             let item = Item::new(ItemId::new(format!("added{k}")), entry.name, fields());
-            let at = doc.items.len();
-            doc.insert(None, at, item).unwrap();
+            if entry.kind == ItemKind::Water {
+                water = Some(item.id.clone());
+            }
+            // A Water Source sits in the Water added before it.
+            let parent = (entry.kind == ItemKind::WaterSource).then(|| water.clone().expect("Water comes before its sources"));
+            let at = parent.as_ref().and_then(|id| doc.find(id)).map_or(doc.items.len(), |p| p.children.len());
+            doc.insert(parent.as_ref(), at, item).unwrap();
         }
         // Each material type compiles its own node, so each needs its rows.
         for (name, material_type) in [("unlit", manifold_core::scene_doc::MaterialType::Unlit), ("cel", manifold_core::scene_doc::MaterialType::Cel)] {
@@ -337,9 +343,12 @@ mod every_param_has_a_row {
         });
         let family = doc.find(&ItemId::new(owner)).is_some_and(|item| item.kind() == ItemKind::Material)
             && role == MATERIAL_FAMILY.node;
+        // The water template's params are a family too (`scene_schema::water`).
+        let water = doc.find(&ItemId::new(owner)).is_some_and(|item| item.kind() == ItemKind::Water)
+            && scene_schema::water_family().is_some_and(|template| template.holds(role));
         let plain_material = owner == "scene" && role == "default_material";
         let scene_level = SCENE_LEVEL_ROWS.iter().any(|row| matches!(row.reach, Reach::Scene(r) if r == role) && row.param == param);
-        found || family || plain_material || (owner == "scene" && scene_level)
+        found || family || water || plain_material || (owner == "scene" && scene_level)
     }
 
     #[test]

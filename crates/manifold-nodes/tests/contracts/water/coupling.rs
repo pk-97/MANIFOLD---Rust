@@ -305,22 +305,6 @@ mod tests {
     }
 
     #[test]
-    fn multiple_fluid_domains_with_one_rigid_world_are_ambiguous() {
-        let mut builder = GraphBuilder::new();
-        builder.scene(
-            "scene",
-            &[
-                ("fluid_a", "world", &[0], false),
-                ("fluid_b", "world", &[1], false),
-            ],
-        );
-        assert!(matches!(
-            prepare(builder),
-            Err(SceneModifierExpandError::AmbiguousScene { .. })
-        ));
-    }
-
-    #[test]
     fn multiple_rigid_worlds_with_one_fluid_domain_are_ambiguous() {
         let mut builder = GraphBuilder::new();
         builder.scene(

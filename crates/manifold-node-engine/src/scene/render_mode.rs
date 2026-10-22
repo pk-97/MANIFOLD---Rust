@@ -23,11 +23,15 @@ pub const RENDER_MODE_SOLID: u32 = 1;
 pub const RENDER_MODE_WIREFRAME: u32 = 2;
 /// Scene-wide render mode: 0 = Rendered, 1 = Solid, 2 = Wireframe, 3 = Points.
 pub const RENDER_MODE_POINTS: u32 = 3;
+/// Physics View: the scene draws as Rendered, and each Water draws its
+/// particle dots instead of its surface (SCENE_DOCUMENT_DESIGN.md section
+/// 7.18 (Fit with the water end game)).
+pub const RENDER_MODE_PHYSICS_VIEW: u32 = 4;
 
 /// Enum-label table for `mode` — `RENDER_MODE_LABELS[mode as usize]` is the
 /// human name. Index IS the wire value; INV-R2 (Rendered = index 0 forever)
 /// is enforced by the const assertion below and the atom tests.
-pub const RENDER_MODE_LABELS: &[&str] = &["Rendered", "Solid", "Wireframe", "Points"];
+pub const RENDER_MODE_LABELS: &[&str] = &["Rendered", "Solid", "Wireframe", "Points", "Physics View"];
 
 // INV-R2: Rendered must stay mode 0 — the enable gate multiplies
 // (`enabled × mode`, D5), so a shifted index would make `enabled = 0`

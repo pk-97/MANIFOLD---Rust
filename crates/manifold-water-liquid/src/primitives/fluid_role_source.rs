@@ -753,11 +753,6 @@ fn initial_fill_is_a_box(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> 
 
 /// The role this source plays, from the `role` wire or param. The node and
 /// its extent rule both read it here.
-///
-/// Stopgap: a saved Collider (index 3) still resolves, off the menu, so every
-/// bundled water scene keeps its walls until the water reads the World's
-/// Colliders (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision
-/// shapes)), which deletes the kind.
 fn role_kind(wired: Option<f32>, param: Option<&ParamValue>) -> Result<FluidRoleKind, String> {
     let index = index_from(wired, param, "role", 1, FluidRoleKind::ALL.len() as u32)?;
     Ok(FluidRoleKind::ALL[index as usize])

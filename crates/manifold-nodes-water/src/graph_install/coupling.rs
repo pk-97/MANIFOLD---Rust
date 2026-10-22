@@ -1,6 +1,6 @@
 //! Prepare the physical rigid/fluid pairs visible in authored render scenes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -51,10 +51,12 @@ pub fn prepare_coupled_scenes(
         )?;
         // Water pairs by its particle producer, whether or not that domain
         // takes scene forces yet.
-        let mut fluids = BTreeSet::new();
+        let mut fluids = Vec::<String>::new();
         for object in index.scene_objects(&scene)? {
-            if let Some(domain) = liquid_domain_of(&index, &object)? {
-                fluids.insert(domain.as_str().to_owned());
+            if let Some(domain) = liquid_domain_of(&index, &object)?
+                && !fluids.iter().any(|known| known == domain.as_str())
+            {
+                fluids.push(domain.as_str().to_owned());
             }
         }
         let mut rigids = BTreeMap::<String, RigidImpulseTargets>::new();
@@ -80,18 +82,13 @@ pub fn prepare_coupled_scenes(
         if fluids.is_empty() || rigids.is_empty() {
             continue;
         }
-        if fluids.len() != 1 || rigids.len() != 1 {
-            return Err(ambiguous(
-                &scene,
-                format!(
-                    "scene must contain exactly one fluid domain and one rigid world (found {} fluids and {} rigid worlds)",
-                    fluids.len(),
-                    rigids.len()
-                ),
-            ));
+        if rigids.len() != 1 {
+            return Err(ambiguous(&scene, format!("scene must contain one rigid world (found {})", rigids.len())));
         }
 
-        let fluid = fluids.into_iter().next().expect("one fluid was checked");
+        // The rigid world steps inside one domain, so the first water drawn
+        // owns it and any other runs without solids.
+        let fluid = fluids.into_iter().next().expect("a fluid was checked");
         let (rigid, colliders) = rigids
             .into_iter()
             .next()

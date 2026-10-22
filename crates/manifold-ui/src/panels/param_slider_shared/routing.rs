@@ -86,8 +86,12 @@ pub(crate) fn field_row_action(
             let items = options
                 .iter()
                 .map(|option| DropdownItem {
-                    label: option.label.clone(),
-                    enabled: true,
+                    // No hover text on a menu item: a disabled choice names its reason.
+                    label: match &option.disabled {
+                        Some(reason) => format!("{} \u{2014} {reason}", option.label),
+                        None => option.label.clone(),
+                    },
+                    enabled: option.disabled.is_none(),
                     separator_after: false,
                     checked: option.checked,
                     action: Some(PanelAction::Project(crate::ProjectAction::SceneFieldSet {

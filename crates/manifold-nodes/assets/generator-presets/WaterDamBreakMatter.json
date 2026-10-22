@@ -4161,18 +4161,6 @@
       }
     },
     {
-      "id": 65,
-      "nodeId": "obstacle_collider",
-      "typeId": "node.fluid_role_source",
-      "handle": "Moving Box Collider",
-      "params": {
-        "role": {
-          "type": "Enum",
-          "value": 3
-        }
-      }
-    },
-    {
       "id": 66,
       "nodeId": "obstacle_mesh",
       "typeId": "node.cube_mesh",
@@ -4527,18 +4515,6 @@
       "fromPort": "object",
       "toNode": 30,
       "toPort": "object_0"
-    },
-    {
-      "fromNode": 64,
-      "fromPort": "transform",
-      "toNode": 65,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 65,
-      "fromPort": "role",
-      "toNode": 51,
-      "toPort": "collider"
     },
     {
       "fromNode": 64,

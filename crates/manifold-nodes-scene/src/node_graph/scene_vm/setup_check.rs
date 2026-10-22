@@ -12,8 +12,10 @@ use manifold_core::copies_body::{PHYSICS_WORLD_TYPE_ID, RIGID_BODY_TYPE_ID, copy
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot};
 use manifold_core::liquid_setup::{
-    AxisFit, BoxFit, ColumnOutcome, FillFit, LATTICE_PADDING_CELLS, SetupFit, axis_fits, fit_box, fit_fill_height,
+    AxisFit, BoxFit, ColumnOutcome, FillFit, SetupFit, axis_fits, fit_box, fit_fill_height,
 };
+use manifold_core::scene_doc::{ItemFields, SceneDoc, SourceRole, param_id};
+use manifold_core::scene_schema::DOMAIN_ROLE;
 use manifold_foundation::scene_surface::SceneShape;
 
 use super::{FluidRole, ParamAddr, SceneShapeVm, ShapeOwner, ShapeWrite};
@@ -77,7 +79,6 @@ impl FluidRole {
             Self::InitialFill => "Initial Fill",
             Self::Inflow => "Inflow",
             Self::Outflow => "Drain",
-            Self::Collider => "Collider",
         }
     }
 }
@@ -252,9 +253,7 @@ pub(super) fn check_domain(
     }
 }
 
-/// The problem of one placed source against its domain's layout, if any. A
-/// collider bigger than the domain (a floor, a scanned room) is ordinary, so
-/// it is a problem only when it lies beyond the lattice's reach altogether.
+/// The problem of one placed source against its domain's layout, if any.
 pub(super) fn check_source(
     layout: &FluidDomainLayout,
     owner: &ShapeOwner,
@@ -263,24 +262,10 @@ pub(super) fn check_source(
     out: &mut Vec<SetupProblem>,
 ) {
     let Some((lo, hi)) = declared_box(shape) else { return };
-    let kind = match role {
-        FluidRole::Collider => {
-            let reach = (layout.cell_size * f64::from(LATTICE_PADDING_CELLS)) as f32;
-            let reached = FluidDomainLayout {
-                min: layout.min.map(|v| v - reach),
-                size: layout.size.map(|v| v + 2.0 * reach),
-                ..*layout
-            };
-            match fit_box(&reached, lo, hi) {
-                BoxFit::Outside => SetupProblemKind::SourceOutside(role),
-                BoxFit::Inside | BoxFit::Clipped { .. } => return,
-            }
-        }
-        FluidRole::InitialFill | FluidRole::Inflow | FluidRole::Outflow => match fit_box(layout, lo, hi) {
-            BoxFit::Inside => return,
-            BoxFit::Clipped { .. } => SetupProblemKind::SourceClipped(role),
-            BoxFit::Outside => SetupProblemKind::SourceOutside(role),
-        },
+    let kind = match fit_box(layout, lo, hi) {
+        BoxFit::Inside => return,
+        BoxFit::Clipped { .. } => SetupProblemKind::SourceClipped(role),
+        BoxFit::Outside => SetupProblemKind::SourceOutside(role),
     };
     out.push(SetupProblem { owner: owner.clone(), kind, params: placing_params(shape, axes_past(layout, lo, hi).into_iter()), bounds: Some((lo, hi)) });
 }
@@ -522,26 +507,20 @@ pub fn problems_with_runtime<'a>(
         }
         if report.fit.pool_full {
             // The pool holds a fixed number of sites, so a coarser lattice
-            // holds more water; Resolution is the domain's, beside Fill Height.
-            let resolution = ParamAddr { param_id: "resolution".to_owned(), ..anchor.fill.clone() };
+            // holds more water; Resolution is the Water's, beside Fill Height.
+            let item = anchor.fill.param_id.strip_suffix("fill_height").unwrap_or_default();
+            let resolution = ParamAddr { param_id: format!("{item}resolution"), ..anchor.fill.clone() };
             add(SetupProblemKind::PoolFull, &[resolution, anchor.fill.clone()], layout_box.or(anchor.domain_bounds));
         }
     }
 }
 
-/// How a liquid domain's box is laid out, with the params that size it.
-/// Which form it takes depends on wires alone, so a value change never moves
-/// a domain between forms.
-#[allow(dead_code, reason = "the water lane builds setup sites from document Water items")]
+/// How a liquid domain's box is laid out: the Water's Transform rows place
+/// the box, and its Resolution sets the cells.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum SiteLayout {
-    /// A wire drives the domain's size, transform or billboard: no stable
-    /// box to check against.
-    Unchecked,
-    /// A cube of Domain Size standing on the floor.
-    Cube { size: (ParamAddr, f32), resolution: (ParamAddr, f32) },
-    /// The box a Transform 3D places.
-    Box { transform: Box<super::TransformVm>, size: (ParamAddr, f32), resolution: (ParamAddr, f32) },
+pub(super) struct SiteLayout {
+    pub(super) transform: Box<super::TransformVm>,
+    pub(super) resolution: (ParamAddr, f32),
 }
 
 /// One liquid domain's setup as the check reads it: the shapes it checks (by
@@ -596,23 +575,19 @@ impl SetupSite {
         let (box_shape, column) = (at(self.box_shape), at(self.column));
         let fill = self.fill_authored.map(|authored| (self.fill.clone(), value(&self.fill).unwrap_or(authored)));
         anchors.push(SetupAnchor::new(self.owner.clone(), self.fill.clone(), box_shape.as_deref(), column.as_deref()));
-        let layout = match &self.layout {
-            SiteLayout::Unchecked => return,
-            SiteLayout::Cube { size, resolution } => {
-                manifold_core::fluid_domain::domain_layout(None, at_value(value, size), at_value(value, resolution).round() as u32)
-            }
-            SiteLayout::Box { transform, size, resolution } => {
-                let triple = |addr: &(ParamAddr, ParamAddr, ParamAddr), v: (f32, f32, f32)| {
-                    [at_value(value, &(addr.0.clone(), v.0)), at_value(value, &(addr.1.clone(), v.1)), at_value(value, &(addr.2.clone(), v.2))]
-                };
-                let pose = manifold_core::fluid_domain::DomainBox {
-                    pos: triple(&transform.pos_addr, transform.pos_value),
-                    rot_euler: triple(&transform.rot_addr, transform.rot_value),
-                    scale: triple(&transform.scale_addr, transform.scale_value),
-                    billboard: false,
-                };
-                manifold_core::fluid_domain::domain_layout(Some(pose), at_value(value, size), at_value(value, resolution).round() as u32)
-            }
+        let layout = {
+            let SiteLayout { transform, resolution } = &self.layout;
+            let triple = |addr: &(ParamAddr, ParamAddr, ParamAddr), v: (f32, f32, f32)| {
+                [at_value(value, &(addr.0.clone(), v.0)), at_value(value, &(addr.1.clone(), v.1)), at_value(value, &(addr.2.clone(), v.2))]
+            };
+            let pose = manifold_core::fluid_domain::DomainBox {
+                pos: triple(&transform.pos_addr, transform.pos_value),
+                rot_euler: triple(&transform.rot_addr, transform.rot_value),
+                scale: triple(&transform.scale_addr, transform.scale_value),
+                billboard: false,
+            };
+            // The box sets the size; the cube size is unread beside it.
+            manifold_core::fluid_domain::domain_layout(Some(pose), 0.0, at_value(value, resolution).round() as u32)
         };
         let state = match &layout {
             Ok(layout) => DomainState::Layout(layout),
@@ -630,17 +605,11 @@ impl SetupSite {
     /// Every param the check reads, with whether a change to it needs a
     /// rebuild rather than a re-check.
     pub(super) fn params<'a>(&'a self, shapes: &'a [SceneShapeVm]) -> impl Iterator<Item = (&'a ParamAddr, bool)> + 'a {
-        let layout: Vec<&ParamAddr> = match &self.layout {
-            SiteLayout::Unchecked => Vec::new(),
-            SiteLayout::Cube { size, resolution } => vec![&size.0, &resolution.0],
-            SiteLayout::Box { transform, size, resolution } => {
-                let t = transform.as_ref();
-                vec![
-                    &size.0, &resolution.0, &t.pos_addr.0, &t.pos_addr.1, &t.pos_addr.2, &t.rot_addr.0, &t.rot_addr.1, &t.rot_addr.2,
-                    &t.scale_addr.0, &t.scale_addr.1, &t.scale_addr.2,
-                ]
-            }
-        };
+        let t = self.layout.transform.as_ref();
+        let layout = [
+            &self.layout.resolution.0, &t.pos_addr.0, &t.pos_addr.1, &t.pos_addr.2, &t.rot_addr.0, &t.rot_addr.1, &t.rot_addr.2,
+            &t.scale_addr.0, &t.scale_addr.1, &t.scale_addr.2,
+        ];
         let shape_params = self.box_shape.into_iter().chain(self.column).chain(self.sources.iter().map(|&(_, i)| i)).flat_map(move |i| {
             shapes[i].params.iter().filter_map(|param| match &param.write {
                 ShapeWrite::Node(addr) => Some(addr),
@@ -655,6 +624,75 @@ impl SetupSite {
             .map(|addr| (addr, false))
             .chain(self.structure.iter().map(|addr| (addr, true)))
     }
+}
+
+/// Every Water's setup site, its domain box and its sources' boxes pushed
+/// onto `shapes` over their card rows. A Fill is the initial column; Inflows
+/// and Drains are checked against the domain.
+pub(super) fn water_sites(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>, shapes: &mut Vec<SceneShapeVm>) -> Vec<SetupSite> {
+    use crate::node_graph::scene_surface::{INITIAL_FILL_SHAPES, LIQUID_DOMAIN_SHAPES, WATER_SOURCE_SHAPES};
+    use super::shapes::{card_shape, resting};
+    let mut sites = Vec::new();
+    doc.walk(|item, _| {
+        if !matches!(item.fields, ItemFields::Water(_)) {
+            return;
+        }
+        let owner = ShapeOwner::LiquidDomain(NodeId::new(format!("{}:{DOMAIN_ROLE}", item.id)));
+        let box_shape = shapes.len();
+        shapes.push(card_shape(owner.clone(), item, &LIQUID_DOMAIN_SHAPES[0], values));
+        let (mut column, mut sources) = (None, Vec::new());
+        for child in &item.children {
+            let ItemFields::WaterSource(source) = &child.fields else { continue };
+            let role = match source.role {
+                SourceRole::Fill => FluidRole::InitialFill,
+                SourceRole::Inflow => FluidRole::Inflow,
+                SourceRole::Drain => FluidRole::Outflow,
+            };
+            let decl = if role == FluidRole::InitialFill { &INITIAL_FILL_SHAPES[0] } else { &WATER_SOURCE_SHAPES[0] };
+            let node = NodeId::new(format!("{}:role", child.id));
+            let index = shapes.len();
+            shapes.push(card_shape(ShapeOwner::RoleSource { node, role }, child, decl, values));
+            match role {
+                FluidRole::InitialFill => column = column.or(Some(index)),
+                _ => sources.push((role, index)),
+            }
+        }
+        let card = |property: &str| ParamAddr { scope_path: Vec::new(), node_doc_id: 0, param_id: param_id(&item.id, property) };
+        let at = |property: &str| values(&param_id(&item.id, property)).unwrap_or_else(|| resting(item, property));
+        let triple = |axes: [&str; 3]| (card(axes[0]), card(axes[1]), card(axes[2]));
+        let value = |axes: [&str; 3]| (at(axes[0]), at(axes[1]), at(axes[2]));
+        let (pos, rot, scale) = (["pos_x", "pos_y", "pos_z"], ["rot_x", "rot_y", "rot_z"], ["scale_x", "scale_y", "scale_z"]);
+        let transform = super::TransformVm {
+            node_doc_id: 0,
+            node: NodeId::new(format!("{}:transform", item.id)),
+            pos_addr: triple(pos),
+            pos_value: value(pos),
+            pos_driven: (false, false, false),
+            rot_addr: triple(rot),
+            rot_value: value(rot),
+            rot_driven: (false, false, false),
+            scale_addr: triple(scale),
+            scale_value: value(scale),
+            scale_driven: (false, false, false),
+        };
+        sites.push(SetupSite {
+            owner,
+            layout: SiteLayout { transform: Box::new(transform), resolution: (card("resolution"), at("resolution")) },
+            box_shape: Some(box_shape),
+            column,
+            fill: card("fill_height"),
+            fill_authored: None,
+            sources,
+            structure: Vec::new(),
+        });
+    });
+    sites
+}
+
+/// The card param a setup param names when it is a scene item's own row:
+/// a document scene addresses its rows by card id, with no graph node.
+pub fn card_param(addr: &ParamAddr) -> Option<&str> {
+    (addr.scope_path.is_empty() && addr.node_doc_id == 0).then_some(addr.param_id.as_str())
 }
 
 #[cfg(test)]
@@ -720,14 +758,6 @@ mod tests {
         assert_eq!(clipped.params.first().map(|addr| addr.param_id.as_str()), Some("scale_x"));
         let away = source([9.0, 3.0, 0.0], [0.5; 3], &[]);
         assert_eq!(problem(FluidRole::Inflow, &away).expect("a problem").kind, SetupProblemKind::SourceOutside(FluidRole::Inflow));
-    }
-
-    #[test]
-    fn a_collider_bigger_than_the_domain_is_ordinary() {
-        let floor = source([0.0, -0.05, 0.0], [10.0, 0.1, 10.0], &[]);
-        assert_eq!(problem(FluidRole::Collider, &floor), None, "a floor past every wall is no problem");
-        let away = source([9.0, 3.0, 0.0], [0.5; 3], &[]);
-        assert_eq!(problem(FluidRole::Collider, &away).expect("a problem").kind, SetupProblemKind::SourceOutside(FluidRole::Collider));
     }
 
     #[test]

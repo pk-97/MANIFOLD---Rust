@@ -2,7 +2,8 @@
 //! to it, the fog pass when fog is on, the render mode, ambient occlusion
 //! when it is on, and the render settings on the scene's render node. A
 //! Swarm follows the world's gravity, still air and clock, so a scene with
-//! one has the world too.
+//! one has the world too, and so does a Water, which also follows the Render
+//! Mode for Physics View.
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{ItemFields, WorldFields};
@@ -18,7 +19,7 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
     };
     let owner = item.id.as_str();
     let mut world = None;
-    if b.doc.any_physics() || b.doc.any_copies() || b.doc.any_swarm() {
+    if b.doc.any_physics() || b.doc.any_copies() || b.doc.any_swarm() || !super::water::waters(b.doc).is_empty() {
         let node = b.add(owner, "physics", "node.physics_world");
         super::physics::join_world(b, node);
         world = Some(node);
@@ -37,6 +38,7 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
     if let Some(world) = world {
         super::swarm::follow_world(b, world);
     }
+    super::water::follow_world(b, world, mode);
 }
 
 /// Contact shadows on the active camera's picture, before depth of field and

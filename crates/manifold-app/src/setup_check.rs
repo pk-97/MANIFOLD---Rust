@@ -21,8 +21,8 @@ use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
 use manifold_core::project::Project;
 use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_nodes_scene::node_graph::scene_vm::{
-    BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupProblem, body_anchors, body_problems, copies_anchors, copies_problems,
-    problems_with_runtime,
+    BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupProblem, body_anchors, body_problems, card_param, copies_anchors,
+    copies_problems, problems_with_runtime,
 };
 use manifold_ui::param_surface::{ParamRow, ParamSurface};
 
@@ -320,6 +320,9 @@ fn find_node_by_scope<'a>(def: &'a EffectGraphDef, scope_path: &[u32], node_doc_
 /// Recipe-local numeric ids may repeat in nested groups; stable binding
 /// targets do not.
 fn card_binding_id(def: &EffectGraphDef, addr: &ParamAddr) -> Option<String> {
+    if let Some(id) = card_param(addr) {
+        return def.preset_metadata.as_ref()?.bindings.iter().any(|binding| binding.id == id).then(|| id.to_owned());
+    }
     let Some(node) = find_node_by_scope(def, &addr.scope_path, addr.node_doc_id) else {
         return addr.scope_path.is_empty().then(|| manifold_core::effects::binding_id_for_node_param_in(def, addr.node_doc_id, &addr.param_id)).flatten();
     };
@@ -338,8 +341,21 @@ pub(crate) fn mark_layer_card(card: &mut ParamSurface, layer: &Layer, report: &[
     with_layer_def(layer, |def| {
         let mut problems = problems_of(def, runtime_fits(report, &layer.layer_id));
         body_problems(&body_anchors(def), refused_bodies(report, &layer.layer_id), &mut problems);
+        problems.extend(water_problems(layer, report));
         mark_rows(&mut card.rows, &problems, def);
     });
+}
+
+/// `layer`'s Water problems: each domain and its sources at the card values,
+/// with what the solver reported (clipped water, bodies past what it couples).
+fn water_problems(layer: &Layer, report: &[SetupFitEntry]) -> Vec<SetupProblem> {
+    let Some((doc, inst)) = layer.gen_params().and_then(|inst| inst.scene.as_ref().map(|doc| (doc, inst))) else {
+        return Vec::new();
+    };
+    let vm = SceneVm::from_doc(doc, &|id| inst.params.contains(id).then(|| inst.get_base_param(id)));
+    let mut problems = Vec::new();
+    problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime_fits(report, &layer.layer_id), &mut problems);
+    problems
 }
 
 /// Put each problem's warning on the first exposed row that edits one of its
@@ -419,13 +435,16 @@ impl SlotCheck {
             self.graph = graph;
             moved = true;
         }
-        if !moved && self.report.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, report)) {
+        // A Water's own problems move with its card values, so a woken frame
+        // re-checks even under the same report.
+        if !moved && !woke && self.report.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, report)) {
             return;
         }
         self.report = Some(report.clone());
         self.problems.clear();
         copies_problems(&self.copies, runtime_fits(report, &layer.layer_id), &mut self.problems);
         body_problems(&self.bodies, refused_bodies(report, &layer.layer_id), &mut self.problems);
+        self.problems.extend(water_problems(layer, report));
         let mut hasher = DefaultHasher::new();
         for problem in &self.problems {
             problem.hash_card(&mut hasher);

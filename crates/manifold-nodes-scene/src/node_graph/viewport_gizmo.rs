@@ -144,7 +144,6 @@ pub enum GizmoTargetKind {
     InitialFill,
     Inflow,
     Drain,
-    Collider,
     Swarm,
 }
 
@@ -158,7 +157,6 @@ impl GizmoTargetKind {
                 FluidRole::InitialFill => Self::InitialFill,
                 FluidRole::Inflow => Self::Inflow,
                 FluidRole::Outflow => Self::Drain,
-                FluidRole::Collider => Self::Collider,
             },
             ShapeOwner::Force(_) => Self::Force,
             ShapeOwner::Swarm(_) => Self::Swarm,
@@ -425,7 +423,6 @@ impl GizmoTarget {
             GizmoTargetKind::InitialFill => physics_gizmo_color(PhysicsGizmoFamily::Fill),
             GizmoTargetKind::Inflow => physics_gizmo_color(PhysicsGizmoFamily::Source),
             GizmoTargetKind::Drain => physics_gizmo_color(PhysicsGizmoFamily::Drain),
-            GizmoTargetKind::Collider => physics_gizmo_color(PhysicsGizmoFamily::Collider),
             GizmoTargetKind::Force => physics_gizmo_color(PhysicsGizmoFamily::Force),
             GizmoTargetKind::Swarm => SWARM_COLOR,
             GizmoTargetKind::Object => UNIFORM_COLOR,

@@ -12,7 +12,7 @@ use manifold_foundation::ItemId;
 mod setup_check;
 pub use setup_check::{
     BodyAnchor, CopiesAnchor, RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, body_anchors,
-    body_problems, copies_anchors, copies_problems, problems_with_runtime,
+    body_problems, card_param, copies_anchors, copies_problems, problems_with_runtime,
 };
 mod shapes;
 pub use shapes::{FluidRole, SceneShapeVm, ShapeOwner, ShapeParamVm, ShapeWrite};
@@ -84,11 +84,17 @@ impl SceneVm {
     pub fn from_doc(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> SceneVm {
         let mut families = Vec::new();
         doc.walk(|item, _| families.push((item.id.clone(), family(item))));
+        let mut shapes = shapes::item_shapes(doc, values);
+        let setup_sites = setup_check::water_sites(doc, values, &mut shapes);
+        let (mut problems, mut setup_anchors) = (Vec::new(), Vec::new());
+        for site in &setup_sites {
+            site.check(&shapes, &|_| None, &mut problems, &mut setup_anchors);
+        }
         SceneVm {
-            shapes: shapes::item_shapes(doc, values),
-            problems: Vec::new(),
-            setup_anchors: Vec::new(),
-            setup_sites: Vec::new(),
+            shapes,
+            problems,
+            setup_anchors,
+            setup_sites,
             drawn: crate::node_graph::scene_compile::drawn_items(doc),
             families,
         }
