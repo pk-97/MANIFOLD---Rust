@@ -340,7 +340,7 @@ One table keyed by (kind, property) replaces the per-node scene table (`scene_su
 | Camera | Rig; Orbit, Tilt, Distance, Target, Roll, Field of View, Clipping; Depth of Field; Motion Blur |
 | Lighting (one card, as today) | Environment source (Sky, HDRI File, None); in HDRI mode: File picker (always present), Rotation, Intensity, Background (Blur, Brightness), Aim Sun at HDRI; in Sky mode: Gradient or Softbox rows; Exposure; then every light |
 | Light | Type, Colour, Intensity, Position, Target, Range, Size, Shadows (rows by type) |
-| Object | Shape (built-ins, Ocean, Mesh from file); Transform (with the Scale link toggle); Material (inline, used by N, Make Unique); Look (Visible, Cast Shadows, Emission); Modifiers; Physics; Copies; Skin |
+| Object | Shape (built-ins, Ocean, Mesh from file); Transform (with the Scale link toggle); Material (inline, used by N, Make Unique); Look (Visible, Cast Shadows, Emission); Modifiers; Physics; Copies. Textures, today's Skin, are the Material's texture source |
 | Group | Transform (with the Scale link toggle); Visible; Material (applies to children with none); Physics (Body here is one compound body); Copies; when Source is a file, Model File and Combine Meshes |
 | Material | Surface rows; texture source (None, file, layer); used by N; Make Unique |
 | Swarm | Emit From; Draw As; Count; Size; Air Drag; Material; Look; Transform places the emitter |
@@ -370,7 +370,7 @@ Kill-pass on A:
 
 Tests exist for breaks a performer would notice. Each lane states a budget (section 11); going over it needs the lead's yes.
 
-- **No new UI flow suites.** Flows that exercise removed behaviour are deleted in the lane that removes it. The one new flow-style check is the click-through in L2's budget.
+- **No new UI flows at all.** Flows that exercise removed behaviour are deleted in the lane that removes it. Peter's hands-on test after wave 2 is the click-through.
 - **CPU first:** command undo exactness, id stability across rename and reparent, save and load round trip, compile determinism, node-id stability across an unrelated edit, group material inheritance, shape-service cache keys, and the Box3D input gate (a NaN scale and a degenerate mesh are refused and the world keeps stepping).
 - **GPU proofs, once per finished stage, one run each, through `scripts/gpu_queue.py`:** swarm Draw As a two-part group (L6), water with a collider and a body (L7), pixel picking returns the drawn item (L9). Never nextest for GPU proofs.
 - **Starter test (L10), small:** every scene file in `scene-presets/` loads under `deny_unknown_fields`; its compile validates; values are within their limits; the base items (camera, sun, environment, World) are present.
@@ -396,23 +396,23 @@ The task beads for G1 (renderer instance space) and G2a (transform chains) stay 
 - Test budget: about 12 tests. Every command undoes exactly; ids survive rename and reparent; save and load round trip; deny_unknown_fields rejects an unknown field; compile is deterministic and node ids are stable across an unrelated edit; a group's material reaches a child with none; compiled graph stays inside the vocabulary; Speed clamps. Plus the non-gating state-continuity check (section 9).
 - Depends on: none.
 
-### Wave 2 (four Sonnet lanes in parallel, after L1)
+### Wave 2 (four lanes in parallel, after L1: three Sonnet, one Opus)
 
 **L2 (Sonnet; BUG-elwvu.2): Scene tab, Add menu and Lighting card on the document; the old path is deleted.**
 - Does: `scene_of(project, layer)` seam and `SceneVm` from the document, every host moved to it; the tree as the real hierarchy with nested groups and kind icons; Add menu (Object, Light, Camera, Group, Material and what other lanes add later); Cmd+G and Cmd+Shift+G; the Lighting card (environment source, always-present HDRI picker, every light); cards by kind for Group, Object, Camera, Light, Material, World; the Scale link toggle in every Transform section (section 7.17); disabled-with-reason action rows; the base Scene as the first browser entry; generator swaps always work (BUG-hkshf, BUG-vis7l); one selection store for the panel.
 - Deletes: the `SceneVm::from_def` trace, `scene_object_model.rs`, `scene_items.rs`, exposure stamping and its load migrations, template splicing, the graph scene commands, the `scene_surface.rs` per-node table, scene projections' metadata joins, `starter_scenes.rs`, standing refusal text, `Scene.json`'s `available: false`, the Layer Plane object path and its physics refusal, flows on removed behaviour. Old Swarm, Water, Ocean items and their starters stop loading here; waves 2 and 3 rebuild them.
 - Files: `manifold-app/src/ui_bridge/` (project.rs, projection/), `manifold-ui/src/panels/scene_setup_panel/`, `manifold-nodes-scene` deletions, `manifold-editing/src/commands/graph/scene*` deletions, `manifold-core/src/scene_exposure.rs` deletion, `manifold-nodes/src/starter_scenes.rs` deletion.
-- Test budget: about 7 tests plus pruned flows. One click-through (open Scene, add a light and an object, group them, set an HDRI file, undo each). Card rows come out right for each kind and never show standing refusal text. A layer-sourced plane accepts the physics setting. A linked Scale edit scales all three axes in one undo step; unlinked it changes one.
+- Test budget: about 6 tests, no new flows. Card rows come out right for each kind and never show standing refusal text. A layer-sourced plane accepts the physics setting. A linked Scale edit scales all three axes in one undo step; unlinked it changes one.
 - Depends on: L1.
 
 **L3 (Sonnet; BUG-elwvu.3): imports as groups.**
 - Does: a dropped glTF becomes a Group with a file Source, children keyed by file node path; Model File swap keeps surviving children and toasts the rest; Combine Meshes switch; paste and duplicate of an import.
 - Deletes: importer graph building (about 3,000 lines); the copy-an-import refusal.
-- Files: `manifold-app/src/gltf_import/`, `manifold-editing/src/commands/scene_doc/`.
+- Files: `manifold-nodes-scene/src/node_graph/gltf_import/`, `manifold-editing/src/commands/scene_doc/`.
 - Test budget: about 4 tests. Ids derive from node path and are stable; a swap keeps a surviving child and drops a vanished one; Combine Meshes off by default; duplicate of an import makes a working clone. Compile time of Peter's largest file is measured and reported, not gated.
 - Depends on: L1.
 
-**L4 (Sonnet; BUG-elwvu.4): physics setting, the CollisionShape service, and the Box3D input gate.**
+**L4 (Opus; BUG-elwvu.4): physics setting, the CollisionShape service, and the Box3D input gate.** Opus because it touches the physics install, the native bridge and the open Box3D crash in section 7.8.
 - Does: the None, Collider, Body setting and card (Mass, Bounce, Friction); emitters for Collision and RigidBody; `CollisionShape` with automatic shapes (exact mesh, spatial split with automatic detail, distance lattice) and the cache key (mesh content ready, scale, water cell size); pending shape joins when ready and the world never pauses; Speed clamp; group Body as one compound body; validation of every transform, scale and hull as finite and non-degenerate before Box3D, with refusals shown on the card; no Box3D assert aborts the show build. Fixes BUG-k787p (Box3D tree query assertion).
 - Deletes: the Collider role params, the rigid body's Shape enum and Collider Detail, `physics_match.rs`, `hold_pending`, the Fluid Role and authored-transform refusals.
 - Files: `manifold-physics/` (new `collision_shape`; the install path and the native bridge), `manifold-water-rigid/src/physics_mesh.rs`, `manifold-node-engine/src/load/physics_members.rs`, `manifold-nodes-scene/.../scene_compile/physics.rs`, `rigid_body.rs`, `scene/fluid/roles.rs` deletions.
@@ -454,7 +454,7 @@ Peter tests a branch build after wave 2 (base scene, objects, lights, groups, im
 **L9 (Opus; BUG-elwvu.9): pixel clicking.**
 - Does: the item-id buffer from the selection mask pass; the compiler's item-to-slot table; content-thread pixel resolve; click picks exactly what is drawn, including parts in groups; one selection store for tree, viewport and preview; gizmo handles only for no-pixel things; works with gizmos hidden.
 - Deletes: the geometric pick against gizmo boxes for pixel items, the second and third selection stores, the second press host, the UI-thread scene rebuild on press.
-- Files: `manifold-renderer` `render_scene.rs` and its selection pass, `viewport_gizmo.rs`, `physics_overlay.rs`, `window_input.rs`, `workspace.rs`, `scene_setup_panel.rs`.
+- Files: `manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` and its selection pass, `viewport_gizmo.rs`, `physics_overlay.rs`, `window_input.rs`, `workspace.rs`, `scene_setup_panel.rs`.
 - Test budget: about 3 tests plus one GPU proof: a click on a drawn pixel returns that item, a click on a part inside a group returns that part, and a click works with gizmos hidden.
 - Depends on: L2.
 
@@ -499,7 +499,7 @@ Bead ids: BUG-elwvu.1 to BUG-elwvu.11 are L1 to L11 in order. Dependencies are s
 - **Values live in the manifest, not the item.** One home per value and an untouched runtime, but the document alone is not a complete scene: export and the starter test read both.
 - **Structural properties cannot be modulated.** An LFO cannot switch Draw As on stage. Switching physics, Draw As or Emit From mid-show restarts that item's simulation, as a Reset does.
 - **Whole-graph recompile per structural edit.** Same order as today's graph clone per transaction, but a large import's first structural edit is where a stutter would show (checked in L3).
-- **Old scenes break.** Peter's shows built on graph scenes stop loading their scene contents unless rebuilt (D-119). The branch is landed once, after he has rebuilt them or chosen not to.
+- **Old scenes break.** Shows built on graph scenes stop loading their scene contents (D-119). Landing does not wait on them and no migration is built; any critical one is rebuilt by hand later.
 - **Between wave 2 and wave 3 the branch has no Swarm, Water or Ocean.** Peter's wave-2 test covers the rest.
 - **Stable ids instead of USD paths.** Right for live mappings; an id-to-path map is needed on export.
 - **Water reads every Collider and Body in its World whose bounds touch the domain.** A collider that should not touch the water must be kept out of the domain; there are no collision groups in this cut.
