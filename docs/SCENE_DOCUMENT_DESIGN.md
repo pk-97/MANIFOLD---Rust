@@ -67,7 +67,7 @@ What the deletion proof (section 10) still finds at df95dd7ce, and who removes i
 | `stamp_scene_node_exposures` | Callers: `manifold-io/src/migrations/scene_cinematic_tail_v1130.rs` and the catalog test `runtime_bound_param_survives_rebuild.rs` (L12); `manifold-nodes-water/src/presets/gpu_flip.rs` (L7). The definition in `manifold-core/src/scene_exposure.rs` goes last | L12, L7, then L10 |
 | Fluid role wiring and the off-menu Collider role kept as a stopgap in `role_kind` | `fluid_role` in 34 files | L7 |
 | Two comments naming `SceneVm::from_def` | `gltf_mesh_source.rs:222`, `gltf_skinned_mesh_source.rs:107` | L12 |
-| The sixteen `render_scene` generator presets (the old starters, Lantern included) | `crates/manifold-nodes/assets/generator-presets/` | L10 |
+| The fifteen old `render_scene` starters (Lantern included; Scene.json is the base Scene and stays) | `crates/manifold-nodes/assets/generator-presets/` | L10 |
 
 ## 4. Refusals, hiding and toasts
 
@@ -271,7 +271,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 ### 7.15 Saved scenes
 
 - A saved scene is a file saved from the app (document plus manifest values), in the closed format.
-- No starters ship: only the base Scene. The sixteen old `render_scene` presets are deleted, Lantern included.
+- No starters ship: only the base Scene. The fifteen old `render_scene` starters leave the browser: six are deleted (Lantern, Swarm, Swarm Cloud and others), and the nine water, physics and ocean scenes move to test fixtures because the engine proofs load them.
 - Changing a layer's generator always works, as in Resolume and Ableton: the old scene goes with the old generator, one undo step; one undo brings both back. BUG-vis7l (Scene preset hidden) and BUG-hkshf (generator change refused) are fixed by design.
 
 ### 7.16 Not changed
@@ -730,7 +730,7 @@ Files: `scene_compile/scene_loop.rs`, `math_view.rs` and `scene_mirror.rs` (new)
 **L10 (Sonnet; BUG-elwvu.10): the crash test, deletions, docs.**
 Files: `crates/manifold-nodes/tests/`, `crates/manifold-nodes/assets/generator-presets/` (deletions), `manifold-core/src/scene_exposure.rs` (deletion), `docs/`.
 1. The scene crash test of section 10 exists and passes.
-2. The sixteen `render_scene` generator presets are deleted, Lantern, Swarm and Swarm Cloud included, with the tests that read them.
+2. The fifteen old `render_scene` starters leave the browser: those no proof reads are deleted with their tests, and the water, physics and ocean scenes the engine proofs load move to test fixtures. Scene.json stays.
 3. `scene_exposure.rs` is deleted.
 4. The deletion proof returns zero.
 5. Superseded docs are marked, the maps updated, the node catalog and docs index regenerated.
@@ -857,7 +857,7 @@ Every scene feature a performer could use on main (origin/main), its state on th
 | Ray tracing (reflections, shadows, ambient occlusion, global illumination), temporal upscale | World card | Works | World Render | built |
 | Fog | Scene Fog preset; World | Works as World Fog; Density is Setup role | World Fog, Density a performance row | L13 |
 | Bloom, chromatic aberration, grain, 2D depth of field | Layer effects | Unchanged; not scene features | Layer effects | none |
-| The sixteen `render_scene` starters | Browser | Play as plain graphs with an empty Scene panel | Deleted; scenes are built in the panel and saved | L10 |
+| The fifteen old `render_scene` starters | Browser | Play as plain graphs with an empty Scene panel | Gone from the browser (engine-proof scenes kept as test fixtures); scenes are built in the panel and saved | L10 |
 | Graph scenes in saved projects | Load | Play as plain graphs with an empty Scene panel | No migration (D-119) | none |
 
 ### 15.2 Modifier restore
