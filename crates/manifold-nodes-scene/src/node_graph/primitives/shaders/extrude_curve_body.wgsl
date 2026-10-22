@@ -109,11 +109,18 @@ fn body(idx: u32, count: u32, depth: f32, steps: i32, close: u32, symmetric: u32
     // Read forwards, a counter-clockwise loop pushed along +Z (or a
     // clockwise one along -Z) faces in, so it is read backwards: winding and
     // normals then face out. An open outline keeps its order.
-    let looped = is_closed || ec_ends_meet(p_len);
+    let ends_meet = ec_ends_meet(p_len);
+    let looped = is_closed || ends_meet;
     let reversed = looped && ec_area2(p_len) * ec_sign(depth) > 0.0;
     var outline_col = col % p_len;
     if reversed {
         outline_col = (cols - 1 - col) % p_len;
+    }
+    // An end point that only nearly meets the start (sin(TAU) is not 0)
+    // reads the start itself, so the seam's two columns share exact
+    // positions and node.smooth_normals welds them: no crack under Inflate.
+    if ends_meet && !is_closed && outline_col == p_len - 1 {
+        outline_col = 0;
     }
     let pt = ec_point(outline_col);
     var t = ec_tangent(outline_col, p_len, looped);

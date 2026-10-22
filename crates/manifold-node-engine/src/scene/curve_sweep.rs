@@ -178,7 +178,8 @@ pub fn extrude_grid(points: &[[f32; 2]], depth: f32, steps: u32, close: bool, sy
     let steps = steps.max(1) as usize;
     let rows = capped_rows(steps + 1, caps);
     let shift = if symmetric { depth * 0.5 } else { 0.0 };
-    let looped = close || is_loop(points);
+    let ends_meet = is_loop(points);
+    let looped = close || ends_meet;
     let reversed = extrude_reversed(points, close, depth);
     let mut grid = Grid { positions: Vec::with_capacity(cols * rows), normals: Vec::with_capacity(cols * rows), cols, rows };
     for row in 0..rows {
@@ -186,6 +187,9 @@ pub fn extrude_grid(points: &[[f32; 2]], depth: f32, steps: u32, close: bool, sy
         let z = depth * step as f32 / steps as f32 - shift;
         for col in 0..cols {
             let at = if reversed { cols - 1 - col } else { col } % p_len;
+            // An end that only nearly meets the start reads the start, so the
+            // seam welds (the WGSL does the same).
+            let at = if ends_meet && !close && at == p_len - 1 { 0 } else { at };
             let [x, y] = points.get(at).copied().unwrap_or_default();
             let [tx, ty] = curve_tangent(points, at, looped).map(|t| if reversed { -t } else { t });
             // A cap faces along Z, the way the outline runs round its
@@ -247,7 +251,7 @@ pub fn tube_grid(points: &[[f32; 2]], lift: &[f32], radius: f32, sides: u32, cap
         for col in 0..cols {
             // The ring turns clockwise seen down the path, so the grid's
             // winding faces out of the tube as its normals do.
-            let theta = -std::f32::consts::TAU * col as f32 / sides as f32;
+            let theta = -std::f32::consts::TAU * (col % sides) as f32 / sides as f32;
             let ring = add(scale(right, theta.cos()), scale(ring_up, theta.sin()));
             let rim = |centre: bool| if centre { center } else { add(center, scale(ring, radius)) };
             let (position, normal) = match role {
@@ -402,6 +406,28 @@ mod tests {
                 let normal = add(add(tri[0].normal, tri[1].normal), tri[2].normal);
                 let along = face[0] * normal[0] + face[1] * normal[1] + face[2] * normal[2];
                 assert!(along > 0.0, "{:?}: a face's normals point against its winding", swept.sweep);
+            }
+        }
+    }
+
+    /// A round sweep's seam columns hold bit-identical positions, so
+    /// node.smooth_normals (welded by exact position) joins them and a push
+    /// along the normals does not crack the seam open. A circle sampled to
+    /// TAU ends near, not on, its start.
+    #[test]
+    fn round_sweeps_close_their_seam_exactly() {
+        let ring = circle(false);
+        assert_ne!(ring[0], ring[ring.len() - 1], "the sampled circle's end should only nearly meet its start");
+        let path: Vec<[f32; 2]> = (0..8).map(|i| [i as f32 * 0.5, (i as f32 * 0.7).sin()]).collect();
+        let grids = [
+            extrude_grid(&ring, 2.0, 2, false, false, true),
+            extrude_grid(&ring, -2.0, 2, false, false, true),
+            tube_grid(&path, &[], 0.3, 12, true),
+        ];
+        for grid in &grids {
+            for row in 0..grid.rows {
+                let (first, last) = (grid.positions[row * grid.cols], grid.positions[row * grid.cols + grid.cols - 1]);
+                assert_eq!(first.map(f32::to_bits), last.map(f32::to_bits), "row {row}: the seam is open");
             }
         }
     }

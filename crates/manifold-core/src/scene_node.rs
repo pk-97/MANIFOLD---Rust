@@ -13,7 +13,7 @@
 
 use crate::NodeId;
 use crate::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GroupDef,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef,
     GroupInterface, InterfacePortDef, PresetMetadata,
 };
 
@@ -30,6 +30,11 @@ pub const SCENE_NODE_ID: &str = "scene";
 /// denoise feed and the item-id buffer does not exist yet, so neither is a
 /// port.
 pub const SCENE_OUTPUTS: [&str; 3] = ["color", "depth", "velocity"];
+
+/// The layer input ports the Scene node takes, when the scene reads them: the
+/// frame size alone (a grid cast from the camera, like the Ocean's, matches
+/// the frame's aspect). Never the layer's picture.
+pub const SCENE_INPUTS: [&str; 2] = ["output_width", "output_height"];
 
 const GENERATOR_INPUT_TYPE_ID: &str = "system.generator_input";
 const FINAL_OUTPUT_TYPE_ID: &str = "system.final_output";
@@ -90,7 +95,10 @@ pub fn is_filled(graph: &EffectGraphDef) -> bool {
 /// one: the layer input, the Scene node, and its colour into the layer output.
 /// The layer graph takes the compiled manifest and scene modifiers, which the
 /// compiler owns. The card controls the user exposed from the nodes around
-/// the Scene node stay, so their maps and automation keep working.
+/// the Scene node stay, so their maps and automation keep working. A scene
+/// that reads the frame size ([`SCENE_INPUTS`]) takes it through Scene node
+/// inputs wired from the layer input; any other read of the layer input is
+/// refused.
 pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<EffectGraphDef, String> {
     let EffectGraphDef { version, name, description, preset_metadata, scene_modifiers, nodes, wires } = compiled;
     let find = |type_id: &str| -> Result<u32, String> {
@@ -103,9 +111,15 @@ pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<
     };
     let (input, output, render) =
         (find(GENERATOR_INPUT_TYPE_ID)?, find(FINAL_OUTPUT_TYPE_ID)?, find(RENDER_SCENE_TYPE_ID)?);
-    if wires.iter().any(|wire| wire.from_node == input) {
+    // Only the frame size crosses in: a scene that sees the layer's pixels
+    // would stop being the sealed render the Scene panel describes.
+    if wires.iter().any(|wire| wire.from_node == input && !SCENE_INPUTS.contains(&wire.from_port.as_str())) {
         return Err("the compiled scene reads the layer input, which the Scene node does not take".into());
     }
+    let inputs: Vec<&str> = SCENE_INPUTS
+        .into_iter()
+        .filter(|port| wires.iter().any(|wire| wire.from_node == input && wire.from_port == *port))
+        .collect();
     let picture = wires
         .iter()
         .find(|wire| wire.to_node == output)
@@ -123,15 +137,25 @@ pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<
         }
     }
     body_nodes.push(bare(boundary_id, NodeId::default(), GROUP_OUTPUT_TYPE_ID, None));
-    let mut body_wires: Vec<EffectGraphWire> =
-        wires.into_iter().filter(|wire| wire.to_node != output && wire.from_node != input).collect();
+    let size_in = boundary_id + 1;
+    if !inputs.is_empty() {
+        body_nodes.push(bare(size_in, NodeId::default(), GROUP_INPUT_TYPE_ID, None));
+    }
+    let mut body_wires: Vec<EffectGraphWire> = wires
+        .into_iter()
+        .filter(|wire| wire.to_node != output)
+        .map(|wire| if wire.from_node == input { EffectGraphWire { from_node: size_in, ..wire } } else { wire })
+        .collect();
     let sources = [picture, (render, "depth".to_owned()), (render, "velocity".to_owned())];
     for (port, (from_node, from_port)) in SCENE_OUTPUTS.iter().zip(sources) {
         body_wires.push(EffectGraphWire { from_node, from_port, to_node: boundary_id, to_port: (*port).to_owned() });
     }
     let body = GroupDef {
         interface: GroupInterface {
-            inputs: Vec::new(),
+            inputs: inputs
+                .iter()
+                .map(|port| InterfacePortDef { name: (*port).to_owned(), port_type: "Scalar(F32)".to_owned() })
+                .collect(),
             outputs: SCENE_OUTPUTS
                 .iter()
                 .map(|port| InterfacePortDef { name: (*port).to_owned(), port_type: "Texture2D".to_owned() })
@@ -167,7 +191,33 @@ pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<
         ..bare(node.id, NodeId::new(SCENE_NODE_ID), SCENE_NODE_TYPE_ID, node.editor_pos)
     };
     node.handle = Some(SCENE_NODE_ID.to_owned());
+    let scene = node.id;
+    wire_frame_size(&mut graph, scene, &inputs)?;
     Ok(graph)
+}
+
+/// Wire the layer input's frame size into the Scene node's size `inputs`, and
+/// drop size wires the scene no longer reads.
+fn wire_frame_size(graph: &mut EffectGraphDef, scene: u32, inputs: &[&str]) -> Result<(), String> {
+    graph.wires.retain(|wire| !(wire.to_node == scene && SCENE_INPUTS.contains(&wire.to_port.as_str())));
+    if inputs.is_empty() {
+        return Ok(());
+    }
+    let layer_input = graph
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GENERATOR_INPUT_TYPE_ID)
+        .map(|node| node.id)
+        .ok_or("the scene needs the frame size, and the layer graph has no layer input")?;
+    for port in inputs {
+        graph.wires.push(EffectGraphWire {
+            from_node: layer_input,
+            from_port: (*port).to_owned(),
+            to_node: scene,
+            to_port: (*port).to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// The layer graph a new scene layer starts with: its input, the Scene node,
@@ -293,4 +343,58 @@ pub fn user_controls(meta: &PresetMetadata) -> Option<PresetMetadata> {
         scene_modifier: None,
         ..meta.clone()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
+        EffectGraphWire { from_node, from_port: from_port.to_owned(), to_node, to_port: to_port.to_owned() }
+    }
+
+    /// A compiled scene: layer input, a grid reading `read` from it, the
+    /// render and the output.
+    fn compiled(read: &str) -> EffectGraphDef {
+        EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                bare(1, NodeId::new("input"), GENERATOR_INPUT_TYPE_ID, None),
+                bare(2, NodeId::new("grid"), "node.projected_grid", None),
+                bare(3, NodeId::new("render"), RENDER_SCENE_TYPE_ID, None),
+                bare(4, NodeId::new("output"), FINAL_OUTPUT_TYPE_ID, None),
+            ],
+            wires: vec![wire(1, read, 2, "width"), wire(3, "color", 4, "in")],
+        }
+    }
+
+    #[test]
+    fn the_frame_size_crosses_into_the_scene_node_and_the_picture_does_not() {
+        let graph = seal(compiled("output_width"), None).expect("the frame size seals");
+        let scene = scene_node(&graph).unwrap();
+        let body = scene.group.as_deref().unwrap();
+        assert_eq!(body.interface.inputs.iter().map(|port| port.name.as_str()).collect::<Vec<_>>(), ["output_width"]);
+        let size_in = body.nodes.iter().find(|node| node.type_id == GROUP_INPUT_TYPE_ID).expect("a size input inside").id;
+        assert!(body.wires.contains(&wire(size_in, "output_width", 2, "width")));
+        let layer_input = graph.nodes.iter().find(|node| node.type_id == GENERATOR_INPUT_TYPE_ID).unwrap().id;
+        assert!(graph.wires.contains(&wire(layer_input, "output_width", scene.id, "output_width")));
+
+        // A reseal wires the size once; a recompile that no longer reads it
+        // drops the wire.
+        let plain = seal(compiled("output_width"), Some(&graph)).unwrap();
+        assert_eq!(plain.wires.iter().filter(|w| w.to_node == scene.id).count(), 1);
+        let mut none = compiled("output_width");
+        none.wires.retain(|w| w.from_node != 1);
+        let unsized_graph = seal(none, Some(&plain)).unwrap();
+        assert!(unsized_graph.wires.iter().all(|w| w.to_node != scene.id));
+
+        for picture in ["out", "time"] {
+            let refused = seal(compiled(picture), None).expect_err("only the frame size crosses in");
+            assert!(refused.contains("reads the layer input"), "{picture}: {refused}");
+        }
+    }
 }
