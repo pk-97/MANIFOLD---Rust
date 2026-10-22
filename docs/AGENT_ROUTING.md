@@ -27,7 +27,8 @@ There is no dispatcher seat. The clerical loop (pop queue, run gates, park failu
 
 ## Standing practice
 
-- **Shut a lane down when it reports.** Once its report is read, the lead stops the agent unless a follow-up brief for it is already planned. An idle agent is a token leak, and the harness can wake it to re-send its report. What it learned lives in its commit and report, so the next brief carries it to a fresh agent.
+- **Shut a lane down when it reports.** Once its report is read, the lead stops the agent. Follow-up work goes to a fresh lane whose brief carries the findings with file:line anchors; resume a reported lane only for a small fix to its own commit. A resumed lane re-reads its whole 200k+ context on every step, about three times what a fresh lane costs. An idle agent is a token leak, and the harness can wake it to re-send its report.
+- **One lead session per campaign.** Each lead step re-reads the lead's whole context; past 200k that dominates the lead's cost. When a campaign lands, the next one starts in a new session from its bead and handoff notes.
 - **Port from the reference.** When a reference implementation exists, the brief says port from it and name every deviation, with the reason, in the report. Silent divergence from a working reference is a brief violation.
 
 ## Landing
