@@ -346,12 +346,12 @@ One table keyed by (kind, property) replaces the per-node scene table (`scene_su
 | Group | Transform (with the Scale link toggle); Visible; Material (applies to children with none); Physics (Body here is one compound body); Copies; when Source is a file, Model File and Combine Meshes |
 | Material | Surface rows; texture source (None, file, layer); used by N; Make Unique |
 | Swarm | Emit From; Draw As; Count; Size; Air Drag; Material; Look; Transform places the emitter |
-| Water | Domain: Position and Size (with the Scale link toggle), moved and resized by its gizmo in the viewport; Resolution; Simulation dials; Whitewater |
+| Water | Domain: Position and Size (with the Scale link toggle), moved and resized by its gizmo in the viewport; Resolution; Simulation dials; Whitewater (Amount only: the particle budget, today's "Whitewater Budget", is automatic from Resolution). Physics View is not a card row: it is a Render menu mode in the header beside Solid and Wireframe |
 | Water Source | Role (header); Shape; Transform; Inflow speed |
 | Force | Its type's rows; Targets; Impulse |
 | World | Physics (Gravity, Speed, Reset, Air Resistance); Fog; Render (ray tracing, temporal upscale, render mode); default active camera |
 
-No preset rows, sections, labels or `cardVisible`. Rows that do not apply never show. Bake size and force detail are automatic and have no rows. A refusal is a disabled control with its reason on hover.
+No preset rows, sections, labels or `cardVisible`. Every row's section is declared in the table; there is no fallback section. Today an undeclared row falls into the item's first group (`scene_setup_panel.rs:1425-1432`), which is why Whitewater Budget and Physics View sit under Transform. Rows that do not apply never show. Bake size and force detail are automatic and have no rows. A refusal is a disabled control with its reason on hover.
 
 The tree is the item hierarchy: Camera and Lighting, World pinned at the top as today, then every other item in its place with a kind icon, nested groups shown as a real tree. A Swarm is its own kind, not an Object.
 
@@ -487,6 +487,7 @@ Bead ids: BUG-elwvu.1 to BUG-elwvu.11 are L1 to L11 in order. Dependencies are s
 - A param write that recompiles or resets anything.
 - A refusal as standing card text, or only in a log line.
 - Scene state kept in panel-only memory, out of reach of undo.
+- A fallback section for a row, or a capacity or budget row a performer has to manage.
 - A physics setting beyond None, Collider, Body; an Advanced section; a Kinematic setting.
 - A second collision-shape path per solver, or any route into Box3D that skips the input gate.
 - An interim physics (hand-picked shapes) "until automatic shapes land".
