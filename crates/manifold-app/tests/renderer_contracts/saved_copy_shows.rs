@@ -145,6 +145,7 @@ impl Values<'_> {
                 rot_euler: axes(["rot_x", "rot_y", "rot_z"], 0.0),
                 scale: axes(["scale_x", "scale_y", "scale_z"], 1.0),
                 billboard: self.get(transform, "billboard").unwrap_or(0.0) >= 0.5,
+                ..Default::default()
             },
             enabled: self.get(id, "enabled").unwrap_or(1.0) >= 0.5,
             shape: self.get(id, "shape").unwrap_or(1.0) as u32,

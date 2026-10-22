@@ -1164,3 +1164,75 @@ fn a_copy_group_gizmo_is_at_the_group_transform_and_scales_uniformly() {
     };
     assert!(scales[0] > 2.0 && scales[0] == scales[1] && scales[1] == scales[2], "{scales:?}");
 }
+
+/// A three-level chain: group 7 holds group 8, which holds object 9. Each
+/// row's gizmo sits at its world place, and a drag on the inner group writes
+/// its own position in its parent's frame.
+fn nested_groups() -> SceneVm {
+    let mut outer = known_object(7, (2.0, 3.0, -8.0), (false, false, false));
+    let SceneObjectVm::Known(o) = &mut outer else { unreachable!() };
+    o.is_group = true;
+    let t = o.transform.as_mut().unwrap();
+    t.rot_value.2 = std::f32::consts::FRAC_PI_2;
+    t.scale_value = (2.0, 1.0, 1.0);
+    let mut inner = known_object(8, (1.0, 0.0, 0.0), (false, false, false));
+    let SceneObjectVm::Known(i) = &mut inner else { unreachable!() };
+    i.is_group = true;
+    i.parent = Some(object_ref(7));
+    i.transform.as_mut().unwrap().rot_value.1 = 0.6;
+    let mut object = known_object(9, (0.5, -0.25, 1.0), (false, false, false));
+    let SceneObjectVm::Known(c) = &mut object else { unreachable!() };
+    c.parent = Some(object_ref(8));
+    scene_with(vec![outer, inner, object])
+}
+
+#[test]
+fn an_inner_group_gizmo_sits_at_its_world_place_and_drags_in_its_parent_frame() {
+    use manifold_node_engine::scene::transform::Transform;
+    let scene = nested_groups();
+    let outer = Transform { pos: [2.0, 3.0, -8.0], rot_euler: [0.0, 0.0, std::f32::consts::FRAC_PI_2], scale: [2.0, 1.0, 1.0], ..Transform::default() };
+    let inner = Transform { pos: [1.0, 0.0, 0.0], rot_euler: [0.0, 0.6, 0.0], parent: outer.world(), ..Transform::default() };
+    let object = Transform { pos: [0.5, -0.25, 1.0], parent: inner.world(), ..Transform::default() };
+    for (id, reference) in [(8, inner), (9, object)] {
+        let target = gizmo_target_for(&scene, &object_id(id)).unwrap();
+        let world = reference.world();
+        for i in 0..3 {
+            assert!((target.origin[i] - world[3][i]).abs() < 1e-5, "row {id}: origin {:?}, want {:?}", target.origin, world[3]);
+            for (axis, column) in target.world_axes.iter().zip(reference.parent) {
+                assert!((axis[i] - column[i]).abs() < 1e-5, "row {id}: its handles follow its parent's axes");
+            }
+        }
+    }
+    let target = gizmo_target_for(&scene, &object_id(8)).unwrap();
+    assert!(!target.pickable, "an inner group is selected through the outer one");
+    let start = px(target.origin);
+    let end = px(offset(target.origin, target.axis_direction(GizmoAxis::X), 1.0));
+    let HandleValues::One(value) = drag(&target, GizmoMode::Move, GizmoAxis::X, start, end) else { panic!("one value") };
+    assert!((value - 2.0).abs() < 1e-4, "one unit in the outer group's frame moves pos_x by one, got {value}");
+    assert_eq!(written(&target, GizmoMode::Move, GizmoAxis::X), vec![ShapeWrite::Node(ParamAddr { scope_path: Vec::new(), node_doc_id: 99, param_id: "pos_x".into() })]);
+}
+
+#[test]
+fn outline_slots_cover_every_object_inside_nested_groups() {
+    let row = |id: u32, index: usize, group: Option<u32>, is_group: bool| {
+        let SceneObjectVm::Known(mut row) = known_object(id, (0.0, 0.0, 0.0), (false, false, false)) else { unreachable!() };
+        row.index = index;
+        row.parent = group.map(object_ref);
+        row.is_group = is_group;
+        SceneObjectVm::Known(row)
+    };
+    // outer 10 { 11, inner 12 { 13, 14 } }, 1 loose.
+    let scene = scene_with(vec![
+        row(1, 0, None, false),
+        row(10, 1, None, true),
+        row(11, 1, Some(10), false),
+        row(12, 2, Some(10), true),
+        row(13, 2, Some(12), false),
+        row(14, 3, Some(12), false),
+    ]);
+    let mut slots = Vec::new();
+    outline_slots(&scene, &[10].map(object_ref), &mut slots);
+    assert_eq!(slots, [1, 2, 3], "the outer group outlines everything inside, at every depth");
+    outline_slots(&scene, &[12].map(object_ref), &mut slots);
+    assert_eq!(slots, [2, 3], "the inner group outlines only its own");
+}

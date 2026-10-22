@@ -1050,10 +1050,10 @@ pub fn rotate_drag_delta(
 }
 
 /// The render slots that draw the scene objects `objects`, for
-/// their selection outline (D-102): each one's own slot, plus every part's
-/// for a group row. A Water row is a group and a real render slot, its looks
-/// the parts; an imported model's group row shares its first part's slot.
-/// Written into `out`, sorted and deduplicated.
+/// their selection outline (D-102): each one's own slot, plus every object's
+/// inside a group row at any depth. A Water row is a group and a real render
+/// slot, its looks the parts; a scene group's row shares its first object's
+/// slot. Written into `out`, sorted and deduplicated.
 pub fn outline_slots<'a>(scene: &SceneVm, objects: impl IntoIterator<Item = &'a SceneNodeRef>, out: &mut Vec<u32>) {
     let rows = || {
         scene.objects.iter().filter_map(|object| match object {
@@ -1061,12 +1061,23 @@ pub fn outline_slots<'a>(scene: &SceneVm, objects: impl IntoIterator<Item = &'a 
             SceneObjectVm::Custom { .. } => None,
         })
     };
+    let inside = |row: &crate::node_graph::scene_vm::SceneObjectKnownRow, group: &SceneNodeRef| {
+        let mut parent = row.parent.as_ref();
+        for _ in 0..scene.objects.len() {
+            let Some(id) = parent else { return false };
+            if id == group {
+                return true;
+            }
+            parent = rows().find(|candidate| &candidate.address == id).and_then(|candidate| candidate.parent.as_ref());
+        }
+        false
+    };
     out.clear();
     for object in objects {
         for row in rows().filter(|row| &row.address == object) {
             out.push(row.index as u32);
             if row.is_group {
-                out.extend(rows().filter(|part| part.parent.as_ref() == Some(object) && !part.is_group).map(|part| part.index as u32));
+                out.extend(rows().filter(|part| !part.is_group && inside(part, object)).map(|part| part.index as u32));
             }
         }
     }

@@ -283,8 +283,9 @@ impl ScenePanel {
         }
     }
 
-    /// Object rows; a compound parent folds its children under a chevron
-    /// that never changes selection.
+    /// Object rows as a tree: each row indented by its depth, and each group
+    /// at any depth folding what is inside it under a chevron that never
+    /// changes selection.
     fn build_object_rows(
         &mut self,
         tree: &mut UITree,
@@ -304,11 +305,13 @@ impl ScenePanel {
                 continue;
             };
             let eye = EyeSlot::Live(row.visible.clone());
+            let Some(depth) = tree_depth(items, item, &expanded) else { continue };
+            let depth_x = depth as f32 * STEP_W;
             let indent = if row.is_group {
                 let open = expanded.contains(id);
                 let toggle = tree.add_button_keyed(
                     Some(self.content_parent),
-                    inner_x,
+                    inner_x + depth_x,
                     cy,
                     STEP_W,
                     ROW_H,
@@ -318,14 +321,9 @@ impl ScenePanel {
                 );
                 tree.set_name(toggle, "scene_setup.objects.group_toggle");
                 self.group_toggle_ids.push((toggle, id.clone()));
-                STEP_W
-            } else if let Some(parent) = &item.parent {
-                if !expanded.contains(parent) {
-                    continue;
-                }
-                STEP_W
+                depth_x + STEP_W
             } else {
-                0.0
+                depth_x
             };
             cy = self.build_tree_row(tree, (inner_x, inner_w, indent), cy, item, selected, eye);
             // A water's Inflow, Drain and Collider rows sit under it after its
@@ -489,4 +487,22 @@ impl ScenePanel {
     pub fn tree_groups(&self) -> &[SceneGroup] {
         &self.tree_groups
     }
+}
+
+/// How deep `item` sits in the object tree: the number of groups above it.
+/// `None` when a group above it is folded, so the row is hidden.
+fn tree_depth(items: &[&SceneItemVm], item: &SceneItemVm, expanded: &ahash::AHashSet<SceneNodeRef>) -> Option<usize> {
+    let mut depth = 0;
+    let mut parent = item.parent.as_ref();
+    while let Some(group) = parent {
+        if !expanded.contains(group) || depth > items.len() {
+            return None;
+        }
+        depth += 1;
+        parent = items
+            .iter()
+            .find(|other| matches!(&other.selection, SceneSelection::Object(id) if id == group))
+            .and_then(|other| other.parent.as_ref());
+    }
+    Some(depth)
 }

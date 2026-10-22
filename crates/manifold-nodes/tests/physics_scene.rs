@@ -115,6 +115,7 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
             rot_euler: ["rot_x", "rot_y", "rot_z"].map(|p| scalar(id - 1, p)),
             scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(id - 1, p)),
             billboard: false,
+            ..Default::default()
         },
         enabled: true,
         shape: scalar(id, "shape") as u32,

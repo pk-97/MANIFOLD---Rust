@@ -33,6 +33,7 @@ fn physics_boxes(count: usize) -> RigidSceneInputs {
             rot_euler: ["rot_x", "rot_y", "rot_z"].map(|p| scalar(&nodes, id - 1, p)),
             scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(&nodes, id - 1, p)),
             billboard: false,
+            ..Default::default()
         },
         enabled: true,
         shape: scalar(&nodes, id, "shape") as u32,
@@ -67,7 +68,7 @@ fn physics_boxes(count: usize) -> RigidSceneInputs {
 /// loose stack, and two copy groups of 122 boxes piled on top.
 fn wide_world() -> RigidSceneInputs {
     let boxed = |pos: [f32; 3], scale: f32, kind: u32| RigidBody {
-        transform: Transform { pos, rot_euler: [0.1, 0.2, 0.05], scale: [scale; 3], billboard: false },
+        transform: Transform { pos, rot_euler: [0.1, 0.2, 0.05], scale: [scale; 3], billboard: false, ..Default::default() },
         kind,
         ..RigidBody::default()
     };

@@ -13,6 +13,7 @@ use manifold_core::scene_modifier_preset::{
 };
 use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
 use manifold_node_engine::load::catalog_source::preset_def;
+use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Mat4, Transform};
 
 use manifold_core::liquid_setup::DEFAULT_FILL_HEIGHT;
 
@@ -144,16 +145,7 @@ pub(crate) fn object_shapes(objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
         if !row.capabilities.transform || (row.transform.is_none() && !row.transform_chain_parseable) {
             continue;
         }
-        let frame = row.parent.as_ref().and_then(|id| {
-            rows.iter().find(|parent| parent.address == *id).and_then(|parent| parent.transform.as_ref())
-        });
-        let frame = frame.map(|t| {
-            crate::node_graph::primitives::render_scene::model_matrix(
-                [t.pos_value.0, t.pos_value.1, t.pos_value.2],
-                [t.rot_value.0, t.rot_value.1, t.rot_value.2],
-                [t.scale_value.0, t.scale_value.1, t.scale_value.2],
-            )
-        });
+        let frame = parent_frame(&rows, row);
         let copy_group = row.instancer.as_ref().is_some_and(|instancer| instancer.kind == InstancerKind::CopyGroup);
         let decls = if copy_group { &COPY_GROUP_SHAPES[..] } else { scene_shape(super::SCENE_OBJECT_TYPE_ID) };
         for (index, decl) in decls.iter().enumerate() {
@@ -177,6 +169,29 @@ pub(crate) fn object_shapes(objects: &[SceneObjectVm]) -> Vec<SceneShapeVm> {
         }
     }
     out
+}
+
+/// The world frame `row`'s own transform sits in: every enclosing group's
+/// transform composed, outermost first, the way `node.transform_3d`'s
+/// `parent` chain composes them at runtime. `None` at the top level.
+fn parent_frame(rows: &[&super::SceneObjectKnownRow], row: &super::SceneObjectKnownRow) -> Option<Mat4> {
+    let mut chain: Vec<&TransformVm> = Vec::new();
+    let mut parent = row.parent.as_ref();
+    for _ in 0..rows.len() {
+        let Some(group) = parent.and_then(|id| rows.iter().find(|candidate| candidate.address == *id)) else { break };
+        chain.extend(group.transform.as_ref());
+        parent = group.parent.as_ref();
+    }
+    chain.iter().rev().fold(None, |frame: Option<Mat4>, t| {
+        let transform = Transform {
+            pos: [t.pos_value.0, t.pos_value.1, t.pos_value.2],
+            rot_euler: [t.rot_value.0, t.rot_value.1, t.rot_value.2],
+            scale: [t.scale_value.0, t.scale_value.1, t.scale_value.2],
+            parent: frame.unwrap_or(IDENTITY_MAT4),
+            ..Transform::default()
+        };
+        Some(transform.world())
+    })
 }
 
 /// Each liquid domain's shapes and its fluid role sources' shapes.

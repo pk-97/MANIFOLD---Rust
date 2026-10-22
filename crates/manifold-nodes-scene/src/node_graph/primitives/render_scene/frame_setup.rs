@@ -251,7 +251,7 @@ impl RenderScene {
                 } else {
                     parent.rot_euler
                 };
-                model_matrix(parent.pos, parent_rot, parent.scale)
+                parent.world_with_rotation(parent_rot)
             });
             let (model, instance_inner) = instance_space_pair(
                 parent_model,

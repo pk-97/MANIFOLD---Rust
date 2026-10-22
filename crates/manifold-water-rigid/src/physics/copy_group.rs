@@ -70,6 +70,7 @@ impl CopyGroup {
                 rot_euler: quat_to_render_scene_euler(rest.rotation),
                 scale,
                 billboard: false,
+                ..Default::default()
             };
         }
         self.shown = arrangement.count;

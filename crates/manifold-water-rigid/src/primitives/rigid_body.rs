@@ -8,7 +8,7 @@ use crate::physics_mesh::{transform_vertices, validate_transform};
 use crate::physics_mesh::{PART_PORTS, load_compound_materials, parse_compound_materials};
 use crate::physics_mesh::prepare_colliders;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::transform::Transform;
+use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Transform};
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 
@@ -17,6 +17,7 @@ const IDENTITY_TRANSFORM: Transform = Transform {
     rot_euler: [0.0; 3],
     scale: [1.0; 3],
     billboard: false,
+    parent: IDENTITY_MAT4,
 };
 
 /// The box spawner a Physics World reads when this body is its `copies`
@@ -234,7 +235,7 @@ ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamTy
     collider_error: Option<String> = None,
     collider_source_transform: Transform = Transform::default(),
     collider_materials: [Option<i32>; 64] = [None; 64],
-    collider_part_transforms: [Transform; 64] = [Transform { pos: [0.0; 3], rot_euler: [0.0; 3], scale: [1.0; 3], billboard: false }; 64],
+    collider_part_transforms: [Transform; 64] = [IDENTITY_TRANSFORM; 64],
     source_pending: bool = false,
  },
 }
