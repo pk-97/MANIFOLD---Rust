@@ -14,6 +14,8 @@ use crate::scene::mesh_selection::MeshSelection;
 pub enum MeshSource {
     Cube { size: f32 },
     Platonic { shape: u32, radius: f32 },
+    /// `node.plane_mesh`: the XY plane facing +Z, `width` by `height`.
+    Plane { width: f32, height: f32 },
     Gltf {
         path: Arc<str>,
         selection: MeshSelection,
@@ -26,6 +28,7 @@ impl MeshSource {
     /// the same source contract before applying its own fixed transform.
     pub fn load_vertices(&self) -> Result<Vec<MeshVertex>, String> {
         let (shape, radius) = match self {
+            Self::Plane { width, height } => return plane_vertices(*width, *height),
             Self::Cube { size } => {
                 if !size.is_finite() || *size <= 0.0 {
                     return Err("mesh source size must be finite and positive".into());
@@ -47,7 +50,6 @@ impl MeshSource {
                 }
                 if !(1..=64).contains(&selection.fragment_count)
                     || selection.fragment_index >= selection.fragment_count
-                    || !(1..=64).contains(&selection.collider_parts)
                     || selection.mesh < -1
                     || selection.primitive < -1
                     || selection.material < -2
@@ -73,6 +75,24 @@ impl MeshSource {
     }
 }
 
+/// The two triangles of `node.plane_mesh`: the XY plane facing +Z.
+fn plane_vertices(width: f32, height: f32) -> Result<Vec<MeshVertex>, String> {
+    if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
+        return Err("mesh source size must be finite and positive".into());
+    }
+    let (x, y) = (width * 0.5, height * 0.5);
+    let corner = |px: f32, py: f32| {
+        let mut vertex: MeshVertex = bytemuck::Zeroable::zeroed();
+        vertex.position = [px, py, 0.0];
+        vertex.normal = [0.0, 0.0, 1.0];
+        vertex.uv = [px / width + 0.5, 0.5 - py / height];
+        vertex.tangent = [1.0, 0.0, 0.0, 1.0];
+        vertex.color = [1.0; 4];
+        vertex
+    };
+    Ok(vec![corner(-x, -y), corner(x, -y), corner(x, y), corner(-x, -y), corner(x, y), corner(-x, y)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,7 +110,6 @@ mod tests {
                 translate: [1.0, 2.0, 3.0],
                 fragment_count: 2,
                 fragment_index: 1,
-                collider_parts: 7,
             },
         }
     }
@@ -199,7 +218,6 @@ mod tests {
                 translate: [0.0; 3],
                 fragment_count: 1,
                 fragment_index: 1,
-                collider_parts: 1,
             },
         }
         .load_vertices()

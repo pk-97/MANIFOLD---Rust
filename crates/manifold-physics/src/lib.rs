@@ -32,6 +32,8 @@ mod mesh;
 pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
 use mesh::triangle_mesh_mass_properties;
 pub mod sdf;
+pub mod collision_shape;
+use collision_shape::{validate_hull, validate_position};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -223,13 +225,25 @@ mod ffi {
             impulse: *const f32,
         ) -> i32;
         pub fn manifold_box3d_destroy_mesh(mesh: usize);
+        pub fn manifold_box3d_assert_count() -> u32;
+        pub fn manifold_box3d_install_assert_handler();
     }
+}
+
+/// How many Box3D internal checks have failed in this process. A failed
+/// check is logged and counted, never an abort. The gate in
+/// [`collision_shape`] keeps non-finite and degenerate input from reaching
+/// the checks at all.
+pub fn native_assert_count() -> u32 {
+    unsafe { ffi::manifold_box3d_assert_count() }
 }
 
 static NATIVE_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_WORLD_PROVENANCE: AtomicU64 = AtomicU64::new(1);
 
 fn native_lock() -> MutexGuard<'static, ()> {
+    static ASSERT_HANDLER: std::sync::Once = std::sync::Once::new();
+    ASSERT_HANDLER.call_once(|| unsafe { ffi::manifold_box3d_install_assert_handler() });
     NATIVE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -347,7 +361,7 @@ pub struct BodyImpulse {
     pub angular: [f32; 3],
 }
 
-const MAX_BODY_HULLS: usize = 64;
+pub(crate) const MAX_BODY_HULLS: usize = 64;
 const COOKED_HULL_MAX_VERTICES: i32 = 42;
 
 /// An opaque body reference tied to the world that created it.
@@ -471,12 +485,7 @@ impl PhysicsWorld {
                 "hull needs between 4 and 255 points",
             ));
         }
-        if points
-            .iter()
-            .any(|point| !point.iter().all(|value| value.is_finite()))
-        {
-            return Err(PhysicsError::InvalidInput("hull points must be finite"));
-        }
+        validate_hull(points)?;
         self.add_hull_batch(&[points], config, 255)
     }
 
@@ -499,12 +508,7 @@ impl PhysicsWorld {
             return Err(PhysicsError::InvalidInput("body supports at most 64 hulls"));
         }
         for hull in hulls {
-            if hull.len() < 4 {
-                return Err(PhysicsError::InvalidInput("hull needs at least 4 points"));
-            }
-            if hull.iter().any(|point| !point.iter().all(|value| value.is_finite())) {
-                return Err(PhysicsError::InvalidInput("hull points must be finite"));
-            }
+            validate_hull(hull)?;
         }
         let hull_refs: Vec<&[[f32; 3]]> = hulls.iter().map(Vec::as_slice).collect();
         self.add_hull_batch(&hull_refs, config, 128)
@@ -605,6 +609,9 @@ impl PhysicsWorld {
             return Err(PhysicsError::InvalidInput(
                 "triangle meshes only support fixed bodies",
             ));
+        }
+        for vertex in vertices {
+            validate_position(*vertex)?;
         }
         let (center, inertia) = triangle_mesh_mass_properties(vertices, triangles, config.mass)?;
         if vertices.len() > i32::MAX as usize {
@@ -955,9 +962,7 @@ impl PhysicsWorld {
             return Err(PhysicsError::InvalidInput("body needs between 1 and 64 hulls"));
         }
         for hull in hulls {
-            if hull.len() < 4 || hull.iter().any(|point| !point.iter().all(|value| value.is_finite())) {
-                return Err(PhysicsError::InvalidInput("hulls need at least 4 finite points"));
-            }
+            validate_hull(hull)?;
         }
         if !matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Hulls(_)) {
             return Err(PhysicsError::InvalidInput("only a hull body can have its hulls replaced"));
@@ -1539,7 +1544,7 @@ fn native_set_wall(native: u64, wall: bool) -> Result<(), PhysicsError> {
 }
 
 fn validate_config(mut config: BodyConfig) -> Result<BodyConfig, PhysicsError> {
-    validate_vec3(config.position, "position")?;
+    validate_position(config.position)?;
     if !config.mass.is_finite() || config.mass < 0.0 {
         return Err(PhysicsError::InvalidInput(
             "mass must be finite and non-negative",

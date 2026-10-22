@@ -15,7 +15,9 @@ use std::sync::Arc;
 use manifold_node_engine::scene::transform::Transform;
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::platonic::platonic_points;
+pub use manifold_physics::collision_shape::Solid;
 
+mod admission;
 mod body_history;
 mod copy_group;
 mod copy_layout;
@@ -37,9 +39,10 @@ mod worker;
 #[cfg(test)]
 mod world_edit_tests;
 
+pub use admission::{BodyRefusal, Member, RefusalReason};
 use body_history::PackedRows;
-use copy_group::{validate_copy_prototype, CopyGroup};
-pub(crate) use copy_group::validate_spawn;
+use manifold_core::scene_schema::SPEED_RANGE;
+use copy_group::CopyGroup;
 use copy_layout::{requested_count, Arrangement};
 pub use impulses::ResolvedRigidImpulse;
 use targeted_fields::{TargetedFieldHistory, TargetedFields};
@@ -135,10 +138,25 @@ impl AdvancementPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ColliderGeometry {
-    pub hulls: Vec<Vec<[f32; 3]>>,
+/// Platonic solid `shape` (tetrahedron 0 to dodecahedron 4) of circumradius
+/// one as a hull solid, for tests that vary the body shape. One shared solid
+/// per shape: the world tells shapes apart by identity.
+#[cfg(test)]
+pub(crate) fn platonic_solid(shape: u32) -> Arc<Solid> {
+    static SOLIDS: std::sync::LazyLock<[Arc<Solid>; 5]> =
+        std::sync::LazyLock::new(|| std::array::from_fn(|shape| Arc::new(Solid::Hulls(vec![platonic_points(shape as u32).to_vec()]))));
+    if shape == 1 {
+        return default_solid();
+    }
+    Arc::clone(&SOLIDS[shape as usize])
+}
+
+/// The collision shape a body carries when nothing prepared one: a cube of
+/// circumradius one, the shape the body node's tests and tools start from.
+pub fn default_solid() -> Arc<Solid> {
+    static CUBE: std::sync::LazyLock<Arc<Solid>> =
+        std::sync::LazyLock::new(|| Arc::new(Solid::Hulls(vec![platonic_points(1).to_vec()])));
+    Arc::clone(&CUBE)
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -152,14 +170,19 @@ pub struct RigidBody {
     /// Parent body index for a prepared fragment, or `None` for an ordinary
     /// body. This metadata never changes collider topology.
     pub fragment_parent: Option<usize>,
-    pub shape: u32,
     pub kind: u32,
     /// kg: the mass the card sets, whatever the body's size. Where the engine
     /// needs a density it derives it from the installed hull's volume.
     pub mass: f32,
     pub friction: f32,
     pub bounce: f32,
-    pub collider: Option<Arc<ColliderGeometry>>,
+    /// The prepared collision shape, local and unscaled; `None` while the
+    /// body has none, which keeps it out of the world.
+    pub collider: Option<Arc<Solid>>,
+    /// Why the body node could not make a shape, shown when the world
+    /// leaves the body out. Runtime-only.
+    #[serde(skip)]
+    pub refused: Option<Arc<str>>,
     /// A generated domain wall (`DomainWalls::install`, liquid and matter).
     /// Runtime-only: never saved, so authored data and take history are
     /// unchanged.
@@ -224,12 +247,12 @@ impl Default for RigidBody {
             enabled: true,
             release_count: 0.0,
             fragment_parent: None,
-            shape: 1,
             kind: 1,
             mass: DEFAULT_MASS_KG,
             friction: 0.5,
             bounce: 0.15,
-            collider: None,
+            collider: Some(default_solid()),
+            refused: None,
             wall: false,
             spawn: CopySpawn::default(),
         }
@@ -292,7 +315,6 @@ fn same_collider(left: &RigidBody, right: &RigidBody) -> bool {
 fn same_body(left: &RigidBody, right: &RigidBody) -> bool {
     left.transform == right.transform
         && left.enabled == right.enabled
-        && left.shape == right.shape
         && left.kind == right.kind
         && left.mass == right.mass
         && left.friction == right.friction
@@ -331,9 +353,8 @@ fn is_fixed_collider_swap(old: Option<&RigidBody>, new: &RigidBody) -> bool {
     old.is_some_and(|old| {
         old.kind == 0
             && new.kind == 0
-            && old.collider.is_some()
-            && new.collider.is_some()
-            && old.shape == new.shape
+            && old.collider.as_deref().is_some_and(|solid| solid.hulls().is_some())
+            && new.collider.as_deref().is_some_and(|solid| solid.hulls().is_some())
             && old.transform.scale == new.transform.scale
             && old.enabled == new.enabled
     })
@@ -345,8 +366,7 @@ fn same_topology_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bo
     match (left, right) {
         (None, None) => true,
         (Some(left), Some(right)) => {
-            left.shape == right.shape
-                && left.transform.scale == right.transform.scale
+            left.transform.scale == right.transform.scale
                 && left.enabled == right.enabled
                 && same_collider(left, right)
         }
@@ -354,38 +374,10 @@ fn same_topology_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bo
     }
 }
 
-fn scale_platonic_points(points: &[[f32; 3]], scale: [f32; 3]) -> [[f32; 3]; 20] {
-    let mut scaled = [[0.0; 3]; 20];
-    for (dst, src) in scaled.iter_mut().zip(points) {
-        for axis in 0..3 {
-            dst[axis] = src[axis] * scale[axis];
-        }
-    }
-    scaled
-}
-
-fn scale_hulls(geometry: &ColliderGeometry, scale: [f32; 3]) -> Vec<Vec<[f32; 3]>> {
-    geometry
-        .hulls
-        .iter()
-        .map(|hull| {
-            hull.iter()
-                .map(|point| {
-                    [
-                        point[0] * scale[0],
-                        point[1] * scale[1],
-                        point[2] * scale[2],
-                    ]
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// Install `body` with its card mass; returns the handle and the volume of
-/// the hulls Box3D installed, which a fragment's density derives from. A scale
-/// or shape change rebuilds the world, so the volume holds for the install's
-/// life.
+/// Install `body` with its card mass through the collision-shape gate;
+/// returns the handle and the installed volume, which a fragment's density
+/// derives from. A scale or shape change rebuilds the world, so the volume
+/// holds for the install's life.
 fn add_body_geometry(
     world: &mut PhysicsWorld,
     body: &RigidBody,
@@ -399,16 +391,39 @@ fn add_copy(
     prototype: &RigidBody,
     pose: manifold_physics::BodyPose,
 ) -> Result<(BodyHandle, f32), String> {
-    let handle = if let Some(geometry) = prototype.collider.as_ref() {
-        let scaled = scale_hulls(geometry, prototype.transform.scale);
-        world.add_hulls(&scaled, prototype.config_at(pose))
-    } else {
-        let points = platonic_points(prototype.shape);
-        let scaled = scale_platonic_points(points, prototype.transform.scale);
-        world.add_hull(&scaled[..points.len()], prototype.config_at(pose))
+    let solid = prototype.collider.as_deref().ok_or("the body has no collision shape")?;
+    let scale = prototype.transform.scale;
+    let handle = solid.install(world, scale, prototype.config_at(pose)).map_err(|error| error.to_string())?;
+    let volume = match solid {
+        Solid::Hulls(_) => installed_volume(world, handle)?,
+        Solid::Mesh(mesh) => mesh_volume(mesh, scale),
+    };
+    Ok((handle, volume))
+}
+
+/// A static mesh's enclosed volume at `scale`, m³, or its bounding box's
+/// when it encloses none (an open surface).
+fn mesh_volume(mesh: &manifold_physics::TriangleMesh, scale: [f32; 3]) -> f32 {
+    let point = |index: u32| mesh.vertices[index as usize].map(f64::from);
+    let mut volume = 0.0f64;
+    for triangle in &mesh.triangles {
+        let [a, b, c] = triangle.map(point);
+        volume += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
     }
-    .map_err(|error| error.to_string())?;
-    Ok((handle, installed_volume(world, handle)?))
+    let scale_product = scale.iter().map(|s| f64::from(s.abs())).product::<f64>();
+    let volume = (volume / 6.0).abs() * scale_product;
+    if volume > 0.0 && volume.is_finite() {
+        return volume as f32;
+    }
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for vertex in &mesh.vertices {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(f64::from(vertex[axis] * scale[axis]));
+            max[axis] = max[axis].max(f64::from(vertex[axis] * scale[axis]));
+        }
+    }
+    (0..3).map(|axis| (max[axis] - min[axis]).max(1.0e-3)).product::<f64>() as f32
 }
 
 /// How many copies each group makes from the world's pool of `MAX_COPIES`,
@@ -543,6 +558,8 @@ pub struct RigidSimulation {
     /// from there, so every knot goes at the origin until a replay records
     /// at or past it or a frame moves transport on.
     owed_origin: Option<PlayedTime>,
+    /// The gate each frame's bodies pass, and what it refused.
+    admission: admission::Admission,
 }
 
 impl Default for RigidSimulation {
@@ -591,6 +608,7 @@ impl Default for RigidSimulation {
             requests: Vec::new(),
             replay_driven: false,
             owed_origin: None,
+            admission: Default::default(),
         }
     }
 }
@@ -641,15 +659,9 @@ impl RigidSimulation {
         self.copies_not_made
     }
 
-    /// Hold the transport clock while an upstream collider is still being
-    /// prepared. The next ready frame starts from its current authored time
-    /// instead of replaying time that elapsed with incomplete geometry.
-    pub fn hold_pending(&mut self, now: PlayedTime) {
-        self.accepted_observation = None;
-        if now.is_finite() {
-            self.last_time = Some(Seconds(now.seconds()));
-        }
-        self.pending_time = Seconds::ZERO;
+    /// The bodies the world leaves out this frame, and why.
+    pub fn refusals(&self) -> &[BodyRefusal] {
+        self.admission.refusals()
     }
 
     /// Advance a world of individually wired bodies with no copies or
@@ -720,6 +732,8 @@ impl RigidSimulation {
         self.targeted_fields.set_targets(bodies + groups);
     }
 
+    /// Admit this frame's bodies through the gate ([`admission`]), then
+    /// advance the world with what was admitted.
     #[allow(clippy::too_many_arguments)]
     fn advance_inner<C: StepCoupling>(
         &mut self,
@@ -731,13 +745,39 @@ impl RigidSimulation {
         accepted_interval: Option<StepInterval>,
         coupling: &mut C,
     ) -> Result<(), String> {
-        let SceneRef { bodies, groups, gravity, targeted_fields: targeted_fields_input, .. } = scene;
         self.accepted_observation = None;
-        if bodies.len() > MAX_BODY_ROWS || groups.len() > MAX_COPY_GROUPS {
+        if scene.bodies.len() > MAX_BODY_ROWS || scene.groups.len() > MAX_COPY_GROUPS {
             return Err(format!(
                 "Physics: a world takes at most {MAX_BODIES} bodies, {MAX_WALL_BODIES} domain walls and {MAX_COPY_GROUPS} copy groups"
             ));
         }
+        self.admission.admit(scene.bodies, scene.groups);
+        let (bodies, groups) = self.admission.take_admitted();
+        let result = self.advance_admitted(
+            SceneRef { bodies: &bodies, groups: &groups, ..scene },
+            now,
+            speed,
+            reset_count,
+            assigned_impulses,
+            accepted_interval,
+            coupling,
+        );
+        self.admission.restore_admitted(bodies, groups);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn advance_admitted<C: StepCoupling>(
+        &mut self,
+        scene: SceneRef<'_>,
+        now: Seconds,
+        speed: f32,
+        reset_count: f32,
+        assigned_impulses: Option<&[AppliedEvent<ResolvedRigidImpulse>]>,
+        accepted_interval: Option<StepInterval>,
+        coupling: &mut C,
+    ) -> Result<(), String> {
+        let SceneRef { bodies, groups, gravity, targeted_fields: targeted_fields_input, .. } = scene;
         let target_slots = bodies.len() + groups.len();
         if !targeted_fields_input.is_empty() && targeted_fields_input.len() != target_slots {
             return Err(format!(
@@ -754,9 +794,10 @@ impl RigidSimulation {
         } else {
             None
         };
+        // Speed clamps to its range and never stops the world.
+        let speed = speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1);
         if !now.0.is_finite()
             || !speed.is_finite()
-            || !(0.0..=4.0).contains(&speed)
             || !reset_count.is_finite()
             || gravity.iter().any(|v| !v.is_finite())
         {
@@ -766,7 +807,7 @@ impl RigidSimulation {
                 );
                 return Ok(());
             }
-            return Err("Physics: non-finite clock/control or speed outside 0–4".into());
+            return Err("Physics: non-finite clock or control".into());
         }
         if let Some(interval) = accepted_interval {
             let duration = interval.duration().0;
@@ -783,31 +824,7 @@ impl RigidSimulation {
                 return Ok(());
             }
         }
-        for prototype in groups.iter().flatten() {
-            validate_spawn(prototype.spawn)?;
-        }
         validate_fragments(bodies)?;
-        for prototype in groups.iter().flatten().filter(|body| body.enabled) {
-            validate_copy_prototype(prototype)?;
-        }
-        for b in bodies.iter().flatten() {
-            if !b.enabled {
-                continue;
-            }
-            if b.shape >= 5
-                || b.kind > 2
-                || b.transform.billboard
-                || b.transform
-                    .scale
-                    .iter()
-                    .any(|s| !s.is_finite() || *s <= 0.0 || *s > 100.0)
-            {
-                return Err(
-                    "Physics: use a Platonic shape, positive scale up to 100, and no billboard"
-                        .into(),
-                );
-            }
-        }
         let topology_changed = bodies.len() != self.descriptions.len()
             || bodies.iter().zip(self.descriptions.iter()).enumerate().any(|(slot, (new, old))| {
                 slot_needs_rebuild(self.handles.get(slot).is_some_and(Option::is_some), old.as_ref(), new.as_ref())
@@ -1221,6 +1238,7 @@ impl RigidSimulation {
         let SceneRef { bodies, groups, gravity, acceleration_field, .. } = scene;
         let (made, not_made) = copy_pool(groups.iter().map(Option::as_ref));
         let mut world = PhysicsWorld::new(gravity).map_err(|e| e.to_string())?;
+        self.admission.clear_lost();
         self.resize_for(bodies.len(), groups.len());
         self.handles.fill(None);
         for (i, body) in bodies.iter().enumerate() {
@@ -1369,8 +1387,8 @@ impl RigidSimulation {
                 if let (Some(old), Some(geometry)) = (old, body.collider.as_ref())
                     && !same_collider(old, body)
                 {
-                    world
-                        .replace_hulls(handle, &scale_hulls(geometry, body.transform.scale), body.config())
+                    geometry
+                        .replace(world, handle, body.transform.scale, body.config())
                         .map_err(|e| e.to_string())?;
                     self.volumes[i] = installed_volume(world, handle)?;
                 }
@@ -1538,7 +1556,7 @@ impl RigidSimulation {
         bodies: &[Option<RigidBody>],
         groups: &[Option<RigidBody>],
     ) -> Result<(), String> {
-        let world = self.world.as_ref().expect("world constructed above");
+        let world = self.world.as_mut().expect("world constructed above");
         // Resolve ordinary and released body poses first; inactive fragments
         // inherit their parent's current native pose below.
         for (i, body) in bodies.iter().enumerate().filter(|(i, body)| {
@@ -1554,6 +1572,12 @@ impl RigidSimulation {
                 continue;
             };
             let pose = world.pose(handle).map_err(|e| e.to_string())?;
+            if !in_range(pose) {
+                world.set_enabled(handle, false).map_err(|e| e.to_string())?;
+                self.admission.lost(Member::Body(i));
+                self.poses[i] = body.transform;
+                continue;
+            }
             let rot_euler = manifold_node_engine::scene::transform::quat_to_render_scene_euler(pose.rotation);
             self.poses[i] = Transform {
                 pos: pose.position,
@@ -1615,6 +1639,11 @@ impl RigidSimulation {
                         continue;
                     };
                     let pose = world.pose(handle).map_err(|e| e.to_string())?;
+                    if !in_range(pose) {
+                        world.set_enabled(handle, false).map_err(|e| e.to_string())?;
+                        self.admission.lost(Member::Copies(group));
+                        continue;
+                    }
                     state.poses[index] = Transform {
                         pos: pose.position,
                         rot_euler: manifold_node_engine::scene::transform::quat_to_render_scene_euler(pose.rotation),
@@ -2518,15 +2547,13 @@ fn body_min_extent(body: &RigidBody) -> f32 {
     };
     let mut minimum = [f32::INFINITY; 3];
     let mut maximum = [f32::NEG_INFINITY; 3];
-    for hull in &geometry.hulls {
-        for point in hull {
-            for axis in 0..3 {
-                let scaled = point[axis] * body.transform.scale[axis];
-                minimum[axis] = minimum[axis].min(scaled);
-                maximum[axis] = maximum[axis].max(scaled);
-            }
+    geometry.for_each_point(|point| {
+        for axis in 0..3 {
+            let scaled = point[axis] * body.transform.scale[axis];
+            minimum[axis] = minimum[axis].min(scaled);
+            maximum[axis] = maximum[axis].max(scaled);
         }
-    }
+    });
     let extent = minimum
         .into_iter()
         .zip(maximum)
@@ -2546,25 +2573,24 @@ fn body_collision_radius(body: &RigidBody) -> f32 {
     let Some(geometry) = body.collider.as_ref() else {
         return body.transform.scale.into_iter().fold(0.0, f32::max);
     };
-    let radius = geometry
-        .hulls
-        .iter()
-        .flat_map(|hull| hull.iter())
-        .map(|point| {
-            point
-                .iter()
-                .enumerate()
-                .map(|(axis, value)| value * body.transform.scale[axis])
-                .map(|value| value * value)
-                .sum::<f32>()
-                .sqrt()
-        })
-        .fold(0.0, f32::max);
+    let mut radius = 0.0f32;
+    geometry.for_each_point(|point| {
+        let length = (0..3).map(|axis| (point[axis] * body.transform.scale[axis]).powi(2)).sum::<f32>().sqrt();
+        radius = radius.max(length);
+    });
     if radius > 0.0 && radius.is_finite() {
         radius
     } else {
         body.transform.scale.into_iter().fold(0.0, f32::max)
     }
+}
+
+/// Whether a solved pose is still one the world can hold: finite and inside
+/// [`manifold_physics::collision_shape::MAX_COORDINATE`]. A body that blew up
+/// is taken out before its bounds can corrupt the broad phase.
+fn in_range(pose: manifold_physics::BodyPose) -> bool {
+    pose.position.iter().all(|value| value.is_finite() && value.abs() <= manifold_physics::collision_shape::MAX_COORDINATE)
+        && pose.rotation.iter().all(|value| value.is_finite())
 }
 
 fn predicted_dynamic_travel(velocity: [f32; 3], acceleration: [f32; 3], tick: f64) -> f32 {

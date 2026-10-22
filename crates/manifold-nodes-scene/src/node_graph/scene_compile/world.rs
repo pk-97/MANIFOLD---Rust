@@ -1,5 +1,5 @@
-//! World: the physics world once an item has physics (bodies join it in lane
-//! L4), the fog pass when fog is on, and the render settings on the scene's
+//! World: the physics world once an item has physics, with every body joined
+//! to it, the fog pass when fog is on, and the render settings on the scene's
 //! render node.
 
 use manifold_core::scene_doc::{ItemFields, WorldFields};
@@ -15,7 +15,8 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
     };
     let owner = item.id.as_str();
     if b.doc.any_physics() {
-        b.add(owner, "physics", "node.physics_world");
+        let world = b.add(owner, "physics", "node.physics_world");
+        super::physics::join_world(b, world);
     }
     if *fog {
         let atmosphere = b.add(owner, "fog", "node.atmosphere");

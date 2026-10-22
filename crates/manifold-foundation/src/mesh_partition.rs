@@ -1,4 +1,4 @@
-//! Deterministic spatial partitions of original triangles, shared by scene splitting and collider preparation.
+//! Deterministic spatial partitions of original triangles, shared by shatter fragments and collision shapes.
 use std::cmp::Ordering;
 
 #[derive(Clone, Debug, PartialEq)]

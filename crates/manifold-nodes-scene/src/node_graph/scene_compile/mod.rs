@@ -12,8 +12,7 @@
 //! decides which rows exist.
 //!
 //! Kinds whose emitters arrive in later lanes (Water, Water Source, Swarm,
-//! Force) and the Ocean shape compile to nothing yet. Every
-//! physics setting compiles as None (lane L4 owns the physics emit).
+//! Force) and the Ocean shape compile to nothing yet.
 
 mod builder;
 mod camera;
@@ -23,6 +22,7 @@ mod material;
 mod mesh;
 mod model_material;
 mod object;
+mod physics;
 mod world;
 
 pub(crate) use builder::Builder;

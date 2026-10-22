@@ -192,7 +192,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Facet Normals | `node.facet_normals` | Filter | Recomputes a mesh's normals from its own triangle geometry, giving flat, faceted shading — the exact fix for a mesh whose normals went stale after a heavy defo… |
 | Flatten 3D → 2D | `node.flatten_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
 | Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
-| Fluid Role Source | `node.fluid_role_source` | Source | Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire. |
+| Fluid Role Source | `node.fluid_role_source` | Source | Prepares one reusable fluid source geometry and emits its typed CPU role wire. |
 | Fold | `node.fold_mesh` | Filter | Mirrors a mesh across a plane through the origin along one axis, with adjustable blend amount — the building block for kaleidoscope geometry. |
 | Free Camera | `node.free_camera` | Source | A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly. |
 | Glitch Jitter | `node.glitch_jitter` | Filter | Snaps every vertex to a new random offset on each time step, giving a hard-cut digital glitch look. |

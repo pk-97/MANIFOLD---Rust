@@ -546,17 +546,9 @@
                   "id": 2,
                   "nodeId": "domain_initial_fill_role",
                   "params": {
-                    "radius": {
-                      "type": "Float",
-                      "value": 0.8660253882408142
-                    },
                     "role": {
                       "type": "Enum",
                       "value": 0
-                    },
-                    "shape": {
-                      "type": "Enum",
-                      "value": 1
                     }
                   },
                   "typeId": "node.fluid_role_source"
@@ -4615,10 +4607,6 @@
       "id": 481,
       "nodeId": "scan_collider",
       "params": {
-        "geometry": {
-          "type": "Enum",
-          "value": 1
-        },
         "path": {
           "type": "String",
           "value": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf"
@@ -4630,10 +4618,6 @@
         "role": {
           "type": "Enum",
           "value": 3
-        },
-        "shell_thickness": {
-          "type": "Float",
-          "value": 0.125
         }
       },
       "typeId": "node.fluid_role_source"

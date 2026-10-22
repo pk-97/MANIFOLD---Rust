@@ -8,7 +8,6 @@ pub mod material;
 pub mod mesh_asset_source;
 mod mesh_boundary;
 pub mod mesh_change;
-pub mod mesh_partition;
 pub mod mesh_source;
 pub mod mesh_selection;
 pub mod render_mode;

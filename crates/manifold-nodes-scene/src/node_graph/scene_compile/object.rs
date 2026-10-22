@@ -64,9 +64,14 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     }
     let object = b.add(owner, "object", "node.scene_object");
     let (surface, maps) = surface_for(b, &item.id);
+    // An object that is its own body draws at the body's solved pose.
+    let pose = super::physics::object(b, item, frame, mesh, transform);
     for w in object_wires(mesh, surface, transform, object) {
         if w.to_port == "vertices" {
             b.wire(vertices.0, vertices.1, object, "vertices");
+            continue;
+        }
+        if pose.is_some() && w.to_port == "transform" {
             continue;
         }
         b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
@@ -75,8 +80,13 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         b.wire(source, "out", object, port);
     }
     if let Some(frame) = frame {
-        b.wire(frame.transform, "transform", object, "parent_transform");
+        if pose.is_none() {
+            b.wire(frame.transform, "transform", object, "parent_transform");
+        }
         b.wire(frame.visible, "out", object, "parent_visible");
+    }
+    if let Some(pose) = pose {
+        b.wire(pose, "transform", object, "parent_transform");
     }
     b.objects.push(object);
     b.object_items.push(item.id.clone());

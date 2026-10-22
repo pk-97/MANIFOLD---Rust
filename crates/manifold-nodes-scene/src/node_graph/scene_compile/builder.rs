@@ -46,6 +46,7 @@ pub(crate) struct Builder<'d> {
     pub(crate) material_maps: BTreeMap<String, Vec<(u32, &'static str)>>,
     /// Every imported part's animation clocks: (part id, clock node).
     pub(crate) clocks: Vec<(ItemId, u32)>,
+    pub(crate) physics: super::physics::State,
 }
 
 impl<'d> Builder<'d> {
@@ -67,6 +68,7 @@ impl<'d> Builder<'d> {
             active_lens: None,
             material_maps: BTreeMap::new(),
             clocks: Vec::new(),
+            physics: super::physics::State::new(doc),
         };
         b.add(SCENE, "input", "system.generator_input");
         b.add(SCENE, "render", "node.render_scene");
@@ -100,6 +102,32 @@ impl<'d> Builder<'d> {
     /// `role` for `owner`.
     pub(crate) fn adopt(&mut self, owner: &str, role: &'static str, id: u32) {
         self.roles.insert((owner.to_owned(), role), id);
+    }
+
+    /// Bind `to` to every card row bound to `from`, starting at `from`'s
+    /// values: a second node that follows the same rows.
+    pub(crate) fn mirror(&mut self, from: u32, to: u32) {
+        let Some(source) = self.node_mut(from).map(|node| (node.node_id.clone(), node.params.clone())) else {
+            return;
+        };
+        let Some(target) = self.node_mut(to) else {
+            return;
+        };
+        target.params = source.1;
+        let target_id = target.node_id.clone();
+        let mirrored: Vec<BindingDef> = self
+            .bindings
+            .iter()
+            .filter(|binding| matches!(&binding.target, BindingTarget::Node { node_id, .. } if *node_id == source.0))
+            .map(|binding| {
+                let mut binding = binding.clone();
+                if let BindingTarget::Node { node_id, .. } = &mut binding.target {
+                    node_id.clone_from(&target_id);
+                }
+                binding
+            })
+            .collect();
+        self.bindings.extend(mirrored);
     }
 
     pub(crate) fn id(&self, owner: &str, role: &'static str) -> Option<u32> {
@@ -176,20 +204,19 @@ impl<'d> Builder<'d> {
     /// with a kind default write it. A row whose node was not emitted is
     /// skipped. Automatic rows were set by the emitter.
     pub(crate) fn rows(&mut self, item: &Item) {
-        self.apply_rows(item, false);
+        self.apply_rows(item, scene_schema::applicable(&item.fields).filter(|row| row.reach != Reach::Clocks));
     }
 
     /// Apply the item's rows that reach the animation clocks below it, once
     /// its parts have compiled.
     pub(crate) fn clock_rows(&mut self, item: &Item) {
-        self.apply_rows(item, true);
+        self.apply_rows(item, scene_schema::applicable(&item.fields).filter(|row| row.reach == Reach::Clocks));
     }
 
-    fn apply_rows(&mut self, item: &Item, clocks: bool) {
-        for row in scene_schema::applicable(&item.fields) {
-            if clocks != (row.reach == Reach::Clocks) {
-                continue;
-            }
+    /// Apply `rows` of the item's table, as [`Self::rows`] does: for a node
+    /// emitted after the item's own rows.
+    pub(crate) fn apply_rows<'r>(&mut self, item: &Item, rows: impl IntoIterator<Item = &'r PropertyRow>) {
+        for row in rows {
             let targets: Vec<u32> = match row.reach {
                 Reach::Own(role) => self.id(item.id.as_str(), role).into_iter().collect(),
                 Reach::Scene(role) => self.id(SCENE, role).into_iter().collect(),

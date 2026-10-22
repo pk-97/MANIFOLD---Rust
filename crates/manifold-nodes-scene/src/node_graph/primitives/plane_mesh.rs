@@ -23,6 +23,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::mesh_source::MeshSource;
 
 /// Number of triangle vertices in the flat plane (2 triangles × 3 vertices).
 pub const PLANE_VERTEX_COUNT: u32 = 6;
@@ -51,6 +52,7 @@ manifold_node_engine::primitive! {
     },
     outputs: {
         vertices: Array(MeshVertex),
+        source: MeshSource,
     },
     params: [
         ParamDef {
@@ -100,6 +102,7 @@ impl Primitive for GeneratePlaneMesh {
         // present, the param is the fallback.
         let width = ctx.scalar_or_param("width", 1.0);
         let height = ctx.scalar_or_param("height", 1.0);
+        ctx.outputs.set_mesh_source("source", MeshSource::Plane { width, height });
 
         let Some(dst) = ctx.outputs.array("vertices") else {
             return;
@@ -146,7 +149,7 @@ mod tests {
     use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
-    fn generate_plane_mesh_declares_width_height_inputs_and_mesh_array_output() {
+    fn generate_plane_mesh_declares_width_height_inputs_mesh_array_and_source_outputs() {
         let layout = ArrayType::of_known::<MeshVertex>();
         assert_eq!(GeneratePlaneMesh::TYPE_ID, "node.plane_mesh");
         assert_eq!(GeneratePlaneMesh::INPUTS.len(), 2);
@@ -156,7 +159,9 @@ mod tests {
         assert_eq!(GeneratePlaneMesh::INPUTS[1].name, "height");
         assert!(!GeneratePlaneMesh::INPUTS[1].required);
         assert_eq!(GeneratePlaneMesh::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(GeneratePlaneMesh::OUTPUTS.len(), 1);
+        assert_eq!(GeneratePlaneMesh::OUTPUTS.len(), 2);
+        assert_eq!(GeneratePlaneMesh::OUTPUTS[1].name, "source");
+        assert_eq!(GeneratePlaneMesh::OUTPUTS[1].ty, PortType::MeshSource);
         assert_eq!(GeneratePlaneMesh::OUTPUTS[0].name, "vertices");
         assert_eq!(
             GeneratePlaneMesh::OUTPUTS[0].ty,

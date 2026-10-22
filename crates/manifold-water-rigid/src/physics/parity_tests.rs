@@ -1,8 +1,8 @@
 //! Digests of every pose at tick 120 of the bundled Physics Boxes scene and a
-//! 64-body world. Each mass is the one its density gave the same body; the
-//! digests moved only when the card set Mass in kg, because installing a body
-//! with its mass directly rounds its inertia differently from the two-step
-//! install before.
+//! 64-body world. Each mass is the one its density gave the same body. A
+//! digest moves only when the solver's input moves: installing a body with
+//! its mass directly rounds inertia differently, and the bullet test measures
+//! a body by its collision shape's true extent, not its scale.
 
 use super::*;
 use manifold_core::copies_body::{platonic_width, size_multiple, spacing_unit};
@@ -76,7 +76,7 @@ fn sixty_four_bodies() -> Vec<Option<RigidBody>> {
         let (column, row, layer) = (i % 4, (i / 4) % 4, i / 16);
         *body = Some(with_density(
             RigidBody {
-                shape: (slot % 5) as u32,
+                collider: Some(platonic_solid((slot % 5) as u32)),
                 ..placed(
                     [column as f32 * 1.6 - 2.4, 1.5 + layer as f32 * 1.7, row as f32 * 1.6 - 2.4],
                     [0.1 * slot as f32, 0.07 * slot as f32, 0.0],
@@ -105,7 +105,7 @@ fn physics_boxes_and_a_sixty_four_body_world_keep_their_trajectory_at_tick_120()
     }
     assert_eq!(boxes.active_copies(0), 256);
     let boxes_digest = digest(boxes.poses.iter().chain(boxes.group_poses(0)).copied());
-    assert_eq!(boxes_digest, 0x1efc_b72b_ba2d_f6ba, "Physics Boxes left its trajectory");
+    assert_eq!(boxes_digest, 0x2966_a1fa_392f_4050, "Physics Boxes left its trajectory");
 
     let wired = sixty_four_bodies();
     let mut world = RigidSimulation::default();

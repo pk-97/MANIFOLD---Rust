@@ -4169,14 +4169,6 @@
         "role": {
           "type": "Enum",
           "value": 3
-        },
-        "shape": {
-          "type": "Enum",
-          "value": 1
-        },
-        "radius": {
-          "type": "Float",
-          "value": 0.8660254
         }
       }
     },
@@ -4278,17 +4270,9 @@
             "typeId": "node.fluid_role_source",
             "handle": "Initial Fill",
             "params": {
-              "radius": {
-                "type": "Float",
-                "value": 0.8660254
-              },
               "role": {
                 "type": "Enum",
                 "value": 0
-              },
-              "shape": {
-                "type": "Enum",
-                "value": 1
               }
             }
           },

@@ -590,10 +590,6 @@ impl Primitive for GltfMeshSource {
                                 translate,
                                 fragment_count,
                                 fragment_index,
-                                // Collider preparation owns this setting; a
-                                // visible mesh source carries a neutral
-                                // default for the later role consumer.
-                                collider_parts: 32,
                             },
                         });
                     }
@@ -1014,7 +1010,6 @@ mod tests {
         };
         assert_eq!(loaded_path.as_ref(), path_a);
         assert_eq!(loaded_selection.mesh, -1);
-        assert_eq!(loaded_selection.collider_parts, 32);
         assert_eq!(primitive.cached_verts.capacity(), 0);
         let SourceAssetIdentity::Ready(identity_a) = Primitive::source_asset_identity(&primitive, &params_a) else {
             panic!("published CPU source must expose its loaded identity");
@@ -1063,7 +1058,6 @@ mod tests {
         };
         assert_eq!(loaded_path.as_ref(), path_b);
         assert_eq!(loaded_selection.mesh, 0);
-        assert_eq!(loaded_selection.collider_parts, 32);
         assert_eq!(primitive.cached_verts.capacity(), 0);
         let SourceAssetIdentity::Ready(identity_b) = Primitive::source_asset_identity(&primitive, &params_b) else {
             panic!("replacement CPU source must publish its own loaded identity");
@@ -1533,7 +1527,7 @@ mod mesh_asset_source_tests {
         for (mesh, primitive) in [(-1, -1), (0, -1), (0, 0)] {
             let selection = manifold_node_engine::scene::mesh_selection::MeshSelection {
                 mesh, primitive, material: -1, fit: true, recenter: true,
-                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0, collider_parts: 1,
+                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0,
             };
             let direct = super::load_physics_mesh_asset(&path, &selection).unwrap();
             let registered = manifold_node_engine::scene::mesh_asset_source::load_mesh(&path, &selection).unwrap();

@@ -305,10 +305,6 @@
       "typeId": "node.rigid_body",
       "handle": "Ground Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 1
-        },
         "motion": {
           "type": "Enum",
           "value": 0
@@ -376,7 +372,12 @@
       "nodeId": "physics_demo_102",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Ground Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
     },
     {
       "id": 103,
@@ -419,10 +420,6 @@
       "typeId": "node.rigid_body",
       "handle": "Box Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 1
-        },
         "motion": {
           "type": "Enum",
           "value": 1
@@ -521,7 +518,12 @@
       "nodeId": "physics_demo_122",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Box Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
     },
     {
       "id": 123,
@@ -608,10 +610,6 @@
       "typeId": "node.rigid_body",
       "handle": "Left Ramp Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 1
-        },
         "motion": {
           "type": "Enum",
           "value": 0
@@ -635,7 +633,12 @@
       "nodeId": "physics_demo_142",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Left Ramp Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
     },
     {
       "id": 143,
@@ -722,10 +725,6 @@
       "typeId": "node.rigid_body",
       "handle": "Right Ramp Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 1
-        },
         "motion": {
           "type": "Enum",
           "value": 0
@@ -749,7 +748,12 @@
       "nodeId": "physics_demo_162",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Right Ramp Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
     },
     {
       "id": 163,
@@ -831,10 +835,10 @@
       "toPort": "body_0"
     },
     {
-      "fromNode": 101,
-      "fromPort": "shape",
-      "toNode": 102,
-      "toPort": "shape"
+      "fromNode": 102,
+      "fromPort": "source",
+      "toNode": 101,
+      "toPort": "source"
     },
     {
       "fromNode": 102,
@@ -873,10 +877,10 @@
       "toPort": "copies_0"
     },
     {
-      "fromNode": 121,
-      "fromPort": "shape",
-      "toNode": 122,
-      "toPort": "shape"
+      "fromNode": 122,
+      "fromPort": "source",
+      "toNode": 121,
+      "toPort": "source"
     },
     {
       "fromNode": 122,
@@ -921,10 +925,10 @@
       "toPort": "body_1"
     },
     {
-      "fromNode": 141,
-      "fromPort": "shape",
-      "toNode": 142,
-      "toPort": "shape"
+      "fromNode": 142,
+      "fromPort": "source",
+      "toNode": 141,
+      "toPort": "source"
     },
     {
       "fromNode": 142,
@@ -963,10 +967,10 @@
       "toPort": "body_2"
     },
     {
-      "fromNode": 161,
-      "fromPort": "shape",
-      "toNode": 162,
-      "toPort": "shape"
+      "fromNode": 162,
+      "fromPort": "source",
+      "toNode": 161,
+      "toPort": "source"
     },
     {
       "fromNode": 162,

@@ -10,6 +10,7 @@ use manifold_node_engine::validation::GraphError;
 use manifold_core::Beats;
 use manifold_core::Seconds;
 use manifold_node_engine::scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID;
+use manifold_water_rigid::physics_mesh::MESH_PORTS;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_water_rigid::physics::SimStep;
 use manifold_water_rigid::node;
@@ -55,7 +56,7 @@ fn setup_input(node: &dyn EffectNode, port: &str) -> bool {
         return !tick_sampled::replays_input(port);
     }
     match node.type_id().as_str() {
-        "node.rigid_body" => matches!(port, "release_count" | "source"),
+        "node.rigid_body" => matches!(port, "release_count" | "source") || MESH_PORTS.contains(&port),
         "node.fluid_role_source" => !matches!(
             port,
             "transform"

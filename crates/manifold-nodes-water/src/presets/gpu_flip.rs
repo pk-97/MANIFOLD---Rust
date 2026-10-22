@@ -77,11 +77,8 @@ manifold_core::testkit_visible! {
 pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
 }
 
-/// Fluid role Collider and the role source's built-in cube, whose circumradius
-/// 0.866 makes it a unit cube before the transform.
+/// Fluid role Collider; the role source's built-in shape is a unit cube.
 const COLLIDER_ROLE: usize = 3;
-const CUBE_SHAPE: usize = 1;
-const UNIT_CUBE_RADIUS: f64 = 0.866_025_4;
 
 manifold_core::testkit_visible! {
 /// A liquid in a cubic tank: a pool `fill_height` deep plus one box, both
@@ -573,8 +570,6 @@ fn obstacle_source(b: &mut Builder) -> (usize, usize) {
         "node.fluid_role_source",
         json!({
             "role": {"type": "Enum", "value": COLLIDER_ROLE},
-            "shape": {"type": "Enum", "value": CUBE_SHAPE},
-            "radius": float(UNIT_CUBE_RADIUS),
         }),
     );
     b.wire((transform, "transform"), collider, "transform");

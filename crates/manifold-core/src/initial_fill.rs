@@ -20,11 +20,8 @@ use crate::NodeId;
 pub const INITIAL_VOLUME_PORT: &str = "initial_volume";
 pub const FLUID_ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 pub const TRANSFORM_3D_TYPE_ID: &str = "node.transform_3d";
-/// `node.fluid_role_source`'s Initial Fill role and Cube shape.
+/// `node.fluid_role_source`'s Initial Fill role. With no mesh it fills a unit cube, so the transform's scale is the box.
 pub const INITIAL_FILL_ROLE: u32 = 0;
-pub const CUBE_SHAPE: u32 = 1;
-/// A unit cube's circumradius, so the transform's scale is the box.
-pub const UNIT_CUBE_RADIUS: f32 = 0.866_025_4;
 /// The name an Initial Fill group and its role source carry.
 pub const INITIAL_FILL_NAME: &str = "Initial Fill";
 
@@ -264,8 +261,6 @@ fn initial_fill_body(transform: Option<EffectGraphNode>, domain_id: &str, taken:
     let mut role = bare_node(role_id, FLUID_ROLE_SOURCE_TYPE_ID, fresh_id(&format!("{domain_id}_initial_fill_role"), taken), Some(INITIAL_FILL_NAME));
     role.params = BTreeMap::from([
         ("role".to_owned(), SerializedParamValue::Enum { value: INITIAL_FILL_ROLE }),
-        ("shape".to_owned(), SerializedParamValue::Enum { value: CUBE_SHAPE }),
-        ("radius".to_owned(), SerializedParamValue::Float { value: UNIT_CUBE_RADIUS }),
     ]);
     let output = bare_node(output_id, GROUP_OUTPUT_TYPE_ID, fresh_id(&format!("{domain_id}_initial_fill_output"), taken), None);
     let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire {
@@ -365,7 +360,6 @@ mod tests {
         assert_eq!((&moved.params, &moved.handle), (&saved.params, &saved.handle));
         let role = body.nodes.iter().find(|node| node.type_id == FLUID_ROLE_SOURCE_TYPE_ID).unwrap();
         assert_eq!(role.params["role"], SerializedParamValue::Enum { value: INITIAL_FILL_ROLE });
-        assert_eq!(role.params["shape"], SerializedParamValue::Enum { value: CUBE_SHAPE });
         assert!(body.wires.contains(&wire(moved.id, "transform", role.id, "transform")));
         let ids = document_node_ids(&graph);
         assert_eq!(ids.len(), graph.nodes.len() + body.nodes.len(), "every stable id is unique");

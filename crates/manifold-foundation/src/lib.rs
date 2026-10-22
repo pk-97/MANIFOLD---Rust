@@ -21,6 +21,7 @@ pub mod device_guard;
 pub mod fonts;
 pub mod hash;
 pub mod id;
+pub mod mesh_partition;
 pub mod param_range;
 pub mod scene_surface;
 pub mod scratch;

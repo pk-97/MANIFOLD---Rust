@@ -977,7 +977,7 @@ mod tests {
                 [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6],
                 [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3],
             ],
-        }], 0.0))
+        }]))
     }
 
     fn collider(geometry: &Arc<PreparedFluidGeometry>, pos: [f32; 3], yaw: f32) -> Option<FluidRole> {
@@ -1644,7 +1644,7 @@ mod tests {
         Arc::new(PreparedFluidGeometry::new(vec![manifold_physics::TriangleMesh {
             vertices: vec![[-half, 0.0, -half], [half, 0.0, -half], [half, 0.0, half], [-half, 0.0, half]],
             triangles: vec![[0, 2, 1], [0, 3, 2]],
-        }], 0.05))
+        }]))
     }
 
     /// The thin-collider check sees a shell's wall, not its mesh's bounds:
@@ -1657,7 +1657,7 @@ mod tests {
         assert_eq!(thinnest(&plan, [2.0, 1.0, 3.0]), 1.0);
         let mut meshes = closed.meshes.clone();
         meshes[0].triangles.truncate(10);
-        let lidless = PreparedFluidGeometry::new(meshes, 0.05);
+        let lidless = PreparedFluidGeometry::new(meshes);
         let plan = lidless.lattice_plan(0.1, [1.0; 3]).unwrap();
         assert!(plan.open);
         assert!((thinnest(&plan, [1.0; 3]) - 0.2).abs() < 1e-6, "{}", thinnest(&plan, [1.0; 3]));

@@ -1,8 +1,9 @@
 //! Bounded measurement of imported objects through the production RigidSimulation.
 //! Usage: physics_mesh_benchmark model.glb [pieces=1]
 use manifold_core::PlayedTime;
-use {manifold_water_rigid::physics::MAX_BODIES, manifold_water_rigid::physics::RigidBody, manifold_water_rigid::physics::RigidSimulation, manifold_node_engine::scene::mesh_selection::MeshSelection, manifold_water_rigid::physics_mesh::prepare_colliders, manifold_node_engine::scene::mesh_selection::select_fragment, manifold_node_engine::scene::transform::Transform};
+use {manifold_water_rigid::physics::MAX_BODIES, manifold_water_rigid::physics::RigidBody, manifold_water_rigid::physics::RigidSimulation, manifold_node_engine::scene::mesh_selection::MeshSelection, manifold_node_engine::scene::mesh_selection::select_fragment, manifold_node_engine::scene::transform::Transform};
 use std::{path::Path, sync::Arc, time::Instant};
+use manifold_physics::collision_shape::{CollisionShape, Solid};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -23,7 +24,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         translate: [0.0; 3],
         fragment_count: 1,
         fragment_index: 0,
-        collider_parts: 32,
     };
     let vertices = selection.load(Path::new(path))?;
     let mut bodies = vec![None; count + 1];
@@ -38,7 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     for index in 0..count {
         let part = select_fragment(vertices.clone(), count as u32, index as u32)?;
-        let collider = Arc::new(prepare_colliders(&part, if count == 1 { 32 } else { 1 })?);
+        let positions: Vec<[f32; 3]> = part.iter().map(|vertex| vertex.position).collect();
+        let hulls = CollisionShape::from_triangle_lists([positions.as_slice()])?.body_hulls([2.2; 3])?;
+        let collider = Arc::new(Solid::Hulls(hulls));
         bodies[index + 1] = Some(RigidBody {
             transform: Transform {
                 pos: [0.0, 2.1, 0.0],

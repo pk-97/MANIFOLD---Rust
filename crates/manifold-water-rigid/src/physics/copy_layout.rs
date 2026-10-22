@@ -4,7 +4,6 @@
 //! computed only here; the card and the gizmo show the group, never a copy.
 
 use manifold_core::copies_body::{spacing_unit, SCATTER_JITTER};
-use manifold_node_engine::platonic::platonic_points;
 use manifold_node_engine::scene::transform::Transform;
 use manifold_physics::BodyPose;
 
@@ -149,9 +148,8 @@ pub(crate) fn copy_width(prototype: &RigidBody) -> [f32; 3] {
             maximum[axis] = maximum[axis].max(scaled);
         }
     };
-    match prototype.collider.as_ref() {
-        Some(geometry) => geometry.hulls.iter().flatten().for_each(&mut grow),
-        None => platonic_points(prototype.shape).iter().for_each(&mut grow),
+    if let Some(solid) = prototype.collider.as_deref() {
+        solid.for_each_point(&mut grow);
     }
     std::array::from_fn(|axis| {
         let width = maximum[axis] - minimum[axis];

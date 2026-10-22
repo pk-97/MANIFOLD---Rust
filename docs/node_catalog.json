@@ -10815,7 +10815,6 @@
       "aliases": [
         "fluid source",
         "fluid role",
-        "fluid collider",
         "inflow",
         "outflow",
         "initial fill"
@@ -11517,26 +11516,6 @@
           "type": "f32"
         },
         {
-          "name": "geometry",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "shell_thickness",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "shape",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "radius",
-          "required": false,
-          "type": "f32"
-        },
-        {
           "name": "mesh_index",
           "required": false,
           "type": "f32"
@@ -11585,11 +11564,6 @@
           "name": "fragment_index",
           "required": false,
           "type": "f32"
-        },
-        {
-          "name": "collider_parts",
-          "required": false,
-          "type": "f32"
         }
       ],
       "label": "Fluid Role Source",
@@ -11605,14 +11579,13 @@
           "enum_values": [
             "Initial Fill",
             "Inflow",
-            "Outflow",
-            "Collider"
+            "Outflow"
           ],
           "label": "Role",
           "name": "role",
           "range": [
             "0",
-            "3"
+            "2"
           ],
           "type": "enum"
         },
@@ -11669,57 +11642,6 @@
           "range": [
             "0",
             "1"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Collision Proxy",
-            "Exact Mesh"
-          ],
-          "label": "Geometry",
-          "name": "geometry",
-          "range": [
-            "0",
-            "1"
-          ],
-          "type": "enum"
-        },
-        {
-          "default": "0.05",
-          "label": "Shell Thickness",
-          "name": "shell_thickness",
-          "range": [
-            "0",
-            "1"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "enum_values": [
-            "Tetrahedron",
-            "Cube",
-            "Octahedron",
-            "Icosahedron",
-            "Dodecahedron"
-          ],
-          "label": "Builtin Shape",
-          "name": "shape",
-          "range": [
-            "0",
-            "4"
-          ],
-          "type": "enum"
-        },
-        {
-          "default": "1",
-          "label": "Radius",
-          "name": "radius",
-          "range": [
-            "0.001",
-            "1000"
           ],
           "type": "float"
         },
@@ -11822,22 +11744,12 @@
             "63"
           ],
           "type": "int"
-        },
-        {
-          "default": "32",
-          "label": "Collider Detail",
-          "name": "collider_parts",
-          "range": [
-            "1",
-            "64"
-          ],
-          "type": "int"
         }
       ],
-      "purpose": "Prepare one built-in or imported mesh as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Exact Mesh preserves the exact indexed surface after exact-coordinate welding: its closed parts are solid volumes and its open parts are shells Shell Thickness (world metres) thick. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
+      "purpose": "Prepare one imported or wired mesh (a cube when there is none) as a CPU FluidRole wire: the exact indexed surface after exact-coordinate welding, closed parts solid and open parts shells with an automatic thickness (manifold_physics::collision_shape). Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire.",
+      "summary": "Prepares one reusable fluid source geometry and emits its typed CPU role wire.",
       "type_id": "node.fluid_role_source"
     },
     {
@@ -33332,6 +33244,10 @@
           "capacity": "param:max_capacity=6",
           "name": "vertices",
           "type": "Array"
+        },
+        {
+          "name": "source",
+          "type": "MeshSource"
         }
       ],
       "params": [
@@ -38109,6 +38025,326 @@
           "type": "Transform"
         },
         {
+          "name": "mesh_0",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_1",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_2",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_3",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_4",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_5",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_6",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_7",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_8",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_9",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_10",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_11",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_12",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_13",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_14",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_15",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_16",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_17",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_18",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_19",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_20",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_21",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_22",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_23",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_24",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_25",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_26",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_27",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_28",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_29",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_30",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_31",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_32",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_33",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_34",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_35",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_36",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_37",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_38",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_39",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_40",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_41",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_42",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_43",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_44",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_45",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_46",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_47",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_48",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_49",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_50",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_51",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_52",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_53",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_54",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_55",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_56",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_57",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_58",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_59",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_60",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_61",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_62",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
+          "name": "mesh_63",
+          "required": false,
+          "type": "MeshSource"
+        },
+        {
           "name": "mass",
           "required": false,
           "type": "f32"
@@ -38176,10 +38412,6 @@
           "type": "RigidBody"
         },
         {
-          "name": "shape",
-          "type": "f32"
-        },
-        {
           "name": "pose",
           "type": "Transform"
         },
@@ -38199,23 +38431,6 @@
           "label": "Enabled",
           "name": "enabled",
           "type": "bool"
-        },
-        {
-          "default": "1",
-          "enum_values": [
-            "Tetrahedron",
-            "Cube",
-            "Octahedron",
-            "Icosahedron",
-            "Dodecahedron"
-          ],
-          "label": "Shape",
-          "name": "shape",
-          "range": [
-            "0",
-            "4"
-          ],
-          "type": "enum"
         },
         {
           "default": "1",
@@ -38377,22 +38592,6 @@
           "type": "int"
         },
         {
-          "default": "32",
-          "label": "Collider Detail",
-          "name": "collider_parts",
-          "range": [
-            "1",
-            "64"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Compound Materials",
-          "name": "compound_materials",
-          "type": "table"
-        },
-        {
           "default": "100",
           "label": "Count",
           "name": "copy_count",
@@ -38469,7 +38668,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Describe a rigid body's shape, starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
+      "purpose": "Describe a rigid body's starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Its collision shape comes from its mesh automatically (manifold_physics::collision_shape): a Fixed body is the exact mesh, a moving body convex hulls with detail chosen from its size and triangles. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",

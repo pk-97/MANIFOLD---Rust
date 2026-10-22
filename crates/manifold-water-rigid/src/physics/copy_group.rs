@@ -77,7 +77,7 @@ impl CopyGroup {
     }
 }
 
-pub(crate) fn validate_spawn(spawn: CopySpawn) -> Result<(), String> {
+pub(crate) fn validate_spawn(spawn: CopySpawn) -> Result<(), &'static str> {
     if !spawn.count.is_finite()
         || !spawn.spacing.is_finite()
         || spawn.spacing <= 0.0
@@ -85,14 +85,13 @@ pub(crate) fn validate_spawn(spawn: CopySpawn) -> Result<(), String> {
         || !spawn.layout.is_finite()
         || spawn.turn.iter().any(|turn| !turn.is_finite())
     {
-        return Err("Physics: copy count, spacing, columns, layout and turn must be finite; spacing must be positive".into());
+        return Err("copy count, spacing, columns, layout and turn must be finite; spacing must be positive");
     }
     Ok(())
 }
 
-pub(crate) fn validate_copy_prototype(prototype: &RigidBody) -> Result<(), String> {
-    if prototype.shape >= 5
-        || prototype.kind > 2
+pub(crate) fn validate_copy_prototype(prototype: &RigidBody) -> Result<(), &'static str> {
+    if prototype.kind > 2
         || prototype.transform.billboard
         || prototype
             .transform
@@ -100,7 +99,7 @@ pub(crate) fn validate_copy_prototype(prototype: &RigidBody) -> Result<(), Strin
             .iter()
             .any(|s| !s.is_finite() || *s <= 0.0 || *s > 100.0)
     {
-        return Err("Physics: copy prototype needs a Platonic shape, positive scale up to 100, and no billboard".into());
+        return Err("copies need a positive scale up to 100 and no billboard");
     }
     let scale = prototype.transform.scale[0];
     if prototype
@@ -109,7 +108,7 @@ pub(crate) fn validate_copy_prototype(prototype: &RigidBody) -> Result<(), Strin
         .iter()
         .any(|axis| (*axis - scale).abs() > 1.0e-5)
     {
-        return Err("Physics: copy prototype scale must be uniform".into());
+        return Err("copies need one scale on all three axes");
     }
     Ok(())
 }

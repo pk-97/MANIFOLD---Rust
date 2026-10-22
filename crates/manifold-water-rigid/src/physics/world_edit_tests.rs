@@ -188,7 +188,7 @@ fn slab_with_collider(offset: f32) -> RigidBody {
             if i & 4 == 0 { -0.5 } else { 0.5 },
         ]
     });
-    RigidBody { collider: Some(Arc::new(ColliderGeometry { hulls: vec![corners.collect()] })), ..slab(0.0) }
+    RigidBody { collider: Some(Arc::new(Solid::Hulls(vec![corners.collect()]))), ..slab(0.0) }
 }
 
 /// Dragging a part of an imported scan re-cooks the Fixed body's collider.

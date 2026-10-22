@@ -504,9 +504,7 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
         // 90 kg in the 0.5 × 0.4 × 0.45 m box.
         mass: 90.0,
         bounce: 0.0,
-        collider: Some(Arc::new(ColliderGeometry {
-            hulls: vec![vertices],
-        })),
+        collider: Some(Arc::new(Solid::Hulls(vec![vertices]))),
         ..RigidBody::default()
     });
     let mut simulation = RigidSimulation::default();

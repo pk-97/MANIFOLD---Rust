@@ -217,10 +217,6 @@
       "typeId": "node.rigid_body",
       "handle": "Ground Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 1
-        },
         "motion": {
           "type": "Enum",
           "value": 0
@@ -288,7 +284,12 @@
       "nodeId": "physics_demo_102",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Ground Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
     },
     {
       "id": 103,
@@ -331,10 +332,6 @@
       "typeId": "node.rigid_body",
       "handle": "Tetrahedron Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 0
-        },
         "motion": {
           "type": "Enum",
           "value": 1
@@ -402,7 +399,12 @@
       "nodeId": "physics_demo_112",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Tetrahedron Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
     },
     {
       "id": 113,
@@ -445,10 +447,6 @@
       "typeId": "node.rigid_body",
       "handle": "Cube Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 1
-        },
         "motion": {
           "type": "Enum",
           "value": 1
@@ -516,7 +514,12 @@
       "nodeId": "physics_demo_122",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Cube Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
     },
     {
       "id": 123,
@@ -559,10 +562,6 @@
       "typeId": "node.rigid_body",
       "handle": "Octahedron Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 2
-        },
         "motion": {
           "type": "Enum",
           "value": 1
@@ -630,7 +629,12 @@
       "nodeId": "physics_demo_132",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Octahedron Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
     },
     {
       "id": 133,
@@ -673,10 +677,6 @@
       "typeId": "node.rigid_body",
       "handle": "Icosahedron Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 3
-        },
         "motion": {
           "type": "Enum",
           "value": 1
@@ -744,7 +744,12 @@
       "nodeId": "physics_demo_142",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Icosahedron Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 3
+        }
+      }
     },
     {
       "id": 143,
@@ -787,10 +792,6 @@
       "typeId": "node.rigid_body",
       "handle": "Dodecahedron Body",
       "params": {
-        "shape": {
-          "type": "Enum",
-          "value": 4
-        },
         "motion": {
           "type": "Enum",
           "value": 1
@@ -858,7 +859,12 @@
       "nodeId": "physics_demo_152",
       "typeId": "node.platonic_solid_mesh",
       "handle": "Dodecahedron Mesh",
-      "params": {}
+      "params": {
+        "shape": {
+          "type": "Enum",
+          "value": 4
+        }
+      }
     },
     {
       "id": 153,
@@ -952,10 +958,10 @@
       "toPort": "body_0"
     },
     {
-      "fromNode": 101,
-      "fromPort": "shape",
-      "toNode": 102,
-      "toPort": "shape"
+      "fromNode": 102,
+      "fromPort": "source",
+      "toNode": 101,
+      "toPort": "source"
     },
     {
       "fromNode": 102,
@@ -994,10 +1000,10 @@
       "toPort": "body_1"
     },
     {
-      "fromNode": 111,
-      "fromPort": "shape",
-      "toNode": 112,
-      "toPort": "shape"
+      "fromNode": 112,
+      "fromPort": "source",
+      "toNode": 111,
+      "toPort": "source"
     },
     {
       "fromNode": 112,
@@ -1036,10 +1042,10 @@
       "toPort": "body_2"
     },
     {
-      "fromNode": 121,
-      "fromPort": "shape",
-      "toNode": 122,
-      "toPort": "shape"
+      "fromNode": 122,
+      "fromPort": "source",
+      "toNode": 121,
+      "toPort": "source"
     },
     {
       "fromNode": 122,
@@ -1078,10 +1084,10 @@
       "toPort": "body_3"
     },
     {
-      "fromNode": 131,
-      "fromPort": "shape",
-      "toNode": 132,
-      "toPort": "shape"
+      "fromNode": 132,
+      "fromPort": "source",
+      "toNode": 131,
+      "toPort": "source"
     },
     {
       "fromNode": 132,
@@ -1120,10 +1126,10 @@
       "toPort": "body_4"
     },
     {
-      "fromNode": 141,
-      "fromPort": "shape",
-      "toNode": 142,
-      "toPort": "shape"
+      "fromNode": 142,
+      "fromPort": "source",
+      "toNode": 141,
+      "toPort": "source"
     },
     {
       "fromNode": 142,
@@ -1162,10 +1168,10 @@
       "toPort": "body_5"
     },
     {
-      "fromNode": 151,
-      "fromPort": "shape",
-      "toNode": 152,
-      "toPort": "shape"
+      "fromNode": 152,
+      "fromPort": "source",
+      "toNode": 151,
+      "toPort": "source"
     },
     {
       "fromNode": 152,
