@@ -12,6 +12,7 @@ use crate::scene_doc::{EnvironmentSource, ItemFields, LightType, SkyStyle};
 const LIGHT: Reach = Reach::Own("light");
 const ENV: Reach = Reach::Own("environment");
 const HDRI: Reach = Reach::Own("hdri");
+const SEA: Reach = Reach::Own("sea");
 // The picture behind the scene, in HDRI mode (SCENE_DOCUMENT_DESIGN.md
 // section 8): the sky the HDRI makes for the active camera, blurred, dimmed
 // or lifted, laid under the finished image when the Background switch is on.
@@ -57,8 +58,16 @@ fn softbox(fields: &ItemFields) -> bool {
     sky(fields, SkyStyle::Softbox)
 }
 
+/// An image-based source: an HDRI file, with or without the sea under it.
 fn hdri(fields: &ItemFields) -> bool {
-    matches!(light_type(fields), Some(LightType::Environment { source: EnvironmentSource::Hdri { .. } }))
+    matches!(
+        light_type(fields),
+        Some(LightType::Environment { source: EnvironmentSource::Hdri { .. } | EnvironmentSource::SeaHorizon { .. } })
+    )
+}
+
+fn sea_horizon(fields: &ItemFields) -> bool {
+    matches!(light_type(fields), Some(LightType::Environment { source: EnvironmentSource::SeaHorizon { .. } }))
 }
 
 const fn metres(property: &'static str) -> PropertyRow {
@@ -69,7 +78,7 @@ const fn softbox_row(property: &'static str) -> PropertyRow {
     row(property, ENV, Environment, setup()).when(softbox)
 }
 
-pub static LIGHT_ROWS: [PropertyRow; 43] = [
+pub static LIGHT_ROWS: [PropertyRow; 48] = [
     // Sun, Point, Spot. A new light starts where the compiler's lamp body
     // puts it (`scene_compile::light::lamp_params`).
     row("light_type", LIGHT, Light, Exposure::Automatic("the light's type")).param("mode").when(lamp),
@@ -135,7 +144,13 @@ pub static LIGHT_ROWS: [PropertyRow; 43] = [
     row("hdri_height", HDRI, Environment, Exposure::Internal("the HDRI is read at 2048 by 1024")).param("height").when(hdri),
     row("bg_enabled", BG_SELECT, Environment, setup()).param("selector").switch(Feature::Background).toggle().default(0.0).when(hdri),
     row("bg_blur", BG_BLUR, Environment, setup()).param("radius").range(0.0, 64.0).limit(AT_LEAST_ZERO).gate(BACKGROUND_ON).default(0.0).when(hdri),
+    row("bg_blur_mode", BG_BLUR, Environment, Exposure::Internal("the background blur is the node's default kind")).param("mode").when(hdri),
     row("bg_brightness", BG_GAIN, Environment, setup()).param("gain").range(0.0, 4.0).limit(AT_LEAST_ZERO).gate(BACKGROUND_ON).default(1.0).when(hdri),
+    // Sea Horizon: the lower half of the HDRI is open water (`node.sea_horizon_env`).
+    row("sea_ior", SEA, Environment, setup()).param("ior").when(sea_horizon),
+    row("water_r", SEA, Environment, setup()).name("Water Colour").colour(RgbChannel::R).when(sea_horizon),
+    row("water_g", SEA, Environment, setup()).colour(RgbChannel::G).when(sea_horizon),
+    row("water_b", SEA, Environment, setup()).colour(RgbChannel::B).when(sea_horizon),
     row("bg_inputs", BG_SELECT, Environment, Exposure::Automatic("two pictures: the scene, and the scene over the sky")).param("num_inputs").when(hdri),
 ];
 
@@ -148,6 +163,7 @@ const LAMPS: &[Choice] = &[
 const SOURCES: &[Choice] = &[
     Choice { key: "sky", label: "Sky" },
     Choice { key: "hdri", label: "HDRI File" },
+    Choice { key: "sea_horizon", label: "Sea Horizon" },
     Choice { key: "none", label: "None" },
 ];
 
@@ -199,6 +215,7 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
             FieldValue::Choice(
                 match light_type(fields) {
                     Some(LightType::Environment { source: EnvironmentSource::Hdri { .. } }) => "hdri",
+                    Some(LightType::Environment { source: EnvironmentSource::SeaHorizon { .. } }) => "sea_horizon",
                     Some(LightType::Environment { source: EnvironmentSource::None }) => "none",
                     _ => "sky",
                 }
@@ -215,7 +232,11 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
                 ("sky", EnvironmentSource::Sky { .. }) => source.clone(),
                 ("sky", _) => EnvironmentSource::Sky { style: SkyStyle::default() },
                 ("hdri", EnvironmentSource::Hdri { .. }) => source.clone(),
+                ("hdri", EnvironmentSource::SeaHorizon { file }) => EnvironmentSource::Hdri { file: file.clone() },
                 ("hdri", _) => EnvironmentSource::Hdri { file: String::new() },
+                ("sea_horizon", EnvironmentSource::SeaHorizon { .. }) => source.clone(),
+                ("sea_horizon", EnvironmentSource::Hdri { file }) => EnvironmentSource::SeaHorizon { file: file.clone() },
+                ("sea_horizon", _) => EnvironmentSource::SeaHorizon { file: String::new() },
                 ("none", _) => EnvironmentSource::None,
                 _ => return Err(wrong_value("environment_source", value)),
             };
@@ -262,7 +283,9 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
         applies: hdri,
         disabled: enabled,
         read: |fields| match light_type(fields) {
-            Some(LightType::Environment { source: EnvironmentSource::Hdri { file } }) => FieldValue::File(file.clone()),
+            Some(LightType::Environment { source: EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file } }) => {
+                FieldValue::File(file.clone())
+            }
             _ => FieldValue::File(String::new()),
         },
         write: |fields, value| {
@@ -271,7 +294,10 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
             else {
                 return Err(wrong_value("hdri_file", value));
             };
-            *source = EnvironmentSource::Hdri { file: path.clone() };
+            *source = match source {
+                EnvironmentSource::SeaHorizon { .. } => EnvironmentSource::SeaHorizon { file: path.clone() },
+                _ => EnvironmentSource::Hdri { file: path.clone() },
+            };
             Ok(())
         },
     },

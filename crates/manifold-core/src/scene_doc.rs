@@ -266,7 +266,8 @@ pub enum LightType {
 
 /// Where the environment light comes from (section 7.5): a procedural sky,
 /// an HDRI file (the picker is always on the card in this mode, so the file
-/// may be empty), or nothing.
+/// may be empty), an HDRI file whose lower half is open sea (Sea Horizon), or
+/// nothing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EnvironmentSource {
@@ -274,6 +275,8 @@ pub enum EnvironmentSource {
     Sky { style: SkyStyle },
     #[serde(rename_all = "camelCase")]
     Hdri { file: String },
+    #[serde(rename_all = "camelCase")]
+    SeaHorizon { file: String },
     None,
 }
 

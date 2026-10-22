@@ -1,5 +1,6 @@
 //! Light: a Sun, Point or Spot is one `node.light`; the Environment is the
-//! baked environment map (with its HDRI file in HDRI mode) and owns the
+//! baked environment map (with its HDRI file in HDRI mode, under open sea in
+//! Sea Horizon mode) and owns the
 //! scene's Exposure on every camera lens. The first Sun lights the softbox
 //! sky's sun disc. A scene takes one Environment: a second compiles to
 //! nothing.
@@ -84,14 +85,23 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
         }
         EnvironmentSource::Sky { style: SkyStyle::Gradient } => 0,
         EnvironmentSource::Sky { style: SkyStyle::Softbox } => 1,
-        EnvironmentSource::Hdri { .. } => 2,
+        EnvironmentSource::Hdri { .. } | EnvironmentSource::SeaHorizon { .. } => 2,
     };
     let environment = b.add(owner, "environment", "node.bake_environment");
     b.set(environment, "mode", SerializedParamValue::Enum { value: mode });
-    if let EnvironmentSource::Hdri { file } = source {
+    if let EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file } = source {
         let hdri = b.add(owner, "hdri", "node.hdri_source");
         b.set(hdri, "path", SerializedParamValue::String { value: file.clone() });
-        b.wire(hdri, "out", environment, "hdri");
+        if matches!(source, EnvironmentSource::SeaHorizon { .. }) {
+            // The photo's lower half is whatever stood under its camera; the sea
+            // replaces it before the bake, so lighting, reflections and the
+            // background all see one horizon.
+            let sea = b.add(owner, "sea", "node.sea_horizon_env");
+            b.wire(hdri, "out", sea, "sky");
+            b.wire(sea, "out", environment, "hdri");
+        } else {
+            b.wire(hdri, "out", environment, "hdri");
+        }
         background(b, owner, environment);
     }
     if let Some(sun) = sun {

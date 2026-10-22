@@ -12,6 +12,7 @@ use super::builder::{Builder, Drawn, Rest, number};
 use super::copies;
 use super::group::Frame;
 use super::material::surface_for;
+use super::ocean;
 use crate::node_graph::scene_graph::wire;
 
 /// The wires that bind one object's mesh, material and transform to its
@@ -108,7 +109,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     };
     let owner = item.id.as_str();
     // Inside a copied group, or drawn as a swarm's particles.
-    let group_copies = frame.and_then(|frame| frame.copies).or_else(|| b.swarm_draws.get(&item.id).copied());
+    // An Ocean is one surface drawn once: it has no mesh source to copy.
+    let ocean = fields.shape == Shape::Ocean;
+    let group_copies = frame.and_then(|frame| frame.copies).or_else(|| b.swarm_draws.get(&item.id).copied()).filter(|_| !ocean);
     let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
     let mut center = None;
     let rest;
@@ -117,6 +120,12 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         center = part.center;
         rest = part.rest;
         (part.source, part.vertices)
+    } else if ocean {
+        let Some(triangles) = ocean::emit_surface(b, item) else {
+            return;
+        };
+        rest = None;
+        (triangles, (triangles, "out"))
     } else {
         let Some((mesh_type, solid)) = mesh_type(&fields.shape) else {
             return;
@@ -143,12 +152,17 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         }
     }
     let object = b.add(owner, "object", "node.scene_object");
+    if ocean {
+        // A sea does not shadow itself; the Shadows row turns it on.
+        b.set(object, "cast_shadows", SerializedParamValue::Float { value: 0.0 });
+    }
     if let Some(rest) = rest {
         b.drawn.push(Drawn { object, item: item.id.clone(), rest });
     }
     let (surface, maps) = surface_for(b, &item.id);
     // An object that is its own body draws at the body's solved pose.
-    let pose = super::physics::object(b, item, frame, mesh, transform);
+    // A surface made on the GPU each frame has no collision mesh.
+    let pose = if ocean { None } else { super::physics::object(b, item, frame, mesh, transform) };
     for w in object_wires(mesh, surface, transform, object) {
         if w.to_port == "vertices" {
             b.wire(vertices.0, vertices.1, object, "vertices");
@@ -188,4 +202,7 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     b.objects.push(object);
     b.object_items.push(item.id.clone());
     b.rows(item);
+    if ocean {
+        ocean::follow_dials(b, item);
+    }
 }

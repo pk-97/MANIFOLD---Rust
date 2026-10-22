@@ -24,6 +24,7 @@ mod light;
 mod material;
 mod modifier;
 mod object;
+mod ocean;
 mod physics;
 mod scene_level;
 mod swarm;
@@ -46,6 +47,7 @@ pub use modifier::{
     MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_rows, modifier_type, shatter_refuses,
 };
 pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
+use ocean::OCEAN_TABLES;
 pub use physics::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
 pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
@@ -304,6 +306,18 @@ fn copies_rows(kind: ItemKind) -> &'static [PropertyRow] {
     }
 }
 
+/// The Ocean surface's rows, on an Object (they apply while its Shape is Ocean).
+fn ocean_rows(kind: ItemKind) -> impl Iterator<Item = &'static PropertyRow> {
+    let tables: &'static [&'static [PropertyRow]] = if kind == ItemKind::Object { &OCEAN_TABLES } else { &[] };
+    tables.iter().flat_map(|table| table.iter())
+}
+
+/// Every row a kind declares, applicable or not, including the sections
+/// that only some of its items have (Ocean).
+pub fn declared_rows(kind: ItemKind) -> impl Iterator<Item = &'static PropertyRow> {
+    rows(kind).iter().chain(ocean_rows(kind))
+}
+
 /// The rows that exist for an item with `fields`; a Modifier's are its
 /// type's.
 pub fn applicable(fields: &ItemFields) -> impl Iterator<Item = &'static PropertyRow> + '_ {
@@ -313,6 +327,7 @@ pub fn applicable(fields: &ItemFields) -> impl Iterator<Item = &'static Property
         .chain(modifier_rows(fields))
         .chain(physics_rows(kind))
         .chain(copies_rows(kind))
+        .chain(ocean_rows(kind))
         .filter(move |row| (row.applies)(fields))
 }
 

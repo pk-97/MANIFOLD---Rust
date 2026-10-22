@@ -152,7 +152,7 @@ pub static OBJECT_ROWS: [PropertyRow; 76] = [
     row("blend_targets", BLEND, Transform, Exposure::Automatic(FROM_FILE)).param("target_count").when(from_file),
 ];
 
-/// The built-in solids: what Shape offers. A model file is not a shape
+/// The built-in solids and the Ocean surface: what Shape offers. A model file is not a shape
 /// pick; it comes in through Add or a drop and lives in Model File.
 const SHAPES: &[Choice] = &[
     Choice { key: "cube", label: "Cube" },
@@ -162,6 +162,7 @@ const SHAPES: &[Choice] = &[
     Choice { key: "octahedron", label: "Octahedron" },
     Choice { key: "icosahedron", label: "Icosahedron" },
     Choice { key: "dodecahedron", label: "Dodecahedron" },
+    Choice { key: "ocean", label: "Ocean" },
 ];
 
 /// An imported object's Shape: its file, kept until a built-in is picked.
@@ -174,6 +175,7 @@ const MESH_SHAPES: &[Choice] = &[
     Choice { key: "octahedron", label: "Octahedron" },
     Choice { key: "icosahedron", label: "Icosahedron" },
     Choice { key: "dodecahedron", label: "Dodecahedron" },
+    Choice { key: "ocean", label: "Ocean" },
 ];
 
 fn shape_key(shape: &Shape) -> &'static str {
@@ -246,6 +248,7 @@ fn write_shape(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String
         "octahedron" => Shape::Octahedron,
         "icosahedron" => Shape::Icosahedron,
         "dodecahedron" => Shape::Dodecahedron,
+        "ocean" => Shape::Ocean,
         "mesh" if matches!(o.shape, Shape::Mesh { .. }) => o.shape.clone(),
         _ => return Err(wrong_value("shape", value)),
     };

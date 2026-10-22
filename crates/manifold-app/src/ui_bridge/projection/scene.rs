@@ -90,7 +90,7 @@ fn item_vm(
             LightType::Environment { source } => (
                 true,
                 match source {
-                    EnvironmentSource::Hdri { file } if !file.is_empty() => Some(file.clone()),
+                    EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file } if !file.is_empty() => Some(file.clone()),
                     _ => None,
                 },
             ),
