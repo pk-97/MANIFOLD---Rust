@@ -69,6 +69,12 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         TextureSource::File { path } => {
             let texture = b.add(owner, "texture", "node.gltf_texture_source");
             b.set(texture, "path", SerializedParamValue::String { value: path.clone() });
+            // The file's own size, from its header (8192 is the param's
+            // range limit); an unreadable file keeps the default.
+            if let Some((w, h)) = crate::node_graph::gltf_load::picture_file_dims(std::path::Path::new(path)) {
+                b.set(texture, "width", SerializedParamValue::Int { value: w.clamp(1, 8192) as i32 });
+                b.set(texture, "height", SerializedParamValue::Int { value: h.clamp(1, 8192) as i32 });
+            }
             vec![(texture, "base_color_map")]
         }
         TextureSource::Model { file, material } => match model_file(file) {
@@ -114,4 +120,27 @@ pub(crate) fn surface_for(b: &mut Builder<'_>, item: &ItemId) -> (u32, Vec<(u32,
         None => b.add(SCENE, "default_material", MATERIAL_FAMILY.type_id),
     };
     (plain, Vec::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use manifold_core::scene_doc::{BASE_CUBE_MATERIAL, ItemFields, ItemId, SceneDoc, TextureSource};
+
+    #[test]
+    fn a_file_texture_keeps_the_pictures_own_size() {
+        let path = std::env::temp_dir().join(format!("manifold_material_file_{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(64, 32, image::Rgba([9, 9, 9, 255])).save(&path).unwrap();
+        let mut doc = SceneDoc::base();
+        let material = doc.find_mut(&ItemId::new(BASE_CUBE_MATERIAL)).unwrap();
+        let ItemFields::Material(m) = &mut material.fields else { panic!("not a material") };
+        m.texture = TextureSource::File { path: path.to_string_lossy().into_owned() };
+        let def = crate::node_graph::scene_compile::compile(&doc).unwrap();
+        let source = def.nodes.iter().find(|n| n.type_id == "node.gltf_texture_source").expect("a texture source");
+        let size = |name: &str| match source.params.get(name) {
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => *value,
+            other => panic!("{name} is {other:?}"),
+        };
+        assert_eq!((size("width"), size("height")), (64, 32));
+        std::fs::remove_file(path).unwrap();
+    }
 }

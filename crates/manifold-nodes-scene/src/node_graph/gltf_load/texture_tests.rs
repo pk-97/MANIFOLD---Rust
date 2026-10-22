@@ -192,3 +192,12 @@ fn malformed_relative_image_uri_reports_error_without_unwinding() {
         .expect("malformed relative image URI must not panic");
     assert!(result.err().unwrap().contains("invalid resource URI"));
 }
+
+#[test]
+fn a_picture_files_size_comes_from_its_header() {
+    let fixture = TextureFixture::new();
+    image::RgbaImage::from_pixel(64, 17, image::Rgba([1, 2, 3, 4])).save(fixture.image_path()).unwrap();
+    assert_eq!(picture_file_dims(&fixture.image_path()), Some((64, 17)));
+    std::fs::write(fixture.image_path(), b"not a picture").unwrap();
+    assert_eq!(picture_file_dims(&fixture.image_path()), None);
+}
