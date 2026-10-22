@@ -37682,30 +37682,18 @@
           "default": "1",
           "label": "Pieces",
           "name": "fragment_count",
-          "range": [
-            "1",
-            "64"
-          ],
           "type": "int"
         },
         {
           "default": "0",
           "label": "Piece",
           "name": "fragment_index",
-          "range": [
-            "0",
-            "63"
-          ],
           "type": "int"
         },
         {
           "default": "-1",
           "label": "Fragment Parent",
           "name": "fragment_parent",
-          "range": [
-            "-1",
-            "63"
-          ],
           "type": "int"
         },
         {

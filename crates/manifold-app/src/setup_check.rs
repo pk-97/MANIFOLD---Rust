@@ -45,7 +45,7 @@ pub(crate) struct SetupFitEntry {
     pub uncoupled_bodies: u32,
     /// Bodies and copy groups the world left out: (world input, reason), the
     /// first reason seen for each input while latched.
-    pub refused: Vec<(String, Arc<str>)>,
+    pub refused: Vec<(Arc<str>, Arc<str>)>,
 }
 
 /// Every such domain the cards warn about: the content thread's report,
@@ -63,7 +63,7 @@ pub(crate) type SetupFitReport = Arc<[SetupFitEntry]>;
 pub(crate) struct SetupFitObservations {
     domains: Vec<(NodeId, FluidDomainSnapshot)>,
     not_made: Vec<(NodeId, u32)>,
-    refused: Vec<(NodeId, String, Arc<str>)>,
+    refused: Vec<(NodeId, Arc<str>, Arc<str>)>,
     /// The latched entries; `report` is a copy taken when they change.
     scratch: Vec<SetupFitEntry>,
     latched_layers: Vec<LatchedLayer>,
@@ -134,7 +134,7 @@ impl LatchedLayer {
 /// and the bodies they left out to the callback, refilling the buffers it is
 /// given.
 pub(crate) type EachRenderedSetup<'a> =
-    &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, String, Arc<str>)]);
+    &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, Arc<str>, Arc<str>)]);
 
 /// A card param's authored value, as `PresetInstance::get_base_param` reads
 /// it, from the param in hand rather than a lookup by id.
@@ -149,7 +149,7 @@ struct Seen<'a> {
     copies_not_made: u32,
     uncoupled_bodies: u32,
     /// The world's refused bodies: (world, input, reason).
-    refused: &'a [(NodeId, String, Arc<str>)],
+    refused: &'a [(NodeId, Arc<str>, Arc<str>)],
 }
 
 impl Seen<'_> {
@@ -199,7 +199,7 @@ impl SetupFitObservations {
         &mut self,
         project: Option<&Project>,
         stamps: PartStamps,
-        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<(NodeId, u32)>, &mut Vec<(NodeId, String, Arc<str>)>, EachRenderedSetup<'_>),
+        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<(NodeId, u32)>, &mut Vec<(NodeId, Arc<str>, Arc<str>)>, EachRenderedSetup<'_>),
     ) {
         let find = |id: &LayerId| project.and_then(|p| p.timeline.find_layer_by_id(id)).map(|(_, layer)| layer);
         let edits = stamps.key(LATCH_PARTS);
@@ -295,7 +295,7 @@ pub(crate) fn refused_bodies<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId
     report
         .iter()
         .filter(move |entry| &entry.layer == layer)
-        .flat_map(|entry| entry.refused.iter().map(move |(input, reason)| (&entry.node, input.as_str(), &**reason)))
+        .flat_map(|entry| entry.refused.iter().map(move |(input, reason)| (&entry.node, &**input, &**reason)))
 }
 
 /// `f` over a generator layer's graph, its own else the catalog's.

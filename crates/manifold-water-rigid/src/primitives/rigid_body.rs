@@ -240,9 +240,9 @@ ParamDef { name: Cow::Borrowed("recenter"), label: "Recenter", ty: ParamType::Bo
 ParamDef { name: Cow::Borrowed("translate_x"), label: "Source Offset X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("translate_y"), label: "Source Offset Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("translate_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-ParamDef { name: Cow::Borrowed("fragment_count"), label: "Pieces", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0,64.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("fragment_index"), label: "Piece", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0,63.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("fragment_parent"), label: "Fragment Parent", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0,63.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("fragment_count"), label: "Pieces", ty: ParamType::Int, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
+ParamDef { name: Cow::Borrowed("fragment_index"), label: "Piece", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+ParamDef { name: Cow::Borrowed("fragment_parent"), label: "Fragment Parent", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_count"), label: "Count", ty: ParamType::Int, default: ParamValue::Float(100.0), range: Some((0.0, MAX_COPIES as f32)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_size_spacing"), label: "Spacing", ty: ParamType::Float, default: ParamValue::Float(manifold_core::copies_body::SIZE_SPACING_DEFAULT), range: Some(manifold_core::copies_body::SIZE_SPACING_RANGE), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_columns"), label: "Columns", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, 64.0)), enum_values: &[] },
@@ -295,7 +295,7 @@ fn next_identity() -> u64 {
 
 impl RigidBodyNode {
     /// Fill `self.asked` with what this frame's inputs ask for.
-    fn read_geometry(&mut self, ctx: &EffectNodeContext<'_, '_>, form: Form, scale: [f32; 3]) -> Result<Geometry, String> {
+    fn read_geometry(&mut self, ctx: &EffectNodeContext<'_, '_>, form: Form, scale: [f32; 3]) -> Result<Geometry, Cow<'static, str>> {
         let asked = &mut self.asked;
         asked.form = form;
         // An exact mesh is installed at the exact scale; only hull detail
@@ -324,7 +324,7 @@ impl RigidBodyNode {
                 continue;
             };
             let transform = ctx.inputs.transform(transform_port).unwrap_or(IDENTITY_TRANSFORM);
-            validate_transform(transform).map_err(|error| format!("mesh part {index}: {error}"))?;
+            validate_transform(transform).map_err(|error| Cow::Owned(format!("mesh part {index}: {error}")))?;
             *part = Some((source, transform));
         }
         if !wired_parts && ctx.inputs.slot("source").is_none()
@@ -332,6 +332,15 @@ impl RigidBodyNode {
         {
             asked.path.push_str(path);
             asked.selection = Some(MeshSelection::from_context(ctx));
+        }
+        // Nothing wired and no file: a Group with no mesh inside, set up
+        // before its first part or after its last one left. It is refused
+        // at once, never held as loading.
+        if !loading && asked.is_empty() && !asked.parts.iter().enumerate().any(|(index, _)| {
+            let port = if wired_parts { ports.ports(index).0 } else { "source" };
+            ctx.inputs.slot(port).is_some()
+        }) {
+            return Err(Cow::Borrowed("this group has no mesh to collide with"));
         }
         self.mesh_seen |= !asked.is_empty();
         Ok(if loading || !self.mesh_seen { Geometry::Loading } else { Geometry::Ready })
@@ -447,7 +456,10 @@ impl Primitive for RigidBodyNode {
             Ok(Geometry::Loading) => {}
             Err(error) => {
                 self.want.clone_from(&self.asked);
-                self.refused = Some(Arc::from(error));
+                // A standing refusal keeps its reason: no allocation per frame.
+                if self.refused.as_deref() != Some(&*error) {
+                    self.refused = Some(Arc::from(error.as_ref()));
+                }
             }
         }
         let collider = if self.refused.is_some() { None } else { self.shape.clone() };
@@ -501,6 +513,8 @@ mod tests {
         source: Slot,
         body: Slot,
         params: ParamValues,
+        /// Leave the mesh input unwired: a Group with no mesh inside.
+        unwired: bool,
     }
 
     impl Rig {
@@ -511,11 +525,12 @@ mod tests {
             let body = backend.acquire(ResourceId(2), PortType::RigidBody, None, (0, 0));
             backend.set_transform(transform, Transform::default());
             backend.set_mesh_source(source_slot, source);
-            Self { node: RigidBodyNode::new(), backend, transform, source: source_slot, body, params: ParamValues::default() }
+            Self { node: RigidBodyNode::new(), backend, transform, source: source_slot, body, params: ParamValues::default(), unwired: false }
         }
 
         fn run(&mut self) -> RigidBody {
-            let input_bindings: &[(&'static str, Slot)] = &[("transform", self.transform), ("source", self.source)];
+            let wired = [("transform", self.transform), ("source", self.source)];
+            let input_bindings: &[(&'static str, Slot)] = if self.unwired { &wired[..1] } else { &wired };
             let output_bindings: &[(&'static str, Slot)] = &[("body", self.body)];
             let mut scalar_scratch = Vec::new();
             let mut camera_scratch = Vec::new();
@@ -584,6 +599,25 @@ mod tests {
         rig.params.insert(Cow::Borrowed("motion"), ParamValue::Enum(0));
         let fixed = rig.settle().collider.expect("static shape");
         assert!(matches!(*fixed, Solid::Mesh(_)), "a Fixed body is the exact mesh");
+    }
+
+    /// A Group set to Body or Collider with no mesh inside, from the start or
+    /// after its last part left, is refused at once with its reason, never
+    /// held as loading (section 7.4).
+    #[test]
+    fn a_group_with_no_mesh_is_refused_at_once() {
+        let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
+        rig.unwired = true;
+        let body = rig.run();
+        assert!(!rig.node.warmup_pending(), "never held as loading");
+        assert!(body.collider.is_none());
+        assert_eq!(body.refused.as_deref(), Some("this group has no mesh to collide with"));
+
+        let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
+        assert!(rig.settle().collider.is_some());
+        rig.unwired = true;
+        let body = rig.run();
+        assert!(!rig.node.warmup_pending() && body.collider.is_none() && body.refused.is_some(), "the last part leaving refuses it too");
     }
 
     #[test]

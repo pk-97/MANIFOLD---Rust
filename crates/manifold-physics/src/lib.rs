@@ -796,6 +796,22 @@ impl PhysicsWorld {
         'field: 'slice,
         I: IntoIterator<Item = (BodyHandle, &'slice [FieldInput<'field>])>,
     {
+        self.apply_fields_each(dt, |target| {
+            for (handle, fields) in targets {
+                target(handle, fields)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// [`Self::apply_fields_by_target`] with the targets handed to `each`'s
+    /// sink one at a time, so a caller builds each target's fields on its own
+    /// stack and nothing is collected, whatever the target count.
+    pub fn apply_fields_each(
+        &mut self,
+        dt: Seconds,
+        each: impl FnOnce(&mut dyn FnMut(BodyHandle, &[FieldInput<'_>]) -> Result<(), PhysicsError>) -> Result<(), PhysicsError>,
+    ) -> Result<(), PhysicsError> {
         let dt_f32 = dt.0 as f32;
         if !dt.0.is_finite() || dt.0 <= 0.0 || !dt_f32.is_finite() || dt_f32 <= 0.0 {
             return Err(PhysicsError::InvalidInput("dt must be finite and positive"));
@@ -807,98 +823,7 @@ impl PhysicsWorld {
         self.field_scratch.clear();
         let result = (|| {
             let _lock = native_lock();
-            for (handle, fields) in targets {
-                for input in fields {
-                    validate_field_input(*input)?;
-                }
-                self.body_record(handle)?;
-                let seen = &mut self.field_seen[handle.index as usize];
-                if *seen {
-                    return Err(PhysicsError::InvalidInput("duplicate field body handle"));
-                }
-                *seen = true;
-
-                let native = self.body_record(handle)?.native;
-                let mut center = [0.0; 3];
-                let mut mass = 0.0;
-                let mut body_type = 0;
-                let mut enabled = 0;
-                let state_result = unsafe {
-                    ffi::manifold_box3d_body_field_state(
-                        native,
-                        center.as_mut_ptr(),
-                        &mut mass,
-                        &mut body_type,
-                        &mut enabled,
-                    )
-                };
-                if state_result != 0 {
-                    return Err(PhysicsError::NativeFailure);
-                }
-                if body_type != BodyKind::Dynamic.native_value() || enabled == 0 {
-                    continue;
-                }
-                if !center.iter().all(|component| component.is_finite())
-                    || !mass.is_finite()
-                    || mass <= 0.0
-                {
-                    return Err(PhysicsError::NativeFailure);
-                }
-
-                let mut air = ForceSample::default();
-                let mut acceleration = [0.0; 3];
-                let mut delta_velocity = [0.0; 3];
-                for input in fields {
-                    let force = input.field.sample_force(center);
-                    let sample = force.push;
-                    air = air + ForceSample { push: [0.0; 3], ..force }.scaled(input.acceleration);
-                    if !sample.iter().all(|component| component.is_finite()) {
-                        return Err(PhysicsError::InvalidInput("field sample must be finite"));
-                    }
-                    for component in 0..3 {
-                        acceleration[component] += sample[component] * input.acceleration;
-                        delta_velocity[component] += sample[component] * input.delta_velocity;
-                    }
-                    if !acceleration
-                        .iter()
-                        .chain(delta_velocity.iter())
-                        .all(|component| component.is_finite())
-                    {
-                        return Err(PhysicsError::InvalidInput("field result must be finite"));
-                    }
-                }
-
-                if !air.is_finite() || air.drag < 0.0 {
-                    return Err(PhysicsError::InvalidInput("field air must be finite"));
-                }
-                if air.drag > 0.0 {
-                    let mut velocity = [0.0; 3];
-                    if unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) } != 0 {
-                        return Err(PhysicsError::NativeFailure);
-                    }
-                    let drag = air.drag_delta_velocity(velocity, dt_f32);
-                    for component in 0..3 {
-                        delta_velocity[component] += drag[component];
-                    }
-                }
-                let force = acceleration.map(|component| component * mass);
-                let impulse = delta_velocity.map(|component| component * mass);
-                if !force
-                    .iter()
-                    .chain(impulse.iter())
-                    .all(|component| component.is_finite())
-                {
-                    return Err(PhysicsError::InvalidInput(
-                        "mass-scaled field result must be finite",
-                    ));
-                }
-                self.field_scratch.push(FieldApplication {
-                    native,
-                    force,
-                    impulse,
-                });
-            }
-
+            each(&mut |handle, fields| self.sample_field_target(handle, fields, dt_f32))?;
             for application in &self.field_scratch {
                 let apply_result = unsafe {
                     ffi::manifold_box3d_body_apply_field(
@@ -915,6 +840,101 @@ impl PhysicsWorld {
         })();
         self.field_scratch.clear();
         result
+    }
+
+    /// Sample one target's fields at its centre of mass into the pending
+    /// applications. The caller holds the native lock.
+    fn sample_field_target(&mut self, handle: BodyHandle, fields: &[FieldInput<'_>], dt_f32: f32) -> Result<(), PhysicsError> {
+        for input in fields {
+            validate_field_input(*input)?;
+        }
+        self.body_record(handle)?;
+        let seen = &mut self.field_seen[handle.index as usize];
+        if *seen {
+            return Err(PhysicsError::InvalidInput("duplicate field body handle"));
+        }
+        *seen = true;
+
+        let native = self.body_record(handle)?.native;
+        let mut center = [0.0; 3];
+        let mut mass = 0.0;
+        let mut body_type = 0;
+        let mut enabled = 0;
+        let state_result = unsafe {
+            ffi::manifold_box3d_body_field_state(
+                native,
+                center.as_mut_ptr(),
+                &mut mass,
+                &mut body_type,
+                &mut enabled,
+            )
+        };
+        if state_result != 0 {
+            return Err(PhysicsError::NativeFailure);
+        }
+        if body_type != BodyKind::Dynamic.native_value() || enabled == 0 {
+            return Ok(());
+        }
+        if !center.iter().all(|component| component.is_finite())
+            || !mass.is_finite()
+            || mass <= 0.0
+        {
+            return Err(PhysicsError::NativeFailure);
+        }
+
+        let mut air = ForceSample::default();
+        let mut acceleration = [0.0; 3];
+        let mut delta_velocity = [0.0; 3];
+        for input in fields {
+            let force = input.field.sample_force(center);
+            let sample = force.push;
+            air = air + ForceSample { push: [0.0; 3], ..force }.scaled(input.acceleration);
+            if !sample.iter().all(|component| component.is_finite()) {
+                return Err(PhysicsError::InvalidInput("field sample must be finite"));
+            }
+            for component in 0..3 {
+                acceleration[component] += sample[component] * input.acceleration;
+                delta_velocity[component] += sample[component] * input.delta_velocity;
+            }
+            if !acceleration
+                .iter()
+                .chain(delta_velocity.iter())
+                .all(|component| component.is_finite())
+            {
+                return Err(PhysicsError::InvalidInput("field result must be finite"));
+            }
+        }
+
+        if !air.is_finite() || air.drag < 0.0 {
+            return Err(PhysicsError::InvalidInput("field air must be finite"));
+        }
+        if air.drag > 0.0 {
+            let mut velocity = [0.0; 3];
+            if unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) } != 0 {
+                return Err(PhysicsError::NativeFailure);
+            }
+            let drag = air.drag_delta_velocity(velocity, dt_f32);
+            for component in 0..3 {
+                delta_velocity[component] += drag[component];
+            }
+        }
+        let force = acceleration.map(|component| component * mass);
+        let impulse = delta_velocity.map(|component| component * mass);
+        if !force
+            .iter()
+            .chain(impulse.iter())
+            .all(|component| component.is_finite())
+        {
+            return Err(PhysicsError::InvalidInput(
+                "mass-scaled field result must be finite",
+            ));
+        }
+        self.field_scratch.push(FieldApplication {
+            native,
+            force,
+            impulse,
+        });
+        Ok(())
     }
 
     pub fn update_body(

@@ -106,7 +106,6 @@ impl HeldClock {
 /// Field and hit targets (body slots, then copy groups) a world gathers on
 /// the stack each tick. A bigger world gathers them on the heap: this is no
 /// limit, only where a tick stops being allocation-free.
-const STACK_TARGETS: usize = 64;
 pub use manifold_core::copies_body::MAX_COPIES;
 pub const AUTHORED_HISTORY_CAPACITY: usize = 256;
 /// The hits in flight a world holds before a burst grows its history.
@@ -468,16 +467,24 @@ pub(crate) fn copy_pool<'a>(
     made: &mut Vec<usize>,
 ) -> usize {
     made.clear();
+    copy_pool_each(groups, |take| made.push(take))
+}
+
+/// [`copy_pool`], handing each group's share to `made` in port order.
+pub(crate) fn copy_pool_each<'a>(
+    groups: impl Iterator<Item = Option<&'a RigidBody>>,
+    mut made: impl FnMut(usize),
+) -> usize {
     let mut pool = MAX_COPIES;
     let mut not_made = 0;
     for prototype in groups {
         let Some(prototype) = prototype.filter(|body| body.enabled) else {
-            made.push(0);
+            made(0);
             continue;
         };
         let requested = requested_count(prototype.spawn);
         let take = requested.min(pool);
-        made.push(take);
+        made(take);
         not_made += requested - take;
         pool -= take;
     }
@@ -515,32 +522,43 @@ fn port_map(old: &[u64], new: &[u64], held: impl Fn(usize) -> bool) -> Option<Ve
     (0..old.len()).all(|at| used[at] || !held(at)).then_some(from)
 }
 
-/// Give every installed body and every active copy its target's inputs
-/// (`inputs[target]`, a body slot then a copy group) in one batch the world
-/// validates whole before any body feels a force. Copies of a group share one
-/// input slice. A target `hit` leaves out takes nothing.
-fn apply_by_target<'f, T: AsRef<[FieldInput<'f>]>>(
+/// The sink a target's inputs go to: its body, or each active copy of its
+/// group.
+type ApplyInputs<'s> = dyn FnMut(&[FieldInput<'_>]) -> Result<(), manifold_physics::PhysicsError> + 's;
+
+/// Give every installed body and every active copy its target's inputs (a
+/// body slot, then a copy group) in one batch the world validates whole
+/// before any body feels a force. `visit(target, apply)` builds target
+/// `target`'s inputs on its own stack and hands them to `apply`, once per
+/// target: copies of a group share them. Nothing is collected, so no tick
+/// allocates at any body count. A target `hit` leaves out takes nothing.
+fn apply_by_target(
     world: &mut PhysicsWorld,
     handles: &[Option<BodyHandle>],
     groups: &[CopyGroup],
     body_count: usize,
-    inputs: &[T],
     hit: impl Fn(usize) -> bool,
     dt: Seconds,
+    visit: impl Fn(usize, &mut ApplyInputs<'_>) -> Result<(), manifold_physics::PhysicsError>,
 ) -> Result<(), String> {
-    let hit = &hit;
-    let recipients = handles
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| hit(*index))
-        .filter_map(|(index, handle)| handle.map(|handle| (handle, inputs[index].as_ref())))
-        .chain(groups.iter().enumerate().filter(move |(group, _)| hit(body_count + group)).flat_map(
-            move |(group, state)| {
-                let input = inputs[body_count + group].as_ref();
-                state.handles[..state.active].iter().flatten().map(move |&handle| (handle, input))
-            },
-        ));
-    world.apply_fields_by_target(recipients, dt).map_err(|error| error.to_string())
+    world
+        .apply_fields_each(dt, |sink| {
+            for (index, handle) in handles.iter().enumerate() {
+                let Some(handle) = *handle else { continue };
+                if hit(index) {
+                    visit(index, &mut |inputs| sink(handle, inputs))?;
+                }
+            }
+            for (group, state) in groups.iter().enumerate() {
+                if hit(body_count + group) {
+                    visit(body_count + group, &mut |inputs| {
+                        state.handles[..state.active].iter().flatten().try_for_each(|&handle| sink(handle, inputs))
+                    })?;
+                }
+            }
+            Ok(())
+        })
+        .map_err(|error| error.to_string())
 }
 
 /// The signed volume of a body's installed hulls, m³: the sum over each
@@ -2517,23 +2535,12 @@ impl RigidSimulation {
                 .map_err(|error| error.to_string());
         };
         let span = self.targeted_fields.span(before, after, alpha)?;
-        let targets = body_count + self.groups.len();
         let global = FieldInput { field: global, acceleration: 1.0, delta_velocity: 0.0 };
         let world = self.world.as_mut().expect("world constructed above");
-        if targets <= STACK_TARGETS {
-            let fields: [_; STACK_TARGETS] = std::array::from_fn(|index| span.field(index));
-            let inputs: [[FieldInput<'_>; 2]; STACK_TARGETS] = std::array::from_fn(|index| {
-                [global, FieldInput { field: &fields[index], acceleration: 1.0, delta_velocity: 0.0 }]
-            });
-            apply_by_target(world, &self.handles, &self.groups, body_count, &inputs[..targets], |_| true, dt)
-        } else {
-            let fields: Vec<_> = (0..targets).map(|index| span.field(index)).collect();
-            let inputs: Vec<[FieldInput<'_>; 2]> = fields
-                .iter()
-                .map(|field| [global, FieldInput { field, acceleration: 1.0, delta_velocity: 0.0 }])
-                .collect();
-            apply_by_target(world, &self.handles, &self.groups, body_count, &inputs, |_| true, dt)
-        }
+        apply_by_target(world, &self.handles, &self.groups, body_count, |_| true, dt, |target, apply| {
+            let field = span.field(target);
+            apply(&[global, FieldInput { field: &field, acceleration: 1.0, delta_velocity: 0.0 }])
+        })
     }
 
     fn animated_microsteps(

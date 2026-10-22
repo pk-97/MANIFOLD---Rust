@@ -25,10 +25,13 @@ pub trait PhysicsNode: Send {
         0
     }
 
-    /// Append each body or copy group the world left out on its last frame:
-    /// the world input it is wired to (`body_k`, `copies_k`) and why, so a
-    /// refusal reaches the card, never only a log line.
-    fn write_body_refusals(&self, _out: &mut Vec<(String, std::sync::Arc<str>)>) {}
+    /// Each body or copy group the world left out on its last frame: the
+    /// world input it is wired to (`body_k`, `copies_k`) and why, so a
+    /// refusal reaches the card, never only a log line. Shared strings, so
+    /// reading a standing refusal every frame allocates nothing.
+    fn body_refusals(&self) -> &[(std::sync::Arc<str>, std::sync::Arc<str>)] {
+        &[]
+    }
 
     /// Resolved rigid inputs from the latest successful graph evaluation.
     /// Pending or invalid inputs must clear the previous observation.
