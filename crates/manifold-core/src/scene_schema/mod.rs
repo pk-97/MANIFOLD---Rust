@@ -19,6 +19,7 @@ mod camera;
 mod deformers;
 mod fields;
 mod copies;
+mod curves;
 mod force;
 mod group;
 mod light;
@@ -40,6 +41,7 @@ pub use fields::{
     is_object_or_group, set_field,
 };
 pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, SURFACE_ROLE, can_copy, copies_unavailable};
+pub use curves::{curve_rows, CURVE_AXIS, CURVE_MATH, CURVE_POLYGON, CURVE_RATIO, CURVE_T, CURVE_XY, SWEEP, TRIANGLES};
 pub use force::{FORCE_ROWS, impulse_unavailable};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
@@ -314,9 +316,10 @@ fn ocean_rows(kind: ItemKind) -> impl Iterator<Item = &'static PropertyRow> {
 }
 
 /// Every row a kind declares, applicable or not, including the sections
-/// that only some of its items have (Ocean).
+/// that only some of its items have (Ocean, the curve shapes).
 pub fn declared_rows(kind: ItemKind) -> impl Iterator<Item = &'static PropertyRow> {
-    rows(kind).iter().chain(ocean_rows(kind))
+    let curves = (kind == ItemKind::Object).then(curve_rows).into_iter().flatten();
+    rows(kind).iter().chain(ocean_rows(kind)).chain(curves)
 }
 
 /// The rows that exist for an item with `fields`; a Modifier's are its
@@ -329,6 +332,7 @@ pub fn applicable(fields: &ItemFields) -> impl Iterator<Item = &'static Property
         .chain(physics_rows(kind))
         .chain(copies_rows(kind))
         .chain(ocean_rows(kind))
+        .chain(curves::curve_rows())
         .filter(move |row| (row.applies)(fields))
 }
 

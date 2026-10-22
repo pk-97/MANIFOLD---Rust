@@ -377,6 +377,17 @@ mod every_param_has_a_row {
                 *source = manifold_core::scene_doc::EnvironmentSource::SeaHorizon { file: "sky.exr".into() };
             }
         }
+        // Every curve shape with every curve.
+        use manifold_core::scene_doc::{Curve, Shape};
+        let curves = [Curve::Circle, Curve::Polygon, Curve::Star, Curve::Spiral, Curve::Helix, Curve::Wave, Curve::Lissajous];
+        for (k, curve) in curves.into_iter().enumerate() {
+            for (s, shape) in [Shape::Extrude { curve }, Shape::Revolve { curve }, Shape::Tube { curve }].into_iter().enumerate() {
+                let fields = manifold_core::scene_doc::ObjectFields { shape, ..Default::default() };
+                let at = doc.items.len();
+                let id = ItemId::new(format!("curve{k}_{s}"));
+                doc.insert(None, at, Item::new(id, "Curve", manifold_core::scene_doc::ItemFields::Object(fields))).unwrap();
+            }
+        }
         doc
     }
 

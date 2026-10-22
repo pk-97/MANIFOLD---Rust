@@ -195,6 +195,16 @@ pub enum Shape {
     Icosahedron,
     Dodecahedron,
     Ocean,
+    /// A built-in curve pushed straight back into a solid (Blender's curve
+    /// Extrude).
+    #[serde(rename_all = "camelCase")]
+    Extrude { curve: Curve },
+    /// A built-in curve spun around the vertical axis (Blender's Screw).
+    #[serde(rename_all = "camelCase")]
+    Revolve { curve: Curve },
+    /// A tube swept along a built-in curve (Blender's curve Bevel depth).
+    #[serde(rename_all = "camelCase")]
+    Tube { curve: Curve },
     #[serde(rename_all = "camelCase")]
     Mesh {
         file: String,
@@ -208,6 +218,31 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "MeshPrimitives::is_all")]
         primitives: MeshPrimitives,
     },
+}
+
+impl Shape {
+    /// The built-in curve a curve shape is made from.
+    pub fn curve(&self) -> Option<Curve> {
+        match self {
+            Shape::Extrude { curve } | Shape::Revolve { curve } | Shape::Tube { curve } => Some(*curve),
+            _ => None,
+        }
+    }
+}
+
+/// The built-in curves Extrude, Revolve and Tube are made from. Its rows are
+/// live; which curve it is, is structural.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Curve {
+    #[default]
+    Circle,
+    Polygon,
+    Star,
+    Spiral,
+    Helix,
+    Wave,
+    Lissajous,
 }
 
 /// The primitives of a file node's mesh that one Object draws.

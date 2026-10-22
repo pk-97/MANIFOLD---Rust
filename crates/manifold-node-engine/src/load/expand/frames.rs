@@ -335,9 +335,50 @@ fn source_route<'a>(
 /// keys, and the frame is the root source's rest pose.
 const VERTEX_PASSES: [&str; 3] = ["node.subdivide_mesh", "node.morph_targets_blend", "node.skin_mesh"];
 
-/// `node` and the passes below it down to its root source, which has nothing
-/// wired in. `None` when the chain holds any other node, a pass is not fed
-/// through exactly one `in` wire, or a skinned source is drawn unposed.
+/// The nodes a scene curve shape is built from: a curve swept into a solid.
+/// Its rows move its points live, but nothing in it reads the clock or a
+/// skin, so the rest pose its compiler measured is its frame.
+const CURVE_GEOMETRY: &[&str] = &[
+    "node.make_triangles",
+    "node.extrude_curve",
+    "node.revolve_curve",
+    "node.tube_from_path",
+    "node.combine_xy",
+    "node.range",
+    "node.array_math",
+    "node.frequency_ratio",
+    "node.polygon_curve",
+];
+
+/// A root source: nothing wired in, or curve geometry fed only by curve
+/// geometry. Its rest pose is its own.
+fn is_static_root(index: &FlatSceneIndex, node: &EffectGraphNode) -> bool {
+    let is_curve = |node: &EffectGraphNode| CURVE_GEOMETRY.contains(&node.type_id.as_str());
+    let mut pending = vec![node];
+    let mut seen = BTreeSet::new();
+    while let Some(at) = pending.pop() {
+        for wire in index.flat.wires.iter().filter(|wire| wire.to_node == at.id) {
+            if !is_curve(at) {
+                return false;
+            }
+            let Some(upstream) = index.flat.nodes.iter().find(|upstream| upstream.id == wire.from_node) else {
+                return false;
+            };
+            if !is_curve(upstream) {
+                return false;
+            }
+            if seen.insert(upstream.id) {
+                pending.push(upstream);
+            }
+        }
+    }
+    true
+}
+
+/// `node` and the passes below it down to its root source
+/// ([`is_static_root`]). `None` when the chain holds any other node, a pass
+/// is not fed through exactly one `in` wire, or a skinned source is drawn
+/// unposed.
 fn source_chain<'a>(index: &'a FlatSceneIndex, node: &'a EffectGraphNode) -> Option<Vec<&'a EffectGraphNode>> {
     let mut chain = vec![node];
     let mut current = node;
@@ -349,9 +390,9 @@ fn source_chain<'a>(index: &'a FlatSceneIndex, node: &'a EffectGraphNode) -> Opt
         current = index.flat.nodes.iter().find(|upstream| upstream.id == wire.from_node)?;
         chain.push(current);
     }
-    let unwired = !index.flat.wires.iter().any(|wire| wire.to_node == current.id);
+    let rooted = is_static_root(index, current);
     let posed = current.type_id != "node.gltf_skinned_mesh_source" || chain.iter().any(|pass| pass.type_id == "node.skin_mesh");
-    (unwired && posed).then_some(chain)
+    (rooted && posed).then_some(chain)
 }
 
 fn scalar(

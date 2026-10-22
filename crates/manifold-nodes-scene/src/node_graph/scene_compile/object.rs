@@ -26,7 +26,8 @@ pub(crate) fn object_wires(mesh: u32, material: u32, transform: u32, object: u32
 }
 
 /// The mesh node a built-in shape is, and the platonic solid index where it
-/// is one. `None` for the shapes with their own emitter (Ocean, Mesh from file).
+/// is one. `None` for the shapes with their own emitter (Ocean, Mesh from
+/// file, the curve shapes).
 fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
     Some(match shape {
         Shape::Cube => ("node.cube_mesh", None),
@@ -38,7 +39,7 @@ fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
         Shape::Octahedron => ("node.platonic_solid_mesh", Some(2)),
         Shape::Icosahedron => ("node.platonic_solid_mesh", Some(3)),
         Shape::Dodecahedron => ("node.platonic_solid_mesh", Some(4)),
-        Shape::Ocean | Shape::Mesh { .. } => return None,
+        Shape::Ocean | Shape::Mesh { .. } | Shape::Extrude { .. } | Shape::Revolve { .. } | Shape::Tube { .. } => return None,
     })
 }
 
@@ -126,6 +127,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         };
         rest = None;
         (triangles, (triangles, "out"))
+    } else if let Some(curve) = super::curves::emit(b, item, &fields.shape) {
+        rest = curve.rest;
+        (curve.sweep, curve.vertices)
     } else {
         let Some((mesh_type, solid)) = mesh_type(&fields.shape) else {
             return;
@@ -193,7 +197,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         if own_copies {
             copies::emit_object(b, item, mesh, transform, object, fields.physics);
         } else if let Some(body) = group_copies {
-            copies::add_part(b, body, mesh, transform);
+            if can_copy(&fields.shape) {
+                copies::add_part(b, body, mesh, transform);
+            }
             copies::draw_instances(b, body, object, true);
         }
     } else if let Some(parent) = parent {
@@ -205,4 +211,5 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     if ocean {
         ocean::follow_dials(b, item);
     }
+    super::curves::follow_rows(b, item, &fields.shape);
 }

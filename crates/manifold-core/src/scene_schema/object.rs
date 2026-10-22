@@ -152,7 +152,7 @@ pub static OBJECT_ROWS: [PropertyRow; 76] = [
     row("blend_targets", BLEND, Transform, Exposure::Automatic(FROM_FILE)).param("target_count").when(from_file),
 ];
 
-/// The built-in solids and the Ocean surface: what Shape offers. A model file is not a shape
+/// The built-in solids, the curve shapes and the Ocean surface: what Shape offers. A model file is not a shape
 /// pick; it comes in through Add or a drop and lives in Model File.
 const SHAPES: &[Choice] = &[
     Choice { key: "cube", label: "Cube" },
@@ -163,6 +163,9 @@ const SHAPES: &[Choice] = &[
     Choice { key: "icosahedron", label: "Icosahedron" },
     Choice { key: "dodecahedron", label: "Dodecahedron" },
     Choice { key: "ocean", label: "Ocean" },
+    Choice { key: "extrude", label: "Extrude" },
+    Choice { key: "revolve", label: "Revolve" },
+    Choice { key: "tube", label: "Tube" },
 ];
 
 /// An imported object's Shape: its file, kept until a built-in is picked.
@@ -176,6 +179,9 @@ const MESH_SHAPES: &[Choice] = &[
     Choice { key: "icosahedron", label: "Icosahedron" },
     Choice { key: "dodecahedron", label: "Dodecahedron" },
     Choice { key: "ocean", label: "Ocean" },
+    Choice { key: "extrude", label: "Extrude" },
+    Choice { key: "revolve", label: "Revolve" },
+    Choice { key: "tube", label: "Tube" },
 ];
 
 fn shape_key(shape: &Shape) -> &'static str {
@@ -188,6 +194,9 @@ fn shape_key(shape: &Shape) -> &'static str {
         Shape::Icosahedron => "icosahedron",
         Shape::Dodecahedron => "dodecahedron",
         Shape::Ocean => "ocean",
+        Shape::Extrude { .. } => "extrude",
+        Shape::Revolve { .. } => "revolve",
+        Shape::Tube { .. } => "tube",
         Shape::Mesh { .. } => "mesh",
     }
 }
@@ -249,6 +258,9 @@ fn write_shape(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String
         "icosahedron" => Shape::Icosahedron,
         "dodecahedron" => Shape::Dodecahedron,
         "ocean" => Shape::Ocean,
+        "extrude" => Shape::Extrude { curve: o.shape.curve().unwrap_or_default() },
+        "revolve" => Shape::Revolve { curve: o.shape.curve().unwrap_or_default() },
+        "tube" => Shape::Tube { curve: o.shape.curve().unwrap_or_default() },
         "mesh" if matches!(o.shape, Shape::Mesh { .. }) => o.shape.clone(),
         _ => return Err(wrong_value("shape", value)),
     };
@@ -266,7 +278,7 @@ fn part_of_import(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     inside.then_some("This part comes from its group's Model File; swap it there")
 }
 
-pub static OBJECT_FIELDS: [FieldRow; 7] = [
+pub static OBJECT_FIELDS: [FieldRow; 8] = [
     FieldRow {
         id: "shape",
         label: "Shape",
@@ -306,6 +318,7 @@ pub static OBJECT_FIELDS: [FieldRow; 7] = [
             _ => Err(wrong_value("model_file", value)),
         },
     },
+    super::curves::CURVE_FIELD,
     MATERIAL_BINDING,
     PHYSICS,
     COPIES,
