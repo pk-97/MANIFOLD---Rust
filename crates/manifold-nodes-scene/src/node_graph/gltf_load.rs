@@ -1106,12 +1106,79 @@ fn find_file_node<'a>(document: &'a gltf::Document, path: &str) -> Option<(gltf:
 }
 
 /// The file's world-space bounding box over every node mesh, and none when
-/// it has no geometry.
-pub(crate) fn file_bounds(document: &gltf::Document) -> Option<([f32; 3], [f32; 3])> {
-    fn visit(node: &gltf::Node, parent: Mat4, bounds: &mut Option<([f32; 3], [f32; 3])>) {
+/// it has no geometry. A skinned mesh is measured where its skin draws it in
+/// the bind pose: glTF ignores a skinned mesh node's own transform (glTF 2.0
+/// section 3.7.3.3), so its node box can sit far from what is drawn.
+pub(crate) fn file_bounds(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Option<([f32; 3], [f32; 3])> {
+    type Bounds = Option<([f32; 3], [f32; 3])>;
+    fn grow(bounds: &mut Bounds, p: [f32; 3]) {
+        let (lo, hi) = bounds.get_or_insert((p, p));
+        for axis in 0..3 {
+            lo[axis] = lo[axis].min(p[axis]);
+            hi[axis] = hi[axis].max(p[axis]);
+        }
+    }
+    /// Each of the skin's joints' bind-pose matrix (joint world times its
+    /// inverse bind), or `None` when the skin cannot be read.
+    fn skin_matrices(
+        skin: &gltf::Skin,
+        document: &gltf::Document,
+        buffers: &[gltf::buffer::Data],
+        parent_of: &[Option<usize>],
+    ) -> Vec<Mat4> {
+        let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+        let inverse_binds: Vec<Mat4> = reader.read_inverse_bind_matrices().map(|it| it.collect()).unwrap_or_default();
+        skin.joints()
+            .enumerate()
+            .map(|(k, joint)| {
+                let world = static_world_matrix(document, joint.index(), parent_of);
+                mat4_mul(&world, inverse_binds.get(k).unwrap_or(&MAT4_IDENTITY))
+            })
+            .collect()
+    }
+    /// Grow by a skinned primitive's bind-pose vertices; false when it has
+    /// no skin attributes to pose by.
+    fn grow_skinned(primitive: &gltf::Primitive, joints: &[Mat4], buffers: &[gltf::buffer::Data], bounds: &mut Bounds) -> bool {
+        let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+        let (Some(positions), Some(vertex_joints), Some(weights)) =
+            (reader.read_positions(), reader.read_joints(0), reader.read_weights(0))
+        else {
+            return false;
+        };
+        for ((p, vertex_joints), weights) in positions.zip(vertex_joints.into_u16()).zip(weights.into_f32()) {
+            let total: f32 = weights.iter().sum();
+            if total <= 0.0 {
+                continue;
+            }
+            let mut posed = [0.0f32; 3];
+            for k in 0..4 {
+                let Some(m) = joints.get(vertex_joints[k] as usize) else { continue };
+                let q = mat4_transform_point(m, p);
+                for axis in 0..3 {
+                    posed[axis] += weights[k] / total * q[axis];
+                }
+            }
+            grow(bounds, posed);
+        }
+        true
+    }
+    fn visit(
+        node: &gltf::Node,
+        parent: Mat4,
+        document: &gltf::Document,
+        buffers: &[gltf::buffer::Data],
+        parent_of: &[Option<usize>],
+        bounds: &mut Bounds,
+    ) {
         let world = mat4_mul(&parent, &node.transform().matrix());
         if let Some(mesh) = node.mesh() {
+            let joints = node.skin().map(|skin| skin_matrices(&skin, document, buffers, parent_of));
             for primitive in mesh.primitives() {
+                if let Some(joints) = &joints
+                    && grow_skinned(&primitive, joints, buffers, bounds)
+                {
+                    continue;
+                }
                 let b = primitive.bounding_box();
                 for corner in 0..8 {
                     let p = [
@@ -1119,22 +1186,18 @@ pub(crate) fn file_bounds(document: &gltf::Document) -> Option<([f32; 3], [f32; 
                         if corner & 2 == 0 { b.min[1] } else { b.max[1] },
                         if corner & 4 == 0 { b.min[2] } else { b.max[2] },
                     ];
-                    let p = mat4_transform_point(&world, p);
-                    let (lo, hi) = bounds.get_or_insert((p, p));
-                    for axis in 0..3 {
-                        lo[axis] = lo[axis].min(p[axis]);
-                        hi[axis] = hi[axis].max(p[axis]);
-                    }
+                    grow(bounds, mat4_transform_point(&world, p));
                 }
             }
         }
         for child in node.children() {
-            visit(&child, world, bounds);
+            visit(&child, world, document, buffers, parent_of, bounds);
         }
     }
+    let parent_of = build_parent_map(document);
     let mut bounds = None;
     for node in resolve_import_nodes(document) {
-        visit(&node, MAT4_IDENTITY, &mut bounds);
+        visit(&node, MAT4_IDENTITY, document, buffers, &parent_of, &mut bounds);
     }
     bounds
 }

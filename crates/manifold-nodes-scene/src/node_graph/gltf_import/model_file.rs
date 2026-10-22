@@ -135,7 +135,7 @@ fn read(path: &Path) -> Result<ModelFile, String> {
             gltf_load::material_info(&document, &m, &label, &mut report)
         })
         .collect();
-    let radius = gltf_load::file_bounds(&document).map_or(1e-3, |(lo, hi)| {
+    let radius = gltf_load::file_bounds(&document, &buffers).map_or(1e-3, |(lo, hi)| {
         let diagonal = (0..3).map(|axis| (hi[axis] - lo[axis]).powi(2)).sum::<f32>().sqrt();
         (diagonal * 0.5).max(1e-3)
     });
