@@ -617,14 +617,11 @@ impl RenderScene {
         });
 
         // One light interpretation for surfaces and shafts: position/direction
-        // plus mode, premultiplied colour plus caster slot, and range. Keep
-        // stable compacted caster IDs through the RT budget; raster consumers
-        // use only its first MAX_RASTER_SHADOW_CASTERS entries. Lights beyond
-        // either shadow budget still contribute direct illumination.
+        // plus mode, premultiplied colour plus caster slot, and range. Every
+        // light with `cast_shadows` gets the next caster slot.
         let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * LIGHT_VEC4_STRIDE);
         let mut light_count: u32 = 0;
-        let mut casters: Vec<manifold_node_engine::scene::light::Light> =
-            Vec::with_capacity(manifold_gpu::raytrace::MAX_RT_CASTERS);
+        let mut casters: Vec<manifold_node_engine::scene::light::Light> = Vec::new();
         // VOLUMETRIC_LIGHT_DESIGN.md D2 (P3): every wired light (Sun AND
         // Point) contributes to the march — 3-vec4-per-light packing,
         // matching `shaft_march.wgsl`'s `shaft_lights` binding(2) layout
@@ -645,7 +642,7 @@ impl RenderScene {
             let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
             if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
                 self.rendered_lights.push(l.pos);
-                let slot: f32 = if l.cast_shadows && casters.len() < manifold_gpu::raytrace::MAX_RT_CASTERS {
+                let slot: f32 = if l.cast_shadows {
                     let s = casters.len() as f32;
                     casters.push(l);
                     s
@@ -676,33 +673,9 @@ impl RenderScene {
         // desyncing the shader's `li * LIGHT_STRIDE` indexing from the
         // real appended entries).
 
-        // Caster table (`@binding(9)`): `MAX_RASTER_SHADOW_CASTERS` slots ×
-        // `CASTER_VEC4_STRIDE` vec4, zeroed then filled per active caster.
-        // Columns 0–3 = shadow_view_proj; vec4 4 = (bias, kernel_half_width,
-        // texel_size, light_size). Always fully sized so `@binding(9)` is a
-        // fixed bind regardless of caster count (Bytes, copy-at-encode,
-        // hazard-free).
-        let mut caster_table: Vec<[f32; 4]> =
-            vec![[0.0; 4]; MAX_RASTER_SHADOW_CASTERS * CASTER_VEC4_STRIDE];
-        for (slot, l) in casters.iter().take(MAX_RASTER_SHADOW_CASTERS).enumerate() {
-            let vp = l.shadow_view_proj();
-            let base = slot * CASTER_VEC4_STRIDE;
-            caster_table[base] = vp[0];
-            caster_table[base + 1] = vp[1];
-            caster_table[base + 2] = vp[2];
-            caster_table[base + 3] = vp[3];
-            // D12: `Contact` has no fixed kernel width — `kernel_half_width()`
-            // returns the sentinel `-1`, which `render_scene.wgsl`'s
-            // `shadow_factor` reads as "run the PCSS blocker-search branch,
-            // using `light_size` below" instead of the fixed PCF loop.
-            let khw = l.shadow_softness.kernel_half_width() as f32;
-            let light_size = match l.shadow_softness {
-                manifold_node_engine::scene::light::ShadowSoftness::Contact { light_size } => light_size,
-                _ => 0.0,
-            };
-            let texel = 1.0 / l.shadow_resolution.clamp(256, 4096) as f32;
-            caster_table[base + 4] = [l.shadow_bias, khw, texel, light_size];
-        }
+        // The caster table both renderers read, one entry per caster slot.
+        let shadow_casters: Vec<manifold_gpu::raytrace::ShadowCaster> =
+            casters.iter().map(shadow_caster_entry).collect();
 
         let dims_tex = ctx.outputs.texture_2d("color")?;
         let width = dims_tex.width;
@@ -1037,7 +1010,7 @@ impl RenderScene {
                 light_data,
                 light_count,
                 casters,
-                caster_table,
+                shadow_casters,
                 native_width,
                 native_height,
                 width,
@@ -1086,5 +1059,36 @@ impl RenderScene {
             },
             (shaft_light_data, shaft_light_count),
         ))
+    }
+}
+
+/// One light's entry in the shared caster table: its shadow-map projection
+/// and filter for the raster, its ray source and colour for the ray tracer.
+fn shadow_caster_entry(l: &manifold_node_engine::scene::light::Light) -> manifold_gpu::raytrace::ShadowCaster {
+    use manifold_node_engine::scene::light::{LightMode, ShadowSoftness};
+    let light_size = match l.shadow_softness {
+        ShadowSoftness::Contact { light_size } => light_size,
+        _ => 0.0,
+    };
+    // D12: `Contact` has no fixed kernel width — `kernel_half_width()`
+    // returns the sentinel `-1`, which `shadow_factor` reads as "run the
+    // PCSS blocker search using `light_size`".
+    let khw = l.shadow_softness.kernel_half_width() as f32;
+    let texel = 1.0 / shadow_map_resolution(l.shadow_resolution) as f32;
+    // A dark light keeps its slot, but its traced fields stay neutral so its
+    // movement cannot disturb RT history; the tracer skips its rays.
+    let (source, kind) = if l.color[..3].iter().all(|&channel| channel == 0.0) {
+        ([0.0, 1.0, 0.0, 0.0], 0.0)
+    } else {
+        match l.mode {
+            LightMode::Sun => ([-l.dir[0], -l.dir[1], -l.dir[2], sun_cone_half_angle(l.shadow_softness)], 0.0),
+            LightMode::Point | LightMode::Spot => ([l.pos[0], l.pos[1], l.pos[2], light_size], 1.0),
+        }
+    };
+    manifold_gpu::raytrace::ShadowCaster {
+        view_proj: l.shadow_view_proj(),
+        shadow: [l.shadow_bias, khw, texel, light_size],
+        source,
+        color: [l.color[0], l.color[1], l.color[2], kind],
     }
 }

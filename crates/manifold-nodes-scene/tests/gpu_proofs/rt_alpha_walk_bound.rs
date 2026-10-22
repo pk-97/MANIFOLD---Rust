@@ -22,7 +22,7 @@ use std::slice;
 
 use manifold_gpu::raytrace::{
     ensure_normal_sources, DebugRayQueryHit, DebugRayQueryRay, GiMaterial, MetalShadowRayTracer,
-    RtAccel, RtCasterParams, RtGeometryChange, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    RtAccel, ShadowCaster, upload_shadow_casters, RtGeometryChange, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
     RT_WALK_MAX_CANDIDATES,
 };
 use manifold_gpu::{
@@ -77,6 +77,11 @@ fn upload_f32(device: &GpuDevice, size: [u32; 2], format: GpuTextureFormat, pixe
 }
 
 fn output(device: &GpuDevice, size: [u32; 2], label: &str) -> GpuTexture {
+    output_of(device, size, GpuTextureDimension::D2, label)
+}
+
+/// `D2Array` for the shadow-visibility output (four casters per layer).
+fn output_of(device: &GpuDevice, size: [u32; 2], dimension: GpuTextureDimension, label: &str) -> GpuTexture {
     device.create_texture(&GpuTextureDesc {
         width: size[0],
         height: size[1],
@@ -84,7 +89,7 @@ fn output(device: &GpuDevice, size: [u32; 2], label: &str) -> GpuTexture {
         // Rgba16Float: the production trace format, and what
         // `harness::readback_rgba_f32` decodes.
         format: GpuTextureFormat::Rgba16Float,
-        dimension: GpuTextureDimension::D2,
+        dimension,
         usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
         label,
         mip_levels: 1,
@@ -199,16 +204,16 @@ fn query(device: &GpuDevice, tracer: &MetalShadowRayTracer, scene: &Scene<'_>, r
 }
 
 /// Four soft suns leaning a little off +z, every ray inside the stack.
-fn suns() -> [RtCasterParams; 4] {
+fn suns() -> [ShadowCaster; 4] {
     let dir = |x: f32, y: f32| {
         let len = (x * x + y * y + 1.0).sqrt();
         [x / len, y / len, 1.0 / len]
     };
     [
-        RtCasterParams::new(dir(0.0, 0.0), 0.05, [1.0; 3], 0),
-        RtCasterParams::new(dir(0.1, 0.0), 0.05, [1.0; 3], 0),
-        RtCasterParams::new(dir(0.0, 0.1), 0.05, [1.0; 3], 0),
-        RtCasterParams::new(dir(-0.1, -0.1), 0.05, [1.0; 3], 0),
+        ShadowCaster::traced(dir(0.0, 0.0), 0.05, [1.0; 3], 0),
+        ShadowCaster::traced(dir(0.1, 0.0), 0.05, [1.0; 3], 0),
+        ShadowCaster::traced(dir(0.0, 0.1), 0.05, [1.0; 3], 0),
+        ShadowCaster::traced(dir(-0.1, -0.1), 0.05, [1.0; 3], 0),
     ]
 }
 
@@ -217,25 +222,27 @@ fn suns() -> [RtCasterParams; 4] {
 fn trace(device: &GpuDevice, tracer: &MetalShadowRayTracer, scene: &Scene<'_>, objects: &[RtObjectGeometry<'_>], size: [u32; 2], frame_index: u32) -> Vec<f32> {
     let pixels = (size[0] * size[1]) as usize;
     let depth = upload_f32(device, size, GpuTextureFormat::Depth32Float, &vec![0.3f32; pixels], "rt-alpha-walk-depth");
-    let out_sv = output(device, size, "rt-alpha-walk-out_sv");
+    let out_sv = output_of(device, size, GpuTextureDimension::D2Array, "rt-alpha-walk-out_sv");
     let stub = |label| output(device, size, label);
-    let (out_sv2, out_svt, out_irr, out_n, out_refl) = (
-        stub("rt-alpha-walk-sv2"), stub("rt-alpha-walk-svt"), stub("rt-alpha-walk-irr"),
+    let (out_svt, out_irr, out_n, out_refl) = (
+        stub("rt-alpha-walk-svt"), stub("rt-alpha-walk-irr"),
         stub("rt-alpha-walk-n"), stub("rt-alpha-walk-refl"),
     );
     let env = output(device, [1, 1], "rt-alpha-walk-env");
     let casters = suns();
+    let caster_list: &[ShadowCaster] = &casters;
+    let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
-        &casters, 2, frame_index, size, size, 0.0, 0, 0, [0.0; 3], IDENTITY, 0, 0.6, 0.1,
+        caster_list.len() as u32,
+        caster_buffer.gpu_address(), 2, frame_index, size, size, 0.0, 0, 0, [0.0; 3], IDENTITY, 0, 0.6, 0.1,
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     let mut encoder = device.create_encoder("rt-alpha-walk-trace");
     tracer.dispatch_shadow_rays(
-        &mut encoder, device, &scene.accel, tracer.zero_emissive_stats(), &params, &params_buffer,
+        &mut encoder, device, &scene.accel, tracer.zero_emissive_stats(), &params, &caster_buffer,
         &scene.materials, &scene.normal_sources, objects, &scene.textures, &depth,
-        &out_sv, &out_sv2, &out_svt, &out_irr, &out_n, &out_refl, &env,
+        &out_sv, &out_svt, &out_irr, &out_n, &out_refl, &env,
         &dummy_emissive, &dummy_emissive, false, "trace_shadow_rays-alpha-walk-bound",
     );
     encoder.commit_and_wait_completed();

@@ -2,11 +2,11 @@
 //! `casters[0]` (`render_scene.rs`'s dispatch call site used to read `let
 //! sun = &casters[0]` unconditionally), so every OTHER shadow-casting
 //! light rendered as fully lit regardless of real occluders. This proof
-//! covers the fix end to end: `manifold_gpu::raytrace::RtCasterParams`/
-//! `ShadowRayParams::casters`, the per-caster loop in
+//! covers the fix end to end: `manifold_gpu::raytrace::ShadowCaster` (the
+//! shared caster table), the per-caster loop in
 //! `trace_shadow_rays`, and `render_scene.wgsl`'s `shadow_factor` reading
-//! its own slot out of the widened `rt_shadow_mask` (now `Rgba16Float`,
-//! one visibility channel per caster).
+//! its own slot out of the widened `rt_shadow_mask` array (one channel per
+//! caster, four casters per layer).
 //!
 //! Scene: `rt_p1_region_probe.rs`'s exact ground(8x8, y=0) + occluder
 //! (3x3, y=1.5, centered over the ground's origin) + orbit camera

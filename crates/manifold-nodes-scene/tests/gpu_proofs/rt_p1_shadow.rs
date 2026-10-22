@@ -37,7 +37,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtCasterParams, RtObjectGeometry, ShadowRayParams,
+    GiMaterial, MetalShadowRayTracer, ShadowCaster, upload_shadow_casters, RtObjectGeometry, ShadowRayParams,
     ShadowRayTracer,
 };
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
@@ -166,21 +166,9 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         height: 1,
         depth: 1,
         format: GpuTextureFormat::Rgba32Float,
-        dimension: GpuTextureDimension::D2,
+        dimension: GpuTextureDimension::D2Array,
         usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
         label: "rt-p1-out_sv",
-        mip_levels: 1,
-    });
-    // RS-A (caster cap 4 -> 8): second shadow-visibility output — unread by
-    // this proof (only asserts on out_sv.r for caster slot 0).
-    let out_sv2 = device.create_texture(&GpuTextureDesc {
-        width: 2,
-        height: 1,
-        depth: 1,
-        format: GpuTextureFormat::Rgba16Float,
-        dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
-        label: "rt-p1-out_sv2",
         mip_levels: 1,
     });
     // RAYTRACING_DESIGN.md section 5.2 P2 widened `trace_shadow_rays` to also
@@ -240,10 +228,13 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     // is never read here).
     // Multi-caster shadow fix: a single sun caster in slot 0 — same
     // `sun_dir`/`sun_cone` this proof always used, now expressed as one
-    // `RtCasterParams` entry instead of top-level `ShadowRayParams` fields.
-    let casters = [RtCasterParams::new([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    // `ShadowCaster` entry instead of top-level `ShadowRayParams` fields.
+    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let caster_list: &[ShadowCaster] = &casters;
+    let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
-        &casters,
+        caster_list.len() as u32,
+        caster_buffer.gpu_address(),
         1,
         0,
         [2, 1],
@@ -258,7 +249,6 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         0.1,         // refl_rough_band — blend band width
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
     // discipline as `out_irr` — one zeroed entry.
     let gi_materials_buffer =
@@ -301,14 +291,13 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
             .map(|t| &t.stats)
             .unwrap_or_else(|| tracer.zero_emissive_stats()),
         &params,
-        &params_buffer,
+        &caster_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
         &objects,
         &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,
-        &out_sv2,
         &out_svt,
         &out_irr,
         &out_n,
@@ -479,19 +468,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         height: 1,
         depth: 1,
         format: GpuTextureFormat::Rgba32Float,
-        dimension: GpuTextureDimension::D2,
+        dimension: GpuTextureDimension::D2Array,
         usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
         label: "rt-p1-2blas-out_sv",
-        mip_levels: 1,
-    });
-    let out_sv2 = device.create_texture(&GpuTextureDesc {
-        width: 2,
-        height: 1,
-        depth: 1,
-        format: GpuTextureFormat::Rgba16Float,
-        dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
-        label: "rt-p1-2blas-out_sv2",
         mip_levels: 1,
     });
     let out_svt = device.create_texture(&GpuTextureDesc {
@@ -551,10 +530,13 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
 
     // Multi-caster shadow fix: a single sun caster in slot 0 — same
     // `sun_dir`/`sun_cone` this proof always used, now expressed as one
-    // `RtCasterParams` entry instead of top-level `ShadowRayParams` fields.
-    let casters = [RtCasterParams::new([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    // `ShadowCaster` entry instead of top-level `ShadowRayParams` fields.
+    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let caster_list: &[ShadowCaster] = &casters;
+    let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
-        &casters,
+        caster_list.len() as u32,
+        caster_buffer.gpu_address(),
         1,
         0,
         [2, 1],
@@ -569,7 +551,6 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         0.1,         // refl_rough_band — blend band width
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
     // discipline as `out_irr` — one zeroed entry.
     let gi_materials_buffer =
@@ -602,14 +583,13 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             .map(|t| &t.stats)
             .unwrap_or_else(|| tracer.zero_emissive_stats()),
         &params,
-        &params_buffer,
+        &caster_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
         &objects,
         &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,
-        &out_sv2,
         &out_svt,
         &out_irr,
         &out_n,

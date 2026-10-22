@@ -25,7 +25,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, EmissiveTableStats, GiMaterial, MetalShadowRayTracer, RtCasterParams,
+    ensure_normal_sources, EmissiveTableStats, GiMaterial, MetalShadowRayTracer, ShadowCaster, upload_shadow_casters,
     RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
 };
 use manifold_gpu::{
@@ -303,9 +303,20 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             mip_levels: 1,
         })
     };
-    let (out_sv, out_sv2, out_svt, out_irr, out_n, out_refl) = (
-        tex("ei-out_sv"),
-        tex("ei-out_sv2"),
+    let sv_tex = |label: &str| {
+        device.create_texture(&GpuTextureDesc {
+            width: 8,
+            height: 1,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2Array,
+            usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+            label,
+            mip_levels: 1,
+        })
+    };
+    let (out_sv, out_svt, out_irr, out_n, out_refl) = (
+        sv_tex("ei-out_sv"),
         tex("ei-out_svt"),
         tex("ei-out_irr"),
         tex("ei-out_n"),
@@ -325,9 +336,12 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     // Lighting dispatch: gi_spp = 1 turns the emissive RIS sampler on; the
     // env chain is a zeroed dummy so the estimator's only term is
     // emissive_direct. Same CPU oracle as the kernel for the SAME draw.
-    let casters: [RtCasterParams; 0] = [];
+    let casters: [ShadowCaster; 0] = [];
+    let caster_list: &[ShadowCaster] = &casters;
+    let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
-        &casters,
+        caster_list.len() as u32,
+        caster_buffer.gpu_address(),
         0,
         0,
         [8, 1],
@@ -343,7 +357,6 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     )
     .with_slot_row_base(objects.len() as u32);
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
     let mut encoder = device.create_encoder("rt-emissive-instancing");
     tracer.dispatch_shadow_rays(
@@ -352,14 +365,13 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         &accel,
         &table.stats,
         &params,
-        &params_buffer,
+        &caster_buffer,
         &gi_buffer,
         &normal_sources,
         &objects,
         &[],
         &depth_tex,
         &out_sv,
-        &out_sv2,
         &out_svt,
         &out_irr,
         &out_n,

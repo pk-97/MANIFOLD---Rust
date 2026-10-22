@@ -132,6 +132,21 @@
         tex
     }
 
+    /// A one-layer shadow-visibility array (the RT visibility textures are
+    /// layer arrays, four casters per layer).
+    fn rgba16f_layers(device: &manifold_gpu::GpuDevice, w: u32, h: u32, label: &str) -> manifold_gpu::GpuTexture {
+        device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2Array,
+            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+            label,
+            mip_levels: 1,
+        })
+    }
+
     fn rgba16f_target(
         device: &manifold_gpu::GpuDevice,
         w: u32,
@@ -415,7 +430,7 @@
             height: smap_res,
             depth: 1,
             format: GpuTextureFormat::Depth32Float,
-            dimension: GpuTextureDimension::D2,
+            dimension: GpuTextureDimension::D2Array,
             usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
             label: "shaft-test-shadow-map",
             mip_levels: 1,
@@ -489,32 +504,21 @@
         let shadow_draw =
             manifold_gpu::GpuEncoder::depth_msaa_draw(&shadow_pipeline, &shadow_bindings, 6, 1);
         let mut shadow_enc = device.create_encoder("shaft-test-shadow-pass");
-        shadow_enc.draw_instanced_depth_only_batch(&shadow_map, &shadow_ds, &[shadow_draw], "shaft-test-shadow");
+        shadow_enc.draw_instanced_depth_only_batch(&shadow_map.layer_view(0), &shadow_ds, &[shadow_draw], "shaft-test-shadow");
         shadow_enc.commit_and_wait_completed();
 
         let bias = light.shadow_bias;
-        let mut caster_table: Vec<[f32; 4]> = vec![[0.0f32; 4]; MAX_RASTER_SHADOW_CASTERS * CASTER_VEC4_STRIDE];
-        caster_table[0] = vp[0];
-        caster_table[1] = vp[1];
-        caster_table[2] = vp[2];
-        caster_table[3] = vp[3];
-        caster_table[4] = [bias, 2.0, 1.0 / smap_res as f32, 0.0];
-        let caster_bytes: &[u8] = bytemuck::cast_slice(&caster_table);
+        let caster = manifold_gpu::raytrace::ShadowCaster {
+            view_proj: vp,
+            shadow: [bias, 2.0, 1.0 / smap_res as f32, 0.0],
+            ..Default::default()
+        };
+        let caster_buf = manifold_gpu::raytrace::upload_shadow_casters(&device, &[caster]);
 
         let shaft_light_data: Vec<[f32; 4]> = light.packed(0.0).into_iter()
             .chain(point_light.packed(-1.0)).collect();
         let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
 
-        let dummy_depth = device.create_texture(&GpuTextureDesc {
-            width: 1,
-            height: 1,
-            depth: 1,
-            format: GpuTextureFormat::Depth32Float,
-            dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
-            label: "shaft-test-dummy-depth",
-            mip_levels: 1,
-        });
         let shadow_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             mag_filter: manifold_gpu::GpuFilterMode::Linear,
             min_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -565,11 +569,8 @@
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
                 GpuBinding::Texture { binding: 1, texture: &half_depth },
                 GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
-                GpuBinding::Bytes { binding: 3, data: caster_bytes },
+                GpuBinding::Buffer { binding: 3, buffer: &caster_buf, offset: 0 },
                 GpuBinding::Texture { binding: 4, texture: &shadow_map },
-                GpuBinding::Texture { binding: 5, texture: &dummy_depth },
-                GpuBinding::Texture { binding: 6, texture: &dummy_depth },
-                GpuBinding::Texture { binding: 7, texture: &dummy_depth },
                 GpuBinding::Sampler { binding: 8, sampler: &shadow_sampler },
                 GpuBinding::Texture { binding: 9, texture: &out_tex },
             ],
@@ -1487,7 +1488,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mut s = RenderScene::new();
 
         // First allocation resets.
-        assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256, 1));
         let assert_history_pair = |pair: &[Option<manifold_gpu::GpuTexture>; 2], format| {
             let textures: Vec<_> = pair.iter().flatten().collect();
             assert_eq!(textures.len(), 2);
@@ -1501,10 +1502,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_history_pair(&s.rt_sv_m1_history, Rgba16Float);
         assert_history_pair(&s.rt_sv_m2_history, Rgba16Float);
         assert_history_pair(&s.rt_sv_hold_history, R16Float);
-        assert_history_pair(&s.rt_sv2_history, Rgba16Float);
-        assert_history_pair(&s.rt_sv2_m1_history, Rgba16Float);
-        assert_history_pair(&s.rt_sv2_m2_history, Rgba16Float);
-        assert_history_pair(&s.rt_sv2_hold_history, R16Float);
         assert_history_pair(&s.rt_svt_history, Rgba16Float);
         assert_history_pair(&s.rt_depth_history, R32Float);
         assert_history_pair(&s.rt_normal_history, Rgba16Float);
@@ -1512,7 +1509,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let original_hold_textures: Vec<_> = s
             .rt_sv_hold_history
             .iter()
-            .chain(s.rt_sv2_hold_history.iter())
             .filter_map(Option::as_ref)
             .cloned()
             .collect();
@@ -1520,34 +1516,31 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             .iter()
             .map(manifold_gpu::GpuTexture::identity_key)
             .collect();
-        s.ensure_rt_masks(&device, 128, 128, 256, 256);
+        s.ensure_rt_masks(&device, 128, 128, 256, 256, 1);
         // Same dims: no realloc, no reset.
-        assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
+        assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256, 1));
         let same_size_hold_ids: Vec<_> = s
             .rt_sv_hold_history
             .iter()
-            .chain(s.rt_sv2_hold_history.iter())
             .filter_map(Option::as_ref)
             .map(manifold_gpu::GpuTexture::identity_key)
             .collect();
         assert_eq!(same_size_hold_ids, original_hold_ids, "same-size ensure must preserve R16 histories");
         // Tier flip (Half → Native at fixed canvas): trace dims change.
-        assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256));
+        assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256, 1));
         assert_eq!(s.rt_irr_trace_w, 256);
         // The truncation hole: canvas 256 → 257 at Quarter (trace 64 → 64).
         // Full-class textures (history included) must still realloc.
-        assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256));
-        assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257));
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256, 1));
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257, 1));
         assert_eq!(s.rt_irr_width, 257);
         assert_history_pair(&s.rt_sv_hold_history, R16Float);
-        assert_history_pair(&s.rt_sv2_hold_history, R16Float);
-        for texture in s.rt_sv_hold_history.iter().flatten().chain(s.rt_sv2_hold_history.iter().flatten()) {
+        for texture in s.rt_sv_hold_history.iter().flatten() {
             assert_eq!((texture.width, texture.height), (257, 257));
         }
         let resized_hold_ids: Vec<_> = s
             .rt_sv_hold_history
             .iter()
-            .chain(s.rt_sv2_hold_history.iter())
             .filter_map(Option::as_ref)
             .map(manifold_gpu::GpuTexture::identity_key)
             .collect();
@@ -1565,7 +1558,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let values: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast(), (257 * 257) as usize) };
         assert!((f16::from_bits(values[0]).to_f32() - 0.25).abs() < 0.01);
         // Masks guard follows the same dual-pair discipline.
-        s.ensure_rt_masks(&device, 64, 64, 256, 256);
+        s.ensure_rt_masks(&device, 64, 64, 256, 256, 1);
         assert_eq!(s.rt_mask_trace_w, 64);
         assert_eq!(s.rt_mask_width, 256);
     }
@@ -1590,7 +1583,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pixel_count = (W * H) as usize;
         let device = manifold_gpu::testkit::test_device();
         let mut scene = RenderScene::new();
-        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H));
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H, 1));
 
         let shared_a = scene.rt_irr_filtered.as_ref().expect("filtered alias").clone();
         let shared_b = scene.rt_irr_filtered_b.as_ref().expect("filtered alias b").clone();
@@ -1683,6 +1676,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let atrous_params_buffer = device.create_buffer_shared(std::mem::size_of::<AtrousParams>() as u64);
         let gi_materials = device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>() as u64);
         gi_materials.zero_fill();
+        let sv_scratch: [manifold_gpu::GpuTexture; 2] =
+            std::array::from_fn(|_| rgba16f_layers(&device, W, H, "rt-post-scratch-visibility"));
         let tracer = MetalShadowRayTracer::new(&device);
         let shared_aux_a: [manifold_gpu::GpuTexture; 4] =
             std::array::from_fn(|_| rgba16f_target(&device, W, H, "rt-post-scratch-shared-pre-a"));
@@ -1709,10 +1704,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     &gi_materials,
                     &depth,
                     &moments,
-                    src_aux[0],
-                    dst_aux[0],
-                    src_aux[1],
-                    dst_aux[1],
+                    &sv_scratch[0],
+                    &sv_scratch[1],
                     src_irr,
                     dst_irr,
                     src_n,
@@ -1917,7 +1910,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // A dimension change creates fresh scratch objects and refreshes both
         // post-filter aliases; no stale handle survives the resize.
-        assert!(scene.ensure_rt_irradiance(&device, W, H, W + 1, H + 1));
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W + 1, H + 1, 1));
         let resized_a = scene.rt_irr_filtered.as_ref().expect("resized filtered alias");
         let resized_b = scene.rt_irr_filtered_b.as_ref().expect("resized filtered alias b");
         assert_eq!((resized_a.width, resized_a.height), (W + 1, H + 1));
@@ -1941,8 +1934,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pixel_count = (W * H) as usize;
         let device = manifold_gpu::testkit::test_device();
         let mut scene = RenderScene::new();
-        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H));
-        assert!(!scene.ensure_rt_irradiance(&device, W, H, W, H));
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H, 1));
+        assert!(!scene.ensure_rt_irradiance(&device, W, H, W, H, 1));
 
         let shared_scratch = scene.rt_refl_full_b.as_ref().expect("reflection scratch").clone();
         let firefly_scratch = scene.rt_firefly_scratch.as_ref().expect("firefly alias").clone();
@@ -2090,6 +2083,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let reflection_dedicated: Vec<_> = (0..FRAME_COUNT).map(|_| device.create_buffer_shared(readback_size)).collect();
         let raw_readback = device.create_buffer_shared(readback_size);
         let history_readbacks: [manifold_gpu::GpuBuffer; 2] = std::array::from_fn(|_| device.create_buffer_shared(readback_size));
+        let sv_layers: [manifold_gpu::GpuTexture; 2] =
+            std::array::from_fn(|_| rgba16f_layers(&device, W, H, "rt-firefly-visibility"));
         let mut encoder = device.create_encoder("rt-firefly-scratch-parity");
         let raw_refl = raw_reflection;
         encoder.copy_texture_to_texture(&raw_input, raw_refl, W, H, 1);
@@ -2102,13 +2097,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let dedicated_atrous = [&dedicated_aux[0], &dedicated_aux[1], &dedicated_aux[2], &dedicated_aux[3], &dedicated_aux[4]];
             tracer.atrous_pass(
                 &mut encoder, &params, &atrous_params_buffer, &gi_materials, &depth, &moments,
-                &visibility, shared_atrous[0], &visibility, shared_atrous[1], &raw_input,
+                &sv_layers[0], &sv_layers[1], &raw_input,
                 shared_atrous[2], &normal, shared_atrous[3], raw_refl, &shared_scratch,
                 &visibility, shared_atrous[4], "rt-firefly-shared-atrous",
             );
             tracer.atrous_pass(
                 &mut encoder, &params, &atrous_params_buffer, &gi_materials, &depth, &moments,
-                &visibility, dedicated_atrous[0], &visibility, dedicated_atrous[1], &raw_input,
+                &sv_layers[0], &sv_layers[1], &raw_input,
                 dedicated_atrous[2], &normal, dedicated_atrous[3], raw_refl, &dedicated_prefilter,
                 &visibility, dedicated_atrous[4], "rt-firefly-dedicated-atrous",
             );
@@ -2116,13 +2111,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // following MSAA resolve overwrites that same backing.
             tracer.atrous_pass(
                 &mut encoder, &params, &atrous_params_buffer, &gi_materials, &depth, &moments,
-                &visibility, shared_atrous[0], &visibility, shared_atrous[1], &raw_input,
+                &sv_layers[0], &sv_layers[1], &raw_input,
                 shared_atrous[2], &normal, shared_atrous[3], &shared_scratch, &shared_reflection_tail,
                 &visibility, shared_atrous[4], "rt-firefly-shared-atrous-readback",
             );
             tracer.atrous_pass(
                 &mut encoder, &params, &atrous_params_buffer, &gi_materials, &depth, &moments,
-                &visibility, dedicated_atrous[0], &visibility, dedicated_atrous[1], &raw_input,
+                &sv_layers[0], &sv_layers[1], &raw_input,
                 dedicated_atrous[2], &normal, dedicated_atrous[3], &dedicated_prefilter, &dedicated_reflection_tail,
                 &visibility, dedicated_atrous[4], "rt-firefly-dedicated-atrous-readback",
             );
@@ -2221,11 +2216,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
 
         let old_scratch_id = shared_scratch.identity_key();
-        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W, H));
+        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W, H, 1));
         let trace_resized = scene.rt_refl_full_b.as_ref().expect("trace-resized scratch").clone();
         assert_ne!(trace_resized.identity_key(), old_scratch_id);
         assert!(trace_resized.ptr_eq(scene.rt_firefly_scratch.as_ref().expect("trace-resized firefly alias")));
-        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W + 1, H + 1));
+        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W + 1, H + 1, 1));
         let full_resized = scene.rt_refl_full_b.as_ref().expect("full-resized scratch");
         assert_ne!(full_resized.identity_key(), trace_resized.identity_key());
         assert!(full_resized.ptr_eq(scene.rt_firefly_scratch.as_ref().expect("full-resized firefly alias")));

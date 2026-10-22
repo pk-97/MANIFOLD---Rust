@@ -45,7 +45,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtCasterParams, RtObjectGeometry,
+    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, ShadowCaster, upload_shadow_casters, RtObjectGeometry,
     ShadowRayParams, ShadowRayTracer,
 };
 use manifold_gpu::{
@@ -235,14 +235,11 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         height: 1,
         depth: 1,
         format: GpuTextureFormat::Rgba32Float,
-        dimension: GpuTextureDimension::D2,
+        dimension: GpuTextureDimension::D2Array,
         usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
         label: "rt-t2c-out_sv",
         mip_levels: 1,
     });
-    // RS-A (caster cap 8): second shadow-visibility output — unread, this
-    // proof asserts on out_sv only (one caster, slot 0).
-    let out_sv2 = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_sv2-stub");
     let out_irr = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_irr-stub");
     let out_n = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_n-stub");
     let out_refl = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_refl-stub");
@@ -258,14 +255,17 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     });
 
     // One sun caster, toward +z.
-    let casters = [RtCasterParams::new(
+    let casters = [ShadowCaster::traced(
         [0.0, 0.0, 1.0],
         cone_half_angle,
         [0.0, 0.0, 0.0],
         0,
     )];
+    let caster_list: &[ShadowCaster] = &casters;
+    let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
-        &casters,
+        caster_list.len() as u32,
+        caster_buffer.gpu_address(),
         1, // shadow_spp — the production value
         frame_index,
         [WIDTH, 1],
@@ -281,8 +281,6 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let dummy_emissive = harness::dummy_emissive_buffer(device);
-    let params_buffer =
-        device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
@@ -317,14 +315,13 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
             .map(|t| &t.stats)
             .unwrap_or_else(|| tracer.zero_emissive_stats()),
         &params,
-        &params_buffer,
+        &caster_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
         &objects,
         &alpha_textures,
         &depth_tex,
         &out_sv,
-        &out_sv2,
         &out_svt,
         &out_irr,
         &out_n,

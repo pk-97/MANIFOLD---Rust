@@ -572,7 +572,7 @@ fn rt_dynamic_emissive_gpu_geometry() {
 // ─── P4b: appearance coverage and indexed hit attributes (A4) ────────────
 
 use manifold_gpu::raytrace::{
-    DebugRayQueryHit, DebugRayQueryRay, RtCasterParams, ShadowRayParams,
+    DebugRayQueryHit, DebugRayQueryRay, ShadowCaster, upload_shadow_casters, ShadowRayParams,
 };
 use manifold_gpu::{GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
@@ -1099,8 +1099,13 @@ fn rt_dynamic_coverage_and_attributes() {
                 mip_levels: 1,
             })
         };
-        let out_sv = mk_out(GpuTextureFormat::Rgba16Float, "rt-p4b-sv");
-        let out_sv2 = mk_out(GpuTextureFormat::Rgba16Float, "rt-p4b-sv2");
+        let out_sv = device.create_texture(&GpuTextureDesc {
+            width, height: 1, depth: 1, format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2Array,
+            usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+            label: "rt-p4b-sv",
+            mip_levels: 1,
+        });
         let out_svt = mk_out(GpuTextureFormat::Rgba16Float, "rt-p4b-svt");
         let out_irr = mk_out(GpuTextureFormat::Rgba32Float, "rt-p4b-irr");
         let out_n = mk_out(GpuTextureFormat::Rgba16Float, "rt-p4b-n");
@@ -1116,16 +1121,18 @@ fn rt_dynamic_coverage_and_attributes() {
         device.upload_texture(&prefiltered_env, &[0u8; 8]);
 
         let casters = if sun {
-            vec![RtCasterParams::new([0.9950372, -0.09950372, 0.0], 0.0, [1.0, 1.0, 1.0], 0)]
+            vec![ShadowCaster::traced([0.9950372, -0.09950372, 0.0], 0.0, [1.0, 1.0, 1.0], 0)]
         } else {
             vec![]
         };
+        let caster_list: &[ShadowCaster] = &casters;
+        let caster_buffer = upload_shadow_casters(device, caster_list);
         let params = ShadowRayParams::new(
-            &casters, 0, 1, [width, 1], [width, 1], 0.0, 0, gi_spp,
+            caster_list.len() as u32,
+            caster_buffer.gpu_address(), 0, 1, [width, 1], [width, 1], 0.0, 0, gi_spp,
             [0.0, 1.8, 2.0], IDENTITY, refl_spp, 0.6, 0.1,
             manifold_gpu::raytrace::SVT_SLOT_NONE,
         );
-        let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
         let gi_materials_buffer = write_shared(device, &materials);
 
         let mut enc = device.create_encoder(label);
@@ -1135,9 +1142,9 @@ fn rt_dynamic_coverage_and_attributes() {
             .expect("encode accel update");
         let table = accel.emissive_table.as_ref().expect("table resident since P4a");
         tracer.dispatch_shadow_rays(
-            &mut enc, device, &accel, &table.stats, &params, &params_buffer,
+            &mut enc, device, &accel, &table.stats, &params, &caster_buffer,
             &gi_materials_buffer, &normal_sources, &objects, &[],
-            &depth_tex, &out_sv, &out_sv2, &out_svt, &out_irr, &out_n, &out_refl,
+            &depth_tex, &out_sv, &out_svt, &out_irr, &out_n, &out_refl,
             &prefiltered_env, &table.triangles, &table.aliases, false, label,
         );
         enc.commit_and_wait_completed();

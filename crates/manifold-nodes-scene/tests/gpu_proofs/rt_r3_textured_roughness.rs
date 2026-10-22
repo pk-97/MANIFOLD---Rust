@@ -46,8 +46,8 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams,
-    ShadowRayTracer,
+    ensure_normal_sources, upload_shadow_casters, GiMaterial, MetalShadowRayTracer, RtObjectGeometry,
+    ShadowCaster, ShadowRayParams, ShadowRayTracer,
 };
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
@@ -324,17 +324,9 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
         height: 1,
         depth: 1,
         format: GpuTextureFormat::Rgba16Float,
-        dimension: GpuTextureDimension::D2,
+        dimension: GpuTextureDimension::D2Array,
         usage: GpuTextureUsage::SHADER_WRITE,
         label: "rt-r3-out_sv-stub",
-        mip_levels: 1,
-    });
-    let out_sv2 = device.create_texture(&GpuTextureDesc {
-        width: 2, height: 1, depth: 1,
-        format: GpuTextureFormat::Rgba16Float,
-        dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_WRITE,
-        label: "rt-r3-out_sv2-stub",
         mip_levels: 1,
     });
     let out_irr = device.create_texture(&GpuTextureDesc {
@@ -412,8 +404,11 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
     } else {
         (None, 0)
     };
+    let caster_list: &[ShadowCaster] = &[];
+    let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
-        &[],
+        caster_list.len() as u32,
+        caster_buffer.gpu_address(),
         frame_index,
         0,
         [2, 1],
@@ -429,7 +424,6 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     )
     .with_lights(if config.complete_lighting { 1 } else { 0 }, light_data_addr);
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
     // gi_materials[0] = floor (albedo/emissive unused on the primary-hit
     // path; only .y (roughness) is read as the flat-factor fallback).
@@ -484,14 +478,13 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
             .map(|t| &t.stats)
             .unwrap_or_else(|| tracer.zero_emissive_stats()),
         &params,
-        &params_buffer,
+        &caster_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
         &objects,
         &material_textures,
         &depth_tex,
         &out_sv,
-        &out_sv2,
         &out_svt,
         &out_irr,
         &out_n,

@@ -12,7 +12,7 @@ use crate::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 // RS-B (RAYTRACING_DESIGN.md section 15.3): per-triangle emissive light table
 // cap — power-rank truncated. Mirrors the embedded MSL `MAX_RT_EMISSIVE_TRIANGLES`
-// at the MSL source above (same manual-sync discipline as `MAX_RT_CASTERS`).
+// at the MSL source above (manual sync with the MSL constant).
 pub const MAX_RT_EMISSIVE_TRIANGLES: u32 = 4096;
 
 /// P4a radix-sort tile size — mirrors the MSL `EM_TILE` (same manual-sync

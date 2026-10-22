@@ -32,7 +32,7 @@
 //!   fully lit.
 //!
 //! The `rt_svt_slot` CPU discriminator (sun-first → Some(0); point-only →
-//! None; sun at index >= MAX_RT_CASTERS → None) is tested against the
+//! None; a sun after ten casters → Some(10)) is tested against the
 //! production fn in render_scene.rs's cfg(test) mod — a duplicated copy
 //! here would drift silently.
 
@@ -40,7 +40,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtCasterParams, RtObjectGeometry,
+    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, ShadowCaster, upload_shadow_casters, RtObjectGeometry,
     ShadowRayParams, ShadowRayTracer, SVT_SLOT_NONE,
 };
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
@@ -116,7 +116,7 @@ fn quad_verts_z(z: f32) -> [PackedVertexUV; 6] {
 fn run_tlc_fixture(
     objects: &[RtObjectGeometry],
     gi_materials: &[GiMaterial],
-    casters: &[RtCasterParams],
+    casters: &[ShadowCaster],
     svt_slot: u32,
     base_color_tex: Option<&manifold_gpu::GpuTexture>,
 ) -> ([f32; 3], f32, [f32; 3], f32) {
@@ -164,7 +164,7 @@ fn run_tlc_fixture(
         height: 1,
         depth: 1,
         format: GpuTextureFormat::Rgba32Float,
-        dimension: GpuTextureDimension::D2,
+        dimension: GpuTextureDimension::D2Array,
         usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
         label: "tlc-out_sv",
         mip_levels: 1,
@@ -201,14 +201,6 @@ fn run_tlc_fixture(
         label: "tlc-prefiltered-env-dummy",
         mip_levels: 1,
     });
-    let out_sv2_dummy = device.create_texture(&GpuTextureDesc {
-        width: 1, height: 1, depth: 1,
-        format: GpuTextureFormat::Rgba16Float,
-        dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
-        label: "tlc-out_sv2-dummy",
-        mip_levels: 1,
-    });
 
     let tex_list: Vec<&manifold_gpu::GpuTexture> = objects
         .iter()
@@ -226,8 +218,11 @@ fn run_tlc_fixture(
         }
     };
 
+    let caster_list: &[ShadowCaster] = casters;
+    let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
-        casters,
+        caster_list.len() as u32,
+        caster_buffer.gpu_address(),
         1,       // shadow_spp
         0,       // frame_index
         [2, 1],  // trace_size
@@ -242,7 +237,6 @@ fn run_tlc_fixture(
         0.1,     // refl_rough_band
         svt_slot,
     );
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
@@ -267,14 +261,13 @@ fn run_tlc_fixture(
             .map(|t| &t.stats)
             .unwrap_or_else(|| tracer.zero_emissive_stats()),
         &params,
-        &params_buffer,
+        &caster_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
         objects,
         &final_alpha_textures,
         &depth_tex,
         &out_sv,
-        &out_sv2_dummy,
         &out_svt,
         &out_irr,
         &out_n,
@@ -373,7 +366,7 @@ fn red_petal_tints_transmitted_pool() {
     )];
 
     // Sun caster (kind=0), svt_slot=0 → this caster's rgb goes to out_svt.
-    let casters = [RtCasterParams::new([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
 
     let (svt0, sv0, svt1, sv1) = run_tlc_fixture(&objects, &gi_materials, &casters, 0, None);
 
@@ -458,7 +451,7 @@ fn point_caster_control_svt_stays_white() {
 
     // Point caster (kind=1), svt_slot = SVT_SLOT_NONE since no Sun caster.
     // Position at (0, 0, 5) — far enough that its occluder at z=1 still blocks.
-    let casters = [RtCasterParams::new([0.0, 0.0, 5.0], 0.0, [0.0, 0.0, 0.0], 1)];
+    let casters = [ShadowCaster::traced([0.0, 0.0, 5.0], 0.0, [0.0, 0.0, 0.0], 1)];
 
     let (svt0, sv0, svt1, sv1) = run_tlc_fixture(
         &objects, &gi_materials, &casters, SVT_SLOT_NONE, None,
@@ -529,7 +522,7 @@ fn factor_zero_occluder_svt_reads_zero() {
         [0.0, 0.0, 0.0, 0.0], // factor 0 = opaque
     )];
 
-    let casters = [RtCasterParams::new([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
 
     let (svt0, sv0, svt1, sv1) = run_tlc_fixture(&objects, &gi_materials, &casters, 0, None);
 
@@ -597,7 +590,7 @@ fn unoccluded_texels_read_white_in_svt() {
         [0.5, 0.0, 0.0, 0.0],
     )];
 
-    let casters = [RtCasterParams::new([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
 
     let (svt0, sv0, svt1, sv1) = run_tlc_fixture(&objects, &gi_materials, &casters, 0, None);
 

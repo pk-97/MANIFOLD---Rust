@@ -110,6 +110,43 @@ fn make_history_side_channel(device: &GpuDevice, format: GpuTextureFormat, label
     })
 }
 
+/// Shadow visibility is one array layer per four casters. Two layers keep a
+/// second, independent group in every fixture.
+const SV_LAYERS: u32 = 2;
+
+fn make_sv_history(device: &GpuDevice, format: GpuTextureFormat, label: &str) -> GpuTexture {
+    let mut usage = GpuTextureUsage::SHADER_WRITE
+        | GpuTextureUsage::SHADER_READ
+        | GpuTextureUsage::COPY_SRC;
+    if format == GpuTextureFormat::R16Float {
+        usage = usage | GpuTextureUsage::RENDER_TARGET;
+    }
+    device.create_texture(&GpuTextureDesc {
+        width: W, height: H, depth: SV_LAYERS, format,
+        dimension: GpuTextureDimension::D2Array,
+        usage,
+        label, mip_levels: 1,
+    })
+}
+
+/// Shadow-visibility input: layer `i` holds `layers[i]` in rgb and 0 in alpha,
+/// the same texels the single-texture fixtures used.
+fn make_sv_layers(device: &GpuDevice, layers: &[f32], label: &str) -> GpuTexture {
+    assert_eq!(layers.len() as u32, SV_LAYERS);
+    let texture = device.create_texture(&GpuTextureDesc {
+        width: W, height: H, depth: SV_LAYERS,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2Array,
+        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+        label, mip_levels: 1,
+    });
+    for (i, &v) in layers.iter().enumerate() {
+        let texels = flat_rgba_f16(W, H, v, v, v);
+        device.upload_texture(&texture.layer_view(i as u32), as_bytes(&texels));
+    }
+    texture
+}
+
 fn make_pass_through(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) -> GpuTexture {
     let texture = device.create_texture(&GpuTextureDesc {
         width: W, height: H, depth: 1,
@@ -149,10 +186,6 @@ struct FullHistorySet {
     sv_m1: [GpuTexture; 2],
     sv_m2: [GpuTexture; 2],
     sv_hold: [GpuTexture; 2],
-    sv2: [GpuTexture; 2],
-    sv2_m1: [GpuTexture; 2],
-    sv2_m2: [GpuTexture; 2],
-    sv2_hold: [GpuTexture; 2],
     svt: [GpuTexture; 2],
     ping: usize,
 }
@@ -178,31 +211,21 @@ impl FullHistorySet {
                 make_history_side_channel(device, GpuTextureFormat::Rgba32Float, "gr-moments-b"),
             ],
             refl: [make_history(device, "gr-refl-a"), make_history(device, "gr-refl-b")],
-            sv: [make_history(device, "gr-sv-a"), make_history(device, "gr-sv-b")],
+            sv: [
+                make_sv_history(device, GpuTextureFormat::Rgba16Float, "gr-sv-a"),
+                make_sv_history(device, GpuTextureFormat::Rgba16Float, "gr-sv-b"),
+            ],
             sv_m1: [
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-svm1-a"),
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-svm1-b"),
+                make_sv_history(device, GpuTextureFormat::Rgba16Float, "gr-svm1-a"),
+                make_sv_history(device, GpuTextureFormat::Rgba16Float, "gr-svm1-b"),
             ],
             sv_m2: [
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-svm2-a"),
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-svm2-b"),
+                make_sv_history(device, GpuTextureFormat::Rgba16Float, "gr-svm2-a"),
+                make_sv_history(device, GpuTextureFormat::Rgba16Float, "gr-svm2-b"),
             ],
             sv_hold: [
-                make_history_side_channel(device, hold_format, "gr-svh-a"),
-                make_history_side_channel(device, hold_format, "gr-svh-b"),
-            ],
-            sv2: [make_history(device, "gr-sv2-a"), make_history(device, "gr-sv2-b")],
-            sv2_m1: [
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-sv2m1-a"),
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-sv2m1-b"),
-            ],
-            sv2_m2: [
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-sv2m2-a"),
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "gr-sv2m2-b"),
-            ],
-            sv2_hold: [
-                make_history_side_channel(device, hold_format, "gr-sv2h-a"),
-                make_history_side_channel(device, hold_format, "gr-sv2h-b"),
+                make_sv_history(device, hold_format, "gr-svh-a"),
+                make_sv_history(device, hold_format, "gr-svh-b"),
             ],
             svt: [make_history(device, "gr-svt-a"), make_history(device, "gr-svt-b")],
             ping: 0,
@@ -226,14 +249,6 @@ impl FullHistorySet {
     fn write_sv_m2(&self) -> &GpuTexture { &self.sv_m2[1 - self.ping] }
     fn read_sv_hold(&self) -> &GpuTexture { &self.sv_hold[self.ping] }
     fn write_sv_hold(&self) -> &GpuTexture { &self.sv_hold[1 - self.ping] }
-    fn read_sv2(&self) -> &GpuTexture { &self.sv2[self.ping] }
-    fn write_sv2(&self) -> &GpuTexture { &self.sv2[1 - self.ping] }
-    fn read_sv2_m1(&self) -> &GpuTexture { &self.sv2_m1[self.ping] }
-    fn write_sv2_m1(&self) -> &GpuTexture { &self.sv2_m1[1 - self.ping] }
-    fn read_sv2_m2(&self) -> &GpuTexture { &self.sv2_m2[self.ping] }
-    fn write_sv2_m2(&self) -> &GpuTexture { &self.sv2_m2[1 - self.ping] }
-    fn read_sv2_hold(&self) -> &GpuTexture { &self.sv2_hold[self.ping] }
-    fn write_sv2_hold(&self) -> &GpuTexture { &self.sv2_hold[1 - self.ping] }
     fn read_svt(&self) -> &GpuTexture { &self.svt[self.ping] }
     fn write_svt(&self) -> &GpuTexture { &self.svt[1 - self.ping] }
     fn advance(&mut self) { self.ping = 1 - self.ping; }
@@ -249,7 +264,6 @@ fn run_accumulate_frame(
     depth_tex: &GpuTexture,
     hi_normal: &GpuTexture,
     hi_sv: &GpuTexture,
-    hi_sv2: &GpuTexture,
     hi_svt: &GpuTexture,
     hi_refl: &GpuTexture,
     history: &mut FullHistorySet,
@@ -297,15 +311,6 @@ fn run_accumulate_frame(
             history.write_sv_m2(),
             history.read_sv_hold(),
             history.write_sv_hold(),
-            hi_sv2,
-            history.read_sv2(),
-            history.write_sv2(),
-            history.read_sv2_m1(),
-            history.write_sv2_m1(),
-            history.read_sv2_m2(),
-            history.write_sv2_m2(),
-            history.read_sv2_hold(),
-            history.write_sv2_hold(),
             hi_svt,
             history.read_svt(),
             history.write_svt(),
@@ -374,11 +379,14 @@ fn assert_history_parity(
     reference: &FullHistorySet,
     label: &str,
 ) -> [f32; 2] {
+    let layer = |t: &GpuTexture, l: u32| t.layer_view(l);
+    let (sv_a, sv_b) = (layer(compact.read_sv(), 0), layer(reference.read_sv(), 0));
+    let (sv2_a, sv2_b) = (layer(compact.read_sv(), 1), layer(reference.read_sv(), 1));
     let rgba_pairs = [
         ("irr", compact.read_irr(), reference.read_irr()),
         ("refl", compact.read_refl(), reference.read_refl()),
-        ("sv", compact.read_sv(), reference.read_sv()),
-        ("sv2", compact.read_sv2(), reference.read_sv2()),
+        ("sv layer 0", &sv_a, &sv_b),
+        ("sv layer 1", &sv2_a, &sv2_b),
         ("svt", compact.read_svt(), reference.read_svt()),
     ];
     for (name, scalar, rgba) in rgba_pairs {
@@ -399,9 +407,11 @@ fn assert_history_parity(
             }
         }
     }
+    let (hold_a, hold_b) = (layer(compact.read_sv_hold(), 0), layer(reference.read_sv_hold(), 0));
+    let (hold2_a, hold2_b) = (layer(compact.read_sv_hold(), 1), layer(reference.read_sv_hold(), 1));
     let hold_pairs = [
-        ("sv_hold", compact.read_sv_hold(), reference.read_sv_hold()),
-        ("sv2_hold", compact.read_sv2_hold(), reference.read_sv2_hold()),
+        ("sv_hold layer 0", &hold_a, &hold_b),
+        ("sv_hold layer 1", &hold2_a, &hold2_b),
     ];
     let mut holds = [0.0; 2];
     for (group, (name, scalar, rgba)) in hold_pairs.into_iter().enumerate() {
@@ -438,8 +448,7 @@ fn step_response_reaches_90_percent_within_4_frames() {
     let tracer = MetalShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "sr-normal");
-    let sv = make_pass_through(device, 1.0, 1.0, 1.0, "sr-sv");
-    let sv2 = make_pass_through(device, 1.0, 1.0, 1.0, "sr-sv2");
+    let sv = make_sv_layers(device, &[1.0, 1.0], "sr-sv");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "sr-svt");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "sr-refl");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
@@ -449,12 +458,12 @@ fn step_response_reaches_90_percent_within_4_frames() {
     // Warm up: constant irradiance 0.1 for 20 frames (converges to ~0.1).
     let warm_irr = upload_irr(device, 0.1, 0.1, 0.1);
     run_accumulate_frame(
-        device, &tracer, &warm_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        device, &tracer, &warm_irr, &depth, &normal, &sv, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "sr-w-0",
     );
     for i in 1..20 {
         run_accumulate_frame(
-            device, &tracer, &warm_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            device, &tracer, &warm_irr, &depth, &normal, &sv, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
             &format!("sr-w-{i}"),
         );
@@ -467,7 +476,7 @@ fn step_response_reaches_90_percent_within_4_frames() {
     let step_irr = upload_irr(device, 0.5, 0.5, 0.5);
     // Frame 0: lighting_changed (no gesture yet — first change).
     run_accumulate_frame(
-        device, &tracer, &step_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        device, &tracer, &step_irr, &depth, &normal, &sv, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
         STEP_FLAG, "sr-step-0",
     );
@@ -478,7 +487,7 @@ fn step_response_reaches_90_percent_within_4_frames() {
 
     // Frame 1: second consecutive change → gesture arms, n=2 held.
     run_accumulate_frame(
-        device, &tracer, &step_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        device, &tracer, &step_irr, &depth, &normal, &sv, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
         STEP_FLAG | GESTURE_FLAG, "sr-step-1",
     );
@@ -488,7 +497,7 @@ fn step_response_reaches_90_percent_within_4_frames() {
 
     // Frame 2: gesture hangover (counter=1, still n=2).
     run_accumulate_frame(
-        device, &tracer, &step_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        device, &tracer, &step_irr, &depth, &normal, &sv, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
         GESTURE_FLAG, "sr-step-2",
     );
@@ -498,7 +507,7 @@ fn step_response_reaches_90_percent_within_4_frames() {
 
     // Frame 3: gesture expired, normal convergence resumes.
     run_accumulate_frame(
-        device, &tracer, &step_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        device, &tracer, &step_irr, &depth, &normal, &sv, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
         0, "sr-step-3",
     );
@@ -516,8 +525,7 @@ fn sub_threshold_scrub_tracking_error_bounded() {
     let tracer = MetalShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "so-normal");
-    let sv = make_pass_through(device, 1.0, 1.0, 1.0, "so-sv");
-    let sv2 = make_pass_through(device, 1.0, 1.0, 1.0, "so-sv2");
+    let sv = make_sv_layers(device, &[1.0, 1.0], "so-sv");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "so-svt");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "so-refl");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
@@ -527,12 +535,12 @@ fn sub_threshold_scrub_tracking_error_bounded() {
     // Warm up from 0.05.
     let warm_irr = upload_irr(device, 0.05, 0.05, 0.05);
     run_accumulate_frame(
-        device, &tracer, &warm_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        device, &tracer, &warm_irr, &depth, &normal, &sv, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "so-w-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &warm_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            device, &tracer, &warm_irr, &depth, &normal, &sv, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
             &format!("so-w-{i}"),
         );
@@ -549,7 +557,7 @@ fn sub_threshold_scrub_tracking_error_bounded() {
             flags |= GESTURE_FLAG;
         }
         run_accumulate_frame(
-            device, &tracer, &ramp_irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            device, &tracer, &ramp_irr, &depth, &normal, &sv, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
             flags, &format!("so-ramp-{frame}"),
         );
@@ -578,44 +586,43 @@ fn sv_channel_follows_geometry_move_within_3_frames() {
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "sgm-normal");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "sgm-refl");
-    let sv2 = make_pass_through(device, 1.0, 1.0, 1.0, "sgm-sv2");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "sgm-svt");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let obj_motion_buf = make_identity_obj_motion(device);
     let mut history = FullHistorySet::new(device);
 
     // Converge on sv=1.0 (fully lit).
-    let sv_one = make_pass_through(device, 1.0, 1.0, 1.0, "sgm-sv-one");
+    let sv_one = make_sv_layers(device, &[1.0, 1.0], "sgm-sv-one");
     let irr_one = upload_irr(device, 0.5, 0.5, 0.5);
     run_accumulate_frame(
-        device, &tracer, &irr_one, &depth, &normal, &sv_one, &sv2, &svt, &refl,
+        device, &tracer, &irr_one, &depth, &normal, &sv_one, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "sgm-w-0",
     );
     for i in 1..20 {
         run_accumulate_frame(
-            device, &tracer, &irr_one, &depth, &normal, &sv_one, &sv2, &svt, &refl,
+            device, &tracer, &irr_one, &depth, &normal, &sv_one, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
             &format!("sgm-w-{i}"),
         );
     }
 
     // Move to sv=0.0 (fully shadowed) with geo_gesture.
-    let sv_zero = make_pass_through(device, 0.0, 0.0, 0.0, "sgm-sv-zero");
+    let sv_zero = make_sv_layers(device, &[0.0, 1.0], "sgm-sv-zero");
     // Frame 0: geo_changed (single change — no gesture yet, sigma gate path).
     run_accumulate_frame(
-        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &sv2, &svt, &refl,
+        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
         GEO_CHANGED_FLAG, "sgm-step-0",
     );
     // Frame 1: geo_gesture arms — sv channel snaps via gesture cue.
     run_accumulate_frame(
-        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &sv2, &svt, &refl,
+        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
         GEO_CHANGED_FLAG | GEO_GESTURE_FLAG, "sgm-step-1",
     );
     // Frame 2: gesture hangover (counter=1, still snapping).
     run_accumulate_frame(
-        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &sv2, &svt, &refl,
+        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
         GEO_GESTURE_FLAG, "sgm-step-2",
     );
@@ -635,22 +642,21 @@ fn sv_channel_holds_through_strobe() {
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "ss-normal");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "ss-refl");
-    let sv2 = make_pass_through(device, 1.0, 1.0, 1.0, "ss-sv2");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "ss-svt");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let obj_motion_buf = make_identity_obj_motion(device);
     let mut history = FullHistorySet::new(device);
 
     // Converge on sv=0.5 (penumbra), irr=0.3.
-    let sv_half = make_pass_through(device, 0.5, 0.5, 0.5, "ss-sv-half");
+    let sv_half = make_sv_layers(device, &[0.5, 1.0], "ss-sv-half");
     let irr_base = upload_irr(device, 0.3, 0.3, 0.3);
     run_accumulate_frame(
-        device, &tracer, &irr_base, &depth, &normal, &sv_half, &sv2, &svt, &refl,
+        device, &tracer, &irr_base, &depth, &normal, &sv_half, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "ss-w-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &irr_base, &depth, &normal, &sv_half, &sv2, &svt, &refl,
+            device, &tracer, &irr_base, &depth, &normal, &sv_half, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
             &format!("ss-w-{i}"),
         );
@@ -666,7 +672,7 @@ fn sv_channel_holds_through_strobe() {
             flags |= GESTURE_FLAG;
         }
         run_accumulate_frame(
-            device, &tracer, &irr_strobe, &depth, &normal, &sv_half, &sv2, &svt, &refl,
+            device, &tracer, &irr_strobe, &depth, &normal, &sv_half, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
             flags, &format!("ss-strobe-{frame}"),
         );
@@ -690,8 +696,7 @@ fn svt_tint_holds_through_strobe() {
     let tracer = MetalShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "sh-normal");
-    let sv = make_pass_through(device, 1.0, 1.0, 1.0, "sh-sv");
-    let sv2 = make_pass_through(device, 1.0, 1.0, 1.0, "sh-sv2");
+    let sv = make_sv_layers(device, &[1.0, 1.0], "sh-sv");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "sh-refl");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let obj_motion_buf = make_identity_obj_motion(device);
@@ -701,12 +706,12 @@ fn svt_tint_holds_through_strobe() {
     let svt_red = make_pass_through(device, 0.6, 0.3, 0.3, "sh-svt-red");
     let irr_low = upload_irr(device, 0.2, 0.2, 0.2);
     run_accumulate_frame(
-        device, &tracer, &irr_low, &depth, &normal, &sv, &sv2, &svt_red, &refl,
+        device, &tracer, &irr_low, &depth, &normal, &sv, &svt_red, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "sh-w-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &irr_low, &depth, &normal, &sv, &sv2, &svt_red, &refl,
+            device, &tracer, &irr_low, &depth, &normal, &sv, &svt_red, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
             &format!("sh-w-{i}"),
         );
@@ -721,7 +726,7 @@ fn svt_tint_holds_through_strobe() {
             flags |= GESTURE_FLAG;
         }
         run_accumulate_frame(
-            device, &tracer, &irr_high, &depth, &normal, &sv, &sv2, &svt_red, &refl,
+            device, &tracer, &irr_high, &depth, &normal, &sv, &svt_red, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
             flags, &format!("sh-strobe-{frame}"),
         );
@@ -739,7 +744,7 @@ fn svt_tint_holds_through_strobe() {
 
 /// The scalar snap-hold histories must preserve the native Metal values of the
 /// previous RGBA16 representation. Exercise reset, an independent crossing in
-/// each visibility quad, nonzero hold countdown and decay, and a final reset.
+/// each visibility layer (four casters per layer), nonzero hold countdown and decay, and a final reset.
 #[test]
 fn scalar_hold_r16_matches_rgba16_history() {
     let h = shared();
@@ -748,10 +753,9 @@ fn scalar_hold_r16_matches_rgba16_history() {
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "scalar-hold-normal");
     let irr = upload_irr(device, 0.3, 0.3, 0.3);
-    let sv_one = make_pass_through(device, 1.0, 1.0, 1.0, "scalar-hold-sv-one");
-    let sv_zero = make_pass_through(device, 0.0, 0.0, 0.0, "scalar-hold-sv-zero");
-    let sv2_one = make_pass_through(device, 1.0, 1.0, 1.0, "scalar-hold-sv2-one");
-    let sv2_zero = make_pass_through(device, 0.0, 0.0, 0.0, "scalar-hold-sv2-zero");
+    let sv_lit = make_sv_layers(device, &[1.0, 1.0], "scalar-hold-sv-lit");
+    let sv_first_dark = make_sv_layers(device, &[0.0, 1.0], "scalar-hold-sv-first-dark");
+    let sv_second_dark = make_sv_layers(device, &[1.0, 0.0], "scalar-hold-sv-second-dark");
     let svt = make_pass_through(device, 0.7, 0.4, 0.2, "scalar-hold-svt");
     let refl = make_pass_through(device, 0.2, 0.1, 0.05, "scalar-hold-refl");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
@@ -761,18 +765,17 @@ fn scalar_hold_r16_matches_rgba16_history() {
     let mut reference = FullHistorySet::with_hold_format(device, GpuTextureFormat::Rgba16Float);
 
     let mut run_pair = |hi_sv: &GpuTexture,
-                        hi_sv2: &GpuTexture,
                         reset: bool,
                         flags: u32,
                         label: &str|
      -> [f32; 2] {
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, hi_sv, hi_sv2, &svt, &refl,
+            device, &tracer, &irr, &depth, &normal, hi_sv, &svt, &refl,
             &mut compact, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, reset, flags,
             &format!("{label}-r16"),
         );
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, hi_sv, hi_sv2, &svt, &refl,
+            device, &tracer, &irr, &depth, &normal, hi_sv, &svt, &refl,
             &mut reference, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, reset, flags,
             &format!("{label}-rgba16"),
         );
@@ -780,41 +783,41 @@ fn scalar_hold_r16_matches_rgba16_history() {
     };
 
     // Reset and converge both independent visibility groups to 1.
-    let initial = run_pair(&sv_one, &sv2_one, true, 0, "scalar-hold-reset");
+    let initial = run_pair(&sv_lit, true, 0, "scalar-hold-reset");
     assert!(initial[0].abs() < 0.01 && initial[1].abs() < 0.01, "reset hold was not cleared: {initial:?}");
     for frame in 0..12 {
-        run_pair(&sv_one, &sv2_one, false, 0, &format!("scalar-hold-warm-{frame}"));
+        run_pair(&sv_lit, false, 0, &format!("scalar-hold-warm-{frame}"));
     }
 
     // First quad crosses independently; its hold must arm while quad two stays
     // at zero. The following frames prove the countdown is actually decaying.
-    let first_cross = run_pair(&sv_zero, &sv2_one, false, 0, "scalar-hold-sv-cross");
-    assert!(first_cross[0] > 3.5, "sv hold did not arm: {first_cross:?}");
-    assert!(first_cross[1].abs() < 0.01, "sv2 hold armed during sv-only crossing: {first_cross:?}");
-    let first_decay = run_pair(&sv_zero, &sv2_one, false, 0, "scalar-hold-sv-decay-1");
-    assert!(first_decay[0] > 0.0 && first_decay[0] < first_cross[0], "sv hold did not decay: {first_cross:?} -> {first_decay:?}");
+    let first_cross = run_pair(&sv_first_dark, false, 0, "scalar-hold-sv-cross");
+    assert!(first_cross[0] > 3.5, "first-layer hold did not arm: {first_cross:?}");
+    assert!(first_cross[1].abs() < 0.01, "second-layer hold armed during a first-layer crossing: {first_cross:?}");
+    let first_decay = run_pair(&sv_first_dark, false, 0, "scalar-hold-sv-decay-1");
+    assert!(first_decay[0] > 0.0 && first_decay[0] < first_cross[0], "first-layer hold did not decay: {first_cross:?} -> {first_decay:?}");
     for frame in 2..=4 {
-        let sample = run_pair(&sv_zero, &sv2_one, false, 0, &format!("scalar-hold-sv-decay-{frame}"));
-        assert!(sample[0].is_finite(), "sv hold became non-finite during decay");
+        let sample = run_pair(&sv_first_dark, false, 0, &format!("scalar-hold-sv-decay-{frame}"));
+        assert!(sample[0].is_finite(), "first-layer hold became non-finite during decay");
     }
 
     // Re-reset before the second independent crossing so the two group proofs
     // each start from a converged, nonzero visibility history.
-    run_pair(&sv_one, &sv2_one, true, 0, "scalar-hold-mid-reset");
+    run_pair(&sv_lit, true, 0, "scalar-hold-mid-reset");
     for frame in 0..12 {
-        run_pair(&sv_one, &sv2_one, false, 0, &format!("scalar-hold-rewarm-{frame}"));
+        run_pair(&sv_lit, false, 0, &format!("scalar-hold-rewarm-{frame}"));
     }
-    let second_cross = run_pair(&sv_one, &sv2_zero, false, 0, "scalar-hold-sv2-cross");
-    assert!(second_cross[1] > 3.5, "sv2 hold did not arm: {second_cross:?}");
-    assert!(second_cross[0].abs() < 0.01, "sv hold armed during sv2-only crossing: {second_cross:?}");
-    let second_decay = run_pair(&sv_one, &sv2_zero, false, 0, "scalar-hold-sv2-decay-1");
-    assert!(second_decay[1] > 0.0 && second_decay[1] < second_cross[1], "sv2 hold did not decay: {second_cross:?} -> {second_decay:?}");
+    let second_cross = run_pair(&sv_second_dark, false, 0, "scalar-hold-second-layer-cross");
+    assert!(second_cross[1] > 3.5, "second-layer hold did not arm: {second_cross:?}");
+    assert!(second_cross[0].abs() < 0.01, "first-layer hold armed during a second-layer crossing: {second_cross:?}");
+    let second_decay = run_pair(&sv_second_dark, false, 0, "scalar-hold-second-layer-decay-1");
+    assert!(second_decay[1] > 0.0 && second_decay[1] < second_cross[1], "second-layer hold did not decay: {second_cross:?} -> {second_decay:?}");
     for frame in 2..=4 {
-        let sample = run_pair(&sv_one, &sv2_zero, false, 0, &format!("scalar-hold-sv2-decay-{frame}"));
-        assert!(sample[1].is_finite(), "sv2 hold became non-finite during decay");
+        let sample = run_pair(&sv_second_dark, false, 0, &format!("scalar-hold-second-layer-decay-{frame}"));
+        assert!(sample[1].is_finite(), "second-layer hold became non-finite during decay");
     }
 
-    let final_reset = run_pair(&sv_one, &sv2_one, true, 0, "scalar-hold-final-reset");
+    let final_reset = run_pair(&sv_lit, true, 0, "scalar-hold-final-reset");
     assert!(final_reset[0].abs() < 0.01 && final_reset[1].abs() < 0.01, "final reset hold was not cleared: {final_reset:?}");
 }
 
@@ -844,8 +847,7 @@ fn denoise_near_raw_caps_history_at_four_frames() {
     let tracer = MetalShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "dnl-normal");
-    let sv = make_pass_through(device, 1.0, 1.0, 1.0, "dnl-sv");
-    let sv2 = make_pass_through(device, 1.0, 1.0, 1.0, "dnl-sv2");
+    let sv = make_sv_layers(device, &[1.0, 1.0], "dnl-sv");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "dnl-svt");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "dnl-refl");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
@@ -856,12 +858,12 @@ fn denoise_near_raw_caps_history_at_four_frames() {
     // Control: 30 frames, no flag — history length approaches 1/alpha = 20.
     let mut history = FullHistorySet::new(device);
     run_accumulate_frame(
-        device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "dnl-c-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
             &format!("dnl-c-{i}"),
         );
@@ -876,19 +878,19 @@ fn denoise_near_raw_caps_history_at_four_frames() {
     // collapse to ≤ 4 (0.25 floor) and hold there.
     let mut history = FullHistorySet::new(device);
     run_accumulate_frame(
-        device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+        device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
         &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "dnl-n-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
             &format!("dnl-n-{i}"),
         );
     }
     for i in 0..10 {
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, &sv, &sv2, &svt, &refl,
+            device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
             &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, NEAR_RAW,
             &format!("dnl-nr-{i}"),
         );

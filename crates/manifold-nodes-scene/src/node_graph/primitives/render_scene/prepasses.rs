@@ -79,11 +79,12 @@ impl RenderScene {
                 opaque_draws.iter().copied().filter(|d| d.cast_shadows).collect();
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
-            for (slot, l) in casters.iter().take(MAX_RASTER_SHADOW_CASTERS).enumerate() {
-                let Some((_, shadow_map)) = self.shadow_maps[slot].as_ref() else {
+            for (slot, l) in casters.iter().enumerate() {
+                let Some(shadow_map) = self.shadow_maps.as_ref().and_then(|maps| maps.layers.get(slot)) else {
                     continue;
                 };
                 let vp = l.shadow_view_proj();
+                let resolution = shadow_map_resolution(l.shadow_resolution);
 
                 // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this caster's
                 // dirty-check key — everything the depth-only batch below
@@ -126,8 +127,8 @@ impl RenderScene {
                 // I1: never serve on ANY mismatch — including the `None` a
                 // fresh primitive (or a resolution/topology change that
                 // reset `shadow_cache_keys`) starts with. A full match means
-                // `shadow_maps[slot]`'s PERSISTED texture (never cleared
-                // except on resolution change — see `ensure_shadow_map`)
+                // this caster's PERSISTED layer (never cleared except when
+                // the array grows — see `ensure_shadow_maps`)
                 // already holds exactly this content, so the depth-only
                 // batch this caster would otherwise issue is redundant.
                 if caster_draws.iter().all(|draw| draw.geometry_content_known && draw.appearance_content_known
@@ -184,10 +185,11 @@ impl RenderScene {
                     .collect();
                 ctx.gpu_encoder()
                     .native_enc
-                    .draw_instanced_depth_only_batch(
+                    .draw_instanced_depth_only_batch_viewport(
                         shadow_map,
                         shadow_ds,
                         &shadow_draws,
+                        [resolution; 2],
                         "node.render_scene shadow",
                     );
             }

@@ -25,7 +25,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtCasterParams, RtObjectGeometry,
+    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, ShadowCaster, upload_shadow_casters, RtObjectGeometry,
     ShadowRayParams, ShadowRayTracer,
 };
 use manifold_gpu::{
@@ -317,20 +317,20 @@ fn run_probes_with_inners(
     }
     let depth_tex = upload_texture_f32(device, W, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-instancing-depth");
 
-    let tex = |label: &str| {
+    let tex_of = |dimension, label: &str| {
         device.create_texture(&GpuTextureDesc {
             width: W,
             height: 1,
             depth: 1,
             format: GpuTextureFormat::Rgba32Float,
-            dimension: GpuTextureDimension::D2,
+            dimension,
             usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
             label,
             mip_levels: 1,
         })
     };
-    let out_sv = tex("rt-instancing-out_sv");
-    let out_sv2 = tex("rt-instancing-out_sv2");
+    let tex = |label: &str| tex_of(GpuTextureDimension::D2, label);
+    let out_sv = tex_of(GpuTextureDimension::D2Array, "rt-instancing-out_sv");
     let out_svt = tex("rt-instancing-out_svt");
     let out_irr = tex("rt-instancing-out_irr");
     let out_n = tex("rt-instancing-out_n");
@@ -350,9 +350,12 @@ fn run_probes_with_inners(
     // (zero casters anyway); ao_spp 1 forces the primary-visibility cast
     // that produces out_n. camera_pos = origin (matches IDENTITY
     // inv_view_proj); slot_row_base = N per D11.
-    let casters: [RtCasterParams; 0] = [];
+    let casters: [ShadowCaster; 0] = [];
+    let caster_list: &[ShadowCaster] = &casters;
+    let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
-        &casters,
+        caster_list.len() as u32,
+        caster_buffer.gpu_address(),
         0,
         0,
         [W, 1],
@@ -368,8 +371,6 @@ fn run_probes_with_inners(
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     )
     .with_slot_row_base(objects.len() as u32);
-    let params_buffer =
-        device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
@@ -394,14 +395,13 @@ fn run_probes_with_inners(
             .map(|t| &t.stats)
             .unwrap_or_else(|| tracer.zero_emissive_stats()),
         &params,
-        &params_buffer,
+        &caster_buffer,
         &gi_materials_buffer,
         &normal_sources,
         &objects,
         &[],
         &depth_tex,
         &out_sv,
-        &out_sv2,
         &out_svt,
         &out_irr,
         &out_n,

@@ -34,7 +34,7 @@ impl RenderScene {
         shaft_light_count: &mut u32,
     ) -> bool {
         let FramePrelude {
-            ref casters,
+            ref casters, ref shadow_casters,
             cam, view_proj, prev_view_proj, cam_motion,
             width, height, rt_trace_w, rt_trace_h, rtq,
             rt_shadows_enabled, rt_ao_enabled, rt_gi_enabled, rt_reflections,
@@ -64,48 +64,11 @@ impl RenderScene {
                     self.rt_source_trace_last_admission = Some((topo_key, content_key));
                 }
 
-                // Multi-caster shadow fix: previously only `casters[0]`
-                // (the first shadow-casting light) was traced — every
-                // other shadow-casting light rendered as fully lit. Build
-                // one `RtCasterParams` per caster (same slot order the
-                // caster table above already uses, so `shadow_factor`'s
-                // `slot_f` indexes this array directly).
-                let rt_casters: Vec<manifold_gpu::raytrace::RtCasterParams> = casters
-                    .iter()
-                    .map(|l| {
-                        // Preserve the caster slot while making a dark light's
-                        // irrelevant motion neutral to RT history. Production
-                        // tracing skips its zero-radiance shadow channel.
-                        if l.color[..3].iter().all(|&channel| channel == 0.0) {
-                            return manifold_gpu::raytrace::RtCasterParams::new(
-                                [0.0, 1.0, 0.0], 0.0, [0.0; 3], 0,
-                            );
-                        }
-                        let (dir_or_pos, cone_or_size, kind) = match l.mode {
-                            manifold_node_engine::scene::light::LightMode::Sun => (
-                                [-l.dir[0], -l.dir[1], -l.dir[2]],
-                                sun_cone_half_angle(l.shadow_softness),
-                                0u32,
-                            ),
-                            manifold_node_engine::scene::light::LightMode::Point
-                            | manifold_node_engine::scene::light::LightMode::Spot => {
-                                let light_size = match l.shadow_softness {
-                                    manifold_node_engine::scene::light::ShadowSoftness::Contact { light_size } => {
-                                        light_size
-                                    }
-                                    _ => 0.0,
-                                };
-                                (l.pos, light_size, 1u32)
-                            }
-                        };
-                        manifold_gpu::raytrace::RtCasterParams::new(
-                            dir_or_pos,
-                            cone_or_size,
-                            [l.color[0], l.color[1], l.color[2]],
-                            kind,
-                        )
-                    })
-                    .collect();
+                // The shared caster table (one entry per caster slot) sits
+                // after the lights in this frame's ring slot.
+                let rt_casters: &[manifold_gpu::raytrace::ShadowCaster] = shadow_casters;
+                let caster_count = rt_casters.len() as u32;
+                let caster_addr = self.light_buffers[self.light_frame].gpu_address() + self.caster_offset;
                 let Some(inv_view_proj) = mat4_inverse(view_proj) else {
                     // A degenerate camera projection — no camera this file
                     // builds produces one; skip the RT pass rather than trace
@@ -161,7 +124,8 @@ impl RenderScene {
                     self.prefiltered_sheen.as_ref().unwrap_or_else(|| self.prefiltered_specular.as_ref().expect("ensured")),
                 );
                 let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
-                    &rt_casters,
+                    caster_count,
+                    caster_addr,
                     mask_shadow_spp,
                     self.jitter_frame_index,
                     [mask_half_w, mask_half_h],
@@ -196,7 +160,8 @@ impl RenderScene {
                 let ao_spp = if rt_ao_enabled { rtq.ao_spp } else { 0 };
                 let gi_spp = if rt_gi_enabled { rtq.gi_spp } else { 0 };
                 let lighting_params = manifold_gpu::raytrace::ShadowRayParams::new(
-                    &rt_casters,
+                    caster_count,
+                    caster_addr,
                     lighting_shadow_spp,
                     self.jitter_frame_index,
                     [light_half_w, light_half_h],
@@ -281,13 +246,11 @@ impl RenderScene {
                     .map(|t| &t.stats)
                     .unwrap_or_else(|| tracer.zero_emissive_stats());
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
-                let mask_params_buffer = self.rt_mask_params_buffer.as_ref().expect("ensured above");
+                let caster_ring = &self.light_buffers[self.light_frame];
                 let normal_sources_buffer = self.rt_normal_sources.as_ref().expect("ensured above");
                 let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
                 let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
                 let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
-                let mask_half2 = self.rt_mask_half2.as_ref().expect("ensured above");
-                let mask_full2 = self.rt_mask_full2.as_ref().expect("ensured above");
                 let svt_half = self.rt_svt_half.as_ref().expect("ensured above");
                 let svt_full = self.rt_svt_full.as_ref().expect("ensured above");
                 let irr_half = self.rt_irr_half.as_ref().expect("ensured above");
@@ -309,14 +272,13 @@ impl RenderScene {
                         accel,
                         emissive_stats,
                         &mask_params,
-                        mask_params_buffer,
+                        caster_ring,
                         gi_materials_buffer,
                         normal_sources_buffer,
                         objects,
                         alpha_textures,
                         depth_tex,
                         mask_half,
-                        mask_half2,
                         svt_half,
                         irr_half,
                         normal_half,
@@ -345,14 +307,13 @@ impl RenderScene {
                     accel,
                     emissive_stats,
                     &lighting_params,
-                    params_buffer,
+                    caster_ring,
                     gi_materials_buffer,
                     normal_sources_buffer,
                     objects,
                     alpha_textures,
                     depth_tex,
                     mask_half,
-                    mask_half2,
                     svt_half,
                     irr_half,
                     normal_half,
@@ -382,8 +343,6 @@ impl RenderScene {
                     depth_tex,
                     mask_half,
                     mask_full,
-                    mask_half2,
-                    mask_full2,
                     irr_half,
                     irr_full,
                     normal_half,
@@ -445,7 +404,6 @@ impl RenderScene {
                 let moments_read = self.rt_moments_history[read_idx].as_ref().expect("ensured above");
                 let atrous_params_buffer = self.rt_atrous_params_buffer.as_ref().expect("ensured above");
                 let mask_full_b = self.rt_mask_full_b.as_ref().expect("ensured above");
-                let mask_full2_b = self.rt_mask_full2_b.as_ref().expect("ensured above");
                 let irr_full_b = self.rt_irr_full_b.as_ref().expect("ensured above");
                 let normal_full_b = self.rt_normal_full_b.as_ref().expect("ensured above");
                 let refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
@@ -461,10 +419,10 @@ impl RenderScene {
                     // is the smallest offset guaranteed to cross into an
                     // adjacent (independently-sampled) half-res block.
                     let step = 2u32 << pass;
-                    let (src_sv, src_irr, src_n, src_refl, src_svt, dst_sv, dst_irr, dst_n, dst_refl, dst_svt, src_sv2, dst_sv2) = if pass % 2 == 0 {
-                        (mask_full, irr_full, normal_full, refl_full, svt_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b, svt_full_b, mask_full2, mask_full2_b)
+                    let (src_sv, src_irr, src_n, src_refl, src_svt, dst_sv, dst_irr, dst_n, dst_refl, dst_svt) = if pass % 2 == 0 {
+                        (mask_full, irr_full, normal_full, refl_full, svt_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b, svt_full_b)
                     } else {
-                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, svt_full_b, mask_full, irr_full, normal_full, refl_full, svt_full, mask_full2_b, mask_full2)
+                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, svt_full_b, mask_full, irr_full, normal_full, refl_full, svt_full)
                     };
                     let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
                         [width, height], step, history_valid,
@@ -479,8 +437,6 @@ impl RenderScene {
                         moments_read,
                         src_sv,
                         dst_sv,
-                        src_sv2,
-                        dst_sv2,
                         src_irr,
                         dst_irr,
                         src_n,
@@ -522,7 +478,7 @@ impl RenderScene {
                 // + svt slot). Gesture detection: two consecutive changes arm
                 // a hold counter.
                 let lighting_key =
-                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_content, pre.env_rotation, &pre.light_data);
+                    compute_rt_lighting_key(rt_casters, &atmosphere.ambient_tint, envmap_content, pre.env_rotation, &pre.light_data);
                 let (lighting_changed, lighting_gesture, _new_prev, new_gesture) =
                     gesture_detect(
                         self.rt_lighting_key,
@@ -535,7 +491,7 @@ impl RenderScene {
                 self.rt_lighting_prev_changed = lighting_changed;
                 self.rt_lighting_gesture = new_gesture;
 
-                let geo_key = compute_rt_lighting_geo_key(&rt_casters, svt_slot);
+                let geo_key = compute_rt_lighting_geo_key(rt_casters, svt_slot);
                 let (geo_changed, geo_gesture, _geo_prev, new_geo_gesture) =
                     gesture_detect(
                         self.rt_lighting_geo_key,
@@ -613,16 +569,6 @@ impl RenderScene {
                 let sv_m2_write = self.rt_sv_m2_history[write_idx].as_ref().expect("ensured above");
                 let sv_hold_read = self.rt_sv_hold_history[read_idx].as_ref().expect("ensured above");
                 let sv_hold_write = self.rt_sv_hold_history[write_idx].as_ref().expect("ensured above");
-                // RS-A (caster cap 4 -> 8): second SV-ACCUM channel — same
-                // read/write indexing, same flip clock, independent sigma-gate.
-                let sv2_history_read = self.rt_sv2_history[read_idx].as_ref().expect("ensured above");
-                let sv2_history_write = self.rt_sv2_history[write_idx].as_ref().expect("ensured above");
-                let sv2_m1_read = self.rt_sv2_m1_history[read_idx].as_ref().expect("ensured above");
-                let sv2_m1_write = self.rt_sv2_m1_history[write_idx].as_ref().expect("ensured above");
-                let sv2_m2_read = self.rt_sv2_m2_history[read_idx].as_ref().expect("ensured above");
-                let sv2_m2_write = self.rt_sv2_m2_history[write_idx].as_ref().expect("ensured above");
-                let sv2_hold_read = self.rt_sv2_hold_history[read_idx].as_ref().expect("ensured above");
-                let sv2_hold_write = self.rt_sv2_hold_history[write_idx].as_ref().expect("ensured above");
                 // RT-TL-C (TL8): svt history gets the same read/write indices
                 // as the irradiance channel (svt blends with irr alpha, not sv
                 // sigma-gate).
@@ -657,15 +603,6 @@ impl RenderScene {
                     sv_m2_write,
                     sv_hold_read,
                     sv_hold_write,
-                    mask_full2,
-                    sv2_history_read,
-                    sv2_history_write,
-                    sv2_m1_read,
-                    sv2_m1_write,
-                    sv2_m2_read,
-                    sv2_m2_write,
-                    sv2_hold_read,
-                    sv2_hold_write,
                     svt_full,
                     svt_history_read,
                     svt_history_write,
@@ -765,9 +702,7 @@ impl RenderScene {
                 // interior stand-in" convention this file's Blend-group
                 // depth sort already uses for a per-object world position
                 // with no full bounding-box tracked); slot -1 (unshadowed
-                // glow — this pseudo-light has no shadow-map caster, the
-                // same honest-cost fallback every Point light beyond
-                // `MAX_RASTER_SHADOW_CASTERS` already uses). Gated on
+                // glow — this pseudo-light has no shadow caster). Gated on
                 // `rt_ready` (this `if` block) rather than `rt_enabled`
                 // alone: an RT-enabled scene whose accel isn't ready yet
                 // has no GI-gathered emissive term either, so gating the

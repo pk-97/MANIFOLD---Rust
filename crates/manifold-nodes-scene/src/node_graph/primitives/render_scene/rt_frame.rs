@@ -310,10 +310,6 @@ impl RenderScene {
                 history_textures.extend(self.rt_sv_m1_history.iter().flatten());
                 history_textures.extend(self.rt_sv_m2_history.iter().flatten());
                 history_textures.extend(self.rt_sv_hold_history.iter().flatten());
-                history_textures.extend(self.rt_sv2_history.iter().flatten());
-                history_textures.extend(self.rt_sv2_m1_history.iter().flatten());
-                history_textures.extend(self.rt_sv2_m2_history.iter().flatten());
-                history_textures.extend(self.rt_sv2_hold_history.iter().flatten());
                 history_textures.extend(self.rt_svt_history.iter().flatten());
                 history_textures.extend(self.rt_depth_history.iter().flatten());
                 history_textures.extend(self.rt_normal_history.iter().flatten());

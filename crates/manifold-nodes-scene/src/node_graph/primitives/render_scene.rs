@@ -24,11 +24,10 @@
 //! resolves out to the single-sample `color` output with alpha-to-coverage
 //! antialiasing the cutout edges.
 //!
-//! Per docs/REALTIME_3D_DESIGN.md section 5 P2 (shipped): shadow maps for the
-//! first `MAX_RASTER_SHADOW_CASTERS` lights whose `cast_shadows` is set (in
-//! slot order) — one depth-only pre-pass per caster into a private
-//! `Depth32Float` map, consumed by PCF (`textureSampleCompareLevel`) in the
-//! lit fragment shaders; lights past the caster cap still illuminate. No
+//! Per docs/REALTIME_3D_DESIGN.md section 5 P2 (shipped): a shadow map for
+//! every light whose `cast_shadows` is set — one depth-only pre-pass per
+//! caster into its own layer of one `Depth32Float` array, consumed by PCF
+//! (`textureSampleCompareLevel`) in the lit fragment shaders. No
 //! atmosphere/fog yet (P3). Lights ride a ring-buffered `@binding(8)`
 //! storage buffer (no 4KB `setBytes` cap). Per
 //! docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3 (P2 of that design,
@@ -338,17 +337,22 @@ const LIGHT_SLIDER_MAX: u32 = 64;
 const DEFAULT_OBJECTS: u32 = 2;
 const DEFAULT_LIGHTS: u32 = 1;
 
-/// Raster shadow-map cap (REALTIME_3D_DESIGN D4, F2 amendment). Maps are
-/// honoured for the first `K` lights *in slot order* whose
-/// `cast_shadows == true`; lights beyond the first `K` casters still
-/// illuminate the scene, they just cast no shadow. This is a SEPARATE,
-/// tighter budget than the (uncapped) object/light sliders: it bounds the
-/// worst case at `objects × K` shadow-depth draws (64 × 4 = 256), not
-/// `objects × lights`. Bumpable like any cap — the shader's caster table
-/// (`@binding(9)`) and shadow-map bindings (`@binding(10..)`) size to it.
-pub(crate) const MAX_RASTER_SHADOW_CASTERS: usize = 4;
 const LIGHT_VEC4_STRIDE: usize = 4;
-const _: () = assert!(MAX_RASTER_SHADOW_CASTERS <= manifold_gpu::raytrace::MAX_RT_CASTERS);
+
+/// The raster shadow maps: one `Depth32Float` layer per caster slot, all
+/// `side` square. A caster renders its own resolution into the top-left of
+/// its layer. `layers` holds one render view per layer, made when the array
+/// is allocated.
+struct ShadowMapArray {
+    side: u32,
+    texture: manifold_gpu::GpuTexture,
+    layers: Vec<manifold_gpu::GpuTexture>,
+}
+
+/// The shadow-map resolution a light gets for its `shadow_resolution`.
+fn shadow_map_resolution(requested: u32) -> u32 {
+    requested.clamp(256, 4096)
+}
 
 /// Ring depth for the per-frame light storage buffer. The content thread is
 /// triple-buffered and its tick loop waits on the surface from ~2 frames ago
@@ -359,19 +363,6 @@ const _: () = assert!(MAX_RASTER_SHADOW_CASTERS <= manifold_gpu::raytrace::MAX_R
 /// `create_buffer_shared` buffer (mesh_pipeline/line_pipeline) leaves to
 /// frame-pacing luck.
 const FRAMES_IN_FLIGHT: usize = 3;
-
-/// Per-caster shadow metadata, packed as 5 `vec4<f32>` into the
-/// `@binding(9)` caster table (`MAX_RASTER_SHADOW_CASTERS` slots, always
-/// bound). Columns 0–3 are the light's `shadow_view_proj`; the 5th vec4 is
-/// `(bias, kernel_half_width, texel_size, light_size)` — `light_size` is
-/// the D12/PCSS spare `.w` (REALTIME_3D_DESIGN section 11): zero for the fixed
-/// Hard/Soft/VerySoft tiers, the light's `Contact { light_size }` value
-/// otherwise, paired with a negative `kernel_half_width` sentinel that
-/// tells `render_scene.wgsl`'s `shadow_factor` to run the PCSS branch
-/// instead of the fixed-kernel PCF loop. Kept as a plain vec4 stride
-/// (not a struct with a mat4 member) so the storage layout is unambiguous
-/// through SPIRV-Cross → MSL — same discipline as the light buffer.
-const CASTER_VEC4_STRIDE: usize = 5;
 
 /// Sun-caster RT cone half-angle for `ShadowSoftness::Soft`, radians.
 /// Committed range 0.0–0.15 rad (~0–8.6°) is the physically-plausible
@@ -499,9 +490,7 @@ const FIREFLY_ABS_FLOOR_MIN: f32 = 4.0;
 /// chain base resolution + mip count. `PREFILTER_MIP_COUNT` mips span
 /// roughness 0 (mip 0, base resolution) to roughness 1 (the last mip,
 /// 16×8) — a fixed, compile-time-shared constant with
-/// `render_scene.wgsl`'s `PREFILTER_MAX_MIP` (same discipline as
-/// `MAX_RASTER_SHADOW_CASTERS`/`CASTER_STRIDE` staying in sync across the
-/// Rust/WGSL boundary).
+/// `render_scene.wgsl`'s `PREFILTER_MAX_MIP`.
 const PREFILTER_BASE_WIDTH: u32 = 512;
 const PREFILTER_BASE_HEIGHT: u32 = 256;
 const PREFILTER_MIP_COUNT: u32 = 6;
@@ -1161,26 +1150,32 @@ pub struct RenderScene {
     /// Depth-only pipeline + depth-stencil state for the shadow passes.
     shadow_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     shadow_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
-    /// Per-caster private shadow maps, cached `(resolution, texture)`;
-    /// recreated when a caster's `shadow_resolution` changes. Created
-    /// `RENDER_TARGET | SHADER_READ` (AGX 0x78 guard).
-    shadow_maps: [Option<(u32, manifold_gpu::GpuTexture)>; MAX_RASTER_SHADOW_CASTERS],
+    /// One shadow-map layer per caster slot; grows with the caster count
+    /// and the largest requested resolution, reused otherwise.
+    shadow_maps: Option<ShadowMapArray>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — per-caster shadow
     /// dirty-check key (a 64-bit hash of everything the shadow pass reads
     /// for that caster this frame — see the shadow loop below for the exact
     /// component list). `Some(key) == this frame's freshly computed key`
-    /// means the persisted `shadow_maps[slot]` texture already holds this
+    /// means the persisted `shadow_maps` layer `slot` already holds this
     /// content, so the depth-only draw batch is skipped entirely (I1: ANY
     /// mismatch — including a `None` on the first frame — falls through to
     /// a real render and stores the new key; never served on a partial
     /// match).
-    shadow_cache_keys: [Option<u64>; MAX_RASTER_SHADOW_CASTERS],
+    shadow_cache_keys: Vec<Option<u64>>,
     /// PCF comparison sampler (`compare = Less`).
     shadow_sampler: Option<manifold_gpu::GpuSampler>,
     /// 1×1 `Depth32Float` (`SHADER_READ`) bound to unused/non-caster
     /// shadow-map slots so every `@binding(10..)` is always a valid depth
     /// texture even in a scene with no casters.
     dummy_depth: Option<manifold_gpu::GpuTexture>,
+    /// One-layer stand-ins for the shadow-map array and the RT visibility
+    /// array when a scene has no casters or RT is off.
+    dummy_depth_array: Option<manifold_gpu::GpuTexture>,
+    dummy_mask_array: Option<manifold_gpu::GpuTexture>,
+    /// Byte offset of this frame's [`manifold_gpu::raytrace::ShadowCaster`]
+    /// table inside the light ring buffer (it follows the lights).
+    caster_offset: u64,
     /// Cached 1-entry `Array(InstanceTransform)` bound to `instances_n`
     /// for any object that leaves it unwired: `pos_scale = [0,0,0,1]`,
     /// `rot_pad = [0,0,0,0]` — the same always-bind ABI-stub pattern as
@@ -1308,11 +1303,9 @@ pub struct RenderScene {
     /// resource here (unwired/RT-off scenes never allocate these).
     rt_mask_half: Option<manifold_gpu::GpuTexture>,
     rt_mask_full: Option<manifold_gpu::GpuTexture>,
-    /// RS-A (caster cap 4 -> 8): second shadow-visibility quad (caster
-    /// slots 4-7) — half-res trace target + full-res upsampled mask, same
-    /// Rgba16Float format and lifecycle as the first quad.
-    rt_mask_half2: Option<manifold_gpu::GpuTexture>,
-    rt_mask_full2: Option<manifold_gpu::GpuTexture>,
+    /// Layer count of every shadow-visibility array (four casters per
+    /// layer). Grows with the caster count, never shrinks.
+    rt_sv_layers: u32,
     rt_mask_width: u32,
     /// Trace-resolution dims of the mask dispatch (RT_QUALITY_SETTINGS_DESIGN.md
     /// D4) — tracked separately from the full-res pair above because the
@@ -1323,13 +1316,6 @@ pub struct RenderScene {
     rt_mask_trace_h: u32,
     rt_mask_height: u32,
     rt_params_buffer: Option<manifold_gpu::GpuBuffer>,
-    /// RT-A3a (D16a split mode): the mask dispatch's OWN params buffer.
-    /// Sharing `rt_params_buffer` raced: `upload()` is a CPU write at
-    /// encode time, so the second upload (lighting) overwrites the first
-    /// (mask) before the GPU runs either — the mask dispatch executed
-    /// with shadow_spp=0 and never wrote the mask (all-zero vis = no
-    /// sun in split mode; Peter's "no lighting at all" 2026-08-02).
-    rt_mask_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// RAYTRACING_DESIGN.md section 5.2 P3: per-object `GiMaterial` (albedo,
     /// emissive) table for the GI gather's emissive-hit + sun-bounce terms
     /// — rebuilt (CPU-mapped, rewritten in place, no realloc unless the
@@ -1428,7 +1414,7 @@ pub struct RenderScene {
     // RT-R2 (RD6): specular history ping-pong pair — same lifecycle +
     // same ping clock as rt_irr_history (I-R2: one reset path, one flip).
     rt_refl_history: [Option<manifold_gpu::GpuTexture>; 2],
-    // SV-ACCUM: shadow-visibility history ping-pong pair — the four caster
+    // SV-ACCUM: shadow-visibility history ping-pong pair — the caster
     // slots accumulate temporally in `accumulate_irradiance` (previously the
     // only RT channel with no history: raw per-frame samples straight to the
     // fragment shader = the penumbra boil). Same lifecycle + same ping
@@ -1442,12 +1428,6 @@ pub struct RenderScene {
     // n=2 snap for 4 frames (the straddling moments deaden the gate right
     // after a real crossing; see the binding-21 comment in raytrace.rs).
     rt_sv_hold_history: [Option<manifold_gpu::GpuTexture>; 2],
-    // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM
-    // — independent sigma-gate per quad, same flip clock as the first.
-    rt_sv2_history: [Option<manifold_gpu::GpuTexture>; 2],
-    rt_sv2_m1_history: [Option<manifold_gpu::GpuTexture>; 2],
-    rt_sv2_m2_history: [Option<manifold_gpu::GpuTexture>; 2],
-    rt_sv2_hold_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_depth_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_normal_history: [Option<manifold_gpu::GpuTexture>; 2],
     /// RT-T1-D (BUG-312): per-texel luminance moments (mean, mean-of-
@@ -1480,8 +1460,6 @@ pub struct RenderScene {
     /// (what `accumulate_irradiance` already reads), so that call site
     /// needs no changes for which buffer it reads.
     rt_mask_full_b: Option<manifold_gpu::GpuTexture>,
-    /// RS-A (caster cap 4 -> 8): second shadow-visibility quad à-trous scratch.
-    rt_mask_full2_b: Option<manifold_gpu::GpuTexture>,
     rt_irr_full_b: Option<manifold_gpu::GpuTexture>,
     rt_normal_full_b: Option<manifold_gpu::GpuTexture>,
     /// RT native-resolution toggle, parsed once at init from
@@ -1597,13 +1575,11 @@ fn shaft_step_count(quality: u32) -> u32 {
 /// borrow), while borrowing exactly these two fields by reference doesn't.
 /// RAYTRACING_DESIGN.md section 16 TL5: the ONE caster slot whose rgb
 /// transmission tint fills `out_svt` — the first Sun-mode caster under
-/// the RT caster cap (0 = none: `rt_flags.z` gets 0 and fs_pbr keeps the
-/// luma channel). A second sun falls back to luma (named honest cost).
+/// casters (0 = none: `rt_flags.z` gets 0 and fs_pbr keeps the luma channel). A second sun falls back to luma (named honest cost).
 fn rt_svt_slot(casters: &[manifold_node_engine::scene::light::Light]) -> Option<u32> {
     casters
         .iter()
         .position(|l| matches!(l.mode, manifold_node_engine::scene::light::LightMode::Sun))
-        .filter(|&i| i < manifold_gpu::raytrace::MAX_RT_CASTERS)
         .map(|i| i as u32)
 }
 
@@ -1612,7 +1588,7 @@ fn rt_svt_slot(casters: &[manifold_node_engine::scene::light::Light]) -> Option<
 /// traced textures or RT shading substitutions and has no other reset path.
 /// Pure (no state), allocation-free, testable in cfg(test).
 fn compute_rt_lighting_key(
-    rt_casters: &[manifold_gpu::raytrace::RtCasterParams],
+    rt_casters: &[manifold_gpu::raytrace::ShadowCaster],
     ambient_tint: &[f32],
     envmap_content: Option<ContentVersion>,
     env_rotation: f32,
@@ -1628,12 +1604,11 @@ fn compute_rt_lighting_key(
     // Ambient knob is NOT hashed: ED2 moved it consumer-side, so it
     // never changes the traced irradiance texture — snapping the
     // accumulator on it would only waste history.
+    // Only the traced fields: a shadow map's projection is no RT input.
     for c in rt_casters {
-        for f in c.dir_or_pos.iter().chain(c.color.iter()) {
+        for f in c.source.iter().chain(c.color.iter()) {
             mix(f.to_bits());
         }
-        mix(c.cone_or_size.to_bits());
-        mix(c.kind);
     }
     for f in ambient_tint {
         mix(f.to_bits());
@@ -1663,7 +1638,7 @@ fn compute_rt_lighting_key(
 /// generation: a strobe or env-brightness scrub leaves this key unchanged
 /// (visibility and transmission tint are geometry terms).
 fn compute_rt_lighting_geo_key(
-    rt_casters: &[manifold_gpu::raytrace::RtCasterParams],
+    rt_casters: &[manifold_gpu::raytrace::ShadowCaster],
     svt_slot: u32,
 ) -> u64 {
     let mut k = 0x8a5f_3c1e_2b94_0d76u64;
@@ -1672,11 +1647,10 @@ fn compute_rt_lighting_geo_key(
         k = k.wrapping_mul(0x100_0000_01b3);
     };
     for c in rt_casters {
-        for f in &c.dir_or_pos {
+        for f in &c.source {
             mix(f.to_bits());
         }
-        mix(c.cone_or_size.to_bits());
-        mix(c.kind);
+        mix(c.color[3].to_bits());
     }
     mix(svt_slot);
     k
@@ -2066,7 +2040,8 @@ struct FramePrelude<'ctx> {
     light_data: Vec<[f32; 4]>,
     light_count: u32,
     casters: Vec<manifold_node_engine::scene::light::Light>,
-    caster_table: Vec<[f32; 4]>,
+    /// One entry per caster, in slot order: the table both renderers read.
+    shadow_casters: Vec<manifold_gpu::raytrace::ShadowCaster>,
     native_width: u32,
     native_height: u32,
     width: u32,
@@ -2664,7 +2639,7 @@ impl RenderScene {
         let FramePrelude {
             objects: _, cam: _, envmap_wired: _, envmap_pending: _, env_rotation: _, atmosphere: _,
             render_mode: _, light_data: _, light_count: _, casters: _,
-            caster_table: _,
+            shadow_casters: _,
             native_width: _, native_height: _, width: _, height: _, aspect: _, temporal_upscale: _,
             view_proj: _, prev_view_proj: _, jitter_px: _, jitter_ndc: _, prev_jitter_ndc: _,
             cam_motion: _, rt_enabled, rt_reflections: _, rt_shadows_enabled: _,
