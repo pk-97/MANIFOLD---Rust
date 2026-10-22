@@ -64,6 +64,9 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
     let index = parent.map_or(doc.items.len(), |p| p.children.len());
     let parent = parent.map(|p| p.id.clone());
     let fields = entry.fields.ok_or_else(|| format!("{} opens the file picker", entry.label))?;
+    if let Some(reason) = manifold_core::scene_schema::add_refused(doc, &fields()) {
+        return Err(reason.to_owned());
+    }
     let names = names(doc);
     let name = unique_name(entry.name, &names);
     let id = new_id();
@@ -562,6 +565,7 @@ pub(crate) fn frame(project: &Project, layer: &LayerId, item: &ItemId) -> Result
             }
         }
         CameraRig::Free => return Err("Frame is not supported for a free camera".to_owned()),
+        CameraRig::Loop => return Err("A Loop camera flies the Scene Loop: place it with Height and Lateral".to_owned()),
     }
     if writes.is_empty() {
         return Err("The camera already frames this item".to_owned());
@@ -584,6 +588,7 @@ pub(crate) fn copy_view(
         ItemFields::Camera(fields) => match fields.rig {
             CameraRig::Orbit => ViewCopyCamera::Orbit,
             CameraRig::Free => ViewCopyCamera::Free,
+            CameraRig::Loop => return Err("A Loop camera flies the Scene Loop, so it cannot take this view".to_owned()),
             CameraRig::LookAt => {
                 let tracked = fields.target.as_ref().and_then(item_origins(doc, inst)).unwrap_or([0.0; 3]);
                 ViewCopyCamera::LookAt { tracked }

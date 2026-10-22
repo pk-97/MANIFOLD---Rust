@@ -67,7 +67,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 34] = [
+pub static ADD_ENTRIES: [AddEntry; 37] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
@@ -109,6 +109,10 @@ pub static ADD_ENTRIES: [AddEntry; 34] = [
         modifier(ModifierType::VortexFragments)
     }),
     entry("modifier.shatter", "Modifier", "Shatter", ItemKind::Modifier, "Shatter", || modifier(ModifierType::Shatter)),
+    // Scene-wide: they act on the whole scene whatever is selected.
+    entry("modifier.scene_loop", "Modifier", "Scene Loop", ItemKind::Modifier, "Scene Loop", || modifier(ModifierType::SceneLoop)),
+    entry("modifier.math_view", "Modifier", "Math View", ItemKind::Modifier, "Math View", || modifier(ModifierType::MathView)),
+    entry("modifier.scene_mirror", "Modifier", "Scene Mirror", ItemKind::Modifier, "Scene Mirror", || modifier(ModifierType::SceneMirror)),
     model_file("object.mesh", "Object", "Mesh from file\u{2026}"),
 ];
 

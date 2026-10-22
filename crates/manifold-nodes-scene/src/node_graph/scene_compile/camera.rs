@@ -13,6 +13,9 @@ use super::builder::{Builder, SCENE};
 use crate::node_graph::cinematic_tail::build_cinematic_tail;
 use crate::node_graph::primitives::camera_switch::CAMERA_SWITCH_INPUTS;
 
+/// A Loop camera's loop length in beats until a Scene Loop sets it.
+pub(crate) const LOOP_BEATS: f32 = 8.0;
+
 /// Emit every camera in tree order, the cut between them, then each
 /// camera's rows.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
@@ -91,10 +94,21 @@ fn emit(b: &mut Builder<'_>, item: &Item) -> u32 {
             CameraRig::Orbit => "node.orbit_camera",
             CameraRig::Free => "node.free_camera",
             CameraRig::LookAt => "node.look_at_camera",
+            CameraRig::Loop => "node.loop_camera",
         },
         _ => "node.orbit_camera",
     };
     let rig = b.add(owner, "rig", rig_type);
+    if rig_type == "node.loop_camera" {
+        // The loop's clock: one ramp per loop of Beats, on the playback beat
+        // (the ramp reads it itself; the sealed scene takes no layer input).
+        // The scene's Scene Loop drives Beats and the corridor params
+        // (`scene_loop.rs`); with none, the camera flies the node's own
+        // corridor every LOOP_BEATS beats.
+        let phase = b.add(owner, "phase", "node.beat_ramp");
+        b.set_number(phase, "bars", LOOP_BEATS);
+        b.wire(phase, "out", rig, "phase");
+    }
     let shake = b.add(owner, "shake", "node.transform_shake");
     let lens = b.add(owner, "lens", "node.camera_lens");
     b.wire(rig, "out", shake, "camera");

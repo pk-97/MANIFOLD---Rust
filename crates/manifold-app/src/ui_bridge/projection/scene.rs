@@ -61,6 +61,7 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
             label: entry.label.to_owned(),
             top_level: manifold_core::scene_doc::can_hold(None, entry.kind),
             holders: ItemKind::ALL.into_iter().filter(|holder| manifold_core::scene_doc::can_hold(Some(*holder), entry.kind)).collect(),
+            disabled: entry.fields.and_then(|fields| manifold_core::scene_schema::add_refused(doc, &fields())).map(str::to_owned),
         })
         .collect();
     SceneSetupVm { layer_id, items, add_entries }

@@ -209,7 +209,7 @@ const fn entry(
 }
 
 /// Every modifier type, in menu order.
-pub static MODIFIER_TYPES: [ModifierTypeEntry; 7] = [
+pub static MODIFIER_TYPES: [ModifierTypeEntry; 10] = [
     entry(ModifierType::SurfacePeel, "surface_peel", "Surface Peel", "SurfacePeel", true, &SURFACE_PEEL_ROWS),
     entry(ModifierType::OrderedRecon, "ordered_recon", "Ordered Recon", "OrderedRecon", true, &ORDERED_RECON_ROWS),
     entry(ModifierType::SurfaceWaves, "surface_waves", "Surface Waves", "SurfaceWaves", true, &SURFACE_WAVES_ROWS),
@@ -231,6 +231,9 @@ pub static MODIFIER_TYPES: [ModifierTypeEntry; 7] = [
         &VORTEX_FRAGMENTS_ROWS,
     ),
     entry(ModifierType::Shatter, "shatter", "Shatter", "Shatter", false, &SHATTER_ROWS),
+    entry(ModifierType::SceneLoop, "scene_loop", "Scene Loop", "SceneLoop", false, &super::scene_wide::SCENE_LOOP_ROWS),
+    entry(ModifierType::MathView, "math_view", "Math View", "MathView", false, &super::scene_wide::MATH_VIEW_ROWS),
+    entry(ModifierType::SceneMirror, "scene_mirror", "Scene Mirror", "SceneMirror", false, &super::scene_wide::SCENE_MIRROR_ROWS),
 ];
 
 /// The entry of a modifier type.
@@ -294,6 +297,11 @@ fn card_mut<'f>(fields: &'f mut ItemFields, row: &str, value: &FieldValue) -> Re
         ItemFields::Modifier(m) => Ok(m),
         _ => Err(wrong_value(row, value)),
     }
+}
+
+/// A card that names its targets: every type but the scene-wide ones.
+fn aimed(fields: &ItemFields) -> bool {
+    card(fields).is_some_and(|m| !m.modifier.scene_wide())
 }
 
 fn is_shatter(fields: &ItemFields) -> bool {
@@ -362,7 +370,7 @@ pub static MODIFIER_FIELDS: [FieldRow; 4] = [
         label: "Targets",
         section: M,
         control: FieldControl::ItemSet { items: is_object_or_group, all: "Whole scene", refused: target_refused },
-        applies: always,
+        applies: aimed,
         disabled: enabled,
         read: |fields| match card(fields).map(|m| &m.targets) {
             Some(ModifierTargets::Items(ids)) => FieldValue::Items(ids.clone()),

@@ -53,6 +53,8 @@ pub struct AddEntryVm {
     pub top_level: bool,
     /// The kinds it can sit inside.
     pub holders: Vec<ItemKind>,
+    /// Why it cannot be added right now: drawn disabled with the reason.
+    pub disabled: Option<String>,
 }
 
 /// The Material an item draws with, as its card shows it inline.

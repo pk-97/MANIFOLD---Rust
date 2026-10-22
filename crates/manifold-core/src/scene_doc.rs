@@ -244,6 +244,8 @@ pub enum CameraRig {
     Orbit,
     Free,
     LookAt,
+    /// Flies the scene's Scene Loop corridor, locked to the beat.
+    Loop,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -513,6 +515,27 @@ pub enum ModifierType {
     ElasticSculpture,
     VortexFragments,
     Shatter,
+    SceneLoop,
+    MathView,
+    SceneMirror,
+}
+
+impl ModifierType {
+    /// Why a scene cannot hold a second card of this type, for the types a
+    /// scene holds at most one of (ruling 21).
+    pub const fn once_per_scene(self) -> Option<&'static str> {
+        match self {
+            ModifierType::SceneLoop => Some("A scene holds one Scene Loop"),
+            ModifierType::MathView => Some("A scene holds one Math View"),
+            _ => None,
+        }
+    }
+
+    /// Whether the type always acts on the whole scene, so its card has no
+    /// Targets row (ruling 21).
+    pub const fn scene_wide(self) -> bool {
+        matches!(self, ModifierType::SceneLoop | ModifierType::MathView | ModifierType::SceneMirror)
+    }
 }
 
 /// What a modifier card acts on: the whole scene, as one group of

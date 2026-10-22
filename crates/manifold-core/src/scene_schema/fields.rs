@@ -124,6 +124,8 @@ pub fn choice_disabled(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> O
     match item.kind() {
         ItemKind::Water => super::water::choice_unavailable(item, field, key),
         ItemKind::WaterSource => super::water_source::choice_unavailable(doc, item, field, key),
+        ItemKind::Camera => super::camera::choice_unavailable(doc, field, key),
+        ItemKind::Modifier => super::scene_wide::type_unavailable(doc, item, field, key),
         _ => None,
     }
 }

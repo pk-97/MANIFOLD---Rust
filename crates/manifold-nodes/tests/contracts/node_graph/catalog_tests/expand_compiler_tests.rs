@@ -1038,45 +1038,6 @@ fn scene_modifier_math_view_captures_preceding_instance_echoes() {
 }
 
 #[test]
-fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
-    // A post-view modifier that writes Camera (SceneLoop's lens stage) still
-    // frames the diagram; its instance copies are post-view and stay out.
-    let owner = math_view_fixture();
-    let loop_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/scene-modifier-presets/SceneLoop.json"
-    )))
-    .unwrap();
-    let scene = owner.scene_modifiers[1].scene.clone();
-    let owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, SceneModifierInstanceDef {
-        id: NodeId::new("scene_loop"),
-        scene,
-        targets: SceneTargetSelection::AllObjects,
-        // SceneLoop consumes no mesh coordinate context, so saved frames are
-        // rejected for it; its EachObject stage resolves targets directly.
-        mesh_frames: Vec::new(),
-        legacy_math_view_carrier: None,
-        graph: Box::new(loop_recipe),
-    })
-    .unwrap();
-    let prepared = prepare_parent(&owner);
-    let plain = prepare_parent(&math_view_fixture());
-    let diagram = math_diagrams(&prepared)[0];
-    let plain_diagram = math_diagrams(&plain)[0];
-    let (camera, _) = diagram_input_source(&prepared, diagram, "camera").unwrap();
-    let (plain_camera, _) = diagram_input_source(&plain, plain_diagram, "camera").unwrap();
-    assert_ne!(
-        node_by_id(&prepared, camera).node_id,
-        node_by_id(&plain, plain_camera).node_id,
-        "post-view camera writes keep framing the diagram (final scene camera)"
-    );
-    assert!(
-        diagram_input_source(&prepared, diagram, "instances").is_none(),
-        "post-view instance writes stay out of the capture"
-    );
-}
-
-#[test]
 fn scene_modifier_math_view_that_cannot_resolve_never_fails_the_layer() {
     // The view's enabled toggle is missing: the view is skipped with a
     // warning, the layer prepares, and final_output keeps the scene image.

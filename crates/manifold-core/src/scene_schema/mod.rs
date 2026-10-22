@@ -26,6 +26,7 @@ mod modifier;
 mod object;
 mod physics;
 mod scene_level;
+mod scene_wide;
 mod swarm;
 mod water;
 mod water_source;
@@ -49,6 +50,7 @@ pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
 pub use physics::{BODY_ROLE, MAX_GROUP_PARTS, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
 pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
+pub use scene_wide::{LOOP_CAMERA_ROWS, NO_SCENE_LOOP, add_refused, scene_loop};
 pub use water::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET, WATER_FAMILY_REASON, WATER_MATERIAL_ROLE,
     WATER_OBJECT_ROLE, WATER_ROWS, WHITEWATER_PER_CELL, WORLD_FOLLOWS, water_look,

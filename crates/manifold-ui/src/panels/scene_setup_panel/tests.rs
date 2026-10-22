@@ -50,6 +50,7 @@ fn live_panel(fields: Vec<FieldRowVm>) -> (ScenePanel, UITree) {
             label: "Cube".into(),
             top_level: true,
             holders: vec![ItemKind::Group],
+            disabled: None,
         }],
     };
     let surface = ParamSurface {

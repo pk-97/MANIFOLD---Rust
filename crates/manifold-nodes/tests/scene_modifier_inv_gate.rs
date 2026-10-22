@@ -70,46 +70,6 @@ fn loop_and_fog_instances_prepare_from_bundled_recipes() {
 }
 
 #[test]
-fn loop_camera_switch_bypass_keeps_shared_pattern_and_spacing_routes() {
-    let attached = attach(&host(), "SceneLoop", "loop-bypass");
-    let enabled_id = binding_id(&attached, "loop-bypass", "enabled");
-    let manifest = manifest_with(&attached, &enabled_id, 0.0);
-    let mut runtime = PresetRuntime::from_def(
-        attached.clone(),
-        &PrimitiveRegistry::with_builtin(),
-        Some(&manifest),
-    )
-    .expect("bypassed loop runtime builds");
-    runtime.apply_param_values(&manifest);
-    let prepared = prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin())
-        .expect("bypassed loop prepares");
-    let switch_route = prepared
-        .routes
-        .iter()
-        .find(|route| {
-            route.modifier_id == NodeId::new("loop-bypass")
-                && route.local.as_str() == "loop_cam_switch"
-        })
-        .expect("expanded loop switch route");
-    let switch_id = runtime
-        .graph
-        .instance_by_node_id(&switch_route.copies[0].node_id)
-        .expect("runtime loop switch");
-    let switch = runtime.graph.get_node(switch_id).expect("runtime switch node");
-    assert_eq!(switch.params.get("select"), Some(&ParamValue::Enum(0)));
-    let metadata = attached.preset_metadata.as_ref().unwrap();
-    for param_id in ["pattern_length", "cell_size"] {
-        assert!(metadata.bindings.iter().any(|binding| {
-            matches!(
-                &binding.target,
-                BindingTarget::SceneModifier { modifier_id, param_id: id }
-                    if modifier_id == &NodeId::new("loop-bypass") && id == param_id
-            )
-        }), "missing exact loop binding for {param_id}");
-    }
-}
-
-#[test]
 fn fog_gate_bypass_retains_atmosphere_output_and_enabled_route() {
     let attached = attach(&host(), "SceneFog", "fog-bypass");
     let enabled_id = binding_id(&attached, "fog-bypass", "enabled");

@@ -11,6 +11,10 @@
 //! half the box's diagonal, so a recipe reads every shape the same way and a
 //! modifier's scale follows its own target. One instance per frame, all
 //! driven by the card's one set of manifest params, `<card id>.<param>`.
+//!
+//! The scene-wide types have no targets and take the whole-scene frame.
+//! Math View compiles here like any card; Scene Loop (`scene_loop.rs`) and
+//! Scene Mirror (`scene_mirror.rs`) have their own emitters.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,8 +45,14 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
     });
     let mut shattered = BTreeSet::new();
     for item in doc.items.iter().filter(|item| item.kind() == ItemKind::Modifier) {
-        if let ItemFields::Modifier(card) = &item.fields {
-            emit(b, item, card, &lineage, &mut shattered)?;
+        let ItemFields::Modifier(card) = &item.fields else {
+            continue;
+        };
+        match card.modifier {
+            // The corridor is the first instance stage (`scene_loop.rs`).
+            ModifierType::SceneLoop => {}
+            ModifierType::SceneMirror => super::scene_mirror::emit(b, item, card)?,
+            _ => emit(b, item, card, &lineage, &mut shattered)?,
         }
     }
     Ok(())
@@ -139,6 +149,10 @@ fn emit(
 /// order they are listed, or one for the whole scene. A part reached by two
 /// targets bends once, in the first one's frame.
 fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Vec<(String, Vec<Drawn>)> {
+    // A scene-wide card (Math View) always reads the whole scene.
+    if card.modifier.scene_wide() {
+        return vec![("scene".to_owned(), b.drawn.clone())];
+    }
     match &card.targets {
         ModifierTargets::Scene => vec![("scene".to_owned(), b.drawn.clone())],
         ModifierTargets::Items(ids) => {
