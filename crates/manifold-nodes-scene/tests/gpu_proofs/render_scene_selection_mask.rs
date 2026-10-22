@@ -20,7 +20,7 @@ fn render(selected: &[u32]) -> (Vec<u8>, Option<Vec<u8>>) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &scene_json(1.0),
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(&scene_json(1.0)),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,

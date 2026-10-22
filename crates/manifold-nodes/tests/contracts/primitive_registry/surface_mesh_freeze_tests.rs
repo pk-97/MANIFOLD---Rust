@@ -251,6 +251,7 @@ mod gpu_tests {
                 "angle_x" => angles[0].to_bits(),
                 "angle_y" => angles[1].to_bits(),
                 "angle_z" => angles[2].to_bits(),
+                "source_offset_x" | "source_offset_y" | "source_offset_z" => 0.0f32.to_bits(),
                 other => panic!("unexpected rotate parameter {other}"),
             })
             .collect();

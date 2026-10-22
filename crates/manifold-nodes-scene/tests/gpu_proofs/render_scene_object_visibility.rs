@@ -145,7 +145,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -319,7 +319,7 @@ fn streaming_mesh_drops_only_its_object() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &streaming_occluder_json(),
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(&streaming_occluder_json()),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,

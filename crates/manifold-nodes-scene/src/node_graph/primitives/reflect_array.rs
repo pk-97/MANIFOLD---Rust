@@ -60,7 +60,9 @@ struct ReflectUniforms {
     enabled: f32,
     live_count: f32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 /// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
@@ -266,7 +268,9 @@ impl Primitive for ReflectArray {
             enabled,
             live_count,
             dispatch_count: out_cap,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
 
         let pipeline = self.pipeline.as_ref().expect("pipeline initialized above");
@@ -625,7 +629,9 @@ mod gpu_tests {
             enabled,
             live_count,
             dispatch_count: out_cap,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let mut enc = device.create_encoder("reflect_array_test");
         enc.dispatch_compute(

@@ -18,13 +18,9 @@ use manifold_node_engine::scene::material::{MapSamplerDesc, MaterialMapInfo};
 /// glTF extensions MANIFOLD's importer actually supports, independent of
 /// what the pinned `gltf` 1.4.1 crate's own feature-flag set types —
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D1. Everything in `Cargo.toml`'s `gltf`
-/// feature list (which now includes `KHR_materials_unlit`'s typed
-/// `Material::unlit()` accessor — BUG-w5wv: this extension was declared
-/// supported here for a long time but never actually read anywhere, so
-/// unlit-authored assets got full PBR lighting; this module now reads the
-/// flag onto [`GltfMaterialInfo::unlit`] genuinely, unremapped, and
-/// `gltf_import/object_group.rs` routes an unlit material to
-/// `node.unlit_material` instead of `node.pbr_material`), plus extensions
+/// feature list (which includes `KHR_materials_unlit`; the parse reads every
+/// material field genuinely and the scene lights an unlit-authored material
+/// like any other), plus extensions
 /// this codebase maps downstream that the crate has no typed accessor for
 /// at this version:
 /// `KHR_materials_pbrSpecularGlossiness` (converted to metal-rough at
@@ -581,8 +577,8 @@ fn walk_gltf_node_for_lights(node: &gltf::Node, parent_world: Mat4, out: &mut Ve
 
 /// BUG-5uqg: every `KHR_lights_punctual` light in `document`'s imported node
 /// set (`resolve_import_nodes` — same scene-resolution fallback the mesh
-/// walk uses), resolved to world space. Called once from
-/// `gltf_import_summary`, stored on [`GltfImportSummary::lights`].
+/// walk uses), resolved to world space. called once from
+/// the model file read (`gltf_import::model_file`).
 pub(crate) fn collect_punctual_lights(document: &gltf::Document) -> Vec<GltfPunctualLight> {
     let mut out = Vec::new();
     for node in resolve_import_nodes(document) {
@@ -1537,7 +1533,7 @@ fn image_data_to_rgba8(data: gltf::image::Data) -> Result<(u32, u32, Vec<u8>), S
 manifold_core::testkit_visible! {
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): glTF `wrapS`/`wrapT`, decoupled
 /// from `manifold_gpu` (this module is content-thread parse code, no GPU
-/// dependency) — `gltf_import.rs` translates these into `node.pbr_material`'s
+/// dependency) — the scene compiler translates these into `node.pbr_material`'s
 /// enum params, which `render_scene` then reads back into
 /// `manifold_gpu::GpuAddressMode`. Default `Repeat` matches both glTF's own
 /// implicit no-sampler default and `WrappingMode`'s crate-level default.
@@ -1906,7 +1902,7 @@ pub(crate) struct GltfMaterialInfo {
     /// `KHR_materials_pbrSpecularGlossiness` `specularGlossinessTexture`
     /// (GLB_XFAIL_BURNDOWN_DESIGN.md D2, BUG-167) rather than a genuine
     /// glTF metallic-roughness map — its usable channel is glossiness in
-    /// ALPHA, not roughness/metallic in G/B. `gltf_import.rs` wires the
+    /// ALPHA, not roughness/metallic in G/B. the scene compiler wires the
     /// `node.gltf_texture_source` feeding this map with `mode =
     /// gloss_to_roughness`, which repacks `(0, 1-gloss, 0, 1)` at decode
     /// time so `render_scene`'s existing G=roughness/B=metallic read stays
@@ -1973,12 +1969,12 @@ manifold_core::testkit_visible! {
 pub(crate) const DEFAULT_MATERIAL_MESH_PARAM: i32 = -2;
 }
 
-/// [`GltfImportSummary::materials`]' reserved sentinel for the synthetic
+/// The model file's material list reserves this sentinel for the synthetic
 /// glTF-default-material entry (D4) — pinned by
 /// `GLB_XFAIL_BURNDOWN_DESIGN.md` section 3: real glTF material indices are
 /// always `< u32::MAX` (the format has no material anywhere near that
 /// count), so this can never collide with a genuine index.
-/// `gltf_import.rs` must treat it as "no glTF material to re-query" —
+/// The scene compiler must treat it as "no glTF material to re-query" —
 /// see [`DEFAULT_MATERIAL_MESH_PARAM`], which is how it tells
 /// `node.gltf_mesh_source` to select this geometry without looking up
 /// material index `u32::MAX` in the document.
@@ -2169,7 +2165,7 @@ pub(crate) struct GltfNodeAnimation {
     /// channel way TRS channels are — a `weights` channel targets the
     /// mesh-owning node itself (glTF 2.0 section 3.7.2.1: it animates that node's
     /// morph weights, overriding `mesh.weights`), so unlike TRS there is
-    /// no ancestor-chain composition to resolve — `gltf_import.rs` looks
+    /// no ancestor-chain composition to resolve — the scene compiler looks
     /// this up directly by the contributing node's index.
     pub weights: Option<WeightsTrack>,
 }
@@ -2521,7 +2517,7 @@ pub(crate) fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Da
 
 /// Every scene-node index (ascending) whose mesh has at least one
 /// primitive matching `material_index` — the SAME grouping
-/// `gltf_import_summary`'s `nodes_by_material` computes, re-derived here
+/// the model file read computes, re-derived here
 /// so `node.gltf_skinned_mesh_source`'s runtime loader ([`load_gltf_skinned_mesh`]'s
 /// D4 fallback) assigns the IDENTICAL slot order the importer stamped into
 /// `node.gltf_skeleton_pose`'s `node_slots` Table param, without needing
@@ -2775,7 +2771,7 @@ fn flatten_rigid_multi_node(
 /// concatenate directly, since their JOINTS_0 all index that one shared
 /// palette. Only when NO skinned contributor exists does this fall back to
 /// D4's node-slot palette across every contributing node
-/// ([`find_material_contributing_nodes`]) — `gltf_import.rs` only reaches
+/// ([`find_material_contributing_nodes`]) — the scene compiler only reaches
 /// that fallback when `GltfMaterialInfo::rigid_multi_node` resolved
 /// (either the multi-node case or the single-node-ambiguous-ancestor case,
 /// both of which this same runtime node-enumeration reproduces identically
@@ -2854,7 +2850,7 @@ pub(crate) fn load_gltf_skinned_mesh(
 
 /// Find the first mesh-owning node (DFS, default-scene rooted) whose mesh
 /// carries a primitive matching `material_index` — no `skin()` requirement,
-/// unlike [`find_skinned_node_for_material`] (a morphed object need not
+/// unlike the skinned-node lookup (a morphed object need not
 /// also be skinned; these are independent glTF features).
 fn find_mesh_node_for_material<'a>(
     node: &gltf::Node<'a>,
@@ -2875,8 +2871,8 @@ fn find_mesh_node_for_material<'a>(
 
 /// Flatten one primitive's per-target POSITION/NORMAL morph deltas into
 /// `per_target_out[target_index]`, using the SAME triangle-index expansion
-/// [`flatten_primitive`] uses for the base mesh — deltas[t][k] must line up
-/// 1:1 with `node.gltf_mesh_source`'s base_verts[k] for this same
+/// [`flatten_primitive`] uses for the base mesh — deltas\[t\]\[k\] must line up
+/// 1:1 with `node.gltf_mesh_source`'s base_verts\[k\] for this same
 /// node/material, so `node.morph_targets_blend` can add them directly.
 /// `world_linear` (the node's world matrix's upper-3x3, NO translation —
 /// a delta is a displacement vector, never a point) transforms position
@@ -2965,7 +2961,7 @@ fn flatten_primitive_morph_deltas(
 /// Load a `.glb`'s morph-target deltas for `material_index`'s sole
 /// contributing node, flattened target-major
 /// (`deltas[target_index * vertex_count + vertex_index]`) — the layout
-/// `node.morph_targets_blend`'s `deltas` input expects. `gltf_import.rs`
+/// `node.morph_targets_blend`'s `deltas` input expects. the scene compiler
 /// only wires `node.gltf_morph_deltas_source` (which calls this) when
 /// `GltfMaterialInfo::morph` resolved. Returns `(deltas, target_count,
 /// vertex_count)`.
@@ -3126,7 +3122,7 @@ pub(crate) fn material_info(
 ) -> GltfMaterialInfo {
     let pbr = m.pbr_metallic_roughness();
     // IMPORT_FIDELITY_DESIGN.md D8/F-P5: BLEND maps to a real
-    // `Blend` material (see `gltf_import.rs`), never Mask cutout —
+    // `Blend` material (see the scene compiler), never Mask cutout —
     // `alpha_mask` reflects ONLY the genuine glTF MASK mode.
     let was_blend = matches!(m.alpha_mode(), gltf::material::AlphaMode::Blend);
     let alpha_mask = matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask);
@@ -3162,7 +3158,7 @@ pub(crate) fn material_info(
 
     // GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167):
     // KHR_materials_pbrSpecularGlossiness converts to metal-rough
-    // HERE, at parse time — `gltf_import.rs`/`render_scene.wgsl`
+    // HERE, at parse time — the scene compiler/`render_scene.wgsl`
     // never see spec-gloss. A material can't carry both
     // pbrMetallicRoughness's own textures/factors AND spec-gloss
     // meaningfully (the extension REPLACES the base PBR model per
@@ -3257,7 +3253,7 @@ pub(crate) fn material_info(
 
     // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular +
     // KHR_materials_ior, mapped to F0 scale downstream
-    // (gltf_import.rs). Defaults (1.5 / 1.0 / [1,1,1]) reproduce
+    // (the scene compiler). Defaults (1.5 / 1.0 / [1,1,1]) reproduce
     // today's hardcoded F0=0.04 exactly — see `fs_pbr`. D2:
     // `specular_factor_override` (set above, non-None only for a
     // spec-gloss material) wins over the direct

@@ -434,7 +434,7 @@ fn run_production_configuration(device: &Arc<GpuDevice>, configuration: Configur
     let scene_json = production_scene_json(rt_enabled);
     let make_runtime = || {
         PresetRuntime::from_json_str_with_device(
-            &scene_json,
+            &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(&scene_json),
             &registry,
             Arc::clone(device),
             1280,
