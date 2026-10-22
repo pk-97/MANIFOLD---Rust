@@ -44,10 +44,7 @@ fn owner(nodes: Vec<EffectGraphNode>, wires: Vec<EffectGraphWire>) -> EffectGrap
 fn instance(scene: &str) -> SceneModifierInstanceDef {
     SceneModifierInstanceDef {
         id: NodeId::new("camera_modifier"),
-        scene: SceneNodeRef {
-            scope: Vec::new(),
-            node: NodeId::new(scene),
-        },
+        scene: NodeId::new(scene),
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: Vec::new(),
         legacy_math_view_carrier: None,

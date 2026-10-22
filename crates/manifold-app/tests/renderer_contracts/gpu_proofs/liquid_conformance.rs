@@ -175,12 +175,11 @@ fn prepare(row: &LiquidSolverRow, def: &EffectGraphDef, registry: &PrimitiveRegi
     let metadata = bare.preset_metadata.take();
     let mut def = manifold_core::flatten::flatten_groups(&bare).expect("a liquid scene flattens");
     if let Some(index) = index {
-        let rebase = |reference: &mut manifold_core::SceneNodeRef| {
+        let rebase = |reference: &mut manifold_core::NodeId| {
             let mapped = index.node(reference).expect("modifier host reference maps to a leaf");
             let leaf = def.nodes.iter().find(|node| node.id == mapped.id).expect("flattened leaf exists");
             assert_eq!(leaf.node_id, mapped.node_id, "index and probe flatten must agree");
-            reference.scope.clear();
-            reference.node = leaf.node_id.clone();
+            *reference = leaf.node_id.clone();
         };
         for modifier in &mut modifiers {
             rebase(&mut modifier.scene);
@@ -1520,7 +1519,7 @@ fn liquid_conformance_prepare_keeps_modifier_routes_cpu() {
 
 fn with_force_and_impulse(def: &EffectGraphDef, strength: f32) -> (EffectGraphDef, String) {
     use manifold_core::NodeId;
-    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    use manifold_core::scene_modifier_preset::SceneTargetSelection;
     let mut recipe: EffectGraphDef =
         serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON).unwrap();
     let metadata = recipe.preset_metadata.as_mut().unwrap();
@@ -1528,16 +1527,16 @@ fn with_force_and_impulse(def: &EffectGraphDef, strength: f32) -> (EffectGraphDe
         metadata.params.iter_mut().find(|param| param.id == id).unwrap().default_value = value;
         metadata.bindings.iter_mut().find(|binding| binding.id == id).unwrap().default_value = value;
     }
-    let top = |node: &str| SceneNodeRef { scope: vec![], node: NodeId::new(node) };
+    let top = |node: &str| NodeId::new(node);
     let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         def,
         &recipe,
         NodeId::new("impulse"),
         top("scene"),
-        SceneTargetSelection::Explicit { objects: vec![<SceneNodeRef as manifold_core::SceneNodeRefExt>::locate(def, &NodeId::new("water_object")).expect("water object in its authored scope")] },
+        SceneTargetSelection::Explicit { objects: vec![NodeId::new("water_object")] },
     )
     .expect("the impulse modifier targets the water");
-    let def = manifold_core::scene_modifier_edit::insert_scene_modifier(def, 0, instance).unwrap().graph;
+    let def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(def, instance).unwrap();
     let fire = def
         .preset_metadata
         .as_ref()

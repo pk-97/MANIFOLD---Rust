@@ -8,12 +8,12 @@
 use manifold_core::effects::PresetInstance;
 use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
-use manifold_core::{GraphTarget, LayerId, NodeId, PresetTypeId};
+use manifold_core::{GraphTarget, LayerId, PresetTypeId};
 use manifold_editing::command::Command;
 use std::collections::HashSet;
 
-/// Prepare a generator type change, preserving every compatible scene
-/// modifier in the destination graph.
+/// Prepare a generator type change. A scene layer's modifiers belong to its
+/// compiled graph, so they never carry across a type change.
 pub(crate) fn build_change(
     project: &Project,
     layer_id: LayerId,
@@ -24,18 +24,6 @@ pub(crate) fn build_change(
         .graph_target_owner(&target)
         .ok_or_else(|| "Generator layer is no longer available".to_string())?;
     let before = source_host.clone();
-    let source_graph = crate::graph_target::resolve(project, &target);
-    let selected: Vec<NodeId> = source_graph
-        .as_ref()
-        .map(|graph| {
-            graph
-                .scene_modifiers
-                .iter()
-                .map(|modifier| modifier.id.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-
     let mut candidate = project.clone();
     {
         let (_, candidate_layer) = candidate
@@ -60,48 +48,12 @@ pub(crate) fn build_change(
             }
         }
     }
-    let after = {
-        let destination_graph = if selected.is_empty() {
-            None
-        } else {
-            Some(
-                crate::graph_target::resolve(&candidate, &target)
-                    .map(|graph| (*graph).clone())
-                    .ok_or_else(|| {
-                        "Destination generator graph is no longer available".to_string()
-                    })?,
-            )
-        };
-        let candidate_host = candidate
-            .timeline
-            .find_layer_by_id_mut(&layer_id)
-            .and_then(|(_, layer)| layer.gen_params_mut())
-            .ok_or_else(|| "Destination generator is no longer available".to_string())?;
-        if !selected.is_empty() {
-            let source_graph = source_graph
-                .as_ref()
-                .expect("selected modifiers require a source graph");
-            // A failed transfer leaves `candidate_host` untouched, so the
-            // swap still happens and the modifiers the new generator cannot
-            // use are dropped in the same undo step.
-            if let Err(reason) = crate::scene_modifier_transfer::transfer(
-                source_host,
-                source_graph,
-                candidate_host,
-                destination_graph
-                    .as_ref()
-                    .expect("selected modifiers have a destination graph"),
-                &selected,
-                true,
-            ) {
-                log::info!(
-                    "[generator_change] dropping {} scene modifier(s) the new generator cannot use: {reason}",
-                    selected.len()
-                );
-            }
-        }
-        candidate_host.clone()
-    };
+    let after = candidate
+        .timeline
+        .find_layer_by_id(&layer_id)
+        .and_then(|(_, layer)| layer.gen_params())
+        .ok_or_else(|| "Destination generator is no longer available".to_string())?
+        .clone();
 
     Ok(Box::new(ReplaceGeneratorStateCommand::new(
         layer_id,

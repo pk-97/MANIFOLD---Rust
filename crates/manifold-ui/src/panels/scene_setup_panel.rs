@@ -52,7 +52,6 @@ use super::param_slider_shared::{
 use super::{GraphParamTarget, PanelAction, ParamsAction};
 use crate::param_surface::{ParamRow, ParamSurface, RowKind, RowMapping, RowRole, RowSpec};
 use crate::slider::GAP;
-use manifold_foundation::SceneNodeRef;
 use manifold_foundation::scene_surface::{ControlGroup, Feature, Gate, GizmoDrawMode, ItemKind, SurfaceRole};
 
 // ── Stable keys ──
@@ -68,17 +67,6 @@ pub(crate) const ROW_H: f32 = 24.0;
 pub(crate) const ROW_GAP: f32 = 4.0;
 const PAD: f32 = 10.0;
 const STEP_W: f32 = 22.0;
-
-/// A scene address as plain text, for widget keys and widget names.
-pub(crate) fn ref_text(node: &SceneNodeRef) -> String {
-    let mut text = String::new();
-    for group in &node.scope {
-        text.push_str(group.as_str());
-        text.push('/');
-    }
-    text.push_str(node.node.as_str());
-    text
-}
 
 /// The panel's card-shaped row state: the rows, their modulation
 /// bookkeeping (the same vectors `ParamCardPanel` keeps) and the shared

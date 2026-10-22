@@ -77,7 +77,7 @@ fn generated<'a>(
 ) -> Result<&'a EffectGraphNode, SceneModifierExpandError> {
     let route = routes
         .iter()
-        .find(|r| r.modifier_id == *modifier && r.local.node == *local)
+        .find(|r| r.modifier_id == *modifier && r.local == *local)
         .ok_or_else(|| invalid("shatter", "control has no prepared route"))?;
     if route.copies.len() != 1 {
         return Err(invalid("shatter", "controls must have scene scope"));
@@ -141,7 +141,7 @@ pub(super) fn prepare(
             generated(def, routes, &instance.id, &shatter.trigger_node)?.id,
             shatter.trigger_port.clone(),
         );
-        let scene = def.nodes.iter().find(|n| n.node_id == instance.scene.node)
+        let scene = def.nodes.iter().find(|n| n.node_id == instance.scene)
             .ok_or_else(|| invalid("shatter", "prepared scene is missing"))?.id;
         let targets = frames::selected_objects(index, instance)?;
         if targets.is_empty() {
@@ -152,7 +152,7 @@ pub(super) fn prepare(
         }
         let mut assemblies: BTreeMap<(u32, usize), (u32, Vec<u32>)> = BTreeMap::new();
         for target in targets {
-            let object = def.nodes.iter().find(|n| n.node_id == target.node)
+            let object = def.nodes.iter().find(|n| n.node_id == target)
                 .ok_or_else(|| invalid("shatter", "prepared object is missing"))?.id;
             let pose = input(def, object, "parent_transform").or_else(|| input(def, object, "transform"))
                 .ok_or_else(|| invalid("shatter", "object needs Physics before Shatter"))?;

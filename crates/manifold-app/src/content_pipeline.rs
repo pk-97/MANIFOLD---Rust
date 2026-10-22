@@ -1355,10 +1355,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.prepare_gpu_residency()
     }
 
-    /// Clone the content device handle for command admission. The handle is
-    /// shared with the pipeline, so redo admissions can query fresh allocator
-    /// values without introducing another device or synchronization primitive.
-    #[cfg(target_os = "macos")]
+    /// Clone the content device handle for the frame-time probe's readback.
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
     pub fn native_device_handle(&self) -> Option<std::sync::Arc<manifold_gpu::GpuDevice>> {
         self.native_device.clone()
     }

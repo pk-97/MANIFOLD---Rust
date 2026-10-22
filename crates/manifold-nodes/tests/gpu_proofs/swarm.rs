@@ -308,8 +308,8 @@ fn a_radial_force_hit_kicks_the_swarm_once() {
     use manifold_core::effect_graph_def::BindingTarget;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::scene_impulse::{ImpulseFire, ImpulseTarget};
-    use manifold_core::scene_modifier_edit::insert_scene_modifier;
-    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
+    use manifold_core::scene_modifier_preset::SceneTargetSelection;
     use manifold_node_engine::exec::effect_node::FrameTime;
     use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
     use manifold_nodes_water::runtime::WaterRuntimeExt;
@@ -318,9 +318,9 @@ fn a_radial_force_hit_kicks_the_swarm_once() {
 
     let swarm: EffectGraphDef = serde_json::from_value(bare_world(0.0, 0.0)).unwrap();
     let recipe: EffectGraphDef = serde_json::from_str(include_str!("../../assets/scene-modifier-presets/RadialForce.json")).unwrap();
-    let scene = SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
+    let scene = NodeId::new("scene");
     let instance = prepare_new_scene_modifier(&swarm, &recipe, NodeId::new("blast"), scene, SceneTargetSelection::AllObjects).unwrap();
-    let def = insert_scene_modifier(&swarm, 0, instance).unwrap().graph;
+    let def = attach_scene_modifier(&swarm, instance).unwrap();
     let metadata = def.preset_metadata.clone().unwrap();
     let alias = |local: &str| {
         metadata.bindings.iter().find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { modifier_id, param_id } if modifier_id.as_str() == "blast" && param_id == local)).unwrap().id.clone()

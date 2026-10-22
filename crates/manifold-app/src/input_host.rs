@@ -170,9 +170,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn handle_effect_select_all(&mut self) -> bool {
         if self.ui_root.object_cards_have_focus { return true; }
-        let selected = if self.ui_root.inspector.has_modifier_selection() {
-            self.ui_root.inspector.select_all_modifiers()
-        } else { self.ui_root.inspector.select_all_effects() };
+        let selected = self.ui_root.inspector.select_all_effects();
         if selected {
             self.ui_root
                 .inspector
@@ -183,29 +181,8 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn handle_effect_copy(&mut self) -> bool {
         if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Copy) { return true; }
-        // An effect selection takes precedence on a scene layer: the modifier
-        // scope is also present while the generator card is displayed.
         if self.ui_root.inspector.has_effect_selection() {
             self.copy_effect_selection();
-            return true;
-        }
-        // Selected modifiers own Cmd+C within their generator scope.
-        if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
-            && !self.ui_root.inspector.has_effect_selection()
-            && self.ui_root.inspector.has_modifier_selection()
-        {
-            let selected = self.ui_root.inspector.selected_modifier_ids();
-            match crate::scene_modifier_transfer::ModifierClipboard::capture(
-                &self.project,
-                &layer,
-                &selected,
-            ) {
-                Ok(clipboard) => self.ui_root.set_scene_modifier_clipboard(Some(clipboard)),
-                Err(reason) => ContentCommand::send(
-                    self.content_tx,
-                    ContentCommand::GraphEditRejected(reason),
-                ),
-            }
             return true;
         }
         false
@@ -235,95 +212,27 @@ impl TimelineInputHost for AppInputHost<'_> {
             return true;
         }
 
-        // Selected modifiers own Cmd+X within their generator scope. Capture
-        // before dispatching the content-owned removal so paste remains valid.
-        if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
-            && self.ui_root.inspector.has_modifier_selection()
-        {
-            let selected = self.ui_root.inspector.selected_modifier_ids();
-            match crate::scene_modifier_transfer::ModifierClipboard::capture(
-                &self.project,
-                &layer,
-                &selected,
-            ) {
-                Ok(clipboard) => {
-                    self.ui_root.set_scene_modifier_clipboard(Some(clipboard));
-                    ContentCommand::send(
-                        self.content_tx,
-                        ContentCommand::SceneModifier(
-                            crate::scene_modifier_edit::SceneModifierAction::RemoveMany(
-                                layer, selected,
-                            ),
-                        ),
-                    );
-                }
-                Err(reason) => ContentCommand::send(
-                    self.content_tx,
-                    ContentCommand::GraphEditRejected(reason),
-                ),
-            }
-            return true;
-        }
-
         false
     }
 
     fn handle_effect_paste(&mut self) -> bool {
         if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Paste) { return true; }
-        // Paste remains in the scene-modifier context, including an empty
-        // destination stack. The content thread owns the actual mutation.
-        if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned()
-            && !self.ui_root.inspector.has_effect_selection()
-            && (self.ui_root.inspector.has_modifier_selection()
-                || self.ui_root.scene_modifier_clipboard.is_some())
-        {
-            if let Some(clipboard) = self.ui_root.scene_modifier_clipboard.clone() {
-                ContentCommand::send(
-                    self.content_tx,
-                    ContentCommand::SceneModifier(
-                        crate::scene_modifier_edit::SceneModifierAction::Paste(
-                            layer,
-                            clipboard,
-                        ),
-                    ),
-                );
-            }
-            return true;
-        }
         self.paste_effect_selection()
     }
 
     fn handle_effect_duplicate(&mut self) -> bool {
         if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Duplicate) { return true; }
-        if self.ui_root.inspector.has_modifier_selection() {
-            if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned() {
-                ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
-                    crate::scene_modifier_edit::SceneModifierAction::Duplicate(layer, self.ui_root.inspector.selected_modifier_ids()),
-                ));
-            }
-            return true;
-        }
         if !self.ui_root.inspector.has_effect_selection() { return false; }
         let clipboard = std::mem::take(&mut self.ui_root.effect_clipboard);
-        let modifiers = self.ui_root.scene_modifier_clipboard.take();
         let scene_items = self.ui_root.scene_item_clipboard.take();
         if self.copy_effect_selection() { self.paste_effect_selection(); }
         self.ui_root.effect_clipboard = clipboard;
-        self.ui_root.scene_modifier_clipboard = modifiers;
         self.ui_root.scene_item_clipboard = scene_items;
         true
     }
 
     fn handle_effect_delete(&mut self) -> bool {
         if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Delete) { return true; }
-        if self.ui_root.inspector.has_modifier_selection() {
-            if let Some(layer) = self.ui_root.inspector.modifier_scope_id().cloned() {
-                let ids = self.ui_root.inspector.selected_modifier_ids();
-                ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
-                    crate::scene_modifier_edit::SceneModifierAction::RemoveMany(layer, ids)));
-            }
-            return true;
-        }
         if !self.ui_root.inspector.has_effect_selection() {
             return false;
         }
@@ -1702,7 +1611,7 @@ mod automation_clipboard_host_tests {
     use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::{AutomationLane, AutomationPoint, PresetInstance, SegmentShape};
     use manifold_core::params::{Param, ParamManifest};
-    use manifold_core::{EffectId, GraphTarget, LayerId, PresetTypeId};
+    use manifold_core::{EffectId, LayerId, PresetTypeId};
     use manifold_core::layer::Layer;
     use manifold_editing::service::EditingService;
     use manifold_ui::ui_state::AutomationTimeSelection;
@@ -1838,7 +1747,7 @@ mod automation_clipboard_host_tests {
                     kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
                     title: "Mirror".into(), collapsed: false, enabled: true,
                     effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
-                    has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
+                    has_graph_mod: false, layer_id: Some(layer_id.clone()),
                     rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
                 }
             }).collect::<Vec<_>>();
@@ -1886,7 +1795,7 @@ mod automation_clipboard_host_tests {
                 kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
                 title: "Card".into(), collapsed: false, enabled: true,
                 effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
-                has_graph_mod: false, layer_id: None, modifier: None,
+                has_graph_mod: false, layer_id: None,
                 rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
             }
         }).collect::<Vec<_>>();
@@ -1935,7 +1844,7 @@ mod automation_clipboard_host_tests {
                 kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
                 title: "Mirror".into(), collapsed: false, enabled: true,
                 effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
-                has_graph_mod: false, layer_id: Some(layer_id.clone()), modifier: None,
+                has_graph_mod: false, layer_id: Some(layer_id.clone()),
                 rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
             }
         }).collect::<Vec<_>>();
@@ -1978,251 +1887,8 @@ mod automation_clipboard_host_tests {
         assert_eq!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().unwrap().len(), 3);
     }
 
-    #[test]
-    fn modifier_paste_dispatches_from_clipboard_into_empty_modifier_stack() {
-        let mut h = Harness::new();
-        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
-        let layer_id = LayerId::new("modifier-shortcut-layer");
-        layer.layer_id = layer_id.clone();
-        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
-            .expect("Scene fixture").as_ref().clone();
-        layer.gen_params_mut().unwrap().graph = Some(graph);
-        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
-        h.project.timeline.layers.push(layer);
-        let mut add = crate::scene_modifier_edit::build_action(
-            &h.project,
-            crate::scene_modifier_edit::SceneModifierAction::Add(
-                layer_id.clone(),
-                "SceneFog".into(),
-            ),
-        )
-        .expect("scene modifier add");
-        add.execute(&mut h.project);
-        let mut destination = Layer::new_generator(
-            "Scene Destination".into(),
-            PresetTypeId::new("Scene"),
-            0,
-        );
-        let destination_id = LayerId::new("modifier-shortcut-destination");
-        destination.layer_id = destination_id.clone();
-        let destination_graph = manifold_nodes::bundled_presets::bundled_preset_def(
-            &PresetTypeId::new("Scene"),
-        )
-        .expect("Scene destination fixture").as_ref().clone();
-        destination.gen_params_mut().unwrap().graph = Some(destination_graph);
-        destination.gen_params_mut().unwrap().refresh_manifest_from_graph();
-        h.project.timeline.layers.push(destination);
-        let source_graph = h
-            .project
-            .graph_target_owner(&GraphTarget::Generator(layer_id.clone()))
-            .and_then(|owner| owner.graph.as_ref())
-            .expect("source graph");
-        let modifier_id = source_graph.scene_modifiers[0].id.clone();
-        h.ui_root.set_scene_modifier_clipboard(Some(
-            crate::scene_modifier_transfer::ModifierClipboard::capture(
-                &h.project,
-                &layer_id,
-                std::slice::from_ref(&modifier_id),
-            )
-            .expect("modifier clipboard capture"),
-        ));
-        h.ui_root
-            .inspector
-            .configure_modifier_cards(&[], Some(&destination_id), true, Vec::new());
-        let before = serde_json::to_vec(&h.project).expect("project serializes");
-        {
-            let mut host = h.host();
-            assert!(host.handle_effect_paste());
-        }
-        let command = h.rx.try_recv().expect("paste must reach content thread");
-        match command {
-            ContentCommand::SceneModifier(
-                crate::scene_modifier_edit::SceneModifierAction::Paste(destination, clipboard),
-            ) => {
-                assert_eq!(destination, destination_id);
-                assert_eq!(clipboard.count(), 1);
-            }
-            other => panic!("expected scene modifier paste, got {:?}", std::mem::discriminant(&other)),
-        }
-        assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before);
 
-        // Copying an ordinary effect afterwards must supersede this modifier
-        // clipboard, including when the destination has no selected cards.
-        let effect = h.project.settings.master_effects[0].clone();
-        let surface = manifold_ui::param_surface::ParamSurface {
-            kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
-            title: "ClipboardTest".into(), collapsed: false, enabled: true,
-            effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
-            has_graph_mod: false, layer_id: None, modifier: None,
-            rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-        };
-        h.project.timeline.find_layer_by_id_mut(&destination_id).unwrap().1.effects = Some(vec![effect]);
-        h.active_layer = Some(destination_id.clone());
-        h.ui_root.inspector.configure_layer_effects(&[surface], Some(&destination_id));
-        assert!(h.ui_root.inspector.select_all_effects());
-        assert!(h.host().handle_effect_copy());
-        assert!(h.ui_root.scene_modifier_clipboard.is_none());
-        h.ui_root.inspector.clear_effect_selection(&mut h.ui_root.tree);
-        assert!(h.host().handle_effect_paste());
-        let ContentCommand::ExecuteSelecting(mut command, _) = h.rx.try_recv().unwrap() else { panic!("expected paste command"); };
-        assert_eq!(h.project.timeline.find_layer_by_id(&destination_id).unwrap().1.effects.as_ref().unwrap().len(), 1);
-        command.execute(&mut h.project);
-        assert_eq!(h.project.timeline.find_layer_by_id(&destination_id).unwrap().1.effects.as_ref().unwrap().len(), 2);
-    }
 
-    #[test]
-    fn modifier_cut_captures_before_removal_and_consumes_capture_failure() {
-        let mut h = Harness::new();
-        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
-        let layer_id = LayerId::new("modifier-cut-layer");
-        layer.layer_id = layer_id.clone();
-        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
-            .expect("Scene fixture").as_ref().clone();
-        layer.gen_params_mut().unwrap().graph = Some(graph);
-        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
-        h.project.timeline.layers.push(layer);
-        let mut add = crate::scene_modifier_edit::build_action(
-            &h.project,
-            crate::scene_modifier_edit::SceneModifierAction::Add(layer_id.clone(), "SceneFog".into()),
-        ).expect("scene modifier add");
-        add.execute(&mut h.project);
-        let modifier_id = h.project
-            .graph_target_owner(&GraphTarget::Generator(layer_id.clone()))
-            .and_then(|owner| owner.graph.as_ref()).expect("generator graph")
-            .scene_modifiers[0].id.clone();
-        let surface = manifold_ui::param_surface::ParamSurface {
-            kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
-            title: "SceneFog".into(), rows: Vec::new(), string_params: Vec::new(),
-            audio_sends: Vec::new(),
-            modifier: Some(manifold_ui::param_surface::ModifierCardInfo {
-                instance_id: modifier_id.clone(), layer_id: layer_id.clone(),
-                params_owner: Default::default(),
-                enabled_label: "Enabled".into(), stack_index: 0, stack_len: 1,
-                targets_all: true, objects: Vec::new(),
-            }),
-            effect_index: 0,
-            effect_id: manifold_core::EffectId::new(format!("scene_modifier:{modifier_id}")),
-            enabled: true, collapsed: false, supports_envelopes: true, has_graph_mod: false,
-            layer_id: None,
-        };
-        h.ui_root.inspector.configure_modifier_cards(std::slice::from_ref(&surface), Some(&layer_id), true, Vec::new());
-        assert!(h.ui_root.inspector.select_all_modifiers());
-        let before = serde_json::to_vec(&h.project).expect("project serializes");
-        let mut input = crate::input_handler::InputHandler::new();
-        input.inspector_has_focus = true;
-        assert!(input.handle_keyboard_input(
-            &winit::keyboard::Key::Character(winit::keyboard::SmolStr::new("x")),
-            manifold_ui::input::Modifiers { command: true, ..Default::default() },
-            &mut h.host(),
-        ));
-        assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before);
-        assert_eq!(h.ui_root.scene_modifier_clipboard.as_ref().unwrap().count(), 1);
-        let (remove_layer, remove_ids) = match h.rx.try_recv().expect("modifier cut") {
-            ContentCommand::SceneModifier(crate::scene_modifier_edit::SceneModifierAction::RemoveMany(layer, ids)) => (layer, ids),
-            other => panic!("expected modifier removal, got {:?}", std::mem::discriminant(&other)),
-        };
-        assert_eq!(remove_layer, layer_id);
-        assert_eq!(remove_ids, vec![modifier_id.clone()]);
-
-        // A stale scope still consumes Cmd+X and reports capture failure.
-        let invalid_layer = LayerId::new("missing-modifier-layer");
-        h.ui_root.inspector.configure_modifier_cards(&[surface], Some(&invalid_layer), true, Vec::new());
-        assert!(h.ui_root.inspector.select_all_modifiers());
-        assert!(input.handle_keyboard_input(
-            &winit::keyboard::Key::Character(winit::keyboard::SmolStr::new("x")),
-            manifold_ui::input::Modifiers { command: true, ..Default::default() },
-            &mut h.host(),
-        ));
-        assert!(matches!(h.rx.try_recv().expect("capture rejection"), ContentCommand::GraphEditRejected(_)));
-    }
-
-    #[test]
-    fn modifier_copy_supersedes_effect_clipboard() {
-        // Latest copy wins across both clipboards: a modifier copy made after
-        // an effect copy must clear the effect clipboard, or a later paste
-        // resurrects the stale effect.
-        let mut h = Harness::new();
-        let effect = h.project.settings.master_effects[0].clone();
-        let surface = manifold_ui::param_surface::ParamSurface {
-            kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
-            title: "ClipboardTest".into(), collapsed: false, enabled: true,
-            effect_index: 0, effect_id: effect.id.clone(), supports_envelopes: true,
-            has_graph_mod: false, layer_id: None, modifier: None,
-            rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-        };
-        let mut layer = Layer::new("Effects".into(), manifold_core::types::LayerType::Video, 0);
-        let layer_id = layer.layer_id.clone();
-        layer.effects = Some(vec![effect]);
-        h.project.timeline.layers.push(layer);
-        h.active_layer = Some(layer_id.clone());
-        h.ui_root.inspector.configure_layer_effects(&[surface], Some(&layer_id));
-        assert!(h.ui_root.inspector.select_all_effects());
-        assert!(h.host().handle_effect_copy());
-        assert!(h.ui_root.effect_clipboard.has_content());
-
-        // Scene-modifier scope on a generator layer, one SceneFog applied.
-        let mut gen_layer = Layer::new_generator(
-            "Scene".into(),
-            PresetTypeId::new("Scene"),
-            0,
-        );
-        let gen_layer_id = LayerId::new("supersede-gen");
-        gen_layer.layer_id = gen_layer_id.clone();
-        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
-            .expect("Scene fixture").as_ref().clone();
-        gen_layer.gen_params_mut().unwrap().graph = Some(graph);
-        gen_layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
-        h.project.timeline.layers.push(gen_layer);
-        let mut add = crate::scene_modifier_edit::build_action(
-            &h.project,
-            crate::scene_modifier_edit::SceneModifierAction::Add(gen_layer_id.clone(), "SceneFog".into()),
-        )
-        .expect("scene modifier add");
-        add.execute(&mut h.project);
-        let modifier_id = h
-            .project
-            .graph_target_owner(&GraphTarget::Generator(gen_layer_id.clone()))
-            .and_then(|owner| owner.graph.as_ref())
-            .expect("source graph")
-            .scene_modifiers[0]
-            .id
-            .clone();
-        let mod_surface = manifold_ui::param_surface::ParamSurface {
-            kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
-            title: "SceneFog".into(),
-            rows: Vec::new(),
-            string_params: Vec::new(),
-            audio_sends: Vec::new(),
-            modifier: Some(manifold_ui::param_surface::ModifierCardInfo {
-                instance_id: modifier_id.clone(),
-                layer_id: gen_layer_id.clone(),
-                params_owner: Default::default(),
-                enabled_label: "Enabled".into(),
-                stack_index: 0,
-                stack_len: 1,
-                targets_all: true,
-                objects: Vec::new(),
-            }),
-            effect_index: 0,
-            effect_id: manifold_core::EffectId::new(format!("scene_modifier:{}", modifier_id)),
-            enabled: true,
-            collapsed: false,
-            supports_envelopes: true,
-            has_graph_mod: false,
-            layer_id: None,
-        };
-        h.ui_root
-            .inspector
-            .configure_modifier_cards(&[mod_surface], Some(&gen_layer_id), true, Vec::new());
-        h.ui_root.inspector.clear_effect_selection(&mut h.ui_root.tree);
-        assert!(h.ui_root.inspector.select_all_modifiers());
-        assert!(h.host().handle_effect_copy());
-        assert!(h.ui_root.scene_modifier_clipboard.is_some());
-        assert!(
-            !h.ui_root.effect_clipboard.has_content(),
-            "modifier copy must clear the effect clipboard"
-        );
-    }
 
     #[test]
     fn paste_multilane_preserves_relative_timing_and_undoes_collision_exactly() {

@@ -6,7 +6,5 @@ mod led_preset_value_tests;
 mod led_utility_value_tests;
 #[path = "renderer_contracts/saved_copy_shows.rs"]
 mod saved_copy_shows;
-#[path = "renderer_contracts/scene_loop_roundtrip_gate.rs"]
-mod scene_loop_roundtrip_gate;
 #[path = "renderer_contracts/ui_color_swatches.rs"]
 mod ui_color_swatches;

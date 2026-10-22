@@ -76,14 +76,11 @@ pub mod retired_cpu_flip;
 pub mod scene_doc;
 pub mod scene_schema;
 pub mod scene_exposure;
-pub mod scene_graph_edit;
 pub mod scene_world_controls;
 pub mod scene_index;
 pub mod scene_impulse;
 pub mod scene_modifier_preset;
-pub mod scene_modifier_edit;
 pub mod scene_modifier_math_view;
-pub mod scene_modifier_periodicity;
 pub mod scene_source_identity;
 pub mod selection;
 pub mod session;
@@ -103,12 +100,10 @@ pub use graph_target::GraphTarget;
 pub use scene_modifier_preset::{
     validate_scene_modifier_schema, SceneAxis, SceneContextValue, SceneEndpoint,
     SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneModifierRecipe,
-    SceneModifierSchemaError, SceneModifierStageDef, SceneNodeInitializer, SceneNodeRef, SceneNodeRefExt,
-    SceneParamCalibration, SceneScalarExpr, SceneStageInput, SceneStageOutput, SceneStageScope,
+    SceneModifierSchemaError, SceneModifierStageDef, SceneNodeInitializer, SceneParamCalibration, SceneScalarExpr, SceneStageInput, SceneStageOutput, SceneStageScope,
     SceneStageSource, SceneTargetSelection, EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
     SCENE_MODIFIER_RECIPE_VERSION,
 };
-pub use scene_modifier_periodicity::repair_scene_modifier_periodicity;
 pub use preset_type_id::PresetTypeId;
 pub use audio_features::{AudioFeatureSnapshot, BandFeatures, SendFeatures};
 pub use audio_mod::{

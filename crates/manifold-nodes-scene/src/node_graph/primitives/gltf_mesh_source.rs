@@ -217,10 +217,9 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         // BUG-194/BUG-195 (SCENE_SETUP_PANEL_DESIGN.md D4/D5): import-time
-        // provenance, never read by `evaluate()`/`run()` — stamped by
-        // `gltf_import.rs` at import/merge time and read back by
-        // `SceneVm::from_def` (the header's vertex-count row) and
-        // `merge_import_into_graph` (scale-sanity's reference-radius pick).
+        // provenance, never read by `evaluate()`/`run()` — stamped by the
+        // scene compiler and read back by the scene table's vertex-count
+        // row and by Shatter.
         // -1 / -1.0 mean "unknown" (a hand-built node never touched by the
         // importer) — never a fabricated non-negative default.
         // BUG-221: a plain constant per-vertex translate — see

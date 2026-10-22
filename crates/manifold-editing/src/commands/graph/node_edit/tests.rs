@@ -658,26 +658,17 @@ fn set_graph_node_param_inserts_and_undo_restores_absence() {
 fn calibrated_source_param_rejects_atomically_but_ordinary_node_writes_remain_live() {
     use manifold_core::NodeId;
     use manifold_core::scene_modifier_preset::{
-        SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
     };
     let mut def = mirror_catalog_default();
     def.nodes[1].node_id = NodeId::new("calibrated-source");
     def.scene_modifiers.push(SceneModifierInstanceDef {
         id: NodeId::new("modifier"),
-        scene: SceneNodeRef {
-            scope: vec![],
-            node: NodeId::new("scene"),
-        },
+        scene: NodeId::new("scene"),
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: vec![SceneMeshReferenceFrame {
-            target: SceneNodeRef {
-                scope: vec![],
-                node: NodeId::new("object"),
-            },
-            source: SceneNodeRef {
-                scope: vec![],
-                node: NodeId::new("calibrated-source"),
-            },
+            target: NodeId::new("object"),
+            source: NodeId::new("calibrated-source"),
             source_definition_hash: "hash".into(),
             source_offset: [0.0; 3],
             scene_radius: 1.0,
@@ -725,7 +716,7 @@ fn calibrated_source_param_rejects_atomically_but_ordinary_node_writes_remain_li
 fn vertices_modifier_allows_host_rt_enabled_with_undo_redo() {
     use manifold_core::NodeId;
     use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        SceneModifierInstanceDef, SceneTargetSelection,
     };
     let mut def = mirror_catalog_default();
     def.nodes.push(EffectGraphNode {
@@ -758,10 +749,7 @@ fn vertices_modifier_allows_host_rt_enabled_with_undo_redo() {
     .expect("vertices recipe fixture");
     def.scene_modifiers.push(SceneModifierInstanceDef {
         id: NodeId::new("modifier"),
-        scene: SceneNodeRef {
-            scope: vec![],
-            node: NodeId::new("scene"),
-        },
+        scene: NodeId::new("scene"),
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: vec![],
         legacy_math_view_carrier: None,

@@ -10,7 +10,6 @@
 use super::PanelAction;
 use super::{DriverConfigAction, GraphParamTarget, InspectorTab};
 use super::{browser_popup, picker_core};
-use manifold_foundation::SceneNodeRef;
 use crate::input::Modifiers;
 use crate::node::Rect;
 use crate::types::{
@@ -19,7 +18,7 @@ use crate::types::{
 };
 use crate::view::{UiGraphTarget, UiSegmentShape};
 use manifold_foundation::scene_surface::FieldPick;
-use manifold_foundation::{AudioSendId, Beats, ClipId, EffectId, ItemId, LayerId, NodeId, ParamId};
+use manifold_foundation::{AudioSendId, Beats, ClipId, EffectId, ItemId, LayerId, ParamId};
 
 /// Card menus and keyboard shortcuts share these editing operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,34 +266,6 @@ pub enum ProjectAction {
     /// RT Quality settings: replace entire RtQualitySettings struct.
     /// Dispatches `ChangeRtQualityCommand`. One undo unit covers all changes.
     ChangeRtQuality(manifold_foundation::settings::RtQualitySettings),
-    /// Attach a catalog recipe to the owning scene through content-side admission.
-    /// `(layer_id, preset_id)`.
-    SceneModifierApply(LayerId, String),
-    /// Remove the exact applied snapshot. `(layer_id, instance_id)`.
-    SceneModifierRemove(LayerId, NodeId),
-    /// Toggle the declared Enabled macro through its existing host mapping.
-    /// `(layer_id, instance_id)`.
-    SceneModifierToggleEnabled(LayerId, NodeId),
-    /// Move one applied modifier to `target_index` in its layer stack.
-    SceneModifierMove(LayerId, NodeId, usize),
-    /// Set the modifier's object targets. `None` means all objects.
-    SceneModifierSetTargets(
-        LayerId,
-        NodeId,
-        Option<Vec<SceneNodeRef>>,
-    ),
-    /// Replace the complete ordered scene-modifier stack for one layer.
-    /// Stable modifier node ids are the domain address; card positions are UI only.
-    SceneModifiersReorder(LayerId, Vec<NodeId>),
-    /// Duplicate the selected scene modifiers, preserving their stable ids in
-    /// the command's captured selection.
-    SceneModifiersDuplicate(LayerId, Vec<NodeId>),
-    /// Capture the selected scene modifiers into the UI-owned clipboard.
-    SceneModifiersCopy(LayerId, Vec<NodeId>),
-    /// Paste the UI-owned scene modifier snapshot through the content thread.
-    SceneModifiersPaste(LayerId),
-    /// Remove the selected scene modifiers as one undoable operation.
-    SceneModifiersRemove(LayerId, Vec<NodeId>),
 }
 
 #[derive(Debug, Clone)]
@@ -424,9 +395,6 @@ pub enum ParamsAction {
     EffectSelectionChanged,
     EditCards(CardEditAction),
     EffectGroupRightClicked(manifold_foundation::EffectGroupId),
-    /// A scene-modifier card was selected. The stable instance id is the UI
-    /// selection address; it is never converted to an effect position.
-    ModifierCardClicked(NodeId),
     /// one atomic enum write (a dropdown pick). Dispatch runs the
     /// generic `Scrub(ValueRef::Param, …)` gesture (Begin/Move/Commit) in
     /// sequence, so the scene id_map interception and the one-undo-unit
@@ -467,11 +435,6 @@ pub enum ParamsAction {
         enabled: bool,
     },
     GenTypeClicked(Option<LayerId>), // layer_id
-    /// SCENE_MODIFIER_FRAMEWORK section 3.7: the inspector "+ Add Modifier"
-    /// button on a scene layer's scope. Opens the modifier picker (one entry
-    /// per registry kind; applied/inapplicable kinds disabled) — the layer
-    /// the picker applies to rides on the action.
-    AddModifierClicked(LayerId), // layer_id
     /// Click on an unmasked effect-group header's add-modifier affordance.
     /// The stable group id is captured by the header intent and remains valid
     /// while the picker/menu flow is open.
@@ -817,18 +780,6 @@ pub enum RootAction {
     /// A file field's picker: the app opens the file dialog and sends the
     /// picked path as a `ProjectAction::SceneFieldSet`.
     SceneFieldFileClicked { layer_id: LayerId, item: ItemId, field: String, extensions: Vec<String> },
-    /// Open the object-target and preview menu for a scene modifier card.
-    SceneModifierObjectsClicked(LayerId, NodeId),
-    /// Open the shared preset menu for one exact scene modifier card.
-    SceneModifierCardRightClicked(LayerId, NodeId),
-    /// Context menu for the exact object modifier under the pointer.
-    ObjectModifierCardRightClicked(crate::param_surface::ObjectModifierCardInfo),
-    /// Preview one exact scene object through a scene modifier instance.
-    PreviewSceneModifierObject(
-        LayerId,
-        NodeId,
-        SceneNodeRef,
-    ),
     /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8): double-click on a dock
     /// numeric value cell opens its type-in box. Carries the row's write
     /// address (mirroring `SceneSetupParamChanged`'s tuple shape), the

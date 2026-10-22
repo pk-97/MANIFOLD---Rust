@@ -31,7 +31,6 @@ pub enum ContentCommand {
     },
     /// Publish selection only after this insertion succeeds on the content thread.
     ExecuteSelecting(Box<dyn Command + Send>, crate::edit_selection::SelectAfterEdit),
-    SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
     ChangeGeneratorType { layer_id: LayerId, new_type: manifold_core::PresetTypeId },
     GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),
@@ -352,8 +351,7 @@ pub enum ContentCommand {
     /// and the draw mode for them and for an export (BUG-b36b8 gizmo draw modes).
     SetGizmoOverlay(Box<crate::gizmo_overlay::GizmoOverlay>),
     SetModifierPreviewContext {
-        scope: Vec<manifold_core::NodeId>,
-        object: Option<manifold_core::scene_modifier_preset::SceneNodeRef>,
+        object: Option<manifold_core::NodeId>,
     },
 
     /// Toggle auto-gain/normalization on the graph editor's node-output

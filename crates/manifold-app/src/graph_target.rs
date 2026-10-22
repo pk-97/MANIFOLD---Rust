@@ -140,3 +140,17 @@ pub(crate) fn catalog_default(project: &Project, target: &GraphTarget) -> Option
         manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type()).map(|def| (*def).clone())
     }
 }
+
+/// Why a card control must not move: it drives a source a calibrated scene
+/// modifier was measured against. Modifier-local controls are never locked.
+pub(crate) fn macro_parameter_lock_reason(
+    project: &Project,
+    target: &GraphTarget,
+    param: &str,
+) -> Option<&'static str> {
+    if matches!(target, GraphTarget::SceneModifier { .. }) {
+        return None;
+    }
+    let graph = resolve(project, target)?;
+    manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(&graph, param)
+}

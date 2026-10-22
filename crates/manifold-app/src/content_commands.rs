@@ -3,7 +3,7 @@
 //! to the appropriate subsystem on the content thread.
 
 use manifold_core::change::{ChangeSet, Part};
-use manifold_core::{LayerId, NodeId, Seconds};
+use manifold_core::Seconds;
 use manifold_playback::external_sync::OffsetTake;
 use manifold_playback::transport_controller::TransportController;
 use manifold_compositor::generator_renderer::GeneratorRenderer;
@@ -92,29 +92,6 @@ fn prepare_project_save(
     engine.project().map(|p| (p.clone(), editing.data_version()))
 }
 
-fn scene_modifier_ids(
-    project: &manifold_core::project::Project,
-    layer_id: &LayerId,
-) -> Option<Vec<NodeId>> {
-    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-    crate::graph_target::resolve(project, &target)
-        .map(|graph| {
-            graph
-                .scene_modifiers
-                .iter()
-                .map(|modifier| modifier.id.clone())
-                .collect()
-        })
-}
-
-fn newly_added_modifier_ids(previous: &[NodeId], current: &[NodeId]) -> Vec<NodeId> {
-    current
-        .iter()
-        .filter(|id| !previous.iter().any(|previous_id| previous_id == *id))
-        .cloned()
-        .collect()
-}
-
 /// Look up the existing Ableton mapping for a target (for undo snapshot).
 /// The three host variants route through the shared
 /// [`Project::ableton_param_mappings`] locate; `MacroSlot` keeps its own arm
@@ -179,17 +156,6 @@ impl ContentThread {
         self.graph_edit_diagnostic = None;
         self.engine.mark_compositor_dirty_now();
         true
-    }
-
-    fn modifier_budget_device(&self) -> Option<std::sync::Arc<manifold_gpu::GpuDevice>> {
-        #[cfg(target_os = "macos")]
-        {
-            self.content_pipeline.native_device_handle()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            None
-        }
     }
 
     /// BUG-104: walk every registered `ClipRenderer`, and for the
@@ -732,20 +698,6 @@ impl ContentThread {
         self.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
     }
 
-    fn publish_modifier_selection(&mut self, layer_id: LayerId, ids: Vec<NodeId>) {
-        let sequence = self
-            .modifier_selection_update
-            .as_ref()
-            .map_or(1, |event| event.sequence.wrapping_add(1));
-        self.modifier_selection_update = Some(std::sync::Arc::new(
-            crate::content_state::ModifierSelectionUpdate {
-                sequence,
-                layer_id,
-                ids,
-            }),
-        );
-    }
-
     /// Apply finished recording takes through the same undo service as edits.
     pub(crate) fn commit_automation_recording(&mut self, finish_active: bool) {
         commit_recording(&mut self.engine, &mut self.editing_service, finish_active);
@@ -787,12 +739,12 @@ impl ContentThread {
                 self.preview_graph_node = None;
                 self.modifier_preview_context = None;
             }
-            ContentCommand::SetModifierPreviewContext { scope, object } => {
+            ContentCommand::SetModifierPreviewContext { object } => {
                 self.clear_editor_scene_viewport();
                 self.modifier_preview_context = match &self.watched_graph_target {
                     Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) =>
                         Some(std::sync::Arc::new(manifold_node_engine::runtime::ModifierPreviewContext {
-                            modifier_id: modifier_id.clone(), scope, object,
+                            modifier_id: modifier_id.clone(), object,
                         })),
                     _ => None,
                 };
@@ -1020,39 +972,6 @@ impl ContentThread {
                     Err(message) => self.report_graph_edit_rejection(message),
                 }
             }
-            ContentCommand::SceneModifier(action) => {
-                let selection_layer = match &action {
-                    crate::scene_modifier_edit::SceneModifierAction::Add(layer_id, _)
-                    | crate::scene_modifier_edit::SceneModifierAction::Duplicate(layer_id, _)
-                    | crate::scene_modifier_edit::SceneModifierAction::Paste(layer_id, _) => {
-                        Some(layer_id.clone())
-                    }
-                    _ => None,
-                };
-                let previous_ids = selection_layer.as_ref().and_then(|layer_id| {
-                    self.engine
-                        .project()
-                        .and_then(|project| scene_modifier_ids(project, layer_id))
-                });
-                let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
-                    .and_then(|project| crate::scene_modifier_edit::build_action(project, action));
-                match result {
-                    Ok(command) => {
-                        self.handle_command(ContentCommand::Execute(command));
-                        if let (Some(layer_id), Some(previous_ids)) =
-                            (selection_layer, previous_ids)
-                            && let Some(project) = self.engine.project()
-                            && let Some(current_ids) = scene_modifier_ids(project, &layer_id)
-                        {
-                            let inserted = newly_added_modifier_ids(&previous_ids, &current_ids);
-                            if !inserted.is_empty() {
-                                self.publish_modifier_selection(layer_id, inserted);
-                            }
-                        }
-                    }
-                    Err(message) => self.report_graph_edit_rejection(message),
-                }
-            }
             ContentCommand::PreviewAutomationLane { target, param_id, points } => {
                 self.engine.set_automation_lane_preview(target, param_id, points);
             }
@@ -1111,10 +1030,6 @@ impl ContentThread {
             }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
                 self.engine.clear_automation_previews();
-                let cmd = crate::scene_modifier_edit::with_admission_device(
-                    cmd,
-                    self.modifier_budget_device(),
-                );
                 let pre = self.engine.project().map(|p| {
                     (
                         p.settings.output_width,
@@ -1155,7 +1070,6 @@ impl ContentThread {
                 }
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
-                let budget_device = self.modifier_budget_device();
                 self.engine.clear_automation_previews();
                 let pre = self.engine.project().map(|p| {
                     (
@@ -1167,7 +1081,6 @@ impl ContentThread {
                 let (renderers, project) = self.engine.split_renderer_project_edit();
                 if let Some(project) = project {
                     let command = Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
-                    let command = crate::scene_modifier_edit::with_admission_device(command, budget_device);
                     self.editing_service.execute_with_validation(
                         command,
                         project,
@@ -1340,7 +1253,6 @@ impl ContentThread {
             ContentCommand::LoadProject(project) => {
                 self.commit_automation_recording(true);
                 self.edit_selection_update = None;
-                self.modifier_selection_update = None;
                 if let Some(ref mut alp) = self.audio_layer_playback {
                     alp.reset();
                 }
@@ -2087,40 +1999,6 @@ mod recording_save_tests {
         assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().is_none_or(Vec::is_empty));
         assert!(editing.redo(engine.project_edit().unwrap()));
         assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, lane.points);
-    }
-}
-
-#[cfg(test)]
-mod modifier_selection_tests {
-    use super::{newly_added_modifier_ids, scene_modifier_ids};
-    use manifold_core::NodeId;
-
-    #[test]
-    fn first_modifier_selection_can_compare_against_the_catalog_graph() {
-        let mut project = manifold_core::project::Project::default();
-        let layer = manifold_core::layer::Layer::new_generator(
-            "Scene".into(), manifold_core::PresetTypeId::new("Scene"), 0,
-        );
-        let layer_id = layer.layer_id.clone();
-        project.timeline.layers.push(layer);
-        assert!(scene_modifier_ids(&project, &layer_id).is_some());
-    }
-
-    #[test]
-    fn selection_update_contains_only_ids_created_by_the_edit() {
-        let existing = vec![NodeId::new("existing")];
-        let current = vec![existing[0].clone(), NodeId::new("new-a"), NodeId::new("new-b")];
-        assert_eq!(
-            newly_added_modifier_ids(&existing, &current),
-            vec![NodeId::new("new-a"), NodeId::new("new-b")]
-        );
-    }
-
-    #[test]
-    fn rejected_or_noop_edits_have_no_created_ids() {
-        let existing = vec![NodeId::new("existing")];
-        assert!(newly_added_modifier_ids(&existing, &existing).is_empty());
-        assert!(newly_added_modifier_ids(&existing, &[]).is_empty());
     }
 }
 

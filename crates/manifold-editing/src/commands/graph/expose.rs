@@ -10,7 +10,6 @@ use manifold_core::project::Project;
 
 use crate::command::Command;
 
-mod modifier;
 
 use super::{
     descend_level, innermost_group_display_name, with_existing_target_graph_mut,
@@ -98,10 +97,6 @@ pub struct ToggleNodeParamExposeCommand {
 enum NodeExposeReverse {
     #[default]
     None,
-    Modifier {
-        graph: Option<EffectGraphDef>,
-        instance: super::InstanceLayerSnapshot,
-    },
     /// Captured on execute. Restored on undo.
     Captured {
         /// Previous membership of `inner_param` in the node's
@@ -322,7 +317,6 @@ impl Command for ToggleNodeParamExposeCommand {
 
     fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::execute(self, project);
             return;
         }
         let node_handle = self.node_handle.clone();
@@ -431,7 +425,6 @@ impl Command for ToggleNodeParamExposeCommand {
 
     fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::undo(self, project);
             return;
         }
         let reverse = std::mem::take(&mut self.reverse);

@@ -100,12 +100,7 @@
       ],
       "initializers": [
         {
-          "target": {
-            "scope": [
-              "object-group"
-            ],
-            "node": "amount-control"
-          },
+          "target": "amount-control",
           "param": "amount",
           "value": {
             "constant": {

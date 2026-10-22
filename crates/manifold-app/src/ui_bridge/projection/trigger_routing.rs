@@ -164,7 +164,7 @@ impl TriggerRoutingCatalog {
     ) {
         if param.spec.is_trigger_gate
             || !project.can_assign_clip_trigger_source(target, param.id(), &ClipTriggerSource::Disabled)
-            || crate::scene_modifier_edit::macro_parameter_lock_reason(project, target, param.id()).is_some()
+            || crate::graph_target::macro_parameter_lock_reason(project, target, param.id()).is_some()
         {
             return;
         }
@@ -197,9 +197,7 @@ impl TriggerRoutingCatalog {
 /// function; modifier rows keep their manifest parameter identity.
 pub(crate) fn attach_trigger_sources(configs: &mut [ParamSurface], project: &Project) {
     for config in configs {
-        let target = if let Some(modifier) = &config.modifier {
-            GraphTarget::Generator(modifier.layer_id.clone())
-        } else if let Some(layer) = &config.layer_id {
+        let target = if let Some(layer) = &config.layer_id {
             GraphTarget::Generator(layer.clone())
         } else {
             GraphTarget::Effect(config.effect_id.clone())
@@ -210,7 +208,7 @@ pub(crate) fn attach_trigger_sources(configs: &mut [ParamSurface], project: &Pro
             let Some(param) = instance.params.get(row.id.as_ref()) else { continue; };
             if param.spec.is_trigger_gate
                 || !project.can_assign_clip_trigger_source(&target, param.id(), &ClipTriggerSource::Disabled)
-                || crate::scene_modifier_edit::macro_parameter_lock_reason(project, &target, param.id()).is_some()
+                || crate::graph_target::macro_parameter_lock_reason(project, &target, param.id()).is_some()
                 || row.spec.disabled.is_some()
             { continue; }
             let source_label = source_label(project, &target, param.id(), &param.clip_trigger_source);
@@ -345,12 +343,10 @@ pub(crate) mod tests {
                 &graph,
                 recipe.as_ref(),
                 id.into(),
-                manifold_core::scene_modifier_preset::SceneNodeRef { scope: vec![], node: "scan_render".into() },
+                "scan_render".into(),
                 manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
             ).unwrap();
-            graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
-                &graph, graph.scene_modifiers.len(), modifier,
-            ).unwrap().graph;
+            graph = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&graph, modifier).unwrap();
         }
         let mut host = PresetInstance::new_generator(PresetTypeId::new("PhotoscanBaseline"));
         host.graph = Some(graph);
@@ -364,17 +360,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn duplicate_force_catalog_groups_and_cards_use_occurrence_names() {
+    fn duplicate_force_catalog_groups_use_occurrence_names() {
         let project = duplicate_force_project();
         let layer = &project.timeline.layers[0];
         let host = layer.gen_params().unwrap();
         let graph = host.graph.as_ref().unwrap();
-        let surfaces = super::super::cards::modifier_surfaces(
-            host, graph, "scene", &[], (manifold_core::Bpm(120.0), 0.0),
-        );
-        assert_eq!(surfaces.iter().map(|surface| surface.title.as_str()).collect::<Vec<_>>(),
-            vec!["Radial Force #1", "Radial Force #2"]);
-
         let catalog = TriggerRoutingCatalog::project(&project);
         for (index, modifier) in graph.scene_modifiers.iter().enumerate() {
             let (binding_id, _) = graph.preset_metadata.as_ref().unwrap().bindings.iter()

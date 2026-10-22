@@ -189,5 +189,5 @@ pub(crate) fn rgb_editable(project: &Project, target: &GraphTarget, ids: &[Param
         return false;
     };
     rgb_ids_editable(inst, ids)
-        && ids.iter().all(|id| crate::scene_modifier_edit::macro_parameter_lock_reason(project, target, id).is_none())
+        && ids.iter().all(|id| crate::graph_target::macro_parameter_lock_reason(project, target, id).is_none())
 }

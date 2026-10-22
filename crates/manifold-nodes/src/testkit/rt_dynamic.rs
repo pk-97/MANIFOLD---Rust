@@ -2,7 +2,7 @@ manifold_core::testkit_visible! {
 pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
     use manifold_core::scene_modifier_preset::{
-        SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
     };
     let mut owner: EffectGraphDef = serde_json::from_str(include_str!(
         "../../tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
@@ -18,10 +18,7 @@ pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectG
         "rt_enabled".into(),
         SerializedParamValue::Bool { value: true },
     );
-    let scene_ref = SceneNodeRef {
-        scope: Vec::new(),
-        node: scene.node_id.clone(),
-    };
+    let scene_ref = scene.node_id.clone();
     let scene_id = scene.id;
     // The structural fixture's PBR material needs a real environment when
     // rendered. Reuse the small procedural environment from the RT proofs.
@@ -68,16 +65,9 @@ pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectG
             .iter()
             .find(|node| node.type_id == "node.transform_3d")
             .unwrap();
-        let scope = vec![container.node_id.clone()];
         frames.push(SceneMeshReferenceFrame {
-            target: SceneNodeRef {
-                scope: scope.clone(),
-                node: object.node_id.clone(),
-            },
-            source: SceneNodeRef {
-                scope,
-                node: source.node_id.clone(),
-            },
+            target: object.node_id.clone(),
+            source: source.node_id.clone(),
             source_definition_hash:
                 manifold_core::scene_source_identity::scene_source_definition_hash(&owner, source)
                     .unwrap(),
@@ -110,13 +100,8 @@ pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectG
             legacy_math_view_carrier: None,
             graph: Box::new(graph),
         };
-        owner = manifold_core::scene_modifier_edit::insert_scene_modifier(
-            &owner,
-            owner.scene_modifiers.len(),
-            instance,
-        )
-        .unwrap()
-        .graph;
+        owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, instance)
+        .unwrap();
     }
     owner
 }

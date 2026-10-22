@@ -3,7 +3,7 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effect_graph_def::EffectGraphNode;
 use manifold_core::preset_type_id::PresetTypeId;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::NodeId;
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects;
@@ -16,16 +16,13 @@ pub fn stock_recipe(name: &str) -> EffectGraphDef {
         .clone()
 }
 
-pub fn render_scene(owner: &EffectGraphDef) -> SceneNodeRef {
+pub fn render_scene(owner: &EffectGraphDef) -> NodeId {
     let node = owner
         .nodes
         .iter()
         .find(|node| node.type_id == "node.render_scene")
         .unwrap_or_else(|| panic!("owner has no render_scene node"));
-    SceneNodeRef {
-        scope: Vec::new(),
-        node: node.node_id.clone(),
-    }
+    node.node_id.clone()
 }
 
 pub fn attach(
@@ -41,18 +38,13 @@ pub fn attach(
         SceneTargetSelection::AllObjects,
     )
     .unwrap_or_else(|error| panic!("{recipe_name} preparation failed: {error}"));
-    manifold_core::scene_modifier_edit::insert_scene_modifier(
-        owner,
-        owner.scene_modifiers.len(),
-        instance,
-    )
+    manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(owner, instance)
     .unwrap_or_else(|error| panic!("{recipe_name} insertion failed: {error}"))
-    .graph
 }
 
 pub fn scene_objects(
     owner: &EffectGraphDef,
-) -> Vec<manifold_core::scene_modifier_preset::SceneNodeRef> {
+) -> Vec<manifold_core::NodeId> {
     scene_modifier_objects(owner, &render_scene(owner))
         .unwrap_or_else(|error| panic!("scene object enumeration failed: {error}"))
 }

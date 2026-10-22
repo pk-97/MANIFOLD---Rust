@@ -39,18 +39,6 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.12.0".to_string());
     }
 
-    // v1.12.0 -> v1.13.0: CINEMATIC_SCENE_TAIL_DESIGN.md D3 — inject the
-    // cinematic tail (coc_from_depth → coc_dilate → bokeh_gather →
-    // motion_blur) into every 3D scene graph that predates it: timeline
-    // layer genParams.graph (the convicted missing-chain location — the
-    // renderer builds the LAYER's graph), effect/clip instance graphs, and
-    // embeddedPresets defs. Neutral lens params only; skip-loudly notes ride
-    // the migrations note sink into LoadReport::migration_notes.
-    if is_version_less_than(&version, "1.13.0") {
-        crate::migrations::scene_cinematic_tail_v1130::migrate(&mut root);
-        root["projectVersion"] = Value::String("1.13.0".to_string());
-    }
-
     // v1.13.0 -> v1.14.0: BUG-bdwd — calibrate stored CoC graphs to their
     // scene scale. `node.coc_from_depth` gained a `world_to_mm` param
     // (imported scenes stamp 1000/scene_radius); this rung carries existing

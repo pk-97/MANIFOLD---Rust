@@ -1677,12 +1677,7 @@
             "enabledParam": "enabled",
             "impulses": [
               {
-                "field": {
-                  "node": "force_impulse_gate",
-                  "scope": [
-                    "force_source_stage"
-                  ]
-                },
+                "field": "force_impulse_gate",
                 "paramId": "fire",
                 "port": "out"
               }
@@ -1739,17 +1734,11 @@
         "wires": []
       },
       "id": "rubble_blast",
-      "scene": {
-        "node": "scene",
-        "scope": []
-      },
+      "scene": "scene",
       "targets": {
         "explicit": {
           "objects": [
-            {
-              "node": "physics_demo_124",
-              "scope": []
-            }
+            "physics_demo_124"
           ]
         }
       }

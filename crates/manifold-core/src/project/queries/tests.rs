@@ -312,10 +312,7 @@ fn scene_modifier_target_reads_and_mutates_only_local_snapshot() {
     let mut host = graph_def_with_id("host", "Host");
     host.scene_modifiers.push(crate::scene_modifier_preset::SceneModifierInstanceDef {
         id: crate::NodeId::new("modifier"),
-        scene: crate::scene_modifier_preset::SceneNodeRef {
-            scope: Vec::new(),
-            node: "scene".into(),
-        },
+        scene: "scene".into(),
         targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
         mesh_frames: Vec::new(),
         legacy_math_view_carrier: None,
@@ -415,10 +412,7 @@ fn scene_modifier_target_duplicate_lookup_is_atomic() {
     let mut host = graph_def_with_id("host", "Host");
     let modifier = crate::scene_modifier_preset::SceneModifierInstanceDef {
         id: crate::NodeId::new("duplicate"),
-        scene: crate::scene_modifier_preset::SceneNodeRef {
-            scope: Vec::new(),
-            node: "scene".into(),
-        },
+        scene: "scene".into(),
         targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
         mesh_frames: Vec::new(),
         legacy_math_view_carrier: None,

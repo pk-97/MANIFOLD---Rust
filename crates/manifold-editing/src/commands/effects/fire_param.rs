@@ -307,9 +307,9 @@ mod tests {
                 }]
             },
             "sceneModifiers": [{
-                "id": "modifier", "scene": {"node": "scene"}, "targets": "allObjects",
+                "id": "modifier", "scene": "scene", "targets": "allObjects",
                 "meshFrames": [{
-                    "target": {"node": "object"}, "source": {"node": "source"},
+                    "target": "object", "source": "source",
                     "sourceDefinitionHash": "hash", "sourceOffset": [0.0, 0.0, 0.0],
                     "sceneRadius": 1.0
                 }],

@@ -476,7 +476,7 @@ mod tests {
         let mut graph = def(json!({"version": 3, "nodes": nodes,
             "wires": [wire(2, "transform", 1, INITIAL_VOLUME_PORT), wire(4, "transform", 3, INITIAL_VOLUME_PORT)]}));
         let modifier = graph.clone();
-        let force = json!({"id": "force", "scene": {"scope": [], "node": "scene"}, "targets": "allObjects", "graph": modifier});
+        let force = json!({"id": "force", "scene": "scene", "targets": "allObjects", "graph": modifier});
         graph.scene_modifiers.push(serde_json::from_value(force).expect("modifier"));
         assert!(migrate_initial_volume(&mut graph));
         let handles: BTreeSet<_> = graph.nodes.iter().filter_map(|node| node.handle.clone()).collect();

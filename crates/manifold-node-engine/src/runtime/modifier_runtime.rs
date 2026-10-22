@@ -339,7 +339,7 @@ manifold_core::testkit_visible! {
     pub fn modifier_node_copies(
         &self,
         modifier: &manifold_core::NodeId,
-        local: &manifold_core::scene_modifier_preset::SceneNodeRef,
+        local: &manifold_core::NodeId,
     ) -> Option<&[crate::load::expand::SceneModifierNodeCopy]> {
         self.modifier_preview_routes
             .iter()

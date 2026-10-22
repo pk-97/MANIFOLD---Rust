@@ -10,7 +10,6 @@
 //! `bundled_generator_presets::tests::every_bundled_preset_executes_one_frame` in the lib.
 
 use manifold_nodes as _;
-mod scene_modifier_legacy;
 mod scene_viewport_session;
 mod glb_conformance;
 

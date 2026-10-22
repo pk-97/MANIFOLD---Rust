@@ -5,7 +5,6 @@
     "crates/manifold-app/src/content_thread.rs": 2523,
     "crates/manifold-app/src/editor_bridge.rs": 2872,
     "crates/manifold-app/src/input_host.rs": 2603,
-    "crates/manifold-app/src/scene_modifier_journey.rs": 2570,
     "crates/manifold-app/src/ui_bridge/inspector.rs": 3763,
     "crates/manifold-app/src/ui_bridge/project.rs": 3418,
     "crates/manifold-app/src/ui_bridge/projection/cards.rs": 1807,

@@ -135,7 +135,7 @@ fn parse_args() -> Result<Args, String> {
 /// `def` with the bundled scene modifier `name` on every object of its one
 /// render scene, through the same preparation Add Force uses.
 fn with_modifier(def: &EffectGraphDef, name: &str, index: usize) -> EffectGraphDef {
-    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    use manifold_core::scene_modifier_preset::SceneTargetSelection;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets/scene-modifier-presets")
         .join(format!("{name}.json"));
@@ -146,7 +146,7 @@ fn with_modifier(def: &EffectGraphDef, name: &str, index: usize) -> EffectGraphD
         .iter()
         .find(|node| node.type_id == "node.render_scene")
         .expect("--add-modifier needs a top-level render scene");
-    let scene = SceneNodeRef { scope: Vec::new(), node: scene.node_id.clone() };
+    let scene = scene.node_id.clone();
     let id = manifold_core::NodeId::new(format!("render-{name}-{index}"));
     let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         def,
@@ -156,9 +156,8 @@ fn with_modifier(def: &EffectGraphDef, name: &str, index: usize) -> EffectGraphD
         SceneTargetSelection::AllObjects,
     )
     .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
-    manifold_core::scene_modifier_edit::insert_scene_modifier(def, def.scene_modifiers.len(), instance)
+    manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(def, instance)
         .unwrap_or_else(|error| panic!("{name} attaches: {error}"))
-        .graph
 }
 
 fn main() {

@@ -6,7 +6,7 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::liquid_domain_of;
 use manifold_core::scene_index::FlatSceneIndex;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
@@ -54,7 +54,7 @@ pub fn prepare_coupled_scenes(
         let mut fluids = BTreeSet::new();
         for object in index.scene_objects(&scene)? {
             if let Some(domain) = liquid_domain_of(&index, &object)? {
-                fluids.insert(domain.node.as_str().to_owned());
+                fluids.insert(domain.as_str().to_owned());
             }
         }
         let mut rigids = BTreeMap::<String, RigidImpulseTargets>::new();
@@ -136,19 +136,9 @@ pub fn prepare_coupled_scenes(
         .collect())
 }
 
-fn ambiguous(scene: &SceneNodeRef, detail: impl Into<String>) -> SceneModifierExpandError {
+fn ambiguous(scene: &NodeId, detail: impl Into<String>) -> SceneModifierExpandError {
     SceneModifierExpandError::AmbiguousScene {
-        path: scene_path(scene),
+        path: scene.to_string(),
         detail: detail.into(),
     }
-}
-
-fn scene_path(scene: &SceneNodeRef) -> String {
-    scene
-        .scope
-        .iter()
-        .map(NodeId::as_str)
-        .chain(std::iter::once(scene.node.as_str()))
-        .collect::<Vec<_>>()
-        .join("/")
 }

@@ -45,12 +45,6 @@ const KEY_CHANGE: u64 = 90_007;
 const KEY_DRAG: u64 = 90_008;
 const KEY_NAME_CLIP: u64 = 90_009;
 const KEY_TOGGLE: u64 = 90_010;
-/// SCENE_MODIFIER_FRAMEWORK section 3.7: the modifier card's remove ×
-/// (right of the collapse chevron's left neighbor — the fixed-slot card's
-/// structural inverse, dispatching `SceneModifierRemove`).
-const KEY_MODIFIER_REMOVE: u64 = 90_012;
-/// Scene modifier object-target and preview menu.
-const KEY_MODIFIER_OBJECTS: u64 = 90_015;
 
 /// D1 tab-ink slide: height of the sliding underline beneath the mod-config
 /// tab strip, inset from the tab's own bottom edge (`HAIRLINE_RADIUS`-scale —
@@ -78,7 +72,6 @@ const CORNER_RADIUS: f32 = color::CARD_RADIUS;
 const CARD_BOTTOM_MARGIN: f32 = 0.0;
 const CHEVRON_W: f32 = 18.0;
 const COG_W: f32 = 18.0;
-const OBJECTS_W: f32 = 32.0;
 /// Width of the right-edge mapping-drawer chevron lane. Rows shrink their
 /// slider by this much so the chevron sits past the D/E buttons at the row's
 /// right edge.
@@ -287,23 +280,10 @@ pub struct ParamCardPanel {
     /// per frame and re-bakes happen only on real change.
     led_band_version: u64,
 
-    // ── SCENE_MODIFIER_FRAMEWORK section 3.7: modifier-card shell ──
-    /// `Some` on a scene modifier card — stable instance identity, owning
-    /// layer, authored enabled label, and ordered-stack position. Drives
-    /// `param_target` (`GeneratorOf(owning layer)` — INV-M4/BUG-292's net),
-    /// the header differences, and the stack/remove
-    /// controls. `None` on every effect/generator card.
-    modifier: Option<crate::param_surface::ModifierCardInfo>,
-    /// Object-scoped modifier card address used by Scene Setup. This shares
-    /// the effect row renderer but deliberately has slimmer chrome: object
-    /// enable/target controls belong to the owning object card.
-    object_modifier: Option<crate::param_surface::ObjectModifierCardInfo>,
     /// The card sits under a Scene tab item header that owns its name and
     /// delete (SCENE_SURFACES D8), so its own header shows neither.
     item_hosted: bool,
     card_host: CardHost,
-    modifier_remove_btn_id: Option<NodeId>,
-    modifier_objects_btn_id: Option<NodeId>,
 
     // ── Dirty-check cache (effect badges + enabled) ──
     cached_enabled: bool,
@@ -487,12 +467,8 @@ impl ParamCardPanel {
             led_band_interior_w: 0.0,
             led_band_interior_h: 0.0,
             led_band_version: 0,
-            modifier: None,
-            object_modifier: None,
             item_hosted: false,
             card_host: CardHost::Inspector,
-            modifier_remove_btn_id: None,
-            modifier_objects_btn_id: None,
             cached_enabled: true,
             cached_has_env: false,
             cached_has_drv: false,
@@ -534,18 +510,7 @@ impl ParamCardPanel {
 
     /// The [`GraphParamTarget`] this card's per-param actions carry — the
     /// effect index for an effect card, `Generator` for a generator card.
-    /// A MODIFIER card (SCENE_MODIFIER_FRAMEWORK D4) carries
-    /// `GeneratorOf(owning layer)`: its rows are the layer's generator
-    /// manifest rows, and every write must land on the OWNING layer even when
-    /// it isn't the app's active layer (BUG-292/INV-M4's net — the same
-    /// `GeneratorOf` wire the scene panel's rows ride).
     fn param_target(&self) -> GraphParamTarget {
-        if let Some(m) = &self.modifier {
-            return GraphParamTarget::GeneratorOf(m.layer_id.clone());
-        }
-        if let Some(m) = &self.object_modifier {
-            return GraphParamTarget::GeneratorOf(m.layer_id.clone());
-        }
         match self.kind {
             ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_id.clone()),
             ParamCardKind::Generator => GraphParamTarget::Generator,
@@ -573,33 +538,12 @@ impl ParamCardPanel {
         )
     }
 
-    /// Snapshot metadata used by the app's typed scene-modifier object menu.
-    pub fn modifier_info(&self) -> Option<&crate::param_surface::ModifierCardInfo> {
-        self.modifier.as_ref()
-    }
-
     /// The card ROOT's identity key (D4): cards are siblings under the
     /// inspector column, so the root's `View::key` — which now pins the
     /// durable WidgetId — must be the card's stable identity, never a
     /// shared constant. Effect instances key on their `EffectId`; generator
     /// cards on their layer (one generator card per layer scope).
     fn identity_key(&self) -> u64 {
-        if let Some(m) = &self.modifier {
-            return crate::param_surface::stable_key(&format!(
-                "scene_modifier:{}:{}",
-                m.layer_id,
-                m.instance_id
-            ));
-        }
-        if let Some(m) = &self.object_modifier {
-            return crate::param_surface::stable_key(&format!(
-                "scene_object_modifier:{}:{}:{}:{}",
-                m.layer_id,
-                crate::panels::scene_setup_panel::ref_text(&m.object),
-                crate::panels::scene_setup_panel::ref_text(&m.owner),
-                m.node_doc_id,
-            ));
-        }
         match self.kind {
             ParamCardKind::Effect => crate::param_surface::stable_key(self.effect_id.as_str()),
             ParamCardKind::Generator => match &self.layer_id {
@@ -663,8 +607,7 @@ impl ParamCardPanel {
     /// `is_trigger_gate` ones, so this no longer filters by
     /// `info.is_trigger_gate` — a continuous/Step/Random drawer's meter now
     /// updates exactly like a trigger-gate drawer's. Keyed on
-    /// `(params owner, param_id)` — the card's own instance, or for a scene
-    /// modifier card the generator that owns its host params — via `manifold_foundation::
+    /// `(owner instance, param_id)` via `manifold_foundation::
     /// fire_meter_key_for_param` — the SAME constructor the content-thread
     /// capture uses — so `fire_level` (built at the app boundary from
     /// `ContentState::fire_meters`, a `manifold-core` type `manifold-ui`
@@ -680,7 +623,7 @@ impl ParamCardPanel {
         fire_level: &dyn Fn(u64) -> Option<f32>,
         dt: f32,
     ) {
-        let owner = self.modifier.as_ref().map_or(&self.effect_id, |m| &m.params_owner);
+        let owner = &self.effect_id;
         for (pi, cfg) in self.row_host.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             let Some(info) = self.rows.get(pi) else { continue };
@@ -1090,11 +1033,6 @@ impl ParamCardPanel {
                 || self.name_label_id == Some(node_id))
     }
 
-    #[cfg(test)]
-    pub(crate) fn card_header_node(&self) -> Option<NodeId> {
-        self.header_bg_id
-    }
-
     /// Dim/undim the card border during a reorder drag (effect kind).
     pub fn set_drag_dimmed(&self, tree: &mut UITree, dim: bool) {
         if !self.is_live() {
@@ -1231,7 +1169,6 @@ pub(super) mod tests {
             supports_envelopes: true,
             string_params: Vec::new(),
             layer_id: None,
-            modifier: None,
             rows: vec![
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("radius"),
@@ -2504,63 +2441,6 @@ pub(super) mod tests {
 
     // ── P7.1 pinning tests — public pointer entry for every row gesture.
 
-    /// BUG-3jpj (scene-modifier-card-drag-clunky): a modifier card's kind is
-    /// Effect with effect_index 0, but its rows address `GeneratorOf(owning
-    /// layer)` (param_target(), INV-M4). Every wire of a slider drag — begin,
-    /// mid-gesture moves, commit — must carry that target; a site that
-    /// re-derives the target from `self.kind` mid-gesture flips the address to
-    /// effect 0 of the active layer, the write lands nowhere, and the slider
-    /// snaps back on the next value sync.
-    #[test]
-    fn modifier_card_drag_addresses_owning_layer_for_whole_gesture() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        let mut config = effect_config();
-        config.modifier = Some(crate::param_surface::ModifierCardInfo {
-            instance_id: manifold_foundation::NodeId::new("modifier-1"),
-            layer_id: LayerId::new("layer-1"),
-            params_owner: Default::default(),
-            enabled_label: "Enabled".into(),
-            stack_index: 0,
-            stack_len: 1,
-            targets_all: true,
-            objects: Vec::new(),
-        });
-        panel.configure(&config);
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let want = GraphParamTarget::GeneratorOf(LayerId::new("layer-1"));
-
-        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
-        let track_rect = tree.get_bounds(track);
-        let mid_x = track_rect.x + track_rect.width * 0.5;
-
-        let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y), &tree);
-        assert!(
-            matches!(down.as_slice(),
-                [PanelAction::Scrub(ValueRef::Param(t1, _), ScrubPhase::Begin),
-                 PanelAction::Scrub(ValueRef::Param(t2, _), ScrubPhase::Move(..))]
-                if *t1 == want && *t2 == want),
-            "begin + first value address the owning layer: {down:?}"
-        );
-
-        let quarter_x = track_rect.x + track_rect.width * 0.25;
-        let moved = panel.handle_drag(Vec2::new(quarter_x, track_rect.y), &mut tree, false);
-        assert!(
-            matches!(moved.as_slice(),
-                [PanelAction::Scrub(ValueRef::Param(t, pid), ScrubPhase::Move(ScrubValue::Scalar(val)))]
-                if *t == want && pid.as_ref() == "radius" && (*val - 25.0).abs() < 1.0),
-            "mid-gesture moves address the owning layer: {moved:?}"
-        );
-
-        let ended = panel.handle_drag_end(&mut tree);
-        assert!(
-            matches!(ended.as_slice(),
-                [PanelAction::Scrub(ValueRef::Param(t, pid), ScrubPhase::Commit)] if *t == want && pid.as_ref() == "radius"),
-            "commit addresses the owning layer: {ended:?}"
-        );
-    }
-
     /// D8: Shift during a param drag scales the applied pointer delta by 0.1,
     /// sampled per move (not just at grab). Drags the "radius" row (0..100,
     /// whole numbers) 20 px from mid-track, coarse then fine, and asserts the
@@ -3223,152 +3103,6 @@ pub(super) mod tests {
         assert_header_order(&gen_config(), ("change", KEY_CHANGE));
     }
 
-    // ── Modifier-card chrome (SCENE_MODIFIER_FRAMEWORK section 3.7) ──
-
-    fn modifier_config() -> ParamSurface {
-        let mut c = effect_config();
-        c.title = "Scene Loop".into();
-        c.modifier = Some(crate::param_surface::ModifierCardInfo {
-            instance_id: manifold_foundation::NodeId::new("modifier-1"),
-            layer_id: manifold_foundation::LayerId::new("layer-a"),
-            params_owner: Default::default(),
-            enabled_label: "Enabled".into(),
-            stack_index: 1,
-            stack_len: 3,
-            targets_all: true,
-            objects: Vec::new(),
-        });
-        c
-    }
-
-    #[test]
-    fn modifier_header_carries_cog_navigating_to_generator_graph() {
-        // BUG-oe99: the modifier shell omitted the cog entirely. It must carry
-        // the same cog as every other card species, navigating to the layer's
-        // generator graph — the modifier's nodes live there.
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new(); // Perform context
-        panel.configure(&modifier_config());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-
-        let cog = panel.cog_btn_id.expect("modifier card builds the cog");
-        let actions = panel.handle_click(cog, &tree);
-        assert!(
-            matches!(
-                actions.as_slice(),
-                [PanelAction::Root(RootAction::OpenGraphTarget(
-                    crate::view::UiGraphTarget::SceneModifier { owner, modifier_id },
-                ))]
-                    if owner.as_ref()
-                        == &crate::view::UiGraphTarget::Generator(LayerId::new("layer-a"))
-                        && *modifier_id == manifold_foundation::NodeId::new("modifier-1")
-            ),
-            "modifier cog navigates to the generator graph, got {actions:?}"
-        );
-    }
-
-    #[test]
-    fn modifier_cards_with_same_title_keep_independent_stable_ids() {
-        let mut first = ParamCardPanel::new();
-        first.configure(&modifier_config());
-
-        let mut second_config = modifier_config();
-        second_config
-            .modifier
-            .as_mut()
-            .expect("modifier metadata")
-            .instance_id = manifold_foundation::NodeId::new("modifier-2");
-        let mut second = ParamCardPanel::new();
-        second.configure(&second_config);
-
-        assert_eq!(first.name, second.name, "the cards intentionally share a title");
-        assert_ne!(first.identity_key(), second.identity_key(), "instance IDs salt card roots");
-    }
-
-    #[test]
-    fn modifier_card_controls_use_stable_instance_id() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&modifier_config());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-
-        let remove = panel.modifier_remove_btn_id.expect("remove built");
-        let objects = panel.modifier_objects_btn_id.expect("objects built");
-        assert!(panel.drag_icon_id.is_some(), "modifier cards use the shared drag handle");
-        assert!(matches!(
-            panel.handle_click(remove, &tree).as_slice(),
-            [PanelAction::Project(crate::panels::ProjectAction::SceneModifiersRemove(layer, instances))]
-                if *layer == LayerId::new("layer-a")
-                    && *instances == vec![manifold_foundation::NodeId::new("modifier-1")]
-        ));
-        assert!(matches!(
-            panel.handle_click(objects, &tree).as_slice(),
-            [PanelAction::Root(RootAction::SceneModifierObjectsClicked(layer, instance))]
-                if *layer == LayerId::new("layer-a")
-                    && *instance == manifold_foundation::NodeId::new("modifier-1")
-        ));
-    }
-
-    #[test]
-    fn modifier_header_layout_places_shared_controls_left_of_cog() {
-        // Trailing order: chevron (rightmost), cog, remove ×, objects, toggle.
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&modifier_config());
-        let rect = Rect::new(0.0, 0.0, 280.0, 300.0);
-        panel.build(&mut tree, rect);
-
-        let inner_x = rect.x + BORDER_W;
-        let inner_w = rect.width - BORDER_W * 2.0;
-        let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
-        let cog_x = chevron_x - GAP - COG_W;
-        let remove_x = cog_x - GAP - CHEVRON_W;
-        let objects_x = remove_x - GAP - OBJECTS_W;
-        let toggle_x = objects_x - GAP - TOGGLE_W;
-        let elem_y = rect.y + BORDER_W + (HEADER_HEIGHT - 16.0) * 0.5;
-
-        let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
-        assert!((chevron.x - chevron_x).abs() < 0.01, "chevron stays rightmost: {chevron:?}");
-        assert!((chevron.y - elem_y).abs() < 0.01, "chevron y: {chevron:?}");
-        let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
-        assert!((cog.x - cog_x).abs() < 0.01, "cog left of chevron: {cog:?}");
-        assert!((cog.y - elem_y).abs() < 0.01, "cog y: {cog:?}");
-        let remove = tree
-            .get_bounds(panel.modifier_remove_btn_id.expect("remove × built"));
-        assert!((remove.x - remove_x).abs() < 0.01, "remove × left of cog: {remove:?}");
-        assert!((remove.y - elem_y).abs() < 0.01, "remove × y: {remove:?}");
-        let objects = tree.get_bounds(panel.modifier_objects_btn_id.expect("objects built"));
-        assert!((objects.x - objects_x).abs() < 0.01, "objects left of remove: {objects:?}");
-        assert!((objects.y - elem_y).abs() < 0.01, "objects y: {objects:?}");
-        let toggle = tree.get_bounds(panel.toggle_btn_id.expect("modifier toggle built"));
-        assert!((toggle.x - toggle_x).abs() < 0.01, "toggle left of objects: {toggle:?}");
-        assert!((toggle.y - elem_y).abs() < 0.01, "toggle y: {toggle:?}");
-    }
-
-    #[test]
-    fn semantic_modifier_enable_uses_labeled_body_row_instead_of_tiny_header() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        let mut config = effect_config();
-        config.rows[0].spec.name = "Camera Travel".into();
-        config.rows[0].spec.is_toggle = true;
-        config.modifier = Some(crate::param_surface::ModifierCardInfo {
-            instance_id: manifold_foundation::NodeId::new("modifier-camera"),
-            layer_id: manifold_foundation::LayerId::new("layer-camera"),
-            params_owner: Default::default(),
-            enabled_label: "Camera Travel".into(),
-            stack_index: 0,
-            stack_len: 1,
-            targets_all: true,
-            objects: Vec::new(),
-        });
-        panel.configure(&config);
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-
-        assert!(panel.toggle_btn_id.is_none(), "semantic labels do not get clipped in header chrome");
-        assert!(panel.row_host.toggle_ids[0].is_some(), "Camera Travel remains an ordinary labeled toggle row");
-    }
-
     #[test]
     fn param_label_column_aligns_to_section_inset() {
         // section 14.2 rule 1 / section 14.5 C — one inset. The effect card and generator card
@@ -3427,7 +3161,6 @@ pub(super) mod tests {
             supports_envelopes: true,
             has_graph_mod: false,
             layer_id: None,
-            modifier: None,
             rows: vec![
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("speed"),

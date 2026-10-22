@@ -67,7 +67,6 @@ fn scene_card(editable: bool) -> (ParamCardPanel, UITree) {
         supports_envelopes: true,
         has_graph_mod: false,
         layer_id: None,
-        modifier: None,
         rows,
         string_params: vec![],
         audio_sends: Vec::new(),

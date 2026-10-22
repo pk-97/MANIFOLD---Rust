@@ -8,7 +8,7 @@ use std::path::Path;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_core::scene_modifier_preset::{
-    SceneNodeRef, SceneTargetSelection, validate_scene_modifier_schema,
+    SceneTargetSelection, validate_scene_modifier_schema,
 };
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -48,10 +48,7 @@ pub fn qualify_scene_modifier(
         (
             &shatter_host,
             SceneTargetSelection::Explicit {
-                objects: vec![SceneNodeRef {
-                    scope: Vec::new(),
-                    node: NodeId::new("physics_demo_114"),
-                }],
+                objects: vec![NodeId::new("physics_demo_114")],
             },
         )
     } else {
@@ -66,20 +63,12 @@ pub fn qualify_scene_modifier(
         host,
         recipe,
         format!("check:{label}").into(),
-        SceneNodeRef {
-            scope: Vec::new(),
-            node: scene_node.node_id.clone(),
-        },
+        scene_node.node_id.clone(),
         targets,
     )
     .map_err(|error| error.to_string())?;
-    let candidate = manifold_core::scene_modifier_edit::insert_scene_modifier(
-        host,
-        host.scene_modifiers.len(),
-        instance,
-    )
-    .map_err(|error| error.to_string())?;
-    prepare_scene_modifiers(&candidate.graph, registry).map_err(|error| error.to_string())?;
+    let candidate = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(host, instance)?;
+    prepare_scene_modifiers(&candidate, registry).map_err(|error| error.to_string())?;
     Ok(())
 }
 

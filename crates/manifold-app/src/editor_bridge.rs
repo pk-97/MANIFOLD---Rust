@@ -495,12 +495,8 @@ fn modifier_preview_selection(
     snap: &manifold_ui::graph_view::GraphSnapshot,
     canvas_scope: &[u32],
     selected: Option<u32>,
-) -> (Option<manifold_core::NodeId>, Vec<manifold_core::NodeId>) {
-    let fallback = stable_scope_path(snap, canvas_scope).unwrap_or_default();
-    let Some(selected) = selected else { return (None, fallback); };
-    resolve_preview_target_with_scope(snap, canvas_scope, selected)
-        .map(|(node, scope)| (Some(node), scope))
-        .unwrap_or((None, fallback))
+) -> Option<manifold_core::NodeId> {
+    resolve_preview_target_with_scope(snap, canvas_scope, selected?).map(|(node, _)| node)
 }
 
 /// Resolve an on-canvas param row `(node_id, inner_param)` to the
@@ -681,6 +677,20 @@ pub(crate) fn watch_editor_graph(
 ) -> bool {
     if target.host_target().is_none() {
         return false;
+    }
+    if scene_graph_refusal(project, target).is_some() {
+        if watched.take().is_none() {
+            return false;
+        }
+        *catalog_default = None;
+        mapping.close();
+        if let Some(canvas) = canvas {
+            canvas.close_mapping_popover();
+        }
+        if let Some(tx) = content_tx {
+            ContentCommand::send(tx, ContentCommand::WatchGraphTarget(None));
+        }
+        return true;
     }
     if watched.as_ref() != Some(target) {
         mapping.close();
@@ -1301,6 +1311,7 @@ impl Application {
     }
 
     pub(crate) fn watch_graph_target(&mut self, target: manifold_core::GraphTarget) {
+        self.graph_editor_refusal = scene_graph_refusal(&self.local_project, &target);
         if !watch_editor_graph(
             &self.local_project,
             &target,
@@ -1311,9 +1322,6 @@ impl Application {
             self.content_tx.as_ref(),
         ) {
             return;
-        }
-        if self.modifier_preview_object.as_ref().is_some_and(|(owner, _)| owner != &target) {
-            self.modifier_preview_object = None;
         }
         self.editor_graph.catalog_default_changed();
         // The content thread clears both preview requests when the watched
@@ -1432,9 +1440,6 @@ impl Application {
             self.watched_graph_target.as_ref(),
             Some(manifold_core::GraphTarget::SceneModifier { .. })
         );
-        let preview_object = self.modifier_preview_object.as_ref()
-            .filter(|(target, _)| Some(target) == self.watched_graph_target.as_ref())
-            .map(|(_, object)| object.clone());
         let (preview_node, modifier_context) = match (self.graph_canvas.as_ref(), editor_ui_snap.as_ref()) {
             (Some(canvas), Some(snap)) if scene_modifier_watched => {
                 let selected = canvas.selected_node_id();
@@ -1449,9 +1454,9 @@ impl Application {
                 if unchanged {
                     (self.last_preview_node.clone(), None)
                 } else {
-                    let (node, scope) = modifier_preview_selection(snap, canvas_scope, selected);
+                    let node = modifier_preview_selection(snap, canvas_scope, selected);
                     self.last_modifier_preview_selection = Some((snap.clone(), canvas_scope.to_vec(), selected));
-                    (node, Some((scope, preview_object)))
+                    (node, Some(None))
                 }
             }
             (Some(canvas), Some(snap)) => (
@@ -1462,7 +1467,7 @@ impl Application {
             ),
             _ if scene_modifier_watched => {
                 self.last_modifier_preview_selection = None;
-                (None, Some((Vec::new(), None)))
+                (None, Some(None))
             }
             _ => {
                 self.last_modifier_preview_selection = None;
@@ -1482,8 +1487,7 @@ impl Application {
         }
         if let Some(context) = modifier_context
             && self.last_modifier_preview_context.as_ref() != Some(&context) {
-                let (scope, object) = context.clone();
-                self.send_content_cmd(ContentCommand::SetModifierPreviewContext { scope, object });
+                self.send_content_cmd(ContentCommand::SetModifierPreviewContext { object: context.clone() });
                 self.last_modifier_preview_context = Some(context);
         }
 
@@ -2218,21 +2222,14 @@ mod preview_target_tests {
         // lives at the parent scope rather than inside the canvas scope.
         let resolved = resolve_preview_target(&s, &[5], 2).unwrap();
         assert_eq!(resolved, NodeId::new("grp"));
-        assert_eq!(modifier_preview_selection(&s, &[5], Some(2)), (Some(resolved), Vec::<NodeId>::new()));
-        // A normal inner node retains the enclosing stable group path.
-        assert_eq!(
-            modifier_preview_selection(&s, &[5], Some(1)),
-            (Some(NodeId::new("inner")), vec![NodeId::new("grp")])
-        );
+        assert_eq!(modifier_preview_selection(&s, &[5], Some(2)), Some(resolved));
+        assert_eq!(modifier_preview_selection(&s, &[5], Some(1)), Some(NodeId::new("inner")));
 
         let mut sibling = group_container();
         sibling.id = 6;
         sibling.node_id = NodeId::new("sibling");
         let siblings = snap(vec![group_container(), sibling], vec![]);
-        assert_eq!(
-            modifier_preview_selection(&siblings, &[6], Some(1)),
-            (Some(NodeId::new("inner")), vec![NodeId::new("sibling")])
-        );
+        assert_eq!(modifier_preview_selection(&siblings, &[6], Some(1)), Some(NodeId::new("inner")));
     }
 }
 
@@ -2258,7 +2255,7 @@ mod binding_reroute_tests {
     };
     use manifold_core::macro_bank::MacroCurve;
     use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        SceneModifierInstanceDef, SceneTargetSelection,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2513,7 +2510,7 @@ mod binding_reroute_tests {
         };
         host.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("modifier"),
-            scene: SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
@@ -2838,4 +2835,22 @@ fn annotate_preparation_controls(
             annotate_preparation_controls(&mut group.nodes, local);
         }
     }
+}
+
+/// Why the graph editor will not show `target`. Only the scene compiler
+/// writes a scene layer's graph (one writer per graph), so the editor never
+/// opens it or a modifier inside it; effects on the layer still open.
+pub(crate) fn scene_graph_refusal(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+) -> Option<&'static str> {
+    let manifold_core::GraphTarget::Generator(layer_id) = target.host_target()? else {
+        return None;
+    };
+    project
+        .timeline
+        .find_layer_by_id(layer_id)
+        .and_then(|(_, layer)| layer.gen_params())
+        .is_some_and(|host| host.scene.is_some())
+        .then_some("Scene layers are built from the Scene panel, so the graph editor can't open them.")
 }

@@ -25,7 +25,6 @@ impl AppInputHost<'_> {
                 }
                 self.ui_root.scene_item_clipboard = Some(SceneItemClipboard { layer, items: selected });
                 self.ui_root.effect_clipboard.clear();
-                self.ui_root.scene_modifier_clipboard = None;
                 if matches!(action, CardEditAction::Cut) {
                     self.ui_root.scene_setup_panel.remove_selection_action()
                 } else {

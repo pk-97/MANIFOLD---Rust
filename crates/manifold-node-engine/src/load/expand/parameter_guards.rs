@@ -33,7 +33,7 @@ impl PreparedModifierParameterGuards {
                 modifier
                     .mesh_frames
                     .iter()
-                    .map(|frame| frame.source.node.as_str())
+                    .map(|frame| frame.source.as_str())
             })
             .collect();
         let mut sources = Vec::with_capacity(ids.len());
@@ -73,7 +73,7 @@ impl PreparedModifierParameterGuards {
                         })
                     })
             })
-            .map(|modifier| modifier.scene.node.clone())
+            .map(|modifier| modifier.scene.clone())
             .collect();
         // Legacy v2 graphs have no scene-modifier metadata. Their fragment
         // stages survive inside flattened groups, so discover every render

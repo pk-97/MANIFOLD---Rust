@@ -18,14 +18,13 @@ use crate::ui_root::UIRoot;
 
 use super::cards::{
     OscScope, SurfaceVisibility, attach_project_sources, audio_send_choices, effects_to_surfaces,
-    gen_params_to_surface, modifier_surfaces, scene_card_folds,
+    gen_params_to_surface, scene_card_folds,
 };
 
 fn mark_selected_automation_row(surface: &mut ParamSurface, layer_id: &manifold_core::LayerId, target: &UiGraphTarget, param_id: &manifold_core::effects::ParamId) {
-    let surface_target = match (surface.kind, surface.modifier.is_some()) {
-        (manifold_ui::panels::param_card::ParamCardKind::Effect, false) => UiGraphTarget::Effect(surface.effect_id.clone()),
-        (manifold_ui::panels::param_card::ParamCardKind::Effect, true)
-        | (manifold_ui::panels::param_card::ParamCardKind::Generator, _) => {
+    let surface_target = match surface.kind {
+        manifold_ui::panels::param_card::ParamCardKind::Effect => UiGraphTarget::Effect(surface.effect_id.clone()),
+        manifold_ui::panels::param_card::ParamCardKind::Generator => {
             UiGraphTarget::Generator(layer_id.clone())
         }
     };
@@ -292,52 +291,10 @@ pub fn sync_inspector_data(
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
             ui.inspector.set_gen_scene_sections(scene_folds.as_deref());
-
-            // Stable instances own cards; the catalog supplies the picker.
-            {
-                let modifier_region = (|| {
-                    let def = layer
-                        .generator_graph()
-                        .cloned()
-                        .or_else(|| {
-                            manifold_nodes::bundled_presets::bundled_preset_def(
-                                &layer.generator_type().clone(),
-                            ).map(|def| (*def).clone())
-                        })?;
-                    // Only a graph with a scene root takes modifiers.
-                    if super::cards::scene_roots(&def).is_empty() {
-                        return None;
-                    }
-                    let gp = layer.gen_params()?;
-                    // The picker's model rides the same configure call — one
-                    // entry per registry kind, applicability read off the
-                    // SAME def (the UI never reads the graph).
-                    let picker = super::cards::modifier_picker_entries(&def);
-                    let mut surfaces = modifier_surfaces(gp, &def, lid, automation_latched, driver_timing);
-                    surfaces.retain(|surface| !super::cards::is_force_surface(surface, &def));
-                    attach_project_sources(&mut surfaces, project);
-                    if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
-                        for surface in &mut surfaces { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
-                    }
-                    Some((surfaces, picker))
-                })();
-                match modifier_region {
-                    Some((surfaces, picker)) => ui.inspector.configure_modifier_cards(
-                        &surfaces,
-                        Some(&layer.layer_id),
-                        true,
-                        picker,
-                    ),
-                    None => {
-                        ui.inspector.configure_modifier_cards(&[], None, false, Vec::new())
-                    }
-                }
-            }
         } else {
             ui.inspector.configure_layer_effects(&[], None);
             ui.inspector.configure_rack_groups(manifold_ui::InspectorTab::Layer, &[]);
             ui.inspector.configure_gen_params(None, None);
-            ui.inspector.configure_modifier_cards(&[], None, false, Vec::new());
             ui.inspector
                 .audio_trigger_section_mut()
                 .configure(None, &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default());
@@ -346,7 +303,6 @@ pub fn sync_inspector_data(
         ui.inspector.configure_layer_effects(&[], None);
         ui.inspector.configure_rack_groups(manifold_ui::InspectorTab::Layer, &[]);
         ui.inspector.configure_gen_params(None, None);
-        ui.inspector.configure_modifier_cards(&[], None, false, Vec::new());
         ui.inspector
             .audio_trigger_section_mut()
             .configure(None, &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default());

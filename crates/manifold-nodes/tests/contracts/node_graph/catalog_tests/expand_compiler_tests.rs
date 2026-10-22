@@ -1,4 +1,4 @@
-use manifold_core::scene_modifier_preset::{SceneStageScope, SceneEndpoint, SceneModifierInstanceDef, SceneNodeRef};
+use manifold_core::scene_modifier_preset::{SceneStageScope, SceneEndpoint, SceneModifierInstanceDef};
 use manifold_node_engine::load::expand::PreparedSceneModifierGraph;
 use std::collections::BTreeSet;
 use manifold_node_engine::load::expand::*;
@@ -62,10 +62,7 @@ pub(super) fn fixture() -> EffectGraphDef {
     owner.version = 3;
     owner.scene_modifiers.push(SceneModifierInstanceDef {
         id: NodeId::new("test_modifier"),
-        scene: SceneNodeRef {
-            scope: vec![],
-            node: NodeId::new("scan_render"),
-        },
+        scene: NodeId::new("scan_render"),
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: vec![],
         legacy_math_view_carrier: None,
@@ -216,10 +213,7 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
         )
         .unwrap();
         assert!(runtime.graph.modifier_buffer_budget().is_some());
-        let local = SceneNodeRef {
-            scope: vec![NodeId::new("elastic_stage")],
-            node: NodeId::new("shear_x"),
-        };
+        let local = NodeId::new("shear_x");
         let copies = runtime
             .modifier_node_copies(&owner.scene_modifiers[0].id, &local)
             .unwrap()
@@ -232,7 +226,7 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
             .unwrap()
             .nodes
             .iter_mut()
-            .find(|node| node.node_id == local.node)
+            .find(|node| node.node_id == *local)
             .unwrap()
             .params
             .insert(
@@ -296,7 +290,7 @@ fn scene_modifier_expand_runtime_accepts_ray_tracing_enabled_by_live_manifest() 
     binding.default_value = 0.0;
     binding.convert = manifold_core::effects::ParamConvert::BoolThreshold;
     binding.target = BindingTarget::Node {
-        node_id: owner.scene_modifiers[0].scene.node.clone(),
+        node_id: owner.scene_modifiers[0].scene.clone(),
         param: "rt_enabled".into(),
     };
     owner
@@ -341,7 +335,7 @@ fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
     let route = prepared
         .routes
         .iter()
-        .find(|route| route.local.node.as_str() == "shear_x")
+        .find(|route| route.local.as_str() == "shear_x")
         .unwrap();
     assert_eq!(route.copies.len(), 2);
     let mut graph = prepared.def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
@@ -496,7 +490,7 @@ fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
     let route = prepared
         .routes
         .iter()
-        .find(|route| route.local.node.as_str() == "shear_x")
+        .find(|route| route.local.as_str() == "shear_x")
         .unwrap();
     for copy in &route.copies {
         for (param, value) in [("amplitude", 0.41), ("axis", 1.0)] {
@@ -863,7 +857,7 @@ fn object_vertices_source(
         .nodes
         .iter()
         // Prepared parents flatten groups; object ids are unique in the fixture.
-        .find(|node| node.type_id == "node.scene_object" && node.node_id == target.node)
+        .find(|node| node.type_id == "node.scene_object" && node.node_id == *target)
         .expect("scene object for frame")
         .id;
     diagram_input_source(prepared, object, "vertices").expect("object vertices wire")
@@ -936,7 +930,7 @@ fn scene_modifier_math_view_builds_in_the_parent_graph_with_stable_identities() 
         .def
         .nodes
         .iter()
-        .find(|node| node.node_id == modifier.scene.node)
+        .find(|node| node.node_id == modifier.scene)
         .unwrap()
         .id;
     for diagram in math_diagrams(&prepared) {
@@ -997,16 +991,13 @@ fn scene_modifier_math_view_reads_the_real_mesh_at_its_position_without_rerunnin
     // object draws), reference is the object's real mesh wire at chain start.
     // The preceding chain is not evaluated a second time: the patch stage
     // count matches the same chain without the view.
-    let mut owner = math_view_fixture();
+    let owner = math_view_fixture();
     let mut vortex_b = owner.scene_modifiers[0].clone();
     vortex_b.id = NodeId::new("vortex_b");
+    let mut owner =
+        manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, vortex_b).unwrap();
+    let vortex_b = owner.scene_modifiers.pop().unwrap();
     owner.scene_modifiers.insert(1, vortex_b);
-    let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-        &owner,
-        &NodeId::new("vortex_b"),
-    )
-    .unwrap()
-    .graph;
     let prepared = prepare_parent(&owner);
     let plain = prepare_parent(&crate::contracts::node_graph::catalog_tests::math_view_fixtures::without_view(&owner));
     assert_eq!(
@@ -1095,14 +1086,14 @@ fn scene_modifier_math_view_captures_preceding_instance_echoes() {
 fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
     // A post-view modifier that writes Camera (SceneLoop's lens stage) still
     // frames the diagram; its instance copies are post-view and stay out.
-    let mut owner = math_view_fixture();
+    let owner = math_view_fixture();
     let loop_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/scene-modifier-presets/SceneLoop.json"
     )))
     .unwrap();
     let scene = owner.scene_modifiers[1].scene.clone();
-    owner.scene_modifiers.push(SceneModifierInstanceDef {
+    let owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, SceneModifierInstanceDef {
         id: NodeId::new("scene_loop"),
         scene,
         targets: SceneTargetSelection::AllObjects,
@@ -1111,13 +1102,8 @@ fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
         mesh_frames: Vec::new(),
         legacy_math_view_carrier: None,
         graph: Box::new(loop_recipe),
-    });
-    let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-        &owner,
-        &NodeId::new("scene_loop"),
-    )
-    .unwrap()
-    .graph;
+    })
+    .unwrap();
     let prepared = prepare_parent(&owner);
     let plain = prepare_parent(&math_view_fixture());
     let diagram = math_diagrams(&prepared)[0];

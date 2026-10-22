@@ -1,5 +1,4 @@
 mod audit;
-mod scene_transaction;
 pub mod binding_transfer;
 pub mod clipboard;
 pub mod command;
