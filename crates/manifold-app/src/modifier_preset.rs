@@ -240,6 +240,7 @@ mod tests {
             source_definition_hash: "mesh-hash".into(),
             source_offset: [1.0, 2.0, 3.0],
             scene_radius: 4.0,
+            live_offset: None,
         };
         EffectGraphDef {
             version: 3,

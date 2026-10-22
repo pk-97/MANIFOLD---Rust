@@ -11,7 +11,7 @@
 // (the output vertex count). A source triangle past `in_len` writes a zero
 // vertex.
 fn body(idx: u32, count: u32, level: i32, in_len: u32) -> Element {
-    let lv = u32(clamp(level, 0, 5));
+    let lv = u32(clamp(level, 0, 8));
     let per = 1u << (2u * lv);
     let tri = idx / 3u;
     let corner = idx % 3u;

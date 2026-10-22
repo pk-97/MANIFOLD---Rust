@@ -365,6 +365,7 @@ mod scene_card_convergence_tests {
                     source_definition_hash: "hash".into(),
                     source_offset: [0.0; 3],
                     scene_radius: 1.0,
+                    live_offset: None,
                 }],
                 legacy_math_view_carrier: None,
                 graph: Box::new(graph.clone()),

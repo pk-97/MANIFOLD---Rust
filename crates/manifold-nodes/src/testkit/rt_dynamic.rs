@@ -78,6 +78,7 @@ pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectG
                 }
             }),
             scene_radius: 3.0,
+            live_offset: None,
         });
     }
     for (id, json) in [
