@@ -385,6 +385,22 @@ impl Camera {
         );
     }
 
+    /// Move the camera along its own axes, then turn it about them: a
+    /// handheld wobble about where the camera stands. `offset` is (right, up,
+    /// back), the camera's local X, Y and Z; `turn` is (pitch, yaw, roll) in
+    /// radians, as [`Self::rotate_local`] applies them. Zero offset and turn
+    /// leave the camera exactly as it was.
+    pub fn nudge_local(&mut self, offset: [f32; 3], turn: [f32; 3]) {
+        if offset != [0.0; 3] {
+            for axis in 0..3 {
+                self.pos[axis] += self.right[axis] * offset[0] + self.up[axis] * offset[1] - self.fwd[axis] * offset[2];
+            }
+            let target = [self.pos[0] + self.fwd[0], self.pos[1] + self.fwd[1], self.pos[2] + self.fwd[2]];
+            self.view = look_at_rh(self.pos, target, self.up);
+        }
+        self.rotate_local(turn[1], turn[0], turn[2]);
+    }
+
     /// Reversed-Z projection: near maps to 1, far/background to 0.
     /// Projection matrix for the given consumer-supplied aspect ratio
     /// (`width / height` of the consumer's render target). Aspect lives here

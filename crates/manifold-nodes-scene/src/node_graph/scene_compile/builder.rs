@@ -43,7 +43,7 @@ pub(crate) struct Builder<'d> {
     /// camera emitter built, or what the Environment put after it. `None`
     /// sends the render straight out.
     pub(crate) tail: Option<u32>,
-    /// The active camera's lens, for what draws behind the scene.
+    /// The cut's camera (the camera switch), for what draws behind the scene.
     pub(crate) active_lens: Option<u32>,
     /// Each Material's texture sources and the `node.scene_object` port
     /// each feeds, by material id.
@@ -168,10 +168,13 @@ impl<'d> Builder<'d> {
         let Some(target) = self.node_mut(to) else {
             return;
         };
-        if let Some(value) = source.1 {
-            target.params.insert(to_param.to_owned(), value);
-        }
         let target_id = target.node_id.clone();
+        let target_type = target.type_id.clone();
+        if let Some(value) = source.1 {
+            self.set_number(to, to_param, number(&value));
+        }
+        // The target converts the row's number as its own param is typed.
+        let convert = self.param_meta(&target_type, to_param).map(|meta| meta.convert);
         let followed: Vec<BindingDef> = self
             .bindings
             .iter()
@@ -179,10 +182,26 @@ impl<'d> Builder<'d> {
             .map(|binding| {
                 let mut binding = binding.clone();
                 binding.target = BindingTarget::Node { node_id: target_id.clone(), param: to_param.to_owned() };
+                if let Some(convert) = convert {
+                    binding.convert = convert;
+                }
                 binding
             })
             .collect();
         self.bindings.extend(followed);
+    }
+
+    /// Make the card param `id` a pick among `labels`, by index.
+    pub(crate) fn choices(&mut self, id: &str, labels: Vec<String>) {
+        let Some(spec) = self.params.iter_mut().find(|spec| spec.id == id) else {
+            return;
+        };
+        let last = labels.len().saturating_sub(1) as f32;
+        spec.min = 0.0;
+        spec.max = last;
+        spec.whole_numbers = true;
+        spec.default_value = spec.default_value.clamp(0.0, last);
+        spec.value_labels = labels;
     }
 
     pub(crate) fn id(&self, owner: &str, role: &'static str) -> Option<u32> {

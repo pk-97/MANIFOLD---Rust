@@ -3621,7 +3621,8 @@
       "aliases": [
         "camera switch",
         "camera mux",
-        "mux camera"
+        "mux camera",
+        "camera cut"
       ],
       "category": "3D Geometry",
       "examples": [],
@@ -3650,17 +3651,57 @@
           "default": "0",
           "enum_values": [
             "A",
-            "B"
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "N",
+            "O",
+            "P",
+            "Q",
+            "R",
+            "S",
+            "T",
+            "U",
+            "V",
+            "W",
+            "X",
+            "Y",
+            "Z",
+            "AA",
+            "AB",
+            "AC",
+            "AD",
+            "AE",
+            "AF"
           ],
           "label": "Select",
           "name": "select",
           "type": "enum"
+        },
+        {
+          "default": "2",
+          "label": "Input Count",
+          "name": "num_inputs",
+          "range": [
+            "1",
+            "32"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Select between two Camera inputs with an enum select: A passes `a`, B passes `b`. An unwired input falls back to the other, so a single producer on either side still reaches `out`. Camera-path scene modifiers mint one between the previous camera producer and the lens — the modifier's enable toggle is a param write on `select` (D5 Switch), never a structural edit. CPU-only; Camera is a value type (like loop_camera's outputs).",
+      "purpose": "Dynamic N-way Camera selector. `num_inputs` sets how many Camera ports exist (a, b, c, …) and the `select` enum forwards the matching input; an unwired pick falls back to the first wired input. With `select` as a param the unpicked cameras are pruned. A scene's live camera cut is one of these with every camera's lens wired in, so a cut is a param write, never a rebuild; camera-path scene modifiers mint the two-input form.",
       "role": "Source",
       "stratum": "driver",
-      "summary": "Switches between two cameras. Scene modifiers use it so toggling the modifier on and off never rebuilds the graph.",
+      "summary": "Picks which of several cameras is shown. Switching is live and never rebuilds the graph, so a camera cut lands on the frame it is asked for.",
       "type_id": "node.camera_switch"
     },
     {
@@ -46602,8 +46643,13 @@
       "inputs": [
         {
           "name": "transform",
-          "required": true,
+          "required": false,
           "type": "Transform"
+        },
+        {
+          "name": "camera",
+          "required": false,
+          "type": "Camera"
         },
         {
           "name": "amount",
@@ -46612,6 +46658,16 @@
         },
         {
           "name": "frequency",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "position_strength",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "rotation_strength",
           "required": false,
           "type": "f32"
         },
@@ -46626,6 +46682,10 @@
         {
           "name": "out",
           "type": "Transform"
+        },
+        {
+          "name": "camera_out",
+          "type": "Camera"
         }
       ],
       "params": [
@@ -46650,16 +46710,36 @@
           "type": "float"
         },
         {
+          "default": "0.25",
+          "label": "Position Strength",
+          "name": "position_strength",
+          "range": [
+            "0",
+            "4"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Rotation Strength",
+          "name": "rotation_strength",
+          "range": [
+            "0",
+            "4"
+          ],
+          "type": "float"
+        },
+        {
           "default": "0",
           "label": "Time",
           "name": "time",
           "type": "float"
         }
       ],
-      "purpose": "Stateless camera/object shake on a Transform wire. Adds a summed-sine noise offset (rotational dominant, positional at 0.25 ratio) driven by time × frequency. amount² response means amount = 0 is a byte-identical passthrough.",
+      "purpose": "Stateless shake on a Transform wire, a Camera wire, or both. Adds a summed-sine noise offset (rotation and position each scaled by their own strength) driven by time × frequency. A Camera shakes in its own axes about its own position (camera_out), as a handheld camera does; a Transform's offset adds to its position and Euler rotation (out). amount² response means amount = 0 is a byte-identical passthrough.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Stateless shake on a Transform wire — rotational jitter dominant, positional at a quarter ratio, driven by time and frequency.",
+      "summary": "Stateless shake on a Transform wire: position and rotation jitter, each with its own strength, driven by time and frequency.",
       "type_id": "node.transform_shake"
     },
     {

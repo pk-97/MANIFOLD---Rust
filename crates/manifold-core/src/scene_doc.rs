@@ -528,15 +528,17 @@ pub struct WorldFields {
     /// Ambient occlusion adds the screen-space contact shadow pass; on in the
     /// base scene.
     pub ambient_occlusion: bool,
-    /// The scene's default active camera; the first camera when unset.
-    pub active_camera: Option<ItemId>,
 }
 
 impl Default for WorldFields {
     fn default() -> Self {
-        Self { fog: false, ambient_occlusion: true, active_camera: None }
+        Self { fog: false, ambient_occlusion: true }
     }
 }
+
+/// The World's Camera row: the live cut, the index of the rendering camera
+/// in [`SceneDoc::cameras`] order (ruling 11).
+pub const CAMERA_PICK: &str = "camera";
 
 /// A live property's param id: `<item id>.<property>` (ruling 7). Renaming
 /// or reparenting an item never changes it.

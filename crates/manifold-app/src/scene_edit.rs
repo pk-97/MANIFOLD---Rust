@@ -413,21 +413,14 @@ pub(crate) fn aim_sun_at_hdri(project: &Project, layer: &LayerId, file: &str) ->
     Ok(batch(writes, "Aim Sun at HDRI", None))
 }
 
-/// The scene's camera: the World's active camera, else the first Camera.
-fn camera_of(doc: &SceneDoc) -> Option<(ItemId, CameraFields)> {
-    let active = doc.world().and_then(|world| match &world.fields {
-        ItemFields::World(fields) => fields.active_camera.clone(),
+/// The camera the World's Camera row shows.
+fn camera_of(doc: &SceneDoc, inst: &PresetInstance) -> Option<(ItemId, CameraFields)> {
+    let pick = doc.camera_pick_param().filter(|id| inst.params.contains(id)).map_or(0.0, |id| inst.get_base_param(&id));
+    let camera = doc.picked_camera(pick)?;
+    match &doc.find(camera)?.fields {
+        ItemFields::Camera(fields) => Some((camera.clone(), fields.clone())),
         _ => None,
-    });
-    let mut found = None;
-    doc.walk(|item, _| {
-        if let ItemFields::Camera(camera) = &item.fields
-            && (found.is_none() || active.as_ref() == Some(&item.id))
-        {
-            found = Some((item.id.clone(), camera.clone()));
-        }
-    });
-    found
+    }
 }
 
 /// Each item's world origin, as the viewport gizmos place it.
@@ -442,7 +435,7 @@ fn item_origins(doc: &SceneDoc, inst: &PresetInstance) -> impl Fn(&ItemId) -> Op
 pub(crate) fn frame(project: &Project, layer: &LayerId, item: &ItemId) -> Result<SceneEdit, String> {
     let doc = doc(project, layer)?;
     let inst = instance(project, layer).ok_or("There is no scene to frame")?;
-    let (camera, fields) = camera_of(doc).ok_or("This scene has no camera")?;
+    let (camera, fields) = camera_of(doc, inst).ok_or("This scene has no camera")?;
     let origin_of = item_origins(doc, inst);
     let at = origin_of(item).ok_or("This item has no position to frame")?;
     // A Look At camera tracking an item aims at its origin plus Target X/Y/Z.

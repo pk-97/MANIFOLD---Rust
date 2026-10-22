@@ -1,15 +1,16 @@
-//! World: physics (`node.physics_world`, emitted once an item has physics),
-//! fog (`node.atmosphere`, when the fog field is on), the render mode
-//! (`node.render_mode`), ambient occlusion (`node.ssao_gtao` and its blur,
-//! when the ambient occlusion field is on) and the rest of the render
-//! settings (the scene's `node.render_scene`).
+//! World: the live camera cut (`node.camera_switch` and the image switch
+//! after the cameras' tails), physics (`node.physics_world`, emitted once an
+//! item has physics), fog (`node.atmosphere`, when the fog field is on), the
+//! render mode (`node.render_mode`), ambient occlusion (`node.ssao_gtao` and
+//! its blur, when the ambient occlusion field is on) and the rest of the
+//! render settings (the scene's `node.render_scene`).
 
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Modes, RgbChannel, Unit};
 
-use super::fields::{FieldControl, FieldRow, FieldValue, enabled, is_camera, is_on, on_off, parse_on, always, wrong_value};
+use super::fields::{FieldRow, enabled, is_on, on_off, parse_on, always, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
-use crate::scene_doc::ItemFields;
+use crate::scene_doc::{CAMERA_PICK, ItemFields};
 
 const PHYSICS: Reach = Reach::Own("physics");
 const FOG: Reach = Reach::Own("fog");
@@ -20,7 +21,11 @@ const AO_BLUR_H: Reach = Reach::Own("ao_blur_h");
 const AO_BLUR_V: Reach = Reach::Own("ao_blur_v");
 const AO_MULTIPLY: Reach = Reach::Own("ao_multiply");
 const AO_MASK: Reach = Reach::Own("ao_mask");
-use ControlGroup::{AmbientOcclusion, Fog, PhysicsWorld, RayTracing, RenderMode, Shading};
+/// The camera switch every camera's lens feeds, and the image switch that
+/// picks the same camera's depth of field and motion blur.
+const CUT: Reach = Reach::Own("camera_switch");
+const CUT_IMAGE: Reach = Reach::Own("camera_cut");
+use ControlGroup::{AmbientOcclusion, Camera, Fog, PhysicsWorld, RayTracing, RenderMode, Shading};
 
 /// The solver runs at 0 to 4 times real time. The row clamps to that, so a
 /// mapped or typed Speed never reaches the solver out of range.
@@ -49,7 +54,13 @@ const fn look(property: &'static str, reach: Reach, section: ControlGroup, order
     row(property, reach, section, perform(CardBand::Look, order))
 }
 
-pub static WORLD_ROWS: [PropertyRow; 51] = [
+pub static WORLD_ROWS: [PropertyRow; 55] = [
+    // Camera: which camera renders. A cut is a param write, so it lands on
+    // its frame and never recompiles; the choices are the cameras by name.
+    row(CAMERA_PICK, CUT, Camera, perform(CardBand::Scene, 0)).param("select").name("Camera"),
+    row("camera_count", CUT, Camera, Exposure::Automatic("the cameras in the scene")).param("num_inputs"),
+    row("camera_cut", CUT_IMAGE, Camera, Exposure::Automatic("follows the Camera row")).param("selector"),
+    row("camera_cut_count", CUT_IMAGE, Camera, Exposure::Automatic("the cameras in the scene")).param("num_inputs"),
     gravity("gravity_x"),
     gravity("gravity_y").default(-9.81),
     gravity("gravity_z"),
@@ -110,7 +121,7 @@ pub static WORLD_ROWS: [PropertyRow; 51] = [
     row("rt_denoise_feed", RENDER, RayTracing, Exposure::Internal("a debug view of the denoiser input")),
 ];
 
-pub static WORLD_FIELDS: [FieldRow; 3] = [
+pub static WORLD_FIELDS: [FieldRow; 2] = [
     FieldRow {
         id: "fog",
         label: "Fog",
@@ -143,25 +154,6 @@ pub static WORLD_FIELDS: [FieldRow; 3] = [
                 _ => return Err(wrong_value("ambient_occlusion", value)),
             }
             Ok(())
-        },
-    },
-    FieldRow {
-        id: "active_camera",
-        label: "Default Camera",
-        section: RenderMode,
-        control: FieldControl::Item { items: is_camera, none: "First camera" },
-        applies: always,
-        disabled: enabled,
-        read: |fields| match fields {
-            ItemFields::World(w) => FieldValue::Item(w.active_camera.clone()),
-            _ => FieldValue::Item(None),
-        },
-        write: |fields, value| match (fields, value) {
-            (ItemFields::World(w), FieldValue::Item(camera)) => {
-                w.active_camera = camera.clone();
-                Ok(())
-            }
-            _ => Err(wrong_value("active_camera", value)),
         },
     },
 ];

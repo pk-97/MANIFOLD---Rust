@@ -94,7 +94,7 @@ mod slice_mesh;
 pub mod scatter_on_mesh;
 mod simplex_per_instance;
 pub(crate) mod camera_orbit;
-mod camera_switch;
+pub(crate) mod camera_switch;
 mod free_camera;
 mod look_at_camera;
 mod camera_lens;

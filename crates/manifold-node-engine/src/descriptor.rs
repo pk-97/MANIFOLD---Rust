@@ -308,6 +308,16 @@ hand_descriptor!(
     aliases: ["switch", "mux", "mux texture", "selector", "Switch TOP"],
 );
 
+// Camera routing (camera_switch.rs)
+hand_descriptor!(
+    "node.camera_switch",
+    "Dynamic N-way Camera selector. `num_inputs` sets how many Camera ports exist (a, b, c, …) and the `select` enum forwards the matching input; an unwired pick falls back to the first wired input. With `select` as a param the unpicked cameras are pruned. A scene's live camera cut is one of these with every camera's lens wired in, so a cut is a param write, never a rebuild; camera-path scene modifiers mint the two-input form.",
+    summary: "Picks which of several cameras is shown. Switching is live and never rebuilds the graph, so a camera cut lands on the frame it is asked for.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["camera switch", "camera mux", "mux camera", "camera cut"],
+);
+
 // 3D scene rendering (render_scene.rs)
 hand_descriptor!(
     "node.render_scene",

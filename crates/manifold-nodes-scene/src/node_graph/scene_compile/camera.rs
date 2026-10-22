@@ -1,65 +1,113 @@
-//! Camera: a rig and its lens per Camera item. The active camera (the
-//! World's choice, else the first camera) drives the render and the
-//! cinematic tail after it: depth of field, then motion blur, then out.
+//! Camera: a rig, its shake and its lens per Camera item, and the live cut
+//! between them (ruling 11). Every camera compiles; a camera switch feeds the
+//! render the one the World's Camera row picks. Each camera has its own depth
+//! of field and motion blur after the render, and an image switch on the same
+//! pick shows that camera's, so only the picked camera's run. A cut is a
+//! param write: it lands on its frame and never recompiles.
 
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::EffectGraphNode;
-use manifold_core::scene_doc::{CameraRig, Item, ItemFields, ItemId};
+use manifold_core::effect_graph_def::{EffectGraphNode, SerializedParamValue};
+use manifold_core::scene_doc::{CAMERA_PICK, CameraRig, Item, ItemFields, ItemId, param_id};
 
-use super::builder::Builder;
+use super::builder::{Builder, SCENE};
 use crate::node_graph::cinematic_tail::build_cinematic_tail;
+use crate::node_graph::primitives::camera_switch::CAMERA_SWITCH_INPUTS;
 
-/// Emit every camera in tree order, wire the active one, then each camera's
-/// rows (the active camera's include its depth of field and motion blur).
+/// Emit every camera in tree order, the cut between them, then each
+/// camera's rows.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
-    let mut cameras = Vec::new();
-    b.doc.walk(|item, _| {
-        if let ItemFields::Camera(_) = item.fields {
-            cameras.push(item.clone());
+    let doc = b.doc;
+    let cameras: Vec<Item> = doc.cameras().into_iter().filter_map(|id| doc.find(id).cloned()).collect();
+    if cameras.is_empty() {
+        return;
+    }
+    let lenses: Vec<u32> = cameras.iter().map(|item| emit(b, item)).collect();
+    // The cut picks among as many cameras as the switch has inputs.
+    let cut = &lenses[..lenses.len().min(CAMERA_SWITCH_INPUTS.len())];
+    let owner = cut_owner(b);
+    let switch = b.add(&owner, "camera_switch", "node.camera_switch");
+    b.set(switch, "num_inputs", SerializedParamValue::Int { value: cut.len() as i32 });
+    b.set(switch, "select", SerializedParamValue::Enum { value: 0 });
+    for (&lens, port) in cut.iter().zip(CAMERA_SWITCH_INPUTS) {
+        b.wire(lens, "out", switch, port);
+    }
+    let render = b.scene("render");
+    b.wire(switch, "out", render, "camera");
+    b.active_lens = Some(switch);
+
+    let tails: Vec<u32> = cameras.iter().zip(&lenses).take(cut.len()).map(|(item, &lens)| tail(b, &item.id, lens)).collect();
+    b.tail = Some(match tails.as_slice() {
+        [only] => *only,
+        _ => {
+            let image = b.add(&owner, "camera_cut", "node.switch_texture");
+            b.set(image, "num_inputs", SerializedParamValue::Int { value: tails.len() as i32 });
+            b.set(image, "selector", SerializedParamValue::Float { value: 0.0 });
+            for (k, &tail) in tails.iter().enumerate() {
+                b.wire(tail, "out", image, &format!("in_{k}"));
+            }
+            image
         }
     });
-    for item in &cameras {
-        emit(b, item);
-    }
-    let chosen = b
-        .doc
-        .world()
-        .and_then(|world| match &world.fields {
-            ItemFields::World(w) => w.active_camera.clone(),
-            _ => None,
-        })
-        .filter(|id| cameras.iter().any(|camera| &camera.id == id))
-        .or_else(|| cameras.first().map(|camera| camera.id.clone()));
-    if let Some(active) = chosen {
-        wire_active(b, &active);
-    }
     for item in &cameras {
         b.rows(item);
     }
 }
 
-fn emit(b: &mut Builder<'_>, item: &Item) {
-    let ItemFields::Camera(fields) = &item.fields else {
+/// After the World's rows: the image switch follows the Camera row, and the
+/// row's choices are the cameras by name.
+pub(crate) fn finish_cut(b: &mut Builder<'_>) {
+    let owner = cut_owner(b);
+    let Some(switch) = b.id(&owner, "camera_switch") else {
         return;
     };
-    let owner = item.id.as_str();
-    let rig_type = match fields.rig {
-        CameraRig::Orbit => "node.orbit_camera",
-        CameraRig::Free => "node.free_camera",
-        CameraRig::LookAt => "node.look_at_camera",
+    if let Some(image) = b.id(&owner, "camera_cut") {
+        b.follow(switch, "select", image, "selector");
+    }
+    let doc = b.doc;
+    let Some(world) = doc.world() else {
+        return;
     };
-    let rig = b.add(owner, "rig", rig_type);
-    let lens = b.add(owner, "lens", "node.camera_lens");
-    b.wire(rig, "out", lens, "camera");
-    b.lenses.push(lens);
+    let names: Vec<String> = doc
+        .cameras()
+        .into_iter()
+        .take(CAMERA_SWITCH_INPUTS.len())
+        .filter_map(|id| doc.find(id).map(|item| item.name.clone()))
+        .collect();
+    b.choices(&param_id(&world.id, CAMERA_PICK), names);
 }
 
-/// The active camera's lens feeds the render and the tail.
-fn wire_active(b: &mut Builder<'_>, camera: &ItemId) {
+/// The cut belongs to the World, whose card has the Camera row.
+fn cut_owner(b: &Builder<'_>) -> String {
+    b.doc.world().map_or_else(|| SCENE.to_owned(), |world| world.id.to_string())
+}
+
+/// The camera's rig, shaken about its own position, then its lens. A group
+/// the camera sits in moves the rig; the shake rides on top of wherever the
+/// rig ends up. Returns the lens.
+fn emit(b: &mut Builder<'_>, item: &Item) -> u32 {
+    let owner = item.id.as_str();
+    let rig_type = match &item.fields {
+        ItemFields::Camera(fields) => match fields.rig {
+            CameraRig::Orbit => "node.orbit_camera",
+            CameraRig::Free => "node.free_camera",
+            CameraRig::LookAt => "node.look_at_camera",
+        },
+        _ => "node.orbit_camera",
+    };
+    let rig = b.add(owner, "rig", rig_type);
+    let shake = b.add(owner, "shake", "node.transform_shake");
+    let lens = b.add(owner, "lens", "node.camera_lens");
+    b.wire(rig, "out", shake, "camera");
+    b.wire(shake, "camera_out", lens, "camera");
+    b.lenses.push(lens);
+    lens
+}
+
+/// The camera's depth of field and motion blur on the render, through its
+/// own lens. Returns the node whose `out` is the finished image.
+fn tail(b: &mut Builder<'_>, camera: &ItemId, lens: u32) -> u32 {
     let owner = camera.as_str();
-    let lens = b.id(owner, "lens").expect("camera lens");
     let render = b.scene("render");
-    b.wire(lens, "out", render, "camera");
     let tail = build_cinematic_tail(&mut || b.fresh(), 1.0, false);
     for mut node in tail.nodes {
         rename(&mut node, camera);
@@ -78,8 +126,7 @@ fn wire_active(b: &mut Builder<'_>, camera: &ItemId) {
     b.wire(dof, "out", blur, "in");
     b.wire(render, "velocity", blur, "velocity");
     b.wire(lens, "out", blur, "camera");
-    b.tail = Some(blur);
-    b.active_lens = Some(lens);
+    blur
 }
 
 /// Give the tail's nodes ids from the camera, inside its group too, so two
