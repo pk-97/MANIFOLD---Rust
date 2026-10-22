@@ -67,16 +67,13 @@ Briefs and reports stay short. An agent re-reads its whole context on every call
 
 What never delegates: verification of evidence the lead acts on. A weaker model's omissions are invisible in its own summary, so the lead spot-checks the underlying code or data. **Visual checks are verification, never a landing gate; the gates are the gates.** Opus seats may render and judge headless stills to verify their own work, and the lead may look at them in review. Sonnet lanes never run headless-PNG or screenshot loops: briefs name the expected visual outcome and an Opus lane renders after the commit. Peter's eye is the stage check after landing. Obsolete when: Sonnet-tier lanes show real visual judgment.
 
-**Debug escalation ladder.** For "this looks wrong and it's not obvious why": (1) lead semantic review of the seam first, the cheapest oracle and the strongest against this codebase's wiring bugs; (2) still stuck → an Opus agent reading the seam fresh, read-and-discuss only (a Fable consult only when the seam is very complex); (3) instrument probe loops last, delegated to an Opus diagnosis lane with the evidence table in the brief, never lead-run. Three probes without a written evidence table is the signal to step back to (1).
+**Debug escalation ladder.** For "this looks wrong and it's not obvious why": (1) lead semantic review of the seam first, the cheapest oracle and the strongest against this codebase's wiring bugs; (2) still stuck → an Opus agent reading the seam fresh, read-and-discuss only; (3) instrument probe loops last, delegated to an Opus diagnosis lane with the evidence table in the brief, never lead-run. Three probes without a written evidence table is the signal to step back to (1).
 
 ## Reviews and the consult seat
 
-The default reviewer is the lead, with `opus` agents for the reading and the adversarial pass. A Fable consult is only for a very complex review. Uses:
-1. **Design fork** the audit can't kill (`docs/DESIGN_AUTHORING.md` section 5 (Foreseeing the plausible-wrong turn)). One focused question.
-2. **Debug ladder step 2.** A fresh strong read when the lead's seam review stalls.
-3. **Pre-wave sanity check.** Attack the brief set for wrong fix shapes, non-disjoint lanes, over-deletion.
+The reviewer is the lead, with `opus` agents for the reading, the adversarial pass, design forks, debug ladder step 2 and pre-wave sanity checks. Fable is expensive: it gets one review per campaign, the very final one, confirming the branch is complete and free of slop and bugs before landing. Any other Fable use needs Peter's ask.
 
-Contract: read-and-discuss only. No Edit/Write, no spawns, no commits. An `opus` agent, or for a very complex review a Fable fork or `model: "fable"` agent, told it is read-only. The lead integrates and owns the call.
+Contract: read-and-discuss only. No Edit/Write, no spawns, no commits. An `opus` agent, or for the final campaign review a `model: "fable"` agent, told it is read-only. The lead integrates and owns the call.
 
 **One adversarial review per landing.** A lane builds a phase as small commits the lead skims one by one; one `opus` adversarial review covers the whole batch before it lands. Instrumentation-only changes and changes that never touch playback get no separate agent review.
 

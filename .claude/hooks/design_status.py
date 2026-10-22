@@ -17,7 +17,7 @@ Lifecycle check: a SHIPPED design doc must either be cited by a live surface (CL
 hooks, memory, or any non-shipped doc — one hop, no credit for citations from other
 shipped docs) or be deleted (git keeps every version). Liveness is recomputed every run — nothing is
 hand-marked. Override for a deliberate uncited keep: a `Lifecycle: contract` line in the
-doc header. Enforced by crates/manifold-core/tests/docs_lifecycle.rs.
+doc header. Reported nightly by scripts/trunk_health.py, never a landing red.
 
 The `last-changed` date is the drift check: a doc that says "not built" but was touched
 this week is the flag to look closer.
@@ -26,8 +26,7 @@ Header budget: a design doc's status header is state + owed/open items + one poi
 capped at HEADER_CAP words. History, amendments, and per-phase stories live in the doc
 body or beads. Docs still over budget are pinned at their current size in
 `design_status_header_budget.txt` — any growth fails, and a doc that shrinks under the
-cap must lose its pin (the ratchet only burns down). Enforced with the lifecycle check
-via crates/manifold-core/tests/docs_lifecycle.rs.
+cap must lose its pin (the ratchet only burns down). Reported with the lifecycle check.
 """
 from __future__ import annotations
 

@@ -57,8 +57,9 @@ class ReservationTests(unittest.TestCase):
     def test_reservation_set_during_run_stops_before_builds_or_gpu(self):
         info = {'owner': 'campaign', 'reason': 'proof window', 'end_epoch': 1800000000}
         # Initial admission + three cheap scripts precede clippy; seven CPU
-        # legs precede the first GPU hold. All commands below are fakes.
-        for allowed_checks, expected_runs in ((4, 5), (8, 9)):
+        # legs precede the first GPU hold. The two reports run first and take
+        # no admission check. All commands below are fakes.
+        for allowed_checks, expected_runs in ((4, 7), (8, 11)):
             with self.subTest(allowed_checks=allowed_checks), tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
                 stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
                 stack.enter_context(patch.object(sys, 'argv', ['trunk_health.py']))
