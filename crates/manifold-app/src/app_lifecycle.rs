@@ -327,6 +327,17 @@ impl Application {
 
         match manifold_io::collect::collect_all_and_save(self.local_project.intake(), &current_path) {
             Ok(report) => {
+                // The content thread owns the project the next save reads, so
+                // it takes the same re-points (a non-undoable write; the copies
+                // are already on disk).
+                use manifold_core::change::{ChangeSet, Part};
+                let moves = report.moves.clone();
+                let path = current_path.clone();
+                let touches = ChangeSet::of(&[Part::Media, Part::Layers, Part::Clips, Part::Effects, Part::Overrides]);
+                self.send_content_cmd(ContentCommand::mutate(
+                    touches,
+                    Box::new(move |project| manifold_io::collect::re_point_moves(project, &moves, &path)),
+                ));
                 self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
                 log::info!(
                     "[ProjectIO] Collect All and Save: {} copied, {} bytes, {} re-pointed, {} missing",
@@ -1011,6 +1022,8 @@ impl Application {
             // can rebuild the timeline in this same frame.
             *self.local_project.intake() = project.clone();
             self.ui_edits.stamps.project_replaced();
+            // An open reads every model file again, a missing one included.
+            self.model_store = Default::default();
             // Sync the global preset overlay to THIS project's embedded
             // presets on every apply — open, snapshot restore, and New
             // Project all pass here, so a previous project's forks never

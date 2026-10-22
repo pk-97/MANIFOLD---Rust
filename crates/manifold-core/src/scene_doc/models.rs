@@ -59,11 +59,11 @@ impl SceneModels {
         self.0.insert(path, facts);
     }
 
-    /// Take every file `other` knows and this does not. Facts only arrive,
-    /// so an undo back to an older document keeps what was read since.
+    /// Take every file's facts from `other`, the newer document: an undo back
+    /// to an older document keeps what was read since, a re-read included.
     pub fn keep_from(&mut self, other: &SceneModels) {
         for (path, facts) in &other.0 {
-            self.0.entry(path.clone()).or_insert_with(|| facts.clone());
+            self.0.insert(path.clone(), facts.clone());
         }
     }
 }

@@ -108,6 +108,26 @@ pub fn read_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), String> {
     Ok((ModelFacts::new(facts), warnings))
 }
 
+/// A picture file's pixel size, read from its header on the worker: what a
+/// Material's file texture compiles with.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PictureSize(pub u32, pub u32);
+
+/// The size of the picture at `path` the document carries, if it has arrived.
+pub(crate) fn picture_size(doc: &SceneDoc, path: &str) -> Option<(u32, u32)> {
+    doc.models.get(path)?.get::<PictureSize>().map(|size| (size.0, size.1))
+}
+
+/// Read the facts of a file a document names: a picture's size, or a
+/// model's facts ([`read_facts`]). On the worker only.
+pub fn read_file_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), String> {
+    if image::ImageFormat::from_path(path).is_err() {
+        return read_facts(path);
+    }
+    let (width, height) = gltf_load::picture_file_dims(path).ok_or_else(|| format!("{} is not a picture this can read", path.display()))?;
+    Ok((ModelFacts::new(PictureSize(width, height)), Vec::new()))
+}
+
 /// The facts of a parsed model file, and its material report lines.
 pub(crate) fn facts_of(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> (ModelFile, Vec<String>) {
     let mut report = Vec::new();

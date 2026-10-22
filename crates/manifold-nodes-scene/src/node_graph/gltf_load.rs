@@ -960,23 +960,25 @@ fn flatten_node_mesh(
 }
 
 /// Where each copy of a node's mesh sits in the file's world: `world` once,
-/// or `world` times each `EXT_mesh_gpu_instancing` instance (an unreadable
-/// instancing block counts as one plain copy). The mesh loader places
-/// vertices the same way, so bounds measured through this match what is
-/// drawn.
+/// or `world` times each `EXT_mesh_gpu_instancing` instance. As in the mesh
+/// loader ([`flatten_node_mesh`]), an empty instance list places nothing,
+/// and so does an unreadable instancing block, which the loader refuses: the
+/// counts and bounds measured through this match what is drawn.
 fn instance_worlds(node: &gltf::Node, world: &Mat4, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<Mat4> {
-    match node_instance_transforms(node, document, buffers).ok().flatten() {
-        Some(list) if !list.is_empty() => list.iter().map(|it| mat4_mul(world, it)).collect(),
-        _ => vec![*world],
+    match node_instance_transforms(node, document, buffers) {
+        Ok(None) => vec![*world],
+        Ok(Some(list)) => list.iter().map(|it| mat4_mul(world, it)).collect(),
+        Err(_) => Vec::new(),
     }
 }
 
 /// One file node as the scene import sees it: its path from the scene
 /// root, its own mesh, and its children.
 pub(crate) struct FileNode {
-    /// Segments joined by `/`: each is the node's name (`/` swapped for a
-    /// space; "node" when unnamed), with `#2`, `#3` for later siblings that
-    /// share a name. Stable across a file swap while the names are.
+    /// Segments joined by `/`: each is the node's name (`/` and `#` swapped
+    /// for a space; "node" when unnamed), with `#2`, `#3` for later siblings
+    /// that share a name ([`sibling_segments`]). Stable across a file swap
+    /// while the names are.
     pub path: String,
     pub name: String,
     /// The node's index in the document.
@@ -1005,17 +1007,7 @@ pub(crate) struct FilePart {
 /// ([`resolve_import_nodes`]).
 pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<FileNode> {
     fn segments(nodes: &[gltf::Node]) -> Vec<(String, String)> {
-        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        nodes
-            .iter()
-            .map(|node| {
-                let name = node.name().map(str::trim).filter(|n| !n.is_empty()).unwrap_or("node").replace('/', " ");
-                let count = seen.entry(name.clone()).or_insert(0);
-                *count += 1;
-                let segment = if *count == 1 { name.clone() } else { format!("{name}#{count}") };
-                (segment, name)
-            })
-            .collect()
+        sibling_segments(nodes).into_iter().zip(nodes).map(|(segment, node)| (segment, node_name(node))).collect()
     }
     fn parts(
         node: &gltf::Node,
@@ -1091,24 +1083,36 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
     build(&resolve_import_nodes(document), "", MAT4_IDENTITY, document, buffers, &parent_of)
 }
 
+/// The name a file node shows: its own, trimmed, or "node" when unnamed,
+/// with `/` (the path separator) swapped for a space.
+fn node_name(node: &gltf::Node) -> String {
+    node.name().map(str::trim).filter(|n| !n.is_empty()).unwrap_or("node").replace('/', " ")
+}
+
+/// Each node's path segment among its siblings: its name with `#` swapped
+/// for a space, then `#2`, `#3` for later siblings that share it, so a node
+/// literally named `Box#2` never takes the second `Box`'s path.
+fn sibling_segments(nodes: &[gltf::Node]) -> Vec<String> {
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    nodes
+        .iter()
+        .map(|node| {
+            let name = node_name(node).replace('#', " ");
+            let count = seen.entry(name.clone()).or_insert(0);
+            *count += 1;
+            if *count == 1 { name } else { format!("{name}#{count}") }
+        })
+        .collect()
+}
+
 /// The node at `path` and its world matrix, found the way
 /// [`file_node_tree`] names them.
 fn find_file_node<'a>(document: &'a gltf::Document, path: &str) -> Option<(gltf::Node<'a>, Mat4)> {
-    fn segment_of(nodes: &[gltf::Node<'_>], segment: &str) -> Option<usize> {
-        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        nodes.iter().position(|node| {
-            let name = node.name().map(str::trim).filter(|n| !n.is_empty()).unwrap_or("node").replace('/', " ");
-            let count = seen.entry(name.clone()).or_insert(0);
-            *count += 1;
-            let this = if *count == 1 { name } else { format!("{name}#{count}") };
-            this == segment
-        })
-    }
     let mut level = resolve_import_nodes(document);
     let mut world = MAT4_IDENTITY;
     let mut found = None;
     for segment in path.split('/') {
-        let index = segment_of(&level, segment)?;
+        let index = sibling_segments(&level).iter().position(|this| this == segment)?;
         let node = level.swap_remove(index);
         world = mat4_mul(&world, &node.transform().matrix());
         level = node.children().collect();
@@ -5157,6 +5161,26 @@ mod tests {
         // Non-identity node transform (translation ~[0.117, 0.124, 0.001]):
         // world_pos must actually carry it, not fall back to the origin.
         assert!(point.world_pos[0].abs() > 1e-3 || point.world_pos[1].abs() > 1e-3);
+    }
+
+    /// A node literally named `Box#2` and the second of two `Box` nodes get
+    /// different paths, and each path finds its own node.
+    #[test]
+    fn sibling_paths_are_unique_and_find_their_node() {
+        let json = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0, 1, 2] }],
+            "nodes": [{ "name": "Box" }, { "name": "Box#2" }, { "name": "Box" }]
+        });
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let gltf::Gltf { document, .. } = gltf::Gltf::from_slice_without_validation(&bytes).unwrap();
+        let paths = sibling_segments(&resolve_import_nodes(&document));
+        assert_eq!(paths, ["Box", "Box 2", "Box#2"]);
+        for (index, path) in paths.iter().enumerate() {
+            let (node, _) = find_file_node(&document, path).expect("the path finds a node");
+            assert_eq!(node.index(), index, "{path}");
+        }
     }
 }
 
