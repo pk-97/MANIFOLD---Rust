@@ -40,7 +40,7 @@ These decide the design. Where a source note disagrees, the ruling wins.
 15. **Base:** the branch carries G1 (renderer instance space) and G2a (transform parent chain). Their task beads stay open until the branch lands.
 16. **Plan:** one branch, the lanes in section 11, at most four parallel builds (disk). Peter tests a branch build after each fix round, with the exact launch command.
 17. **Silence means Blender.** Where this doc is silent, an item behaves as it does in Blender (Unity for the default scene and components). The lane names each such call in its report.
-18. **One writer per graph.** A scene layer's graph is written only by the scene compiler. The graph editor never opens or edits a scene layer's graph, and the Scene panel never edits a graph directly. Effect and generator graphs outside scene layers are written only by the graph editor. No hand-wired scene graphs: every scene capability is an item kind, a field, a modifier or a World setting. Node trees may later attach to items as assets (section 14), never replacing the scene.
+18. **One writer per region.** The scene compiler writes the scene. On a scene layer's graph the scene is one sealed Scene node, read-only in the graph editor, with outputs for colour and the render's other passes (depth, normals, item id). Everything around that node is the user's: the graph editor opens a scene layer's graph so post-processing is wired after the Scene node, and a recompile never touches it (Blender's compositor Render Layers node). The Scene panel never edits a graph directly. Effect and generator graphs outside scene layers are written only by the graph editor. No hand-wired scene graphs: every scene capability is an item kind, a field, a modifier or a World setting. Node trees may later attach to items as assets (section 14), never replacing the scene.
 19. **Nothing main had is dropped without Peter's yes.** Every scene feature a performer could use on main has a home and an owning lane in section 15. One that fits no kind is listed in section 15.3 for Peter.
 20. **Modifiers are a kind, and forces are not modifiers.** A Modifier item is one card in the scene's single ordered chain, shown in its own section of the tree, like a layer's effect cards: drag to reorder, an on/off toggle per card, the type swappable. Order in the section is the order of application. Each card names its targets: one or more Objects or Groups, or the whole scene. No Object or Group holds a modifier list. Forces stay their own kind in their own section of the tree; they add up, so they are not a chain. Every mesh modifier works on any Object shape (built-in solids, planes, imported parts, Ocean) and on Groups, in any scene. Each item supplies its own rest-pose bounds, centre and vertex count, and every recipe reads them the same way. A built-in shape gets enough mesh detail automatically while a deforming modifier targets it. A Group target bends all its parts in one shared frame, as main did for scans. No modifier refuses a shape. Every modifier row is a performance row. Every modifier and force main shipped comes back as a Modifier, a Force or a World setting (section 15.2).
 21. **Scene-wide modifiers.** Scene Loop, Math View and Scene Mirror are Modifier types that act on the whole scene. Scene Loop is the corridor loop, and every camera sees it; a camera's Loop rig rides it, and a camera cut keeps the tiling. A scene holds at most one Scene Loop and one Math View. Neither is on the World card. Scene Fog is removed: fog is World Fog, its Density a performance row.
@@ -162,7 +162,7 @@ Where we deliberately differ, and why:
 - It compiles the whole graph per structural edit, on the content thread, and at load. A param write never recompiles.
 - Force and Modifier items compile to `scene_modifiers` instances and the `load/expand` passes, addressed by node id (ruling 8). Modifiers compile in chain order. Bodies ride `physics_members`.
 - Every mesh source the compiler emits (built-in solids, Sphere, Plane, imported parts, Ocean, procedural shapes, a Group as the union of its parts, the whole scene as the union of everything) supplies its rest-pose bounds, centre and vertex count, and every modifier recipe reads them the same way (ruling 20). A recipe never takes its scale from the largest import in the scene.
-- A scene layer has no editable graph and no inspection view in this cut. The graph editor never opens one (ruling 18).
+- A scene layer's graph opens in the graph editor with the scene as one sealed Scene node; the user wires post-processing around it (ruling 18). [L12b]
 
 ### 7.4 Stage versus setup
 
@@ -534,7 +534,7 @@ Branch `wave/scene-document`. Land once, after L11.
 | Lead | Merge F1, F2, L6 and `lane/scene-doc-glb-sweep` (3d5849b57). Peter tests the build |
 | A | L12, L13, L14, L17 |
 | B | L15 (after L12), L7, L8 |
-| C | L9 (after L7), L16, L18, L19, L20 (each after L15) |
+| C | L9 (after L7), L16, L18, L19, L20, L12b (each after L15) |
 | D | L21 (after L15 and L8), L10 (after L6, L7, L9, L12, L16) |
 | E | L22 (after every other lane) |
 | F | L11 |
@@ -677,6 +677,14 @@ Files: `manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` and its 
 6. Cmd+C and Cmd+V copy and paste items within a scene and into another scene layer; Cmd+D duplicates.
 7. Promise 13's GPU proof passes.
 
+**L12b (Opus): the sealed Scene node.**
+Files: `manifold-node-engine` (a sealed node the compiler owns), the install seam (`install_scene_document`), the graph editor's open path and its read-only node view. Joins: after L15. Reference: Blender's compositor Render Layers node. Search the graph engine for an existing group or sealed-node mechanism first and extend it.
+1. A scene layer's graph opens in the graph editor. The compiled scene shows as one sealed Scene node: it can be moved, not opened, edited, deleted or rewired inside.
+2. Its outputs are Colour plus whatever passes the render already produces (depth, normals, item id); a pass that does not exist yet is reported, not built.
+3. Nodes wired between the Scene node and the layer output survive every recompile (any Scene panel edit), save and load.
+4. Undo of a Scene panel edit never undoes a graph editor edit, and the reverse.
+5. L12's refusal toast is gone; nothing writes inside the Scene node but the compiler.
+
 **L20 (Opus): curve shapes.**
 Files: `scene_compile/curves.rs` (new), `scene_schema/curves.rs` (new), Shape entries in `scene_doc.rs`. Joins: bounds through L15. Reference: Blender's curve objects (Extrude and Bevel depth) and its Screw modifier.
 1. Shape offers Extrude (`extrude_curve`), Revolve (`revolve_curve`) and Tube (`tube_from_path`).
@@ -744,7 +752,7 @@ Files: the whole branch diff against main. Runs alone, after every other lane.
 ## 12. Forbidden moves
 
 - A second scene path, fallback, stopgap, shim or migration. Old scenes may break (D-119, no old-show compatibility).
-- A second writer of any graph: the graph editor or the Scene panel writing a scene layer's graph, anything but the graph editor writing an effect or generator graph, or a hand-wired scene graph anywhere.
+- A second writer of any region: the graph editor writing inside the Scene node, the Scene panel writing any graph, anything but the graph editor writing an effect or generator graph, or a hand-wired scene graph anywhere.
 - Dropping a feature main had without Peter's yes, or leaving one with no owning lane.
 - A preset-only param, section, label, `cardVisible` or string binding on a scene layer.
 - A row the (kind, property) table does not declare, or a bespoke row, slider or drawer (the param surface recipe named in ruling 12).
