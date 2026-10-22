@@ -394,7 +394,7 @@ Tests exist for breaks a performer would notice. Each lane states a budget (sect
 
 ## 11. Plan: four waves, eleven lanes, one branch
 
-Branch `wave/scene-document`. Step zero, done by L1 before anything else: merge `lane/g1-instance-space` (fce17d15c) and `lane/g2a-nested-groups` (4ccea112a) in. The one conflict is in the `frame_setup.rs` closure: G2a's `parent.world_with_rotation` wins inside G1's composition. Drop G2a's old-path UI half. Merge main into the branch at the end of each wave. Land once, after wave 4.
+Branch `wave/scene-document`. Step zero, done by L1 before anything else: merge `lane/g1-instance-space` (fce17d15c) and `lane/g2a-nested-groups` (4ccea112a) in. The one conflict is in the `frame_setup.rs` closure: G2a's `parent.world_with_rotation` wins inside G1's composition. G2a merges whole; L2 deletes its old-path UI half with the old path. Merge main into the branch at the end of each wave. Land once, after wave 4.
 
 Each lane makes one commit and stops for review. Each runs scoped clippy and nextest on the touched crates, regenerates the node catalog and docs index where it changed them, and one `--cheap` landing gate. At most four lanes build in parallel (disk).
 
@@ -407,7 +407,7 @@ The task beads for G1 (renderer instance space) and G2a (transform chains) stay 
 **L1 (Opus; BUG-elwvu.1): the document, ids, table, commands, and the first compiler.**
 - Does: merge G1 and G2a; `SceneDoc`, `ItemId`, the closed ten-kind enum and fields, the (kind, property) table for Group, Object, Camera, Light, Material, World; the five commands plus Group and Ungroup composites; the compiler for Group, Object (including Shape Plane with a layer-sourced Material), Camera, Light (all four types), Material (nearest-wins binding; texture source None, file or layer), World (Gravity, Speed with clamp, Reset, Air Resistance, Fog, Render); `PresetInstance` gains the document; the allowed-vocabulary list; the base scene as a file in code. Physics emits as None for now.
 - Files: `manifold-core/src/scene_doc.rs` (new), `manifold-core/src/scene_schema/` (new, one file per kind), `manifold-editing/src/commands/scene_doc/` (new), `manifold-nodes-scene/src/node_graph/scene_compile/` (new, moving `object_group` and `light_template` from `scene_templates.rs`), `manifold-core/src/effects/instance.rs`.
-- Deletes: nothing yet beyond G2a's old-path UI half. The old path stays compiling until L2 so the branch builds.
+- Deletes: nothing. G2a merges whole; its old-path UI half (outliner group rows, `scene_object_model.rs` nesting, scene_vm group rows) goes with the old path in L2. The old path stays compiling until L2 so the branch builds.
 - Test budget: about 12 tests. Every command undoes exactly; ids survive rename and reparent; save and load round trip; deny_unknown_fields rejects an unknown field; compile is deterministic and node ids are stable across an unrelated edit; a group's material reaches a child with none; compiled graph stays inside the vocabulary; Speed clamps. Plus the non-gating state-continuity check (section 9).
 - Depends on: none.
 
