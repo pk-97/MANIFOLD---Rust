@@ -362,10 +362,45 @@ pub enum SkyStyle {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct MaterialFields {
+    /// The shading model: lit PBR, flat Unlit or banded Cel.
+    pub material_type: MaterialType,
     pub texture: TextureSource,
+    /// Which surface a layer texture feeds.
+    pub texture_feeds: TextureFeeds,
     /// The features added from "+ Add feature", in the inspector's order,
     /// each with its mode (section 7.6).
     pub features: Vec<FeatureSetting>,
+}
+
+/// How a Material shades: `node.pbr_material`, `node.unlit_material` (flat
+/// colour, no lights) or `node.cel_material` (toon bands).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialType {
+    #[default]
+    Pbr,
+    Unlit,
+    Cel,
+}
+
+impl MaterialType {
+    /// The material node this type compiles to.
+    pub const fn node_type(self) -> &'static str {
+        match self {
+            Self::Pbr => "node.pbr_material",
+            Self::Unlit => "node.unlit_material",
+            Self::Cel => "node.cel_material",
+        }
+    }
+}
+
+/// The surface a layer texture feeds on a Material.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextureFeeds {
+    #[default]
+    BaseColour,
+    Emission,
 }
 
 /// A Material's image: none, a file, or another layer's output (today's

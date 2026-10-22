@@ -40,7 +40,7 @@ pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, can_copy, copies_unavail
 pub use force::{FORCE_ROWS, impulse_unavailable};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
-pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily};
+pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily, node_type as material_node_type};
 pub use modifier::{modifier_param_id, modifier_property, modifier_rows, modifiers_unavailable};
 pub use object::{OBJECT_ROWS, has_shape_name, modifier_label, shape_name};
 pub use physics::{BODY_ROLE, MAX_GROUP_PARTS, PHYSICS_ROWS, PhysicsPart, bodies_past_capacity, physics_parts, physics_unavailable, world_full};

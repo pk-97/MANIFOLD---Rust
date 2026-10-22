@@ -10,7 +10,7 @@ use manifold_core::effects::{ParameterDriver, PresetInstance};
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::material_inspector::MaterialFeature;
-use manifold_core::scene_doc::{FeatureSetting, ItemFields, ItemId, ItemKind, MaterialFields, PhysicsSetting, SceneCompiler, SceneDoc, param_id};
+use manifold_core::scene_doc::{FeatureSetting, ItemFields, ItemId, ItemKind, MaterialFields, MaterialType, PhysicsSetting, SceneCompiler, SceneDoc, param_id};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{LayerId, PresetTypeId};
 
@@ -122,6 +122,14 @@ fn every_scene_edit_undoes_exactly() {
         ("set", Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id(CUBE), body))),
         ("group", Box::new(CompositeCommand::new(group_commands(&layer, &doc, &[id(CUBE), id("sun")], id("rig")), "Group".into()))),
         ("material feature", Box::new(material_feature(&layer))),
+        (
+            "material type",
+            Box::new(SetSceneItemFieldsCommand::new(
+                layer.clone(),
+                id(manifold_core::scene_doc::BASE_CUBE_MATERIAL),
+                ItemFields::Material(MaterialFields { material_type: MaterialType::Unlit, ..MaterialFields::default() }),
+            )),
+        ),
         ("add object", Box::new(CompositeCommand::new(add_object_commands(&layer, None, 0, ball, ball_material), "Add".into()))),
         ("make unique", Box::new(CompositeCommand::new(make_unique, "Make Unique".into()))),
     ];

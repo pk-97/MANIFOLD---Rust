@@ -195,6 +195,12 @@ mod every_param_has_a_row {
             let at = doc.items.len();
             doc.insert(None, at, item).unwrap();
         }
+        // Each material type compiles its own node, so each needs its rows.
+        for (name, material_type) in [("unlit", manifold_core::scene_doc::MaterialType::Unlit), ("cel", manifold_core::scene_doc::MaterialType::Cel)] {
+            let fields = manifold_core::scene_doc::MaterialFields { material_type, ..Default::default() };
+            let at = doc.items.len();
+            doc.insert(None, at, Item::new(ItemId::new(name), name, manifold_core::scene_doc::ItemFields::Material(fields))).unwrap();
+        }
         let mesh = manifold_core::scene_doc::Shape::Mesh {
             file: String::new(),
             node_path: String::new(),
