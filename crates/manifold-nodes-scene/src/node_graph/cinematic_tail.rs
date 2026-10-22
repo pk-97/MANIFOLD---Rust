@@ -8,30 +8,21 @@
 //! `scene.rs` (god-file ceiling, `godfile_regrowth.rs`).
 
 use manifold_core::effect_graph_def::{
-    BindingDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
-    GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef, SerializedParamValue,
+    EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
+    GroupInterface, InterfacePortDef,
 };
-use manifold_core::NodeId;
-use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
 use crate::node_graph::scene_graph::{bool_val, enum_val, float, plain_node, wire};
-use crate::node_graph::scene_exposure::metadata_for_node_type;
 
 /// The tail's products: the assembled `dof` group node and the top-level
 /// `motion_blur` node (in `nodes`, push-order preserved), plus their ids
 /// for the caller's spine wiring (`ao → dof → motion_blur → final`; the
-/// shared lens feeds `dof.camera` and `motion_blur.camera`). `bokeh_id`
-/// and `motion_blur_params` feed the caller's Camera-section card stamps
-/// (P4): the bokeh stamp targets the group-internal `dof/bokeh` nodeId,
-/// and the motion_blur stamp seeds its slider defaults from the node's
-/// stamped params.
+/// shared lens feeds `dof.camera` and `motion_blur.camera`).
 pub(crate) struct CinematicTail {
     pub nodes: Vec<EffectGraphNode>,
     pub dof_group_id: u32,
     pub motion_blur_id: u32,
     pub bokeh_id: u32,
-    pub motion_blur_params: std::collections::BTreeMap<String, manifold_core::effect_graph_def::SerializedParamValue>,
-    pub bokeh_params: std::collections::BTreeMap<String, manifold_core::effect_graph_def::SerializedParamValue>,
 }
 
 /// Build the DoF group + motion_blur node with neutral lens-era params
@@ -71,7 +62,6 @@ pub(crate) fn build_cinematic_tail(
     bokeh_node.params.insert("aperture".to_string(), enum_val(0));
     bokeh_node.params.insert("quality".to_string(), enum_val(1));
     bokeh_node.params.insert("blur_alpha".to_string(), bool_val(true));
-    let bokeh_params = bokeh_node.params.clone();
     dof_nodes.push(bokeh_node);
     let dof_out_id = fresh_id();
     dof_nodes.push(plain_node(dof_out_id, "dof_out", GROUP_OUTPUT_TYPE_ID, "output"));
@@ -106,56 +96,12 @@ pub(crate) fn build_cinematic_tail(
         plain_node(motion_blur_id, "motion_blur", "node.motion_blur", "motion_blur");
     motion_blur_node.params.insert("max_blur_px".to_string(), float(32.0));
     motion_blur_node.params.insert("enabled".to_string(), bool_val(enabled));
-    let motion_blur_params = motion_blur_node.params.clone();
 
     CinematicTail {
         nodes: vec![dof_group_node, motion_blur_node],
         dof_group_id,
         motion_blur_id,
         bokeh_id,
-        motion_blur_params,
-        bokeh_params,
     }
 }
 
-/// P4 (Peter): the tail's performance/character knobs surface on the
-/// Camera card next to the lens rows — motion_blur's `max_blur_px` +
-/// `enabled`, and bokeh's `enabled` (the DoF on/off). Bokeh lives inside
-/// the `dof` group, but its `node_id` ("bokeh") survives flattening
-/// verbatim (flatten.rs prefixes HANDLES only — "dof/bokeh" is the
-/// handle; the nodeId safety invariant keeps the id), and both binding
-/// resolution paths (build.rs's instance_by_node_id, bindings.rs's
-/// identity match) key on the id. The bokeh toggle, aperture and quality are stamped:
-/// the radius slider stays deferred (f-stop is the photographic DoF
-/// control).
-pub(crate) fn stamp_tail_camera_sections(
-    card_params: &mut Vec<ParamSpecDef>,
-    card_bindings: &mut Vec<BindingDef>,
-    motion_blur_id: u32,
-    bokeh_id: u32,
-    motion_blur_params: &std::collections::BTreeMap<String, SerializedParamValue>,
-    bokeh_params: &std::collections::BTreeMap<String, SerializedParamValue>,
-) {
-    stamp_scene_node_exposures_into(
-        card_params,
-        card_bindings,
-        motion_blur_id,
-        &NodeId::new("motion_blur"),
-        "Camera",
-        &metadata_for_node_type("node.motion_blur"),
-        motion_blur_params,
-    );
-    let bokeh_enabled_meta: Vec<_> = metadata_for_node_type("node.bokeh_gather")
-        .into_iter()
-        .filter(|m| matches!(m.name.as_str(), "enabled" | "aperture" | "quality"))
-        .collect();
-    stamp_scene_node_exposures_into(
-        card_params,
-        card_bindings,
-        bokeh_id,
-        &NodeId::new("bokeh"),
-        "Camera",
-        &bokeh_enabled_meta,
-        bokeh_params,
-    );
-}

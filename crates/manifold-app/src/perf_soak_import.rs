@@ -6,7 +6,7 @@
 //! module never touches the project loader, the content thread, or
 //! `ContentPipeline`. It drives the EXACT import-graph construction
 //! `render_import.rs` (whole file, main + module doc) already proves —
-//! `assemble_import_graph` -> `PresetRuntime::from_def_with_device` at
+//! `compile_model_scene` -> `PresetRuntime::from_def_with_device` at
 //! `Rgba16Float` into a `RenderTarget` — and reuses that file's
 //! io_pending/byte-stability convergence loop verbatim for warmup (D7:
 //! "never a wrapper project", the D7-rejected alternative). The two modes
@@ -28,7 +28,7 @@ use manifold_gpu::GpuDevice;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -131,9 +131,9 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
 
     // EXACT render_import.rs construction — never a wrapper project, never
     // through the loader/content thread (D7).
-    let (def, report) = assemble_import_graph(glb_path)
+    let (def, model) = compile_model_scene(glb_path)
         .map_err(|e| format!("import error for {}: {e}", glb_path.display()))?;
-    eprintln!("perf-soak (import): {} -> {report:?}", glb_path.display());
+    eprintln!("perf-soak (import): {} -> {} part(s)", glb_path.display(), model.roots.len());
 
     let params: Vec<Param> = def
         .preset_metadata

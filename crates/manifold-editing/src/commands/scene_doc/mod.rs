@@ -8,12 +8,14 @@
 
 mod commands;
 mod group;
+mod import;
 
 pub use commands::{
     AddSceneItemCommand, RemoveSceneItemCommand, RenameSceneItemCommand, ReparentSceneItemCommand,
     SetSceneItemFieldsCommand,
 };
 pub use group::{group_commands, ungroup_commands};
+pub use import::{SwapPlan, import_model_commands, swap_model_file_commands};
 
 #[cfg(test)]
 mod tests;

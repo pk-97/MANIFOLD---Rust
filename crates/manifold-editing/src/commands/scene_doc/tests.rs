@@ -158,3 +158,79 @@ fn a_param_write_never_recompiles() {
     assert_eq!(fx.get_base_param(&param_id(&id(CUBE), "value")), 0.3);
     assert_eq!((&fx.graph, fx.graph_structure_version), (&graph, version), "the write recompiled the scene");
 }
+
+fn part(path: &str) -> manifold_core::scene_doc::ImportedNode {
+    manifold_core::scene_doc::ImportedNode {
+        key: format!("{path}#mesh"),
+        name: path.to_owned(),
+        mesh_node: Some(path.to_owned()),
+        vertex_count: 3,
+        children: Vec::new(),
+    }
+}
+
+fn model(paths: &[&str]) -> manifold_core::scene_doc::ImportedModel {
+    manifold_core::scene_doc::ImportedModel {
+        name: "rig".into(),
+        roots: vec![manifold_core::scene_doc::ImportedNode {
+            key: "rig".into(),
+            name: "rig".into(),
+            mesh_node: None,
+            vertex_count: 0,
+            children: paths.iter().map(|p| part(p)).collect(),
+        }],
+        bounds: None,
+    }
+}
+
+/// A Model File swap keeps the edits on parts whose file node path is still
+/// there, drops the parts that vanished, adds new ones, and is one undo step.
+#[test]
+fn a_model_file_swap_keeps_edits_on_surviving_parts() {
+    use manifold_core::scene_doc::{Shape, import_child_id};
+
+    let (mut project, layer) = project();
+    let group = id("model");
+    let mut undo = UndoRedoManager::new();
+    let first = model(&["rig/a", "rig/b"]);
+    let add = import_model_commands(&layer, None, 0, group.clone(), "a.glb", &first);
+    assert!(undo.execute(Box::new(CompositeCommand::new(add, "Import".into())), &mut project));
+    let a = import_child_id(&group, "rig/a#mesh");
+    let b = import_child_id(&group, "rig/b#mesh");
+    let doc = scene(&project).scene.clone().unwrap();
+    assert!(doc.find(&a).is_some() && doc.find(&b).is_some(), "both parts imported");
+
+    // Edits on part a: a transform value and a material binding.
+    let value = param_id(&a, "value");
+    assert!(UndoRedoManager::new().execute(
+        Box::new(ChangeGraphParamCommand::new(GraphTarget::Generator(layer.clone()), value.clone(), 0.5, 0.9)),
+        &mut project
+    ));
+    assert!(undo.execute(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Material, None, 0, None, id("paint"))), &mut project));
+    let ItemFields::Object(mut fields) = scene(&project).scene.as_ref().unwrap().find(&a).unwrap().fields.clone() else {
+        panic!("a part is an Object");
+    };
+    fields.material = Some(id("paint"));
+    assert!(undo.execute(Box::new(SetSceneItemFieldsCommand::new(layer.clone(), a.clone(), ItemFields::Object(fields))), &mut project));
+
+    // Swap to a file that keeps a, loses b and gains c.
+    let before = state(&project);
+    let doc = scene(&project).scene.clone().unwrap();
+    let plan = swap_model_file_commands(&layer, &doc, &group, "b.glb", &model(&["rig/a", "rig/c"])).unwrap();
+    assert_eq!(plan.removed, 1);
+    assert!(undo.execute(Box::new(CompositeCommand::new(plan.commands, "Swap".into())), &mut project));
+
+    let after = scene(&project).scene.clone().unwrap();
+    let c = import_child_id(&group, "rig/c#mesh");
+    assert!(after.find(&b).is_none(), "the vanished part is gone");
+    assert!(after.find(&c).is_some(), "the new part is added");
+    let kept = after.find(&a).expect("the surviving part stays");
+    let ItemFields::Object(kept) = &kept.fields else { panic!("a part is an Object") };
+    assert_eq!(kept.material, Some(id("paint")), "the material binding survives");
+    assert!(matches!(&kept.shape, Shape::Mesh { file, node_path, .. } if file == "b.glb" && node_path == "rig/a"));
+    assert_eq!(scene(&project).get_base_param(&value), 0.9, "the transform edit survives");
+
+    // One undo step restores the scene as it was before the swap.
+    assert!(undo.undo(&mut project));
+    assert_eq!(state(&project), before, "the swap undoes in one step");
+}

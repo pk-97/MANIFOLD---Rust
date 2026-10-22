@@ -1,4 +1,3 @@
-use std::path::Path;
 
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, SerializedParamValue};
 use manifold_core::layer::Layer;
@@ -8,7 +7,6 @@ use manifold_editing::command::Command;
 use manifold_editing::commands::graph::AddGraphNodeCommand;
 use manifold_editing::commands::graph::SetGraphNodeParamCommand;
 use manifold_editing::service::EditingService;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
 use super::{SceneModifierAction, build_action, with_admission, with_admission_snapshot};
 
@@ -18,14 +16,9 @@ mod cliftest;
 #[path = "force_tests.rs"]
 mod forces;
 
-const MUSHROOM_FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../tests/fixtures/gltf/cc0___mushroom.glb"
-);
-
 pub(crate) fn project_with_mushroom() -> (Project, LayerId) {
-    let (graph, _) = assemble_import_graph(Path::new(MUSHROOM_FIXTURE))
-        .expect("production mushroom import must assemble");
+    let graph = manifold_nodes::scene_modifier_qualify::mushroom_host()
+        .expect("the mushroom scene must import and compile");
     let mut layer =
         Layer::new_generator("Mushroom".into(), PresetTypeId::new("PhotoscanBaseline"), 0);
     let layer_id = LayerId::new("admission-layer");

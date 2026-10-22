@@ -110,13 +110,13 @@ fn catalog_host() -> EffectGraphDef {
 fn physics_catalog_host() -> EffectGraphDef {
     use manifold_core::{GraphTarget, project::Project, types::LayerType};
     use manifold_editing::{command::Command, commands::graph::EnableSceneObjectPhysicsCommand};
-    use manifold_nodes_scene::node_graph::{gltf_import::assemble_import_graph, scene_exposure::metadata_for_node_type};
+    use manifold_nodes_scene::node_graph::{gltf_import::compile_model_scene, scene_exposure::metadata_for_node_type};
 
     // Shatter requires an imported object with authored Physics. Use the same
     // compound source as the existing release/material preservation proof.
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
-    let (owner, _) = assemble_import_graph(&fixture).expect("catalog physics source imports");
+    let (owner, _) = compile_model_scene(&fixture).expect("catalog physics source imports");
     let scene_id = owner.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
     let mut project = Project::default();
     let layer = project.timeline.add_layer("Catalog Physics", LayerType::Generator,

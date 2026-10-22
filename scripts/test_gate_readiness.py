@@ -92,7 +92,7 @@ class P1PlannerTests(unittest.TestCase):
         self.assertTrue(expected, 'feature-transfer assertions must exercise real targets')
         self.assertEqual(plan.gpu_binaries, expected)
         gpu = gpu_scope.Plan(paths=['fixture'], workspace=Workspace(ROOT),
-                             required_binaries=plan.gpu_binaries, glb=True)
+                             required_binaries=plan.gpu_binaries, glb=False)
         required_runs = {(run['package'], target): run for run in gpu.runs()
                          for target in run['targets'] if run['budgeted']}
         for _, target in expected:

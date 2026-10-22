@@ -942,58 +942,6 @@ mod routing_tests {
 }
 
 #[cfg(test)]
-mod prepared_toggle_tests {
-    use super::*;
-    use manifold_core::layer::Layer;
-    use manifold_core::{GraphTarget, PresetTypeId};
-    use manifold_editing::service::EditingService;
-
-    #[test]
-    fn imported_shatter_toggle_preserves_add_undo() {
-        let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb"));
-        let (graph, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(path).unwrap();
-        let scene_id = graph.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
-        let mut layer = Layer::new_generator("Scan".into(), PresetTypeId::new("PhotoscanBaseline"), 0);
-        let layer_id = layer.layer_id.clone();
-        layer.gen_params_mut().unwrap().graph = Some(graph.clone());
-        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
-        let mut project = Project::default();
-        project.timeline.layers.push(layer);
-        let target = GraphTarget::Generator(layer_id.clone());
-        let first = manifold_core::scene_slots::object_at_slot(&graph, scene_id, 0).expect("the import has an object");
-        let physics = manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
-            &project, target.clone(), first,
-            &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
-            &manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
-            &graph,
-        ).expect("the photoscan takes physics");
-        let mut editing = EditingService::new();
-        editing.execute(with_admission(Box::new(physics)), &mut project);
-        assert!(editing.take_rejection().is_none());
-        let before = serde_json::to_value(&project).unwrap();
-        let add = build_action(&project, SceneModifierAction::Add(layer_id.clone(), "Shatter".into())).unwrap();
-        editing.execute(with_admission(add), &mut project);
-        assert!(editing.take_rejection().is_none());
-        let after_add = serde_json::to_value(&project).unwrap();
-        let id = project.graph_target_owner(&target).unwrap().graph.as_ref().unwrap().scene_modifiers[0].id.clone();
-        let toggle = build_action(&project, SceneModifierAction::Toggle(layer_id, id)).unwrap();
-        editing.execute(with_admission(toggle), &mut project);
-        assert!(editing.take_rejection().is_none());
-        let after_toggle = serde_json::to_value(&project).unwrap();
-        assert_ne!(after_toggle, after_add);
-        assert!(editing.undo(&mut project));
-        assert_eq!(serde_json::to_value(&project).unwrap(), after_add);
-        assert!(editing.redo(&mut project));
-        assert_eq!(serde_json::to_value(&project).unwrap(), after_toggle);
-        assert!(editing.undo(&mut project));
-        assert_eq!(serde_json::to_value(&project).unwrap(), after_add);
-        assert!(editing.undo(&mut project));
-        assert_eq!(serde_json::to_value(&project).unwrap(), before);
-    }
-}
-
-#[cfg(test)]
 pub(crate) mod tests;
 
 #[cfg(test)]

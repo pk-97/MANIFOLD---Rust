@@ -243,7 +243,7 @@ fn drag_the_photoscan(pick: impl Fn(&[GizmoTarget]) -> GizmoTarget) -> Dragged {
     use manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
-    let (imported_graph, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&fixture).expect("the photoscan imports");
+    let (imported_graph, _) = manifold_nodes_scene::node_graph::gltf_import::compile_model_scene(&fixture).expect("the photoscan imports");
     let mut project = Project::default();
     let preset_id = imported_graph.preset_metadata.as_ref().unwrap().id.clone();
     let index = project.timeline.add_layer("Photoscan", LayerType::Generator, preset_id);

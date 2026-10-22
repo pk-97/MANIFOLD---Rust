@@ -561,7 +561,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                 continue
             plan.filters.update(mounted)
         plan.filters.update(changed_test_filters(path, repo, base, patches.get(path, '')))
-        if is_gltf_path(path):
+        if is_gltf_path(path) and (Path(repo) / GLTF_PATHS[0]).is_file():
             plan.glb = True
         for root, filters in CONTRACT_ROOT_ROWS:
             if path.startswith(root):

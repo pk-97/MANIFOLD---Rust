@@ -12,10 +12,12 @@
 //! The format is closed: every type here denies unknown fields.
 
 mod base;
+mod import;
 mod tree;
 
 
 pub use manifold_foundation::id::ItemId;
+pub use import::{ImportPlacement, ImportedModel, ImportedNode, import_child_id, is_import_child, node_item};
 pub use tree::SceneEditError;
 
 use serde::{Deserialize, Serialize};
@@ -203,7 +205,14 @@ pub enum Shape {
     Dodecahedron,
     Ocean,
     #[serde(rename_all = "camelCase")]
-    Mesh { file: String, node_path: String },
+    Mesh {
+        file: String,
+        node_path: String,
+        /// Vertices after the file's triangles are expanded, read at import: the
+        /// mesh node's buffer is sized from it (0 until known).
+        #[serde(default)]
+        vertex_count: u32,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -246,15 +246,6 @@ fn physics_boundary_rows_share_owner() {
         }).count();
         assert_eq!(children, looks, "{preset}: the water's looks");
     }
-    // An imported model: its group is the parent of its parts.
-    let (import, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(
-        &manifold_nodes_scene::node_graph::gltf_import::testkit::azalea_fixture_path(),
-    )
-    .expect("the fixture imports");
-    let imported = assert_rows_share_owner("azalea", &import);
-    let vm = SceneVm::from_def(&import).expect("the import is a scene");
-    assert!(vm.objects.iter().all(|object| matches!(object, SceneObjectVm::Known(_))), "every imported part is a row: {:?}", vm.objects.len());
-    assert!(imported >= 3, "a parent and both its parts");
     assert!(rows > 20, "the bundled scenes have rows");
 }
 

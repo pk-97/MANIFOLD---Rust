@@ -62,13 +62,6 @@ fn rows(project: &Project, layer: &LayerId) -> Vec<manifold_nodes_scene::node_gr
         .collect()
 }
 
-fn rename_scene_object(project: &mut Project, layer: &LayerId, object: &manifold_core::SceneNodeRef, name: &str) {
-    let command = panel_rename_command(project, layer, object, name);
-    let mut editing = EditingService::new();
-    editing.execute(command, project);
-    assert_eq!(editing.take_rejection(), None);
-}
-
 /// Exercise the panel's header and keyboard/context rename action addresses.
 /// Text entry/commit gesture coverage is deferred to BUG-ajyri.
 pub(super) fn panel_rename_command(project: &Project, layer: &LayerId, object: &manifold_core::SceneNodeRef, name: &str)
@@ -320,77 +313,3 @@ fn tree_has_name(tree: &manifold_ui::UITree, name: &str) -> bool {
     tree.all_nodes().any(|node| tree.name_of(node.id) == Some(name))
 }
 
-#[test]
-fn water_and_imported_compound_rename_use_object_node_id() {
-    let (mut project, layer, render) = super::water_family::water_project();
-    add_water(&mut project, &layer, render);
-    let water = rows(&project, &layer)
-        .into_iter()
-        .find(|row| row.is_group && row.liquid_domain.is_some())
-        .expect("Water parent");
-    let mut ui = sync_water_ui(&project, &layer);
-    ui.scene_setup_panel.set_selection(
-        layer.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(water.address.clone()),
-    );
-    build_scene_tree(&mut ui);
-    let action = ui.scene_setup_panel.rename_selection_action().expect("Water rename");
-    assert!(matches!(action,
-        manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneSetupRenameObjectClicked(_, id, _))
-            if id == water.address));
-    rename_scene_object(&mut project, &layer, &water.address, "Renamed Water");
-    assert_eq!(
-        rows(&project, &layer)
-            .into_iter()
-            .find(|row| row.address == water.address)
-            .expect("renamed Water row")
-            .name,
-        "Renamed Water"
-    );
-
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
-    let default = effective_def(&project, &layer);
-    let plan = manifold_nodes_scene::node_graph::gltf_import::assemble_merge_plan(&default, &fixture)
-        .expect("import compound fixture");
-    let mut editing = EditingService::new();
-    editing.execute(
-        Box::new(manifold_editing::commands::graph::ImportModelIntoSceneCommand::new(
-            manifold_core::GraphTarget::Generator(layer.clone()),
-            Vec::new(),
-            plan.render_scene_node_id,
-            plan.new_nodes,
-            plan.new_wires,
-            plan.new_objects_count,
-            plan.new_card_params,
-            plan.new_card_bindings,
-            plan.new_string_params, plan.new_string_bindings,
-            default,
-        ).with_scene_bounds(plan.scene_bounds)),
-        &mut project,
-    );
-    assert_eq!(editing.take_rejection(), None);
-    let imported = rows(&project, &layer)
-        .into_iter()
-        .find(|row| row.is_group && row.liquid_domain.is_none())
-        .expect("imported compound parent");
-    let mut ui = sync_water_ui(&project, &layer);
-    ui.scene_setup_panel.set_selection(
-        layer.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(imported.address.clone()),
-    );
-    build_scene_tree(&mut ui);
-    let action = ui.scene_setup_panel.rename_selection_action().expect("import rename");
-    assert!(matches!(action,
-        manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneSetupRenameObjectClicked(_, id, _))
-            if id == imported.address));
-    rename_scene_object(&mut project, &layer, &imported.address, "Renamed Import");
-    assert_eq!(
-        rows(&project, &layer)
-            .into_iter()
-            .find(|row| row.object_node_id == imported.object_node_id)
-            .expect("renamed imported row")
-            .name,
-        "Renamed Import"
-    );
-}

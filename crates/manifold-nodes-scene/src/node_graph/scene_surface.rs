@@ -104,8 +104,6 @@ const SPOT: Gate = Gate::Only(Feature::LightType, Modes(0b100));
 /// `node.bake_environment`'s `mode` values: Gradient 0, Softbox 1, HDRI 2.
 const GRADIENT: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b001));
 const SOFTBOX: Gate = Gate::Only(Feature::EnvironmentMode, Modes(0b010));
-/// The Background switch's values: off 0, on 1.
-const BACKGROUND_ON: Gate = Gate::Only(Feature::Background, Modes(0b10));
 
 /// `node.fluid_role_source`'s roles past Initial Fill (0): an Initial Fill
 /// is the water at rest in its box, so it reads no motion.
@@ -224,13 +222,6 @@ pub fn scene_shape(type_id: &str) -> &'static [SceneShapeDecl] {
     }
 }
 
-/// The placement an author gives a control that drives several nodes: the
-/// one its first target would have alone. A fan-out keeps its own scene
-/// facts (SCENE_SURFACES_DESIGN.md D23 (scene facts follow the bound node)),
-/// so the importer writes this into the control when it builds it.
-pub(crate) fn fan_out_scene(type_id: &str, param: &str) -> Option<SceneParamDesc> {
-    scene_param_facts(type_id, param).map(|facts| facts.desc)
-}
 
 fn rigid_body(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Body;
@@ -476,20 +467,6 @@ fn bake_environment(param: &str) -> Option<SceneParamFacts> {
     })
 }
 
-/// Where the importer's Background controls sit on the Scene tab: the
-/// Environment group, as setup rows. They drive nodes outside the scene
-/// vocabulary (the switch, blur and exposure of the sky chain), so the
-/// importer places them by card param id instead of by node type. Blur and
-/// Brightness read only while the Background switch is on.
-pub(crate) fn background_scene(param: &str) -> Option<SceneParamDesc> {
-    let facts = match param {
-        "bg_enabled" => setup(ControlGroup::Environment).switch(Feature::Background),
-        "bg_blur" => setup(ControlGroup::Environment).gate(BACKGROUND_ON),
-        "bg_brightness" => setup(ControlGroup::Environment).gate(BACKGROUND_ON),
-        _ => return None,
-    };
-    Some(facts.desc)
-}
 
 fn scene_object(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Look;

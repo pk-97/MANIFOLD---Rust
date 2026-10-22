@@ -25,7 +25,6 @@ mod expand_compiler_tests;
 mod expand_compiler_conformance;
 mod expand_compiler_parameter_guard_tests;
 mod execution_plan;
-mod loaded_preset_view;
 mod atomic;
 mod persistence;
 
@@ -118,18 +117,14 @@ mod scene_exposure;
 
 mod gltf_animation_source;
 
-mod gltf_upgrade_project;
 
 #[cfg(feature = "gpu-proofs")]
 mod copy_positions;
 
 
 
-mod gltf_upgrade;
 
 mod loop_upgrade;
 
 
-mod gltf_import;
-mod gltf_card_precedence;
 mod surface_mesh_normals;

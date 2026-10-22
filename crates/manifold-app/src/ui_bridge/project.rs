@@ -975,25 +975,10 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
 
-        // P4 "Import Model…" button (D5): a native file dialog picks a
-        // second `.glb`/`.gltf`, `merge_import_into_graph` (via the public
-        // `assemble_merge_plan` wrapper — the assembler's own summary type
-        // is crate-private, same constraint as `OBJECT_SAFETY_MAX`) builds
-        // a `MergePlan` against the layer's CURRENT effective def, and
-        // `ImportModelIntoSceneCommand` applies it as one undo unit. Loud
-        // failure (log + no-op), never a silent partial merge — same
-        // posture as `Application::import_model_file`'s own parse-failure
-        // branch.
-        ProjectAction::SceneSetupImportModelClicked(layer_id, render_scene_node_id) => {
-            let Some(default) = generator_catalog_default(project, layer_id) else {
-                return DispatchResult::handled();
-            };
-            let effective_def = project
-                .timeline
-                .find_layer_by_id(layer_id)
-                .and_then(|(_, layer)| layer.generator_graph().cloned())
-                .unwrap_or_else(|| default.clone());
-
+        // "Import Model…": a native file dialog picks a `.glb`/`.gltf`, which
+        // joins the scene as a Group of its parts, one undo step. A file that
+        // cannot be read toasts.
+        ProjectAction::SceneSetupImportModelClicked(layer_id, _) => {
             let Some(path) = crate::file_dialogs::pick_file(
                 crate::file_dialogs::DialogAction::ImportModel,
                 dialogs,
@@ -1001,46 +986,39 @@ pub(super) fn dispatch_project(
             ) else {
                 return DispatchResult::handled();
             };
-
-            let plan = match manifold_nodes_scene::node_graph::gltf_import::assemble_merge_plan(
-                &effective_def,
-                &path,
-            ) {
-                Ok(plan) => plan,
+            match crate::scene_import::add_model_commands(layer_id, &path) {
+                Ok(commands) => project.execute_batch(commands, "Import 3D Model".to_string()),
                 Err(e) => {
-                    log::warn!(
-                        "[Scene Setup] Import Model… merge failed for {}: {e}",
-                        path.display()
-                    );
-                    return DispatchResult::handled();
+                    log::warn!("[Scene Setup] Import Model… failed for {}: {e}", path.display());
+                    let name = path.file_name().map_or_else(|| "model".into(), |n| n.to_string_lossy().into_owned());
+                    ui.toast.show_with_accent(format!("Couldn't import {name}: {e}"), manifold_ui::color::RED_BASE);
                 }
+            }
+            DispatchResult::handled()
+        }
+        // Model File swap on an imported Group: the picked file replaces the
+        // Group's Source and its parts are reconciled by file node path, in
+        // one undo step. A file that cannot be read, or a group that is no
+        // import, toasts.
+        ProjectAction::SceneSetupSwapModelFile(layer_id, group) => {
+            let Some(path) = crate::file_dialogs::pick_file(
+                crate::file_dialogs::DialogAction::ImportModel,
+                dialogs,
+                user_prefs,
+            ) else {
+                return DispatchResult::handled();
             };
-            debug_assert_eq!(
-                plan.render_scene_node_id, *render_scene_node_id,
-                "the freshly-built plan must target the SAME render_scene the Vm/action carried"
-            );
-
-            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-            let cmd = manifold_editing::commands::graph::ImportModelIntoSceneCommand::new(
-                target,
-                Vec::new(),
-                plan.render_scene_node_id,
-                plan.new_nodes,
-                plan.new_wires,
-                plan.new_objects_count,
-                plan.new_card_params,
-                plan.new_card_bindings,
-                plan.new_string_params, plan.new_string_bindings,
-                default,
-            )
-            .with_scene_bounds(plan.scene_bounds);
-            let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            project.execute(boxed);
-            if !plan.report_lines.is_empty() {
-                log::info!(
-                    "[Scene Setup] Import Model… report: {}",
-                    plan.report_lines.join("; ")
-                );
+            match crate::scene_import::swap_model_file(project, layer_id, group, &path) {
+                Ok(swap) => {
+                    project.execute_batch(swap.commands, "Swap Model File".to_string());
+                    if let Some(toast) = swap.toast {
+                        ui.toast.show(toast);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[Scene Setup] Model File swap failed for {}: {e}", path.display());
+                    ui.toast.show_with_accent(format!("Couldn't swap the model file: {e}"), manifold_ui::color::RED_BASE);
+                }
             }
             DispatchResult::handled()
         }

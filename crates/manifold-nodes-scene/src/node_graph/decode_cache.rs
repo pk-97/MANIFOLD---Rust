@@ -385,6 +385,7 @@ fn mesh_selector_key(selector: &GltfMeshSelector) -> String {
         }
         GltfMeshSelector::Material { material_index } => format!("material:{material_index}"),
         GltfMeshSelector::DefaultMaterial => "default-material".to_string(),
+        GltfMeshSelector::Node { path } => format!("node:{path}"),
     }
 }
 
@@ -1253,7 +1254,7 @@ mod tests {
         let selector = GltfMeshSelector::WholeScene;
 
         let v1 =
-            cached_load_gltf_mesh_with_root(&path, selector, Some(root.to_path_buf())).unwrap();
+            cached_load_gltf_mesh_with_root(&path, selector.clone(), Some(root.to_path_buf())).unwrap();
 
         let file_hash = parse_buffer_snapshot(&path).unwrap().identity;
         let key = key_hash(

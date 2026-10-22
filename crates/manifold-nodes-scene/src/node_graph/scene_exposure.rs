@@ -234,11 +234,6 @@ fn migrate_light_titles(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
-#[cfg(test)]
-pub(crate) fn migrate_light_titles_for_test(def: &mut EffectGraphDef) -> bool {
-    migrate_light_titles(def)
-}
-
 /// The layered gather consumes the original signed CoC and computes its own
 /// conservative tile bounds. Older saved graphs routed that CoC through the
 /// standalone `coc_dilate` node first, which inflated radii at silhouettes.

@@ -331,8 +331,6 @@ class ScopeTests(unittest.TestCase):
             "crates/manifold-compositor/src/layer_compositor.rs": ["layer_compositor"],
             "crates/manifold-compositor/src/preset_thumbnail.rs": ["preset_thumbnail"],
             "crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade.rs": ["loop_upgrade"],
-            "crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs":
-                ["gltf_import", "gltf_card_precedence", "gltf_upgrade", "gltf_upgrade_project"],
         }
         import cpu_scope
         for path, modules in cases.items():

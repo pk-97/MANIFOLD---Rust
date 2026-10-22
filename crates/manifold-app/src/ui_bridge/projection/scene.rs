@@ -1115,25 +1115,6 @@ mod ownership_tests {
     }
 
     #[test]
-    fn imported_gltf_scene_controls_have_one_owner() {
-        for fixture in ["cc0__oomurasaki_azalea_r._x_pulchrum.glb", "cc0___mushroom.glb"] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/fixtures/gltf").join(fixture);
-            let (def, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
-                .unwrap_or_else(|e| panic!("{fixture}: {e}"));
-            let camera = assert_one_owner(fixture, &def);
-            assert!(!camera.is_empty(), "{fixture}: the camera owns its dials");
-            let owned: std::collections::BTreeSet<String> = scene_items(&def)
-                .iter()
-                .flat_map(|(_, nodes, _)| parameter_ids_for_nodes(Some(&def), nodes))
-                .collect();
-            for id in ["bg_enabled", "bg_blur", "bg_brightness"] {
-                assert!(owned.contains(id), "{fixture}: the world owns the Background control {id}");
-            }
-        }
-    }
-
-    #[test]
     fn duplicated_ground_binding_uses_its_clone_target_for_section_ownership() {
         let mut def = azalea_like_fixture();
         def.nodes = vec![
