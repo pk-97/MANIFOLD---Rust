@@ -498,30 +498,6 @@ mod tests {
         }
     }
 
-    const BOX_BODY_HANDLE: &str = "Box Body";
-
-    fn build(def: EffectGraphDef, what: &str) -> manifold_node_engine::runtime::PresetRuntime {
-        manifold_node_engine::runtime::PresetRuntime::from_def_for_render(def, &registry(), None, false)
-            .unwrap_or_else(|e| panic!("{what} must build: {e:?}"))
-    }
-
-    /// A copies body saved with a metres Spacing loses it to the
-    /// retired-param strip, so the layer still builds.
-    #[test]
-    fn an_unwired_body_with_a_stale_copy_spacing_still_builds() {
-        let mut doc: serde_json::Value =
-            serde_json::from_str(include_str!("../../../assets/generator-presets/PhysicsBoxes.json")).unwrap();
-        let body = doc["nodes"].as_array().unwrap().iter().position(|n| n["handle"] == BOX_BODY_HANDLE).unwrap();
-        doc["nodes"][body]["params"]["copy_spacing"] = serde_json::json!({"type": "Float", "value": 1.85});
-        let body_id = doc["nodes"][body]["id"].clone();
-        doc["wires"].as_array_mut().unwrap().retain(|w| !(w["fromNode"] == body_id && w["fromPort"] == "body"));
-        let def: EffectGraphDef = serde_json::from_value(doc).unwrap();
-        let runtime = build(def, "an unwired body with a stale Spacing");
-        let graph = &runtime.graph;
-        let body = graph.get_node(graph.node_id_by_handle(BOX_BODY_HANDLE).unwrap()).unwrap();
-        assert!(body.params.get("copy_spacing").is_none());
-    }
-
     /// The GPU FLIP domain sizes its own pool, so an old show's saved Max
     /// Particles, exposed or not, loads cleanly and is ignored: the bundled
     /// GPU FLIP Dam Break with a domain carrying 5000 builds, and the domain
@@ -531,7 +507,7 @@ mod tests {
         use manifold_node_engine::runtime::PresetRuntime;
 
         let mut doc: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../assets/generator-presets/WaterDamBreakGpuFlip.json"
+            "../../fixtures/presets/WaterDamBreakGpuFlip.json"
         ))
         .unwrap();
         let mut stack = vec![&mut doc];

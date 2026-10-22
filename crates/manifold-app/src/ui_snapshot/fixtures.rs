@@ -70,7 +70,6 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
         "timeline" => Some(timeline_scene()),
         "physicsscene" => Some(physics_scene("PhysicsSolids", "Physics Solids")),
         "newscene" => Some(new_scene("PhysicsSolids", "Physics Solids")),
-        "physicsboxes" => Some(physics_scene("PhysicsBoxes", "Physics Boxes")),
         "fluidauthoring" => Some(physics_scene("Scene", "Fluid Authoring")),
         "scene-setup" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
         "waterdambreak" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
@@ -237,6 +236,7 @@ fn physics_scene(preset: &'static str, name: &str) -> SceneData {
 /// `newscene`: a scene layer exactly as it is added, card untouched. A new
 /// scene's card is empty until the user puts controls on it.
 fn new_scene(preset: &'static str, name: &str) -> SceneData {
+    manifold_nodes::engine_scenes::install();
     let mut project = Project::default();
     let mut layer = Layer::new_generator(name.into(), PresetTypeId::new(preset), 0);
     layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(32.0)));

@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const PHYSICS_SOLIDS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/assets/generator-presets/PhysicsSolids.json"
+    "/tests/fixtures/presets/PhysicsSolids.json"
 ));
 const UNIFORM_FORCE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),

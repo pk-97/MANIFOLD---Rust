@@ -39,6 +39,7 @@ fn project() -> Project {
 }
 
 fn project_of(preset: &'static str) -> Project {
+    manifold_nodes::engine_scenes::install();
     let mut project = Project::default();
     project.settings.bpm = Bpm(BPM as f32);
     project.settings.output_width = WIDTH as i32;

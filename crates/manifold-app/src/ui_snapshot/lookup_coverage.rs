@@ -12,7 +12,6 @@ const SCENE_FIXTURES: &[&str] = &[
     "gltfscene",
     "mushroomscene",
     "physicsscene",
-    "physicsboxes",
     "fluidauthoring",
     "waterdambreak",
     "waterdambreakmatter",
@@ -126,8 +125,9 @@ fn scene_card_rows_survive_save_and_reload() {
 
 /// A PhysicsSolids control the template declares, bound to one top-level node.
 fn template_node_control() -> (manifold_core::effect_graph_def::EffectGraphDef, String, String) {
+    manifold_nodes::engine_scenes::install();
     let ty = manifold_core::PresetTypeId::from_string("PhysicsSolids".into());
-    let template = manifold_nodes::bundled_presets::bundled_preset_def(&ty).expect("PhysicsSolids");
+    let template = manifold_nodes::engine_scenes::scene_def(&ty).expect("PhysicsSolids");
     let meta = template.preset_metadata.as_ref().unwrap();
     let (id, node_id) = meta
         .params
@@ -147,6 +147,7 @@ fn template_node_control() -> (manifold_core::effect_graph_def::EffectGraphDef, 
 }
 
 fn physics_solids(graph: manifold_core::effect_graph_def::EffectGraphDef) -> PresetInstance {
+    manifold_nodes::engine_scenes::install();
     let mut fx = PresetInstance::new_generator(manifold_core::PresetTypeId::from_string(
         "PhysicsSolids".into(),
     ));

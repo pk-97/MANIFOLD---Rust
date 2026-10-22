@@ -28,7 +28,7 @@ use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::{Value, json};
 
 
-const PRESET: &str = include_str!("../../assets/generator-presets/WaterFloatingBoxMatter.json");
+const PRESET: &str = include_str!("../fixtures/presets/WaterFloatingBoxMatter.json");
 const PROBE_TYPE: &str = "test.matter_coupling_probe";
 const SIZE: u32 = 64;
 const G: f32 = 9.81;

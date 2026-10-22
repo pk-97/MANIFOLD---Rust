@@ -7,7 +7,7 @@ use manifold_core::effect_graph_def::{
 use manifold_core::id::NodeId;
 use manifold_core::liquid_domain::{MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
-use crate::bundled_presets::bundled_preset_def;
+use crate::engine_scenes::scene_def;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_water_gpu_mpm::matter::{MatterPoint, STATS_WORDS};
 use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
@@ -376,7 +376,7 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     })
 }
 fn bundled(id: &'static str) -> EffectGraphDef {
-    bundled_preset_def(&PresetTypeId::new(id))
+    scene_def(&PresetTypeId::new(id))
         .unwrap_or_else(|| panic!("no bundled preset {id}"))
         .as_ref()
         .clone()

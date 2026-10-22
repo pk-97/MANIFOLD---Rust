@@ -16,7 +16,7 @@ use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scen
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution::Executor, exec::effect_node::FrameTime, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::compile};
 
-const PHYSICS_SOLIDS: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");
+const PHYSICS_SOLIDS: &str = include_str!("fixtures/presets/PhysicsSolids.json");
 
 const RECIPES: [(&str, &str, &str); 3] = [
     ("UniformForce", "node.uniform_vector_field", "Direction X"),

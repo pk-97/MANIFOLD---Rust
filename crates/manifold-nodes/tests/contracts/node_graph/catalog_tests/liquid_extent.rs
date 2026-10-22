@@ -2,11 +2,9 @@
 use manifold_node_engine::exec::extent::*;
 use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_core::effect_graph_def::EffectGraphDef;
-    use manifold_nodes::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
     use manifold_core::fluid_domain::domain_layout;
 
 
-    use manifold_core::preset_def::PresetKind;
 
 
 
@@ -43,26 +41,27 @@ use manifold_core::effect_graph_def::EffectGraphDef;
         }
     }
 
-    /// Every bundled generator preset holding a liquid domain.
+    /// Every engine scene holding a liquid domain.
     fn liquid_presets() -> Vec<(String, std::sync::Arc<EffectGraphDef>)> {
         let holds_liquid = |def: &EffectGraphDef| {
             let flat = manifold_node_engine::load::expand::flatten_expanded(def, &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin()).expect("flattens");
             flat.nodes.iter().any(|node| is_liquid_domain(&node.type_id))
         };
-        bundled_preset_type_ids(PresetKind::Generator)
-            .filter_map(|id| bundled_preset_def(&id).filter(|def| holds_liquid(def.as_ref())).map(|def| (id.to_string(), def)))
+        manifold_nodes::engine_scenes::all()
+            .filter(|(_, def)| holds_liquid(def.as_ref()))
+            .map(|(id, def)| (id.to_string(), def))
             .collect()
     }
 
     fn particle_blend_preset() -> EffectGraphDef {
-        serde_json::from_str(include_str!("../../../../assets/generator-presets/WaterDamBreakParticles.json")).unwrap()
+        serde_json::from_str(include_str!("../../../fixtures/presets/WaterDamBreakParticles.json")).unwrap()
     }
 
     #[test]
     fn particle_blend_presets_have_complete_extent_rules() {
         for text in [
-            include_str!("../../../../assets/generator-presets/WaterDamBreakGpuFlip.json"),
-            include_str!("../../../../assets/generator-presets/WaterDamBreakParticles.json"),
+            include_str!("../../../fixtures/presets/WaterDamBreakGpuFlip.json"),
+            include_str!("../../../fixtures/presets/WaterDamBreakParticles.json"),
         ] {
             let def = serde_json::from_str(text).unwrap();
             for resolution in [16, 32] {

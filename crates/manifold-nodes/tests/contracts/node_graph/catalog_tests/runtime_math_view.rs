@@ -580,7 +580,7 @@ fn retired_params_leave_before_scene_modifier_value_writes() {
     }
     let mut def: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/assets/generator-presets/WaterDamBreakGpuFlip.json"
+        "/tests/fixtures/presets/WaterDamBreakGpuFlip.json"
     )))
     .unwrap();
     let step = find_step(&mut def.nodes).expect("the Dam Break has a GPU FLIP step");

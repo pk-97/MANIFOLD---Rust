@@ -379,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_modifier_editor_owner_resolves_exact_generator() {
+    fn modifier_owner_resolves_exact_generator() {
         let (project, target, layer_a, layer_b) = project_with_modifier();
         let selection = SelectionState::default();
         let resolved = resolve_graph_target(
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_modifier_editor_owner_rejects_invalid_and_dangling_controls() {
+    fn modifier_owner_rejects_invalid_and_dangling_controls() {
         let (project, target, _, layer_b) = project_with_modifier();
         let selection = SelectionState::default();
         let invalid = GraphTarget::SceneModifier {

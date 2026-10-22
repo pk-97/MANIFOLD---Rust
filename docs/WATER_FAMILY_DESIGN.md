@@ -165,7 +165,7 @@ its role. No family Duplicate control or keyboard/context bypass.
 ### Change surface and re-derivation
 
 F1a owns renderer builders, golden fixtures and both
-`assets/generator-presets/WaterDamBreak{GpuFlip,Particles}.json`.
+`tests/fixtures/presets/WaterDamBreak{GpuFlip,Particles}.json`.
 F1b/F2 own `scene_vm.rs`, `scene_exposure.rs`, editing `scene/fluid.rs` and
 `fluid/template.rs`, scene lifecycle tests, app `ui_bridge/project.rs`,
 `projection/scene.rs`, `projection/inspector.rs`,

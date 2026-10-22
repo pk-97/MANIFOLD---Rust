@@ -20,7 +20,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
     /// takes scene forces and impulses on the same port FLIP does.
     #[test]
     fn matter_surface_water_resolves_to_its_domain_force_port() {
-        let def = preset(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakMatter.json")));
+        let def = preset(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/WaterDamBreakMatter.json")));
         let registry = PrimitiveRegistry::with_builtin();
         let index = FlatSceneIndex::build(&def).unwrap();
         let water = top("water_object");
@@ -40,21 +40,3 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
         assert_eq!(recipients, vec![(NodeId::new("matter_domain"), ImpulseTarget::Fluid)]);
     }
 
-    /// A swarm's object is found through its copies and its step, and takes
-    /// scene forces on its forces node's port, as water and bodies do.
-    #[test]
-    fn swarm_object_resolves_to_its_forces_node() {
-        let def = preset(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/Swarm.json")));
-        let registry = PrimitiveRegistry::with_builtin();
-        let index = FlatSceneIndex::build(&def).unwrap();
-        // The preset is the Add menu's swarm inserted whole: one group.
-        let group = def.nodes.iter().find(|node| node.type_id == "group").expect("the swarm group");
-        let inside = |type_id: &str| {
-            let node = group.group.as_deref().unwrap().nodes.iter().find(|node| node.type_id == type_id).expect("swarm node");
-            node.node_id.clone()
-        };
-        assert_eq!(
-            recipient_key(&index, &inside("node.scene_object"), &registry).unwrap(),
-            Some((inside("node.swarm_forces"), "acceleration_field".to_string()))
-        );
-    }

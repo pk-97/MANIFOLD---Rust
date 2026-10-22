@@ -309,7 +309,6 @@ fn render_ui_scene(
         || scene == "gltfscene"
         || scene == "mushroomscene"
         || scene == "physicsscene"
-        || scene == "physicsboxes"
         || scene == "newscene"
         || scene == "gltfanimscene"
         || scene == "bug047"

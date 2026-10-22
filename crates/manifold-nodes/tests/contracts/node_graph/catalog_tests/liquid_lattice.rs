@@ -8,9 +8,11 @@
 
         let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         let mut hosts = Vec::new();
+        let engine_scenes = manifold_nodes::engine_scenes::NAMES.map(manifold_core::PresetTypeId::new);
         for kind in [PresetKind::Effect, PresetKind::Generator] {
-            for type_id in bundled_preset_type_ids(kind) {
-                let def = bundled_preset_def(&type_id).expect("bundled preset");
+            let engine_scenes = if kind == PresetKind::Generator { engine_scenes.to_vec() } else { Vec::new() };
+            for type_id in bundled_preset_type_ids(kind).chain(engine_scenes) {
+                let def = bundled_preset_def(&type_id).or_else(|| manifold_nodes::engine_scenes::scene_def(&type_id)).expect("bundled preset");
                 let expanded = manifold_node_engine::load::expand::expand_scene_modifiers(def.as_ref(), &registry)
                     .unwrap_or_else(|error| panic!("{type_id}: {error}"));
                 let flat = manifold_core::flatten::flatten_groups(&expanded)

@@ -76,3 +76,9 @@ filter = '''
   | (binary_id(manifold-app::bin/manifold) & test(/^(content_thread::tests::paused_|gap_start_probe::|mute_visibility_probe::|ui_bridge::project::tests::sdr_controls_route_pointer_gestures_to_content_and_undo$)/))
 '''
 test-group = "gpu"
+
+# The scene crash test runs about 1500 cases in 10 s. A hang in any of them
+# kills the test instead of stalling the run.
+[[profile.default.overrides]]
+filter = 'binary_id(manifold-nodes::main) & test(/^scene_document::every_kind_and_choice_survives::/)'
+slow-timeout = { period = "60s", terminate-after = 2 }

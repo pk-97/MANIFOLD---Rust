@@ -37,6 +37,7 @@ manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"
 manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 manifold-physics = { path = "../manifold-physics" }
+manifold-editing = { path = "../manifold-editing" }
 manifold-fluids = { path = "../manifold-fluids" }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-playback = { path = "../manifold-playback" }

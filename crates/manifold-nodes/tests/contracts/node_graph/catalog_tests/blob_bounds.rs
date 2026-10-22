@@ -35,7 +35,7 @@ mod migration_tests {
 
     #[test]
     fn liquid_fields_saved_before_blob_bounds_load_with_the_shipped_wiring() {
-        const SHIPPED: &str = include_str!("../../../../assets/generator-presets/WaterDamBreakGpuFlip.json");
+        const SHIPPED: &str = include_str!("../../../fixtures/presets/WaterDamBreakGpuFlip.json");
         let flat = |doc: serde_json::Value| {
             let def: EffectGraphDef = serde_json::from_value(doc).expect("parse");
             manifold_core::flatten::flatten_groups(&def).expect("flattens")

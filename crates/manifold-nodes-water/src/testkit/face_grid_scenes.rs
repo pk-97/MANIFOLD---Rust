@@ -26,9 +26,8 @@ pub const DIVISOR_ROW: u32 = 65 * 64 * 64;
 /// chosen for its shape, not its meaning, dividing by the length of the u
 /// faces (node.dot_products, a boundary). `consumer` is the v or w axis.
 pub fn matter_dam_break_faces(consumer: Option<usize>) -> EffectGraphDef {
-    let json = manifold_node_engine::load::catalog_source::preset_json(&manifold_core::PresetTypeId::new("WaterDamBreakMatter"))
-        .expect("registered catalog owner must provide WaterDamBreakMatter");
-    let mut preset: Value = serde_json::from_str(&json).expect("preset parses");
+    let json = include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakMatter.json");
+    let mut preset: Value = serde_json::from_str(json).expect("preset parses");
     let nodes = preset["nodes"].as_array_mut().expect("preset nodes");
     let group = nodes.iter_mut().find(|n| n["nodeId"] == "Live Matter").expect("Live Matter group");
     let inner = &mut group["group"];

@@ -13,7 +13,6 @@ mod param_wrap_smoke;
 mod project_preset_overlay;
 mod scene_document;
 mod scene_force_presets;
-mod swarm_hold;
 mod scene_loop_probe;
 mod scene_loop_wrap_parity;
 mod scene_modifier_inv_gate;
