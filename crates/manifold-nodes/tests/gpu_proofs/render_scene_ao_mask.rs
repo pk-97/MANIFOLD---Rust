@@ -216,7 +216,7 @@ fn render_and_read(json: &str, frames: i64) -> (Vec<u8>, u32, u32, Vec<u8>) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -337,7 +337,7 @@ fn rt_enabled_and_ready_forces_zero_everywhere_drawn() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(&json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -640,7 +640,7 @@ fn render_ao_group(json: &str, frames: i64) -> (Vec<u8>, Vec<u8>, u32, u32) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -753,7 +753,7 @@ fn rt_ready_makes_ao_group_identity_on_color() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(&json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,

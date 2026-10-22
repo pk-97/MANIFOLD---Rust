@@ -231,7 +231,7 @@ fn rt_w0_forced_gbuffer_matches_orbit_oracle() {
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(&json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -401,7 +401,7 @@ fn rt_w0_default_scene_stays_lazy_no_forced_gbuffer() {
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
         ]}"#;
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,

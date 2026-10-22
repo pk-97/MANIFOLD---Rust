@@ -294,8 +294,8 @@ impl LiquidRigidOwner {
     /// body already moving keeps its state. The poses follow at once; the
     /// liquid takes the new bodies at the next frame start
     /// ([`Self::rebind`]). False when the change needs a fresh world (a body
-    /// left or changed its shape, the walls moved, a fragment appeared); the
-    /// caller then builds a new owner.
+    /// left or changed its shape, the walls moved, a fragment appeared) or
+    /// no tick has run yet; the caller then builds a new owner.
     pub fn admit(
         &mut self,
         inputs: &RigidSceneInputs,
@@ -303,6 +303,12 @@ impl LiquidRigidOwner {
         colliders: &RigidImpulseTargets,
         capacity: usize,
     ) -> Result<bool, String> {
+        // Before the first tick a body that arrives (a wired mesh landing a
+        // frame late) belongs to the epoch's start: the fill must seed
+        // around it, and a restart loses nothing yet.
+        if self.completed == 0 && self.pending.is_none() {
+            return Ok(false);
+        }
         if walls != self.walls || capacity != self.capacity {
             return Ok(false);
         }

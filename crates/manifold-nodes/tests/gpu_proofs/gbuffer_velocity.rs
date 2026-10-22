@@ -160,7 +160,7 @@ fn gbuffer_velocity_two_frame_conformance() {
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(&json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -310,7 +310,7 @@ fn gbuffer_velocity_unwired_scene_bundled_smoke_stays_finite() {
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
         ]}"#;
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
