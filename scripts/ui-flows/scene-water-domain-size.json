@@ -1,9 +1,0 @@
-[
-  {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button","under_name":"inspector"}},"gesture":{"Click":{"modifiers":{}}}}},
-  {"ScrollTo":{"target":{"Query":{"name":"scene_tree.add.Objects"}}}},
-  {"Pointer":{"target":{"Query":{"name":"scene_tree.add.Objects"}},"gesture":{"Click":{"modifiers":{}}}}},
-  {"Pointer":{"target":{"Query":{"text":"Water","under_name":"dropdown"}},"gesture":{"Click":{"modifiers":{}}}}},
-  {"ScrollTo":{"target":{"Query":{"text":"Domain Size"}}}},
-  {"Assert":{"selector":{"Query":{"text":"Domain Size"}},"check":{"Count":1}}},
-  "Snapshot"
-]

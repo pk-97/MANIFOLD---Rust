@@ -68,14 +68,14 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
     }
     match scene {
         "timeline" => Some(timeline_scene()),
-        "physicsscene" => Some(physics_scene("PhysicsSolids", "Physics Solids")),
-        "newscene" => Some(new_scene("PhysicsSolids", "Physics Solids")),
+        "physicsscene" => Some(physics_scene("Scene", "Scene")),
+        "newscene" => Some(new_scene("Scene", "Scene")),
         "fluidauthoring" => Some(physics_scene("Scene", "Fluid Authoring")),
-        "scene-setup" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
-        "waterdambreak" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
-        "waterdambreakmatter" => Some(physics_scene("WaterDamBreakMatter", "Water — Dam Break (Live GPU)")),
+        "scene-setup" => Some(physics_scene("Scene", "Scene")),
+        "waterdambreak" => Some(physics_scene("Scene", "Scene")),
+        "waterdambreakmatter" => Some(physics_scene("Scene", "Scene")),
         // The free-camera scene: Ocean drives a free camera through a lens.
-        "oceanscene" => Some(physics_scene("Ocean", "Ocean")),
+        "oceanscene" => Some(physics_scene("Scene", "Scene")),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {
