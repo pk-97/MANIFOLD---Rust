@@ -877,6 +877,10 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
     no_swarm.remove(&ItemId::new("swarm")).unwrap();
     // A Copies row at its defaults lies across the travel axis: one cube deep.
     assert!((spacing(no_swarm) - 2.0).abs() < 1e-4, "the copies' row sizes the cell");
+    // A Water's particle draws (foam, spray, bubbles, Physics View dots)
+    // have no live count and stay out of the corridor.
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("water"), "Water", ItemFields::default_for(ItemKind::Water))).unwrap();
     let layer = scene_layer(doc);
     let def = layer.gen_params().unwrap().graph.clone().unwrap();
     let mut registry = PrimitiveRegistry::with_builtin();
@@ -894,6 +898,8 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
         .filter(|n| n.type_id == "node.scene_object" && (n.node_id.as_str().contains("cube:") || n.node_id.as_str().contains("swarm:")))
         .collect();
     assert_eq!(drawn.len(), 2, "the copied cube and the swarm draw");
+    let nests = graph.nodes.iter().filter(|n| n.type_id == "node.nest_copies").count();
+    assert_eq!(nests, 2, "only the copied cube and the swarm are tiled, not the water's particles");
     for object in drawn {
         let (switch, _) = source(object.id, "instances");
         let (nest, port) = source(switch.id, "in_1");
