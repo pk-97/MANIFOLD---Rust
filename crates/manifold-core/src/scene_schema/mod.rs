@@ -48,7 +48,8 @@ pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily, node_type as material_node_type};
 pub use modifier::{
-    MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_refuses, modifier_rows, modifier_type, shatter_refuses,
+    MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_refuses, modifier_rows, modifier_type, shatter_parts,
+    shatter_refuses,
 };
 pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
 use ocean::OCEAN_TABLES;

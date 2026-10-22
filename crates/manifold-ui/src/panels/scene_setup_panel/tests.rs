@@ -180,13 +180,20 @@ fn a_tree_row_drag_moves_the_item_into_a_group_or_beside_a_row() {
         assert_eq!(to.as_ref().map(ItemId::as_str), parent);
         assert_eq!(ahead.as_ref().map(ItemId::as_str), before);
     }
-    // Releasing off the rows (over the viewport, or below the tree) cancels.
-    for drop in [Vec2::new(600.0, target.y + target.height * 0.5), Vec2::new(from.x + 4.0, 890.0)] {
-        let start = Vec2::new(from.x + 4.0, from.y + from.height * 0.5);
-        assert!(panel.handle_event(&drag_begin(Some(cube), start), &mut tree).0);
-        let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: drop }, &mut tree);
-        assert!(actions.is_empty(), "a drop at {drop:?} moves nothing, got {actions:?}");
-    }
+    // Releasing in the panel below the last row moves the item to the end
+    // of the top level; releasing outside the panel (over the viewport)
+    // cancels.
+    let start = Vec2::new(from.x + 4.0, from.y + from.height * 0.5);
+    assert!(panel.handle_event(&drag_begin(Some(cube), start), &mut tree).0);
+    let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: Vec2::new(from.x + 4.0, 890.0) }, &mut tree);
+    assert!(
+        matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneTreeMove { parent: None, before: None, .. })]),
+        "a drop below the rows goes to the end of the top level, got {actions:?}"
+    );
+    let drop = Vec2::new(600.0, target.y + target.height * 0.5);
+    assert!(panel.handle_event(&drag_begin(Some(cube), start), &mut tree).0);
+    let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: drop }, &mut tree);
+    assert!(actions.is_empty(), "a drop at {drop:?} moves nothing, got {actions:?}");
 }
 
 /// Double-clicking a tree row renames its item, the name field over the row.

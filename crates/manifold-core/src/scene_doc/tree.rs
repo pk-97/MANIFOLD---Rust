@@ -535,16 +535,19 @@ impl SceneDoc {
         cuts
     }
 
-    /// One past the highest cut number the Camera row can name: every
-    /// number handed out, a deleted camera's included.
+    /// One past the highest cut number a live camera holds: the Camera row
+    /// spans the live cameras, so a deleted camera's number past them takes
+    /// no range.
     pub fn cut_count(&self) -> u32 {
-        self.cuts().last().map_or(0, |&(cut, _)| cut + 1).max(self.next_cut)
+        self.cuts().last().map_or(0, |&(cut, _)| cut + 1)
     }
 
-    /// The Camera row's label for each number up to [`Self::cut_count`]: the
-    /// camera's name, or empty for a number no camera holds.
+    /// The Camera row's label for each number up to [`Self::cut_count`], and
+    /// one past it: the camera's name, or empty for a number no camera
+    /// holds. The empty last label names every value past the live cameras,
+    /// a deleted camera's, which shows the first camera.
     pub fn cut_labels(&self) -> Vec<String> {
-        let mut labels = vec![String::new(); self.cut_count() as usize];
+        let mut labels = vec![String::new(); self.cut_count() as usize + 1];
         for (cut, id) in self.cuts() {
             if let (Some(label), Some(item)) = (labels.get_mut(cut as usize), self.find(id))
                 && label.is_empty()

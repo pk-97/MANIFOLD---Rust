@@ -1025,8 +1025,8 @@ impl ScenePanel {
 
     /// Where a tree row dropped at `pos` goes: into a Group when it lands on
     /// the middle of the Group's row, else before or after the row it lands
-    /// on, as that row's sibling. A drop off the rows cancels, as in
-    /// Blender's outliner.
+    /// on, as that row's sibling; below the last row, the end of the top
+    /// level. A drop outside the panel cancels.
     fn tree_drop(&self, tree: &UITree, item: &ItemId, pos: crate::node::Vec2) -> Option<PanelAction> {
         let vm = self.state.as_live()?;
         if !self.point_in_panel(pos) {
@@ -1042,7 +1042,13 @@ impl ScenePanel {
             })
             .collect();
         let (parent, before) = match rows.iter().find(|(bounds, _)| bounds.contains(pos)) {
-            None => return None,
+            None => {
+                let (last, _) = rows.last()?;
+                if y < last.y + last.height {
+                    return None;
+                }
+                (None, None)
+            }
             Some((_, target)) if *target == item => return None,
             Some((bounds, target)) => {
                 let on = vm.item(target)?;
