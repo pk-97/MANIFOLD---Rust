@@ -12894,6 +12894,12 @@
         },
         {
           "default": "0",
+          "label": "File Node",
+          "name": "node_path",
+          "type": "string"
+        },
+        {
+          "default": "0",
           "label": "Material Index",
           "name": "material_index",
           "range": [
@@ -13267,6 +13273,12 @@
           "default": "0",
           "label": "File",
           "name": "path",
+          "type": "string"
+        },
+        {
+          "default": "0",
+          "label": "File Node",
+          "name": "node_path",
           "type": "string"
         },
         {

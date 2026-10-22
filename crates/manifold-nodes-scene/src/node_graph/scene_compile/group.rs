@@ -32,6 +32,7 @@ fn walk(b: &mut Builder<'_>, items: &[Item], frame: Option<&Frame>) {
                 if !super::mesh::emit_combined(b, item, &inner) {
                     walk(b, &item.children, Some(&inner));
                 }
+                b.clock_rows(item);
             }
             ItemFields::Object(_) => super::object::emit(b, item, frame),
             _ => {}

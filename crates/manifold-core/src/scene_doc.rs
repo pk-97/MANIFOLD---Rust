@@ -17,7 +17,10 @@ mod tree;
 
 
 pub use manifold_foundation::id::ItemId;
-pub use import::{ImportPlacement, ImportedModel, ImportedNode, import_child_id, is_import_child, node_item};
+pub use import::{
+    ImportPlacement, ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, camera_item, import_child_id,
+    is_import_child, light_item, material_item, node_item,
+};
 pub use tree::SceneEditError;
 
 use serde::{Deserialize, Serialize};
@@ -180,6 +183,10 @@ pub struct GroupFields {
     /// An import: the file this group's children come from (section 7.7).
     pub source: Option<String>,
     pub combine_meshes: bool,
+    /// An import's animation clip: which of the file's clips every
+    /// animated part below plays. Structural, so it is never mapped; Rate,
+    /// Loop Mode and Retrigger are the live rows.
+    pub clip: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -212,7 +219,41 @@ pub enum Shape {
         /// mesh node's buffer is sized from it (0 until known).
         #[serde(default)]
         vertex_count: u32,
+        /// Which of the node's primitives this Object draws: a node whose mesh
+        /// carries several materials is one Object per material.
+        #[serde(default, skip_serializing_if = "MeshPrimitives::is_all")]
+        primitives: MeshPrimitives,
     },
+}
+
+/// The primitives of a file node's mesh that one Object draws.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MeshPrimitives {
+    /// Every primitive.
+    #[default]
+    All,
+    /// The primitives of one glTF material, by its index in the file.
+    #[serde(rename_all = "camelCase")]
+    Material { index: u32 },
+    /// The primitives with no material (glTF's default material).
+    NoMaterial,
+}
+
+impl MeshPrimitives {
+    pub fn is_all(&self) -> bool {
+        *self == MeshPrimitives::All
+    }
+
+    /// The glTF material these primitives use (`None` is the default
+    /// material); `None` for every primitive.
+    pub fn material(&self) -> Option<Option<u32>> {
+        match self {
+            MeshPrimitives::All => None,
+            MeshPrimitives::Material { index } => Some(Some(*index)),
+            MeshPrimitives::NoMaterial => Some(None),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -295,6 +336,12 @@ pub enum TextureSource {
     File { path: String },
     #[serde(rename_all = "camelCase")]
     Layer { layer: crate::LayerId },
+    /// A material of a model file (section 7.7): its factors, every map and
+    /// every extension, read from the file when the scene compiles.
+    /// `material` is the glTF material index; `None` is glTF's default
+    /// material, for primitives with none.
+    #[serde(rename_all = "camelCase")]
+    Model { file: String, material: Option<u32> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

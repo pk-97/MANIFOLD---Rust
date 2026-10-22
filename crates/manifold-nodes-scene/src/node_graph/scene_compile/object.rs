@@ -41,8 +41,11 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         return;
     };
     let owner = item.id.as_str();
-    let mesh = if let Shape::Mesh { file, node_path, vertex_count } = &fields.shape {
-        super::mesh::emit_source(b, owner, file, node_path, *vertex_count)
+    let mut center = None;
+    let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
+        let part = super::mesh::emit_part(b, item, file, node_path, *vertex_count, *primitives);
+        center = part.center;
+        (part.source, part.vertices)
     } else {
         let Some((mesh_type, solid)) = mesh_type(&fields.shape) else {
             return;
@@ -51,16 +54,25 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         if let Some(solid) = solid {
             b.set(mesh, "shape", SerializedParamValue::Enum { value: solid });
         }
-        mesh
+        (mesh, (mesh, "vertices"))
     };
     let transform = b.add(owner, "transform", "node.transform_3d");
+    if let Some(center) = center {
+        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
+            b.set(transform, param, SerializedParamValue::Float { value: center[axis] });
+        }
+    }
     let object = b.add(owner, "object", "node.scene_object");
-    let (surface, texture) = surface_for(b, &item.id);
+    let (surface, maps) = surface_for(b, &item.id);
     for w in object_wires(mesh, surface, transform, object) {
+        if w.to_port == "vertices" {
+            b.wire(vertices.0, vertices.1, object, "vertices");
+            continue;
+        }
         b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
     }
-    if let Some(texture) = texture {
-        b.wire(texture, "out", object, "base_color_map");
+    for (source, port) in maps {
+        b.wire(source, "out", object, port);
     }
     if let Some(frame) = frame {
         b.wire(frame.transform, "transform", object, "parent_transform");

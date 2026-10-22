@@ -12,10 +12,12 @@
 use manifold_nodes as _;
 mod scene_modifier_legacy;
 mod scene_viewport_session;
+mod glb_conformance;
 
 mod alpha_contract;
 mod node_error_status;
 mod bug237_light_camera_commit_render_proof;
+mod cinematic_scene_tail;
 mod film_grain_decorrelation;
 mod fragment_storage;
 mod gbuffer_depth;
@@ -34,6 +36,12 @@ mod rt_object_motion_shadow;
 mod rt_p2_soft_ao_temporal;
 mod rt_p3_emissive_texture;
 mod rt_t1b_vertex_normals;
+#[path = "catalog/rt_bug318_import_toggle.rs"]
+mod rt_bug318_import_toggle;
+#[path = "catalog/rt_bug326_fix_gate.rs"]
+mod rt_bug326_fix_gate;
+#[path = "catalog/rt_bugmajv_kernel_toggle.rs"]
+mod rt_bugmajv_kernel_toggle;
 mod rt_emissive_instancing;
 mod rt_emissive_light_table;
 mod rt_firefly_clamp;
@@ -43,8 +51,12 @@ mod rt_dynamic_geometry;
 mod rt_dynamic_current_frame;
 mod rt_dynamic_refit;
 mod rt_dynamic_shading;
+#[path = "catalog/rt_normal_tangent_mirror.rs"]
+mod rt_normal_tangent_mirror;
 mod rt_r2_accumulation;
 mod rt_r2_clamp;
+#[path = "catalog/rt_r3_heldout_gltf.rs"]
+mod rt_r3_heldout_gltf;
 mod rt_t38_multibounce;
 mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;

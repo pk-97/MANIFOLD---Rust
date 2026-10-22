@@ -62,8 +62,12 @@ fn a_model_becomes_parts_keyed_by_file_node_path() {
     let file = path.to_string_lossy().into_owned();
     let model = import_model(&path).unwrap();
     // `rig` has two parts below it, so the import is a group of them; the
-    // mesh-less `empty` node is gone.
-    let item = model.into_item(&file, ItemId::new("rigid"));
+    // mesh-less `empty` node is gone, and the glTF default material both
+    // parts draw with sits beside them.
+    let items = model.into_items(&file, ItemId::new("rigid"));
+    let [item] = items.as_slice() else {
+        panic!("a two-part model is one group");
+    };
     let ItemFields::Group(group) = &item.fields else {
         panic!("a two-part model is a group");
     };
@@ -71,6 +75,7 @@ fn a_model_becomes_parts_keyed_by_file_node_path() {
     let paths: Vec<&str> = item
         .children
         .iter()
+        .filter(|child| !matches!(child.fields, ItemFields::Material(_)))
         .map(|child| match &child.fields {
             ItemFields::Object(o) => match &o.shape {
                 Shape::Mesh { node_path, vertex_count, .. } => {
@@ -85,11 +90,11 @@ fn a_model_becomes_parts_keyed_by_file_node_path() {
     assert_eq!(paths, ["rig/a", "rig/b"]);
 
     // Each part loads its own mesh, already placed in the file's world.
-    let a = load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/a".into() }).unwrap();
-    let b = load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/b".into() }).unwrap();
+    let a = load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/a".into(), material: -1 }).unwrap();
+    let b = load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/b".into(), material: -1 }).unwrap();
     assert_eq!((a.len(), b.len()), (3, 3));
     assert_eq!(a[0].position, [1.0, 0.0, 0.0]);
     assert_eq!(b[0].position, [0.0, 2.0, 0.0]);
-    assert!(load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/empty".into() }).unwrap().is_empty());
+    assert!(load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/empty".into(), material: -1 }).unwrap().is_empty());
     std::fs::remove_file(path).unwrap();
 }

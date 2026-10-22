@@ -117,21 +117,25 @@ fn webp_dimensions_match_runtime_with_absent_or_different_size_fallback() {
         serde_json::json!({"source":0,"extensions":{"EXT_texture_webp":{"source":1}}}),
     ] {
         fixture.write_document(serde_json::json!([texture]), images.clone(), webp.get_ref());
+        let (document, buffers) = parse_document_and_buffers(Path::new(&fixture.path)).unwrap();
         let (w, h, _) = load_gltf_texture(&fixture.path, 0).unwrap();
         assert_eq!((w, h), (3, 2));
+        assert_eq!(texture_dims(Path::new(&fixture.path), &document, &buffers), [(w, h)]);
     }
 }
 
 #[test]
-fn missing_texture_source_is_reported_by_the_runtime() {
+fn missing_texture_source_is_reported_by_runtime_and_sized_by_fallback() {
     let fixture = TextureFixture::external_png();
     fixture.write_document(
         serde_json::json!([{}]),
         serde_json::json!([{"uri":"map.png"}]),
         &[],
     );
+    let (document, buffers) = parse_document_and_buffers(Path::new(&fixture.path)).unwrap();
     let error = load_gltf_texture(&fixture.path, 0).unwrap_err();
     assert_eq!(error, "texture 0 has no image source");
+    assert_eq!(texture_dims(Path::new(&fixture.path), &document, &buffers), [(2, 2)]);
 }
 
 #[test]

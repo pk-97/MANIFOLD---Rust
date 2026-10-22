@@ -13,7 +13,7 @@
 //! since this is a production code path, not a test.
 
 use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::scene::material::{MaterialMapInfo};
+use manifold_node_engine::scene::material::{MapSamplerDesc, MaterialMapInfo};
 
 /// glTF extensions MANIFOLD's importer actually supports, independent of
 /// what the pinned `gltf` 1.4.1 crate's own feature-flag set types —
@@ -528,6 +528,8 @@ manifold_core::testkit_visible! {
 #[derive(Debug, Clone)]
 pub(crate) struct GltfPunctualLight {
     pub name: Option<String>,
+    /// The owning node's index in the document.
+    pub node_index: usize,
     pub kind: GltfLightKind,
     pub color: [f32; 3],
     pub intensity: f32,
@@ -542,6 +544,51 @@ pub(crate) struct GltfPunctualLight {
     /// without a separate rotation-only matrix path.
     pub world_forward: [f32; 3],
 }
+}
+
+/// Recursively collect every node in `document` carrying a
+/// `KHR_lights_punctual` light, alongside its world transform. Mirrors
+/// `walk_gltf_node`'s recursion shape but only needs `node.transform()` — no
+/// buffers, no geometry.
+fn walk_gltf_node_for_lights(node: &gltf::Node, parent_world: Mat4, out: &mut Vec<GltfPunctualLight>) {
+    let world = mat4_mul(&parent_world, &node.transform().matrix());
+    if let Some(light) = node.light() {
+        let world_pos = mat4_transform_point(&world, [0.0, 0.0, 0.0]);
+        let fwd_pt = mat4_transform_point(&world, [0.0, 0.0, -1.0]);
+        let world_forward = normalize3(sub3(fwd_pt, world_pos));
+        let kind = match light.kind() {
+            gltf::khr_lights_punctual::Kind::Directional => GltfLightKind::Directional,
+            gltf::khr_lights_punctual::Kind::Point => GltfLightKind::Point,
+            gltf::khr_lights_punctual::Kind::Spot { inner_cone_angle, outer_cone_angle } => {
+                GltfLightKind::Spot { inner_cone_angle, outer_cone_angle }
+            }
+        };
+        out.push(GltfPunctualLight {
+            name: light.name().map(str::to_string),
+            node_index: node.index(),
+            kind,
+            color: light.color(),
+            intensity: light.intensity(),
+            range: light.range(),
+            world_pos,
+            world_forward,
+        });
+    }
+    for child in node.children() {
+        walk_gltf_node_for_lights(&child, world, out);
+    }
+}
+
+/// BUG-5uqg: every `KHR_lights_punctual` light in `document`'s imported node
+/// set (`resolve_import_nodes` — same scene-resolution fallback the mesh
+/// walk uses), resolved to world space. Called once from
+/// `gltf_import_summary`, stored on [`GltfImportSummary::lights`].
+pub(crate) fn collect_punctual_lights(document: &gltf::Document) -> Vec<GltfPunctualLight> {
+    let mut out = Vec::new();
+    for node in resolve_import_nodes(document) {
+        walk_gltf_node_for_lights(&node, MAT4_IDENTITY, &mut out);
+    }
+    out
 }
 
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): build a column-major `Mat4`
@@ -690,7 +737,11 @@ pub(crate) enum GltfMeshSelector {
     /// The mesh of the one file node at `path` (see [`file_node_tree`]),
     /// world-transformed through its ancestors, children excluded. An
     /// imported Object's mesh (SCENE_DOCUMENT_DESIGN.md section 7.7).
-    Node { path: std::sync::Arc<str> },
+    /// `material` keeps the primitives of one material: `-1` every
+    /// primitive, `-2` ([`DEFAULT_MATERIAL_MESH_PARAM`]) the materialless
+    /// ones, else that glTF material index. A node whose mesh carries
+    /// several materials is one Object per material.
+    Node { path: std::sync::Arc<str>, material: i32 },
     /// Walk the default scene's node tree, world-transforming every
     /// node's mesh primitives and combining them into one buffer. The
     /// proven azalea-fixture path — "just drop a model in."
@@ -920,10 +971,23 @@ pub(crate) struct FileNode {
     /// share a name. Stable across a file swap while the names are.
     pub path: String,
     pub name: String,
+    /// The node's index in the document.
+    pub index: usize,
     pub has_mesh: bool,
-    /// The node's own mesh as a triangle list, every instance counted.
-    pub vertex_count: u32,
+    /// The node's mesh split by material, in first-use order: one part per
+    /// glTF material (`None` is the glTF default material).
+    pub parts: Vec<FilePart>,
     pub children: Vec<FileNode>,
+}
+
+/// The primitives of one node's mesh that share a material.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FilePart {
+    pub material: Option<u32>,
+    /// Their vertex count once triangles are expanded and instances counted.
+    pub vertex_count: u32,
+    /// The centre of their bounding box in the file's world space.
+    pub center: [f32; 3],
 }
 
 /// The file's node tree under the same roots the mesh loader walks
@@ -942,38 +1006,77 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
             })
             .collect()
     }
-    fn vertex_count(node: &gltf::Node, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> u32 {
+    fn parts(node: &gltf::Node, world: &Mat4, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<FilePart> {
         let Some(mesh) = node.mesh() else {
-            return 0;
+            return Vec::new();
         };
-        let per_instance: u64 = mesh
-            .primitives()
-            .map(|p| {
-                let n = p.indices().map(|a| a.count()).or_else(|| p.get(&gltf::Semantic::Positions).map(|a| a.count()));
-                (n.unwrap_or(0) / 3 * 3) as u64
-            })
-            .sum();
         let instances = node_instance_transforms(node, document, buffers).ok().flatten().map_or(1, |list| list.len().max(1));
-        (per_instance * instances as u64).min(u64::from(u32::MAX)) as u32
+        let mut parts: Vec<(FilePart, [f32; 3], [f32; 3])> = Vec::new();
+        for p in mesh.primitives() {
+            let n = p.indices().map(|a| a.count()).or_else(|| p.get(&gltf::Semantic::Positions).map(|a| a.count()));
+            let vertices = (n.unwrap_or(0) / 3 * 3) as u64 * instances as u64;
+            let material = p.material().index().map(|index| index as u32);
+            let at = match parts.iter().position(|(part, _, _)| part.material == material) {
+                Some(at) => at,
+                None => {
+                    let empty = FilePart { material, vertex_count: 0, center: [0.0; 3] };
+                    parts.push((empty, [f32::INFINITY; 3], [f32::NEG_INFINITY; 3]));
+                    parts.len() - 1
+                }
+            };
+            let (part, lo, hi) = &mut parts[at];
+            part.vertex_count = (u64::from(part.vertex_count) + vertices).min(u64::from(u32::MAX)) as u32;
+            let b = p.bounding_box();
+            for corner in 0..8 {
+                let local = [
+                    if corner & 1 == 0 { b.min[0] } else { b.max[0] },
+                    if corner & 2 == 0 { b.min[1] } else { b.max[1] },
+                    if corner & 4 == 0 { b.min[2] } else { b.max[2] },
+                ];
+                let point = mat4_transform_point(world, local);
+                for axis in 0..3 {
+                    lo[axis] = lo[axis].min(point[axis]);
+                    hi[axis] = hi[axis].max(point[axis]);
+                }
+            }
+        }
+        parts
+            .into_iter()
+            .map(|(mut part, lo, hi)| {
+                if lo.iter().chain(hi.iter()).all(|v| v.is_finite()) {
+                    part.center = [0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5);
+                }
+                part
+            })
+            .collect()
     }
-    fn build(nodes: &[gltf::Node], prefix: &str, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<FileNode> {
+    fn build(
+        nodes: &[gltf::Node],
+        prefix: &str,
+        parent: Mat4,
+        document: &gltf::Document,
+        buffers: &[gltf::buffer::Data],
+    ) -> Vec<FileNode> {
         segments(nodes)
             .into_iter()
             .zip(nodes)
             .map(|((segment, name), node)| {
                 let path = if prefix.is_empty() { segment } else { format!("{prefix}/{segment}") };
+                let world = mat4_mul(&parent, &node.transform().matrix());
                 let children: Vec<gltf::Node> = node.children().collect();
+                let parts = parts(node, &world, document, buffers);
                 FileNode {
-                    children: build(&children, &path, document, buffers),
-                    vertex_count: vertex_count(node, document, buffers),
+                    children: build(&children, &path, world, document, buffers),
+                    parts,
                     path,
                     name,
+                    index: node.index(),
                     has_mesh: node.mesh().is_some(),
                 }
             })
             .collect()
     }
-    build(&resolve_import_nodes(document), "", document, buffers)
+    build(&resolve_import_nodes(document), "", MAT4_IDENTITY, document, buffers)
 }
 
 /// The node at `path` and its world matrix, found the way
@@ -1058,10 +1161,15 @@ pub(crate) fn load_gltf_mesh_from_buffers(
 ) -> Result<Vec<MeshVertex>, String> {
     let mut out = Vec::new();
     match selector {
-        GltfMeshSelector::Node { path } => {
+        GltfMeshSelector::Node { path, material } => {
             let (node, world) = find_file_node(document, &path)
                 .ok_or_else(|| format!("the file has no node at \"{path}\""))?;
-            flatten_node_mesh(&node, &world, document, buffers, MaterialFilter::All, &mut out)?;
+            let filter = match material {
+                DEFAULT_MATERIAL_MESH_PARAM => MaterialFilter::DefaultOnly,
+                index if index >= 0 => MaterialFilter::Material(index as u32),
+                _ => MaterialFilter::All,
+            };
+            flatten_node_mesh(&node, &world, document, buffers, filter, &mut out)?;
         }
         GltfMeshSelector::WholeScene => {
             for node in resolve_import_nodes(document) {
@@ -1165,6 +1273,50 @@ pub(crate) fn parse_texture_snapshot(
 ) -> Result<GltfTextureSnapshot, String> {
     use sha2::{Digest, Sha256};
     let (document, buffers) = parse_document_and_buffers(path)?;
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
+    let (encoded, format) = texture_encoded(&document, &buffers, base, texture_index)?;
+    let mut hash = Sha256::new();
+    hash.update(b"manifold.gltf-texture-snapshot.v1");
+    match &format {
+        Ok(format) => hash.update(format.extensions_str()[0].as_bytes()),
+        Err(error) => hash.update(error.as_bytes()),
+    }
+    hash.update(&encoded);
+    Ok(GltfTextureSnapshot {
+        encoded,
+        format,
+        identity: hash.finalize().into(),
+    })
+}
+
+/// Every texture's pixel size, by texture index, read from the image
+/// headers alone, with the same source selection the runtime decode uses.
+/// A texture that cannot be read is 2x2, the size of the stand-in the
+/// runtime draws for it.
+pub(crate) fn texture_dims(
+    path: &std::path::Path,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Vec<(u32, u32)> {
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
+    (0..document.textures().len() as u32)
+        .map(|index| {
+            let (encoded, format) = texture_encoded(document, buffers, base, index).ok()?;
+            image::ImageReader::with_format(std::io::Cursor::new(encoded), format.ok()?)
+                .into_dimensions()
+                .ok()
+        })
+        .map(|dims| dims.unwrap_or((2, 2)))
+        .collect()
+}
+
+/// The encoded bytes of texture `texture_index` and their image format.
+fn texture_encoded(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    base: &std::path::Path,
+    texture_index: u32,
+) -> Result<(Vec<u8>, Result<image::ImageFormat, String>), String> {
     let texture = document
         .textures()
         .nth(texture_index as usize)
@@ -1181,7 +1333,6 @@ pub(crate) fn parse_texture_snapshot(
             document.images().len()
         )
     })?;
-    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
     let (encoded, mime, uri) = match image.source() {
         gltf::image::Source::View { view, mime_type } => {
             let buffer = &buffers[view.buffer().index()].0;
@@ -1223,18 +1374,7 @@ pub(crate) fn parse_texture_snapshot(
             "image {index}: unsupported image encoding {mime:?}"
         )),
     };
-    let mut hash = Sha256::new();
-    hash.update(b"manifold.gltf-texture-snapshot.v1");
-    match &format {
-        Ok(format) => hash.update(format.extensions_str()[0].as_bytes()),
-        Err(error) => hash.update(error.as_bytes()),
-    }
-    hash.update(&encoded);
-    Ok(GltfTextureSnapshot {
-        encoded,
-        format,
-        identity: hash.finalize().into(),
-    })
+    Ok((encoded, format))
 }
 
 pub(crate) fn decode_texture_snapshot(
@@ -1368,6 +1508,99 @@ impl Default for GltfSamplerInfo {
     }
 }
 
+/// Read `document.textures().nth(idx)`'s sampler, or the default when `idx`
+/// is `None` (map unwired) — the same default `GltfSamplerInfo::default()`
+/// already encodes, kept as one call site so the two never drift.
+fn sampler_info_for(document: &gltf::Document, idx: Option<u32>) -> GltfSamplerInfo {
+    let Some(tex) = idx.and_then(|i| document.textures().nth(i as usize)) else {
+        return GltfSamplerInfo::default();
+    };
+    let s = tex.sampler();
+    let wrap = |w: gltf::texture::WrappingMode| -> GltfWrapMode {
+        match w {
+            gltf::texture::WrappingMode::Repeat => GltfWrapMode::Repeat,
+            gltf::texture::WrappingMode::ClampToEdge => GltfWrapMode::ClampToEdge,
+            gltf::texture::WrappingMode::MirroredRepeat => GltfWrapMode::MirrorRepeat,
+        }
+    };
+    let mag = match s.mag_filter() {
+        Some(gltf::texture::MagFilter::Nearest) => GltfFilterMode::Nearest,
+        _ => GltfFilterMode::Linear,
+    };
+    let (min, mip) = match s.min_filter() {
+        Some(gltf::texture::MinFilter::Nearest) => (GltfFilterMode::Nearest, None),
+        Some(gltf::texture::MinFilter::Linear) => (GltfFilterMode::Linear, None),
+        Some(gltf::texture::MinFilter::NearestMipmapNearest) =>
+            (GltfFilterMode::Nearest, Some(GltfFilterMode::Nearest)),
+        Some(gltf::texture::MinFilter::NearestMipmapLinear) =>
+            (GltfFilterMode::Nearest, Some(GltfFilterMode::Linear)),
+        Some(gltf::texture::MinFilter::LinearMipmapNearest) =>
+            (GltfFilterMode::Linear, Some(GltfFilterMode::Nearest)),
+        Some(gltf::texture::MinFilter::LinearMipmapLinear) | None =>
+            (GltfFilterMode::Linear, Some(GltfFilterMode::Linear)),
+    };
+    GltfSamplerInfo {
+        wrap_u: wrap(s.wrap_s()),
+        wrap_v: wrap(s.wrap_t()),
+        mag_filter: mag,
+        min_filter: min,
+        mip_filter: mip,
+    }
+}
+
+fn material_sampler_info(info: GltfSamplerInfo) -> MapSamplerDesc {
+    let convert = |filter| match filter {
+        GltfFilterMode::Linear => manifold_gpu::GpuFilterMode::Linear,
+        GltfFilterMode::Nearest => manifold_gpu::GpuFilterMode::Nearest,
+    };
+    MapSamplerDesc {
+        wrap_u: match info.wrap_u {
+            GltfWrapMode::Repeat => manifold_gpu::GpuAddressMode::Repeat,
+            GltfWrapMode::ClampToEdge => manifold_gpu::GpuAddressMode::ClampToEdge,
+            GltfWrapMode::MirrorRepeat => manifold_gpu::GpuAddressMode::MirrorRepeat,
+        },
+        wrap_v: match info.wrap_v {
+            GltfWrapMode::Repeat => manifold_gpu::GpuAddressMode::Repeat,
+            GltfWrapMode::ClampToEdge => manifold_gpu::GpuAddressMode::ClampToEdge,
+            GltfWrapMode::MirrorRepeat => manifold_gpu::GpuAddressMode::MirrorRepeat,
+        },
+        mag_filter: convert(info.mag_filter),
+        min_filter: convert(info.min_filter),
+        mip_filter: info.mip_filter.map(convert),
+    }
+}
+
+fn extension_map_info(
+    document: &gltf::Document,
+    extension: Option<&serde_json::Value>,
+    key: &str,
+) -> MaterialMapInfo {
+    let Some(info) = extension.and_then(|v| v.get(key)) else {
+        return MaterialMapInfo::default();
+    };
+    let texture_index = info
+        .get("index")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    let transform = info
+        .get("extensions")
+        .and_then(|v| v.get("KHR_texture_transform"));
+    let uv_transform = transform
+        .map(parse_uv_transform_json)
+        .map(|(uv, _)| uv)
+        .unwrap_or(IDENTITY_UV_TRANSFORM);
+    let tex_coord = transform
+        .and_then(|v| v.get("texCoord"))
+        .and_then(|v| v.as_u64())
+        .or_else(|| info.get("texCoord").and_then(|v| v.as_u64()))
+        .unwrap_or(0) as u32;
+    MaterialMapInfo {
+        uv_transform,
+        tex_coord,
+        sampler: material_sampler_info(sampler_info_for(document, texture_index)),
+    }
+}
+
 manifold_core::testkit_visible! {
 /// One distinct glTF material that has geometry, plus everything the
 /// importer needs to build its `render_scene` object: the PBR factors,
@@ -1378,8 +1611,6 @@ manifold_core::testkit_visible! {
 // the `manifold-app` file-drop handler calls in production.
 #[derive(Debug, Clone)]
 pub(crate) struct GltfMaterialInfo {
-    pub material_index: u32,
-    pub name: Option<String>,
     pub base_color_factor: [f32; 4],
     pub metallic: f32,
     pub roughness: f32,
@@ -1548,23 +1779,12 @@ pub(crate) struct GltfMaterialInfo {
     /// is already `true` when this is) and the importer emits a report
     /// line noting the downgrade.
     pub was_blend: bool,
-    /// BUG-w5wv: `KHR_materials_unlit` presence (`Material::unlit()`,
-    /// default `false`). Every other field on this struct stays the
-    /// genuine parsed glTF value — the importer (`gltf_import/
-    /// object_group.rs`) reads this flag to route the material to
-    /// `node.unlit_material` instead of `node.pbr_material`, not by
-    /// remapping any field here.
-    pub unlit: bool,
     /// `KHR_materials_ior`'s `ior` (default 1.5 — glTF's implicit default,
     /// and the value that makes `dielectric_f0` below collapse to today's
     /// hardcoded 0.04). GLB_CONFORMANCE_DESIGN.md G-P4/D5.
     pub ior: f32,
     /// `KHR_materials_specular`'s `specularFactor` (default 1.0).
     pub specular_factor: f32,
-    /// Old specular/glossiness imports reduced RGB to this scalar mean.
-    /// Load-time upgrades use it to recognize generated defaults without
-    /// replacing the performer's authored specular edits. Not serialized.
-    pub legacy_specular_factor: Option<f32>,
     /// `KHR_materials_specular`'s `specularColorFactor` (default
     /// `[1,1,1]`), or the dielectric F0 tint recovered from a
     /// `KHR_materials_pbrSpecularGlossiness` RGB factor.
@@ -1616,16 +1836,6 @@ pub(crate) struct GltfMaterialInfo {
     /// alpha is repacked as glossiness, so both channels remain available to
     /// the downstream material.
     pub mr_texture_is_gloss_alpha: bool,
-    /// BUG-5mma: `true` when COLOR_0 genuinely varies across the primitives
-    /// sharing this material — either within one primitive, or two
-    /// primitives disagree on their (otherwise-constant) color, or a
-    /// colored primitive shares the material with an uncolored one. See
-    /// [`VertexColorAccum`]. The `base_color_factor` remains the authored
-    /// glTF factor; this flag exists only to drive the
-    /// "vertex colors not supported" report line
-    /// in `gltf_import/object_group.rs` for the varying case.
-    pub vertex_color_varies: bool,
-    pub vertex_count: u32,
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
     /// settings, read straight off each map's own glTF `sampler` (default
     /// when unwired or the texture has no explicit sampler:
@@ -1639,63 +1849,39 @@ pub(crate) struct GltfMaterialInfo {
     /// UV, UV-set, and sampler metadata for extension maps in the
     /// fixed [`MaterialMapInfo`] order documented on `Material`.
     pub extension_maps: [MaterialMapInfo; 14],
-    /// GLTF_ANIMATION_DESIGN.md A1/A4: this object's resolved TRS
-    /// animation, ONE ENTRY PER PARSED CLIP (aligned to the document's
-    /// `animations()` index — A4's D4 clip selection), when its geometry is
-    /// contributed by exactly one mesh-owning node (see
-    /// [`resolve_object_animation`]) whose ancestor chain carries a
-    /// translation/rotation/scale keyframe track in that clip. A clip entry
-    /// is `None` when this object isn't animated in that specific clip;
-    /// the whole vector is empty for a static object, or when more than one
-    /// node contributes this material's geometry (the documented
-    /// multi-node-per-material scope boundary — never partially or
-    /// incorrectly animated). BUG-207: resolved for the synthetic
-    /// default-material entry too, from `nodes_by_material`'s `None`
-    /// bucket — the sentinel is a first-class key, not a special case.
-    pub animations: Vec<Option<GltfObjectAnimation>>,
-    /// GLTF_ANIMATION_DESIGN.md A2 (D2): this object's resolved skin
-    /// topology, when every mesh-owning node contributing its geometry
-    /// carries a `node.skin()` and all of them share ONE glTF skin index
-    /// (JOINTS_0 then indexes one shared palette, so N contributors
-    /// concatenate as trivially as one). `None` for a static or
-    /// rigid-animated object, or the mixed / different-skins multi-node
-    /// case (loud report line, never partial skinning). BUG-207: resolved
-    /// for the synthetic default-material entry too (see `animations`
-    /// above).
-    pub skin: Option<GltfObjectSkin>,
-    /// GLTF_ANIMATION_DESIGN.md A3: this object's resolved morph-target
-    /// topology, when its geometry is contributed by exactly one
-    /// mesh-owning node (the SAME single-node scope boundary `animation`/
-    /// `skin` above use) whose mesh carries `targets` on the primitive(s)
-    /// contributing this material. `None` for an unmorphed object or the
-    /// multi-node case. BUG-207: resolved for the synthetic
-    /// default-material entry too (see `animations` above).
-    pub morph: Option<GltfObjectMorph>,
-    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): this object's resolved
-    /// node-slot rigid-animation topology — see
-    /// [`GltfObjectRigidMultiNode`]'s doc for the cases that set it.
-    /// `None` for a static or direct-leaf-only animated single-node, or
-    /// skinned object. Mutually exclusive with `skin` (a skinned object
-    /// never also gets a node-slot palette) but independent of
-    /// `animations` (always empty when this is `Some`).
-    pub rigid_multi_node: Option<GltfObjectRigidMultiNode>,
-    /// BUG-221: this object's OWN world-space bounding-box center — distinct
-    /// from `GltfImportSummary::bbox_min/max`'s SCENE-WIDE center, which is
-    /// the ONE value every object was previously recentered by (correct for
-    /// whole-scene framing/layout, but it leaves each object's own local
-    /// origin wherever the source glTF authored it, so rotating the
-    /// object's `node.transform_3d` — which always rotates about local
-    /// `(0,0,0)`, `render_scene.rs`'s `model_matrix` — swings it about a
-    /// point that can be far from its visual center). Computed by the same
-    /// per-material world-space bbox walk as `vertex_count`
-    /// (`summarize_node`'s `per_material_bbox` accumulator), so it is
-    /// world-combined/instance-aware exactly like the scene-wide bbox.
-    /// `gltf_import.rs` uses it to recenter this object's OWN mesh source
-    /// about its own center (so local `(0,0,0)` becomes the visual center)
-    /// and to reposition the outward-facing `node.transform_3d`'s pos so
-    /// net world placement is unchanged — see `build_object_group`.
-    pub own_center: [f32; 3],
 }
+}
+
+/// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
+/// scalar factors to MANIFOLD's metal-rough vocabulary
+/// (GLB_XFAIL_BURNDOWN_DESIGN.md D2, BUG-167). Pure/value-level so it's
+/// unit-testable without a parsed `Document` — see the `tests` module.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SpecGlossConversion {
+    pub roughness: f32,
+    pub metallic: f32,
+    pub specular_factor: f32,
+    pub specular_tint: [f32; 3],
+}
+
+/// Convert spec-gloss's `glossinessFactor` + `specularFactor` (RGB) to
+/// metal-rough's `roughness` plus the existing dielectric F0 controls
+/// (`KHR_materials_specular`'s slots, GLB_CONFORMANCE_DESIGN.md G-P4).
+/// The authored RGB factor is already an F0 colour, while MANIFOLD's shader
+/// multiplies the tint by the default dielectric reflectance (0.04), so the
+/// tint is normalized by 0.04 and the scalar weight stays at 1.0. `metallic`
+/// is pinned to `0.0`: spec-gloss has no metalness channel of its own.
+pub(crate) fn convert_spec_gloss(
+    glossiness_factor: f32,
+    specular_factor_rgb: [f32; 3],
+) -> SpecGlossConversion {
+    let specular_tint = specular_factor_rgb.map(|value| value.clamp(0.0, 1.0) / 0.04);
+    SpecGlossConversion {
+        roughness: (1.0 - glossiness_factor).clamp(0.0, 1.0),
+        metallic: 0.0,
+        specular_factor: 1.0,
+        specular_tint,
+    }
 }
 
 manifold_core::testkit_visible! {
@@ -1743,85 +1929,55 @@ fn material_label(material_index: u32) -> String {
     }
 }
 
+/// Fold glTF `KHR_texture_transform`'s `(offset, rotation, scale)` into the
+/// affine `[m00, m01, m10, m11, tx, ty]` `resolve_albedo` applies as
+/// `uv' = M*uv + t`. Matches the spec's documented composition order,
+/// `translation * rotation * scale` applied to the UV as a column vector
+/// (scale innermost, then rotate, then translate) — verified against
+/// three.js/Babylon's glTF loaders and the extension README's worked
+/// matrices. Identity in, identity out (`sin(0)==0.0`, `cos(0)==1.0`
+/// exactly in f32), so an absent extension is byte-identical.
+pub(crate) fn fold_uv_transform(offset: [f32; 2], rotation: f32, scale: [f32; 2]) -> [f32; 6] {
+    let (s, c) = rotation.sin_cos();
+    [
+        scale[0] * c,
+        -scale[1] * s,
+        scale[0] * s,
+        scale[1] * c,
+        offset[0],
+        offset[1],
+    ]
+}
 
 manifold_core::testkit_visible! {
 pub(crate) const IDENTITY_UV_TRANSFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 }
 
+use manifold_node_engine::scene::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION;
 
-manifold_core::testkit_visible! {
-/// What the importer needs to know about a glb up front: the distinct
-/// materials that actually carry geometry (each becomes one
-/// `render_scene` object), the world-space bounding box (for the default
-/// framing camera + recentre), and counts of glTF cameras and
-/// default-material (unassigned) geometry so the importer can report what
-/// it did and didn't handle.
-#[derive(Debug, Clone)]
-pub(crate) struct GltfImportSummary {
-    pub materials: Vec<GltfMaterialInfo>,
-    pub bbox_min: [f32; 3],
-    pub bbox_max: [f32; 3],
-    pub camera_count: usize,
-    /// Triangle-list vertices belonging to primitives with NO material
-    /// (glTF default material). v1 does not import these — reported so the
-    /// caller can warn rather than silently drop them.
-    pub default_material_vertex_count: u32,
-    /// GLTF_ANIMATION_DESIGN.md A1: every `document.animations()` entry,
-    /// parsed as a per-node list of TRS keyframe tracks — raw, unresolved
-    /// against any particular material/object. `gltf_import.rs` doesn't
-    /// consume this directly; it consumes [`GltfMaterialInfo::animations`]
-    /// (the per-object RESOLVED animation, one entry per clip in this
-    /// list). Kept on the summary so a parse-only smoke test can assert the
-    /// parser sees the right channels on an asset it was never wired
-    /// against, independent of the per-material resolution step.
-    /// GLTF_ANIMATION_DESIGN.md A2: also read directly by `gltf_import.rs`
-    /// to build `node.gltf_skeleton_pose`'s per-joint Table params (a
-    /// joint's animated TRS track, looked up by node index per clip). A4:
-    /// `gltf_import.rs` now loops every entry here (not just `[0]`) to
-    /// build the compound-keyed `(clip_index, joint_index)` Tables D4's
-    /// clip selector reads at runtime.
-    pub animations: Vec<GltfAnimationInfo>,
-    /// Non-fatal animation parse findings — a non-LINEAR interpolation
-    /// channel (STEP/CUBICSPLINE, Deferred past A1), a morph-weight
-    /// channel (A3 scope), an unreadable channel (e.g. a target that
-    /// couldn't be resolved), or a same-object TRS-channel conflict
-    /// (section "resolve_object_animation") — one line per occurrence, never a
-    /// silent drop. `gltf_import.rs` folds these into `ImportReport::report_lines`.
-    pub animation_report_lines: Vec<String>,
-    /// BUG-213: `extensionsUsed` entries that are NOT in
-    /// [`MANIFOLD_SUPPORTED_EXTENSIONS`] and NOT in `extensionsRequired`
-    /// (those hard-fail in [`parse_document_and_buffers`]) — optional
-    /// extensions the asset lists that we don't implement, so the import
-    /// proceeds without them. One line per extension, never a silent skip.
-    /// BUG-mbol: also carries per-primitive geometry skips found by
-    /// `summarize_node` — a Draco- or meshopt-compressed primitive (no
-    /// decoder, BUG-7w79) or any other primitive with no readable POSITION
-    /// data, named by mesh/primitive/node, never a silent zero-vertex drop
-    /// (or, for meshopt, a silent garbage-geometry read). `gltf_import.rs`
-    /// folds these into `ImportReport::report_lines`.
-    pub extension_report_lines: Vec<String>,
-    /// BUG-5uqg: every `KHR_lights_punctual` light in the imported node set,
-    /// resolved to world space — `gltf_import::scene` adds one `node.light`
-    /// card per entry, alongside (not replacing) the synthesized sun/fill/
-    /// strip rig.
-    pub lights: Vec<GltfPunctualLight>,
-    /// Every embedded perspective camera, resolved to world-space pose —
-    /// BUG-d2qz. Orthographic cameras are parsed but not resolved here (no
-    /// `node.free_camera` ortho mode); one line is pushed to
-    /// `camera_report_lines` per skip instead. `gltf_import.rs` adds each
-    /// entry as an extra selectable `node.free_camera` card alongside the
-    /// synthesized bbox-framed orbit camera, which stays the default.
-    pub cameras: Vec<GltfCameraInfo>,
-    /// D9 doctrine, same as `animation_report_lines`/`extension_report_lines`:
-    /// one line per orthographic camera this importer doesn't resolve, never
-    /// a silent drop. `gltf_import.rs` folds these into `ImportReport::report_lines`.
-    pub camera_report_lines: Vec<String>,
-    /// Decoded pixel dimensions per `document.textures()` entry (texture
-    /// index, not image index). The importer stamps these onto every
-    /// `node.gltf_texture_source` it creates so maps keep their authored
-    /// resolution instead of resampling to the 1024² v1 default.
-    pub texture_dims: Vec<(u32, u32)>,
-}
+/// Parse a raw `KHR_texture_transform` extension JSON object (the shape the
+/// spec defines: optional `offset: [f32; 2]`, `rotation: f32`,
+/// `scale: [f32; 2]`, `texCoord: u32`) and fold it via
+/// [`fold_uv_transform`]. Returns `(folded_affine, has_tex_coord_override)`.
+/// Needed for the normal and occlusion maps, whose gltf-1.4.1 wrappers
+/// (`NormalTexture`/`OcclusionTexture`) expose no typed
+/// `texture_transform()` — only `extension_value()` raw JSON. Spec defaults
+/// on absent fields (offset `[0,0]`, rotation `0`, scale `[1,1]`) match the
+/// typed accessor's defaults exactly.
+pub(crate) fn parse_uv_transform_json(v: &serde_json::Value) -> ([f32; 6], bool) {
+    let f2 = |key: &str, default: [f32; 2]| -> [f32; 2] {
+        v.get(key)
+            .and_then(|a| a.as_array())
+            .and_then(|a| {
+                Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
+            })
+            .unwrap_or(default)
+    };
+    let offset = f2("offset", [0.0, 0.0]);
+    let scale = f2("scale", [1.0, 1.0]);
+    let rotation = v.get("rotation").and_then(|r| r.as_f64()).unwrap_or(0.0) as f32;
+    let tex_coord_override = v.get("texCoord").is_some();
+    (fold_uv_transform(offset, rotation, scale), tex_coord_override)
 }
 
 manifold_core::testkit_visible! {
@@ -1834,6 +1990,8 @@ pub(crate) struct GltfCameraInfo {
     /// The glTF camera's own `name`, falling back to its owning node's
     /// `name`, falling back to `None` (caller numbers it).
     pub name: Option<String>,
+    /// The owning node's index in the document.
+    pub node_index: usize,
     pub pos: [f32; 3],
     /// Radians, `node.free_camera`'s convention: yaw about world +Y, pitch
     /// about the camera's own right axis, roll about `fwd` — see
@@ -1902,7 +2060,6 @@ pub(crate) struct QuatTrack {
 }
 }
 
-
 manifold_core::testkit_visible! {
 /// One LINEAR-sampled morph-target-weights keyframe track (glTF `weights`
 /// channel target path) — GLTF_ANIMATION_DESIGN.md A3. glTF interleaves
@@ -1955,42 +2112,6 @@ pub(crate) struct GltfAnimationInfo {
     /// 1.4.1 can't even deserialize when the extension omits
     /// `target.node` — see BUG_BACKLOG.md). Never silent.
     pub skipped_channels: Vec<String>,
-}
-}
-
-manifold_core::testkit_visible! {
-/// One object's (= one material's) RESOLVED animation — the merge of
-/// whichever ancestor-chain node carries each TRS channel. See
-/// [`resolve_object_animation`] for why a chain walk is necessary:
-/// `BoxAnimated.glb` itself splits its single animated object's
-/// translation onto an ANCESTOR node and rotation onto the mesh's own
-/// node, so "the node that owns this material's mesh" is not enough.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GltfObjectAnimation {
-    /// Clip duration in SECONDS (glTF's own unit) — the last keyframe
-    /// time across whichever channels are present. Never converted to
-    /// beats here (D3: seconds→beats happens at RUNTIME, live against the
-    /// current tempo, never baked at import).
-    pub duration_s: f32,
-    pub translation: Option<Vec3Track>,
-    pub rotation: Option<QuatTrack>,
-    pub scale: Option<Vec3Track>,
-    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: the scene-node index EACH
-    /// channel's track came from — one per channel, NOT a single
-    /// object-wide node. Confirmed load-bearing by `BoxAnimated.glb`
-    /// itself (the design's own canonical A1 fixture): its translation
-    /// channel targets node 0 (an ancestor), its rotation channel targets
-    /// node 2 (the mesh node) — two DIFFERENT physical nodes for the SAME
-    /// object, not a rare edge case. `None` when that channel isn't
-    /// animated at all (mirrors the sibling `Option<Vec3Track/QuatTrack>`
-    /// field). Stamped onto `node.gltf_animation_source`'s `translation_
-    /// node`/`rotation_node`/`scale_node` params so each channel samples
-    /// from its OWN correct entry in the shared, file-keyed `GltfAnimSet`
-    /// (whose `Channel`s are keyed by node index) instead of a per-object
-    /// baked Table.
-    pub translation_node: Option<usize>,
-    pub rotation_node: Option<usize>,
-    pub scale_node: Option<usize>,
 }
 }
 
@@ -2198,6 +2319,81 @@ fn static_world_matrix(document: &gltf::Document, node_index: usize, parent_of: 
     world
 }
 
+/// Invert `Camera::from_pos_euler`'s basis construction
+/// (`crate::node_graph::camera`): given a world-space forward and up
+/// (both expected normalized; `up` need only be non-parallel to `fwd` —
+/// it's re-orthonormalized here the same way `from_pos_euler` builds its
+/// own `up0`), recover the `(yaw, pitch, roll)` triple that reproduces
+/// them. `pitch = asin(fwd.y)`, `yaw = atan2(-fwd.x, -fwd.z)` fall straight
+/// out of `from_pos_euler`'s `fwd` formula; `roll` is recovered by
+/// projecting `up` onto the pre-roll `(right0, up0)` basis `from_pos_euler`
+/// itself derives from `yaw`/`pitch` before rotating by `roll` — see the
+/// round-trip proof in `tests::euler_from_fwd_up_round_trips_from_pos_euler`.
+/// Degenerate only where `from_pos_euler` itself is (`pitch` at exactly
+/// ±90°, where `yaw` isn't observable from `fwd` alone) — not exercised by
+/// any camera-bearing fixture in the Khronos sample set.
+fn euler_from_fwd_up(fwd: [f32; 3], up: [f32; 3]) -> (f32, f32, f32) {
+    let pitch = fwd[1].clamp(-1.0, 1.0).asin();
+    let yaw = (-fwd[0]).atan2(-fwd[2]);
+    let right0 = [yaw.cos(), 0.0, -yaw.sin()];
+    let up0 = [yaw.sin() * pitch.sin(), pitch.cos(), yaw.cos() * pitch.sin()];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let s = -dot(up, right0);
+    let c = dot(up, up0);
+    let roll = s.atan2(c);
+    (yaw, pitch, roll)
+}
+
+/// Every `document.nodes()` entry carrying a `camera()`, resolved to
+/// world-space pose via `static_world_matrix` — BUG-d2qz. Perspective
+/// cameras become a [`GltfCameraInfo`]; orthographic cameras (no
+/// `node.free_camera` ortho mode) are skipped with a report line each,
+/// never silently.
+pub(crate) fn parse_cameras(document: &gltf::Document, parent_of: &[Option<usize>]) -> (Vec<GltfCameraInfo>, Vec<String>) {
+    let mut cameras = Vec::new();
+    let mut report_lines = Vec::new();
+    for node in document.nodes() {
+        let Some(cam) = node.camera() else { continue };
+        let label = cam
+            .name()
+            .or(node.name())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("camera {}", cam.index()));
+        match cam.projection() {
+            gltf::camera::Projection::Perspective(persp) => {
+                let world = static_world_matrix(document, node.index(), parent_of);
+                let pos = [world[3][0], world[3][1], world[3][2]];
+                // Local -Z is forward, local +Y is up (glTF camera
+                // convention, identical to `node.free_camera`'s own
+                // yaw=pitch=roll=0 convention) — transform both by the
+                // world rotation (columns 2 and 1) and normalize away any
+                // uniform node scale.
+                let fwd = normalize3([-world[2][0], -world[2][1], -world[2][2]]);
+                let up = normalize3([world[1][0], world[1][1], world[1][2]]);
+                let (yaw, pitch, roll) = euler_from_fwd_up(fwd, up);
+                cameras.push(GltfCameraInfo {
+                    name: Some(label),
+                    node_index: node.index(),
+                    pos,
+                    yaw,
+                    pitch,
+                    roll,
+                    fov_y: persp.yfov(),
+                    near: persp.znear(),
+                    far: persp.zfar().unwrap_or(10_000.0),
+                });
+            }
+            gltf::camera::Projection::Orthographic(_) => {
+                report_lines.push(format!(
+                    "camera {label:?}: orthographic projection not imported (node.free_camera \
+                     has no orthographic mode) — skipped"
+                ));
+            }
+        }
+    }
+    (cameras, report_lines)
+}
+
 /// Parse every `document.skins()` entry, indexed by glTF skin index. A
 /// skin with no `inverseBindMatrices` accessor (spec-legal — implies
 /// identity per joint) falls back to `MAT4_IDENTITY` for every joint.
@@ -2241,51 +2437,8 @@ pub(crate) fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Da
         .collect()
 }
 
-manifold_core::testkit_visible! {
-/// This render object's (= one material's) resolved skin topology —
-/// `GltfSkinInfo` plus which skin index it came from (for report
-/// messages). `gltf_import.rs` reads this to build `node.gltf_skeleton_pose`'s
-/// Table params; per-vertex JOINTS_0/WEIGHTS_0 live separately, read at
-/// RUNTIME by `node.gltf_skinned_mesh_source` from the same file.
-#[derive(Debug, Clone)]
-pub(crate) struct GltfObjectSkin {
-    pub skin_index: u32,
-    pub info: GltfSkinInfo,
-}
-}
-
 // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3) — rigid multi-node via the
 // node-slot palette ──────────────────────────────────────────────────
-
-manifold_core::testkit_visible! {
-/// This render object's (= one material's) resolved node-slot topology —
-/// the sorted scene-node indices contributing its geometry, slot order =
-/// list order (slot `i` = `slot_nodes[i]`). Set when EITHER (a) more than
-/// one mesh-owning node contributes this material's geometry, at least one
-/// contributor or its ancestor chain is animated in some clip, none skinned
-/// (the `:2492` case this design deletes), OR (b) exactly one contributing
-/// node whose ancestor chain has any animated TRS channel, including a
-/// single ancestor (the node-slot palette preserves static child bind pose
-/// and the animated ancestor's pivot), OR (c) the chain animates the SAME
-/// TRS channel on more than one ancestor (the `:1700` case — composing
-/// multiple animated ancestors into one TRS track isn't generally valid, but
-/// the whole-hierarchy node-slot
-/// palette composes them correctly via matrix multiplication regardless of
-/// how many ancestors are animated, so a 1-slot palette subsumes it).
-/// `None` for a static or direct-leaf-only animated single-node object
-/// (those keep the existing `GltfObjectAnimation` TRS-track path) or a
-/// skinned object.
-/// `gltf_import.rs` wires this the same way as `GltfObjectSkin` — through
-/// `node.gltf_skinned_mesh_source` (its `material_index` selector already
-/// finds these SAME nodes at runtime, sorted the same way — see
-/// `find_material_contributing_nodes`) + `node.skin_mesh`, with
-/// `node.gltf_skeleton_pose` in node-slot mode (`skin_index == -2`) instead
-/// of skin mode.
-#[derive(Debug, Clone)]
-pub(crate) struct GltfObjectRigidMultiNode {
-    pub slot_nodes: Vec<u32>,
-}
-}
 
 /// Every scene-node index (ascending) whose mesh has at least one
 /// primitive matching `material_index` — the SAME grouping
@@ -2316,33 +2469,6 @@ pub(crate) fn find_material_contributing_nodes(
 }
 
 // ─── GLTF_ANIMATION_DESIGN.md A3 — morph targets ───────────────────────
-
-manifold_core::testkit_visible! {
-/// This render object's (= one material's) resolved morph-target topology
-/// — how many targets, which node's `weights` animation channel (if any)
-/// drives them, and the static per-target fallback weight for a target
-/// that channel doesn't animate. `gltf_import.rs` reads this (plus the
-/// SAME `node_anims_clip0` lookup `build_skeleton_pose_tables` already
-/// uses for skinning) to build `node.gltf_morph_weights`'s `weight_tracks`
-/// Table; the actual per-vertex delta geometry is loaded separately, at
-/// RUNTIME, by `node.gltf_morph_deltas_source` (mirrors how per-vertex
-/// JOINTS_0/WEIGHTS_0 live outside `GltfObjectSkin` too — vertex-scale
-/// data is never baked into import-time Tables).
-#[derive(Debug, Clone)]
-pub(crate) struct GltfObjectMorph {
-    /// The sole contributing node's index — `node_anims_clip0.get(&this)`
-    /// is where an animated `weights` channel for this object would live.
-    pub mesh_node_index: usize,
-    pub target_count: u32,
-    /// `mesh.weights()[i]` for `i in 0..target_count`, defaulted to `0.0`
-    /// for any target past a short (or absent) `weights` array — glTF 2.0
-    /// section 3.7.2.1's spec default for an unauthored target weight. Used as
-    /// the fallback for a target this object's `weights` channel (if any)
-    /// doesn't animate — mirrors `GltfSkinInfo::joint_bind_translation`'s
-    /// "unanimated joint gets its bind-pose static row" convention.
-    pub static_weights: Vec<f32>,
-}
-}
 
 /// (vertices, per-vertex joint indices as f32, per-vertex weights) — the
 /// coincident triple `node.gltf_skinned_mesh_source` uploads as its three
@@ -2578,8 +2704,21 @@ fn flatten_rigid_multi_node(
 pub(crate) fn load_gltf_skinned_mesh(
     path: &std::path::Path,
     material_index: u32,
+    node_path: &str,
 ) -> Result<SkinnedMeshData, String> {
     let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
+    // An imported part (SCENE_DOCUMENT_DESIGN.md section 7.7): one file
+    // node's primitives of one material. Skinned, it reads its own skin;
+    // otherwise it is a one-slot node palette driven by its animated chain.
+    if !node_path.is_empty() {
+        let (node, _) = find_file_node(&document, node_path)
+            .ok_or_else(|| format!("{}: the file has no node at \"{node_path}\"", path.display()))?;
+        return if node.skin().is_some() {
+            flatten_skinned_node(&node, &buffers, material_index)
+        } else {
+            flatten_rigid_multi_node(&document, &buffers, &[node.index()], material_index)
+        };
+    }
     let mut skinned: Vec<(gltf::Node, usize)> = Vec::new();
     for root in resolve_import_nodes(&document) {
         collect_skinned_nodes_for_material(&root, material_index, &mut skinned);
@@ -2770,13 +2909,21 @@ pub(crate) fn load_gltf_morph_deltas(
     path: &std::path::Path,
     material_index: u32,
     skinned: bool,
+    node_path: &str,
 ) -> Result<(Vec<MeshVertex>, u32, u32), String> {
     let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
     let parent_of = build_parent_map(&document);
-    for node in resolve_import_nodes(&document) {
-        let Some(found) = find_mesh_node_for_material(&node, material_index) else {
-            continue;
-        };
+    // An imported part names its file node; otherwise the first node
+    // carrying the material.
+    let by_path = if node_path.is_empty() {
+        None
+    } else {
+        let (node, _) = find_file_node(&document, node_path)
+            .ok_or_else(|| format!("{}: the file has no node at \"{node_path}\"", path.display()))?;
+        Some(node)
+    };
+    let roots = if by_path.is_some() { Vec::new() } else { resolve_import_nodes(&document) };
+    if let Some(found) = by_path.or_else(|| roots.iter().find_map(|node| find_mesh_node_for_material(node, material_index))) {
         // The node's own world transform — SAME matrix `walk_gltf_node`
         // would compose for this node when node.gltf_mesh_source's
         // Material selector flattens the base mesh (assuming no
@@ -2820,9 +2967,685 @@ pub(crate) fn load_gltf_morph_deltas(
     ))
 }
 
+/// glTF's implicit default material (spec section 3.9.2: white, metallic 1, roughness 1) for geometry with no material, with empty geometry facts.
+pub(crate) fn default_material_info() -> GltfMaterialInfo {
+    GltfMaterialInfo {
+        base_color_factor: [1.0, 1.0, 1.0, 1.0],
+        metallic: 1.0,
+        roughness: 1.0,
+        emissive: [0.0, 0.0, 0.0],
+        alpha_mask: false,
+        alpha_cutoff: 0.5,
+        base_color_texture: None,
+        normal_texture: None,
+        normal_scale: 1.0,
+        mr_texture: None,
+        occlusion_texture: None,
+        occlusion_strength: 1.0,
+        emissive_texture: None,
+        emissive_strength: 1.0,
+        transmission_factor: 0.0,
+        transmission_texture: None,
+        diffuse_transmission_factor: 0.0,
+        diffuse_transmission_color: [1.0, 1.0, 1.0],
+        diffuse_transmission_texture: None,
+        diffuse_transmission_color_texture: None,
+        clearcoat_factor: 0.0,
+        clearcoat_roughness_factor: 0.0,
+        clearcoat_normal_scale: 1.0,
+        clearcoat_texture: None,
+        clearcoat_roughness_texture: None,
+        clearcoat_normal_texture: None,
+        sheen_color_factor: [0.0, 0.0, 0.0],
+        sheen_roughness_factor: 0.0,
+        sheen_color_texture: None,
+        sheen_roughness_texture: None,
+        iridescence_factor: 0.0,
+        iridescence_ior: 1.3,
+        iridescence_thickness_minimum: 100.0,
+        iridescence_thickness_maximum: 400.0,
+        iridescence_texture: None,
+        iridescence_thickness_texture: None,
+        anisotropy_strength: 0.0,
+        anisotropy_rotation: 0.0,
+        anisotropy_texture: None,
+        dispersion: 0.0,
+        volume_thickness_factor: 0.0,
+        volume_attenuation_distance: VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+        volume_attenuation_color: [1.0, 1.0, 1.0],
+        volume_thickness_texture: None,
+        was_blend: false,
+        ior: 1.5,
+        specular_factor: 1.0,
+        specular_color_factor: [1.0, 1.0, 1.0],
+        specular_texture: None,
+        specular_color_texture: None,
+        base_color_uv_transform: IDENTITY_UV_TRANSFORM,
+        normal_uv_transform: IDENTITY_UV_TRANSFORM,
+        mr_uv_transform: IDENTITY_UV_TRANSFORM,
+        occlusion_uv_transform: IDENTITY_UV_TRANSFORM,
+        emissive_uv_transform: IDENTITY_UV_TRANSFORM,
+        core_tex_coords: [0; 5],
+        mr_texture_is_gloss_alpha: false,
+        base_color_sampler: GltfSamplerInfo::default(),
+        normal_sampler: GltfSamplerInfo::default(),
+        mr_sampler: GltfSamplerInfo::default(),
+        occlusion_sampler: GltfSamplerInfo::default(),
+        emissive_sampler: GltfSamplerInfo::default(),
+        extension_maps: [MaterialMapInfo::default(); 14],
+    }
+}
+
+/// One glTF material's surface: factors, maps, samplers, texture transforms
+/// and extensions, read from the document alone. The scene compiler reads a model file's materials through this
+/// (SCENE_DOCUMENT_DESIGN.md section 7.6 (Materials and layer planes)).
+pub(crate) fn material_info(
+    document: &gltf::Document,
+    m: &gltf::Material,
+    label: &str,
+    geometry_report_lines: &mut Vec<String>,
+) -> GltfMaterialInfo {
+    let pbr = m.pbr_metallic_roughness();
+    // IMPORT_FIDELITY_DESIGN.md D8/F-P5: BLEND maps to a real
+    // `Blend` material (see `gltf_import.rs`), never Mask cutout —
+    // `alpha_mask` reflects ONLY the genuine glTF MASK mode.
+    let was_blend = matches!(m.alpha_mode(), gltf::material::AlphaMode::Blend);
+    let alpha_mask = matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask);
+
+    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
+    // per-map (all five families — see the field doc comments).
+    // base-color/mr/emissive route through `texture::Info`, which
+    // has the typed `texture_transform()` accessor; normal and
+    // occlusion (`NormalTexture`/`OcclusionTexture`) don't, so
+    // those parse the raw `extensions` JSON via
+    // `parse_uv_transform_json` (identical spec defaults).
+    let fold_typed = |info: Option<gltf::texture::Info>| -> [f32; 6] {
+        match info.as_ref().and_then(|t| t.texture_transform()) {
+            Some(t) => fold_uv_transform(t.offset(), t.rotation(), t.scale()),
+            None => IDENTITY_UV_TRANSFORM,
+        }
+    };
+    let mut base_color_info = pbr.base_color_texture();
+    let mut base_color_uv_transform = fold_typed(pbr.base_color_texture());
+    let mut mr_texture_index = pbr.metallic_roughness_texture().map(|t| t.texture().index() as u32);
+    // BUG-pm9m: retained alongside `mr_texture_index` (updated in
+    // lockstep, including the spec-gloss override below) purely to
+    // read its `tex_coord()` for the TEXCOORD_n warning further
+    // down — `mr_texture_index` alone only carries the texture,
+    // not which UV set it samples.
+    let mut mr_info = pbr.metallic_roughness_texture();
+    let mut mr_uv_transform = fold_typed(pbr.metallic_roughness_texture());
+    let mut base_color_factor = pbr.base_color_factor();
+    let mut metallic = pbr.metallic_factor();
+    let mut roughness = pbr.roughness_factor();
+    let mut mr_texture_is_gloss_alpha = false;
+    let emissive_uv_transform = fold_typed(m.emissive_texture());
+
+    // GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167):
+    // KHR_materials_pbrSpecularGlossiness converts to metal-rough
+    // HERE, at parse time — `gltf_import.rs`/`render_scene.wgsl`
+    // never see spec-gloss. A material can't carry both
+    // pbrMetallicRoughness's own textures/factors AND spec-gloss
+    // meaningfully (the extension REPLACES the base PBR model per
+    // spec), so this unconditionally overrides the metal-rough
+    // fields already computed above when present. `specular_factor`
+    // is declared here (rather than with the KHR_materials_specular
+    // block below) so both the direct-specular-extension path AND
+    // this spec-gloss override write the SAME variable — one slot,
+    // two possible sources, never both.
+    let mut specular_factor_override: Option<f32> = None;
+    let mut specular_color_factor_override: Option<[f32; 3]> = None;
+    let mut spec_gloss_color_texture: Option<u32> = None;
+    let mut spec_gloss_color_map: Option<MaterialMapInfo> = None;
+    let mut spec_gloss_present = false;
+    if let Some(sg) = m.pbr_specular_glossiness() {
+        spec_gloss_present = true;
+        let conv = convert_spec_gloss(sg.glossiness_factor(), sg.specular_factor());
+        base_color_factor = sg.diffuse_factor();
+        base_color_info = sg.diffuse_texture();
+        base_color_uv_transform = fold_typed(sg.diffuse_texture());
+        roughness = conv.roughness;
+        metallic = conv.metallic;
+        specular_factor_override = Some(conv.specular_factor);
+        specular_color_factor_override = Some(conv.specular_tint);
+        match sg.specular_glossiness_texture() {
+            Some(tex) => {
+                let texture_index = tex.texture().index() as u32;
+                let tex_coord = tex
+                    .texture_transform()
+                    .and_then(|transform| transform.tex_coord())
+                    .unwrap_or_else(|| tex.tex_coord());
+                let uv_transform = fold_typed(Some(tex));
+                mr_texture_index = Some(texture_index);
+                mr_info = sg.specular_glossiness_texture();
+                mr_uv_transform = fold_typed(sg.specular_glossiness_texture());
+                mr_texture_is_gloss_alpha = true;
+                spec_gloss_color_texture = Some(texture_index);
+                spec_gloss_color_map = Some(MaterialMapInfo {
+                    uv_transform,
+                    tex_coord,
+                    sampler: material_sampler_info(sampler_info_for(
+                        document,
+                        Some(texture_index),
+                    )),
+                });
+            }
+            None => {
+                mr_texture_index = None;
+                mr_info = None;
+                mr_uv_transform = IDENTITY_UV_TRANSFORM;
+            }
+        }
+    }
+
+    let fold_raw = |ext: Option<&serde_json::Value>| -> [f32; 6] {
+        match ext {
+            Some(v) => {
+                parse_uv_transform_json(v).0
+            }
+            None => IDENTITY_UV_TRANSFORM,
+        }
+    };
+    let normal_uv_transform = fold_raw(
+        m.normal_texture()
+            .as_ref()
+            .and_then(|t| t.extension_value("KHR_texture_transform")),
+    );
+    let occlusion_uv_transform = fold_raw(
+        m.occlusion_texture()
+            .as_ref()
+            .and_then(|t| t.extension_value("KHR_texture_transform")),
+    );
+    let typed_tex_coord = |info: Option<gltf::texture::Info>| -> u32 {
+        info.map(|t| {
+            t.texture_transform()
+                .and_then(|transform| transform.tex_coord())
+                .unwrap_or_else(|| t.tex_coord())
+        })
+        .unwrap_or(0)
+    };
+    let core_tex_coords = [
+        typed_tex_coord(base_color_info.clone()),
+        m.normal_texture()
+            .map(|t| t.extension_value("KHR_texture_transform").and_then(|v| v.get("texCoord")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or_else(|| t.tex_coord()))
+            .unwrap_or(0),
+        typed_tex_coord(mr_info.clone()),
+        m.occlusion_texture()
+            .map(|t| t.extension_value("KHR_texture_transform").and_then(|v| v.get("texCoord")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or_else(|| t.tex_coord()))
+            .unwrap_or(0),
+        typed_tex_coord(m.emissive_texture()),
+    ];
+
+    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular +
+    // KHR_materials_ior, mapped to F0 scale downstream
+    // (gltf_import.rs). Defaults (1.5 / 1.0 / [1,1,1]) reproduce
+    // today's hardcoded F0=0.04 exactly — see `fs_pbr`. D2:
+    // `specular_factor_override` (set above, non-None only for a
+    // spec-gloss material) wins over the direct
+    // `KHR_materials_specular` extension — spec-gloss materials
+    // don't also carry that extension in practice, but if one did,
+    // D2's conversion is the more specific decision for this slot.
+    let ior = if spec_gloss_present {
+        1.5
+    } else {
+        m.ior().unwrap_or(1.5)
+    };
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6: raw-JSON texture-index
+    // helper, hoisted above its original sheen/iridescence/
+    // anisotropy use so clearcoat/specular (parsed below, before
+    // that block) can share it too.
+    let tex_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
+        v.get(key)?.get("index")?.as_u64().map(|i| i as u32)
+    };
+    // BUG-pm9m: sibling of `tex_idx` — the raw-JSON texture-info
+    // object's own `texCoord` (glTF spec default 0), read the same
+    // way for the extension texture families below that have no
+    // typed accessor at 1.4.1 (clearcoat/sheen/iridescence/
+    // anisotropy). `None` means the slot itself is absent, not
+    // texCoord 0 — filtered out below same as every typed slot.
+    let tex_coord_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
+        let obj = v.get(key)?;
+        Some(obj
+            .get("extensions")
+            .and_then(|e| e.get("KHR_texture_transform"))
+            .and_then(|t| t.get("texCoord"))
+            .or_else(|| obj.get("texCoord"))
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0) as u32)
+    };
+    let specular_ext = m.specular();
+    let specular_factor = specular_factor_override
+        .unwrap_or_else(|| specular_ext.as_ref().map(|s| s.specular_factor()).unwrap_or(1.0));
+    let specular_color_factor = specular_color_factor_override.unwrap_or_else(|| {
+        specular_ext
+            .as_ref()
+            .map(|s| s.specular_color_factor())
+            .unwrap_or([1.0, 1.0, 1.0])
+    });
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
+    // surface): specularTexture/specularColorTexture, typed
+    // accessors on `Specular<'_>` (gltf 1.4.1 has the feature).
+    let specular_texture = if spec_gloss_present {
+        None
+    } else {
+        specular_ext
+            .as_ref()
+            .and_then(|s| s.specular_texture())
+            .map(|t| t.texture().index() as u32)
+    };
+    let specular_color_texture = if spec_gloss_present {
+        spec_gloss_color_texture
+    } else {
+        specular_ext
+            .as_ref()
+            .and_then(|s| s.specular_color_texture())
+            .map(|t| t.texture().index() as u32)
+    };
+
+    // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat.
+    // No typed accessor in gltf 1.4.1 (verified: no
+    // `KHR_materials_clearcoat` feature in either `gltf` or
+    // `gltf-json` 1.4.1's own `Cargo.toml`) — raw JSON sniff via
+    // the same `extension_value` this file already used for the
+    // presence-only boolean, extended to pull the two factors.
+    // glTF's own implicit defaults (0.0 for both) make an absent
+    // extension byte-identical to pre-G-P5.
+    let clearcoat_ext = m.extension_value("KHR_materials_clearcoat");
+    let clearcoat_factor = clearcoat_ext
+        .and_then(|v| v.get("clearcoatFactor"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as f32;
+    let clearcoat_roughness_factor = clearcoat_ext
+        .and_then(|v| v.get("clearcoatRoughnessFactor"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as f32;
+    let clearcoat_normal_scale = clearcoat_ext
+        .and_then(|v| v.get("clearcoatNormalTexture"))
+        .and_then(|v| v.get("scale"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0) as f32;
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
+    // surface): clearcoatTexture/clearcoatRoughnessTexture/
+    // clearcoatNormalTexture, raw-JSON sniff (same `tex_idx`
+    // doctrine sheen/iridescence/anisotropy already use — no typed
+    // accessor exists for this extension at 1.4.1).
+    let clearcoat_texture = clearcoat_ext.and_then(|v| tex_idx(v, "clearcoatTexture"));
+    let clearcoat_roughness_texture =
+        clearcoat_ext.and_then(|v| tex_idx(v, "clearcoatRoughnessTexture"));
+    let clearcoat_normal_texture =
+        clearcoat_ext.and_then(|v| tex_idx(v, "clearcoatNormalTexture"));
+
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_sheen.
+    // Same raw-JSON-sniff doctrine as clearcoat above — no typed
+    // accessor at 1.4.1. glTF's own implicit defaults ([0,0,0] /
+    // 0.0) make an absent extension byte-identical to pre-E1.
+    let sheen_ext = m.extension_value("KHR_materials_sheen");
+    let f3 = |v: &serde_json::Value, key: &str, default: [f32; 3]| -> [f32; 3] {
+        v.get(key)
+            .and_then(|a| a.as_array())
+            .and_then(|a| {
+                Some([
+                    a.first()?.as_f64()? as f32,
+                    a.get(1)?.as_f64()? as f32,
+                    a.get(2)?.as_f64()? as f32,
+                ])
+            })
+            .unwrap_or(default)
+    };
+    let f1 = |v: &serde_json::Value, key: &str, default: f32| -> f32 {
+        v.get(key).and_then(|x| x.as_f64()).map(|x| x as f32).unwrap_or(default)
+    };
+    let sheen_color_factor = sheen_ext
+        .map(|v| f3(v, "sheenColorFactor", [0.0, 0.0, 0.0]))
+        .unwrap_or([0.0, 0.0, 0.0]);
+    let sheen_roughness_factor =
+        sheen_ext.map(|v| f1(v, "sheenRoughnessFactor", 0.0)).unwrap_or(0.0);
+    let sheen_color_texture = sheen_ext.and_then(|v| tex_idx(v, "sheenColorTexture"));
+    let sheen_roughness_texture =
+        sheen_ext.and_then(|v| tex_idx(v, "sheenRoughnessTexture"));
+
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_iridescence.
+    // Raw-JSON sniff — no typed accessor at 1.4.1.
+    let iridescence_ext = m.extension_value("KHR_materials_iridescence");
+    let iridescence_factor =
+        iridescence_ext.map(|v| f1(v, "iridescenceFactor", 0.0)).unwrap_or(0.0);
+    let iridescence_ior =
+        iridescence_ext.map(|v| f1(v, "iridescenceIor", 1.3)).unwrap_or(1.3);
+    let iridescence_thickness_minimum = iridescence_ext
+        .map(|v| f1(v, "iridescenceThicknessMinimum", 100.0))
+        .unwrap_or(100.0);
+    let iridescence_thickness_maximum = iridescence_ext
+        .map(|v| f1(v, "iridescenceThicknessMaximum", 400.0))
+        .unwrap_or(400.0);
+    let iridescence_texture =
+        iridescence_ext.and_then(|v| tex_idx(v, "iridescenceTexture"));
+    let iridescence_thickness_texture =
+        iridescence_ext.and_then(|v| tex_idx(v, "iridescenceThicknessTexture"));
+
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_anisotropy.
+    // Raw-JSON sniff — no typed accessor at 1.4.1.
+    let anisotropy_ext = m.extension_value("KHR_materials_anisotropy");
+    let anisotropy_strength =
+        anisotropy_ext.map(|v| f1(v, "anisotropyStrength", 0.0)).unwrap_or(0.0);
+    let anisotropy_rotation =
+        anisotropy_ext.map(|v| f1(v, "anisotropyRotation", 0.0)).unwrap_or(0.0);
+    let anisotropy_texture = anisotropy_ext.and_then(|v| tex_idx(v, "anisotropyTexture"));
+
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_dispersion.
+    // Raw-JSON sniff — no typed accessor at 1.4.1. Single-field
+    // extension, no texture defined by the spec.
+    let dispersion = m
+        .extension_value("KHR_materials_dispersion")
+        .map(|v| f1(v, "dispersion", 0.0))
+        .unwrap_or(0.0);
+
+    // RAYTRACING_DESIGN.md section 16 TL3:
+    // KHR_materials_diffuse_transmission. Raw-JSON sniff — no typed
+    // accessor at 1.4.1. Factor and colour values feed the material;
+    // both texture families are retained for SceneObject map wiring.
+    let diffuse_transmission_ext =
+        m.extension_value("KHR_materials_diffuse_transmission");
+    let diffuse_transmission_factor = diffuse_transmission_ext
+        .map(|v| f1(v, "diffuseTransmissionFactor", 0.0))
+        .unwrap_or(0.0);
+    let diffuse_transmission_color = diffuse_transmission_ext
+        .and_then(|v| v.get("diffuseTransmissionColorFactor"))
+        .and_then(|a| a.as_array())
+        .and_then(|a| {
+            Some([
+                a.first()?.as_f64()? as f32,
+                a.get(1)?.as_f64()? as f32,
+                a.get(2)?.as_f64()? as f32,
+            ])
+        })
+        .unwrap_or([1.0, 1.0, 1.0]);
+    let diffuse_transmission_texture = diffuse_transmission_ext
+        .and_then(|v| tex_idx(v, "diffuseTransmissionTexture"));
+    let diffuse_transmission_color_texture = diffuse_transmission_ext
+        .and_then(|v| tex_idx(v, "diffuseTransmissionColorTexture"));
+
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_volume.
+    // Typed accessor (`Material::volume()`) — the Cargo feature IS
+    // enabled at 1.4.1, unlike the four raw-JSON families above.
+    // `attenuation_distance()`'s crate-level default is
+    // `f32::INFINITY` (glTF spec's own implicit default meaning "no
+    // attenuation") — NOT read straight through: `f32::INFINITY`
+    // is not representable in MANIFOLD's JSON project format
+    // (`serde_json` errors serializing a non-finite float, and
+    // EVERY glTF import without an explicit attenuationDistance —
+    // i.e. almost all of them — would hit this on save) nor is it
+    // a value later Beer-Lambert shading math (E2) can safely
+    // divide distance by. `VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION`
+    // is the finite stand-in — see its doc comment.
+    let volume_ext = m.volume();
+    let volume_thickness_factor =
+        volume_ext.as_ref().map(|v| v.thickness_factor()).unwrap_or(0.0);
+    let volume_attenuation_distance = volume_ext
+        .as_ref()
+        .map(|v| v.attenuation_distance())
+        .filter(|d| d.is_finite())
+        .unwrap_or(VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION);
+    let volume_attenuation_color = volume_ext
+        .as_ref()
+        .map(|v| v.attenuation_color())
+        .unwrap_or([1.0, 1.0, 1.0]);
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
+    // surface): thicknessTexture, typed accessor (Volume has crate
+    // support at 1.4.1, same as thickness_factor above).
+    let volume_thickness_texture = volume_ext
+        .as_ref()
+        .and_then(|v| v.thickness_texture())
+        .map(|t| t.texture().index() as u32);
+
+    let base_color_texture = base_color_info.as_ref().map(|t| t.texture().index() as u32);
+    let normal_texture = m.normal_texture().map(|t| t.texture().index() as u32);
+    let occlusion_texture = m.occlusion_texture().map(|t| t.texture().index() as u32);
+    let emissive_texture = m.emissive_texture().map(|t| t.texture().index() as u32);
+
+    // BUG-pm9m: UV sets 0 and 1 are carried through MeshVertex;
+    // report only higher authored sets, which still fall back to UV0.
+    for (slot, tex_coord) in [
+        ("baseColor", base_color_info.as_ref().map(|_| core_tex_coords[0])),
+        ("metallicRoughness", mr_info.as_ref().map(|_| core_tex_coords[2])),
+        ("normal", m.normal_texture().map(|_| core_tex_coords[1])),
+        ("occlusion", m.occlusion_texture().map(|_| core_tex_coords[3])),
+        ("emissive", m.emissive_texture().map(|_| core_tex_coords[4])),
+        (
+            "specular",
+            if spec_gloss_present {
+                None
+            } else {
+                specular_ext
+                    .as_ref()
+                    .and_then(|s| s.specular_texture())
+                    .map(|t| t.tex_coord())
+            },
+        ),
+        (
+            "specularColor",
+            if spec_gloss_present {
+                spec_gloss_color_map.map(|info| info.tex_coord)
+            } else {
+                specular_ext
+                    .as_ref()
+                    .and_then(|s| s.specular_color_texture())
+                    .map(|t| t.tex_coord())
+            },
+        ),
+        (
+            "volumeThickness",
+            volume_ext.as_ref().and_then(|v| v.thickness_texture()).map(|t| t.tex_coord()),
+        ),
+        ("clearcoat", clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatTexture"))),
+        (
+            "clearcoatRoughness",
+            clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatRoughnessTexture")),
+        ),
+        (
+            "clearcoatNormal",
+            clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatNormalTexture")),
+        ),
+        ("sheenColor", sheen_ext.and_then(|v| tex_coord_idx(v, "sheenColorTexture"))),
+        (
+            "sheenRoughness",
+            sheen_ext.and_then(|v| tex_coord_idx(v, "sheenRoughnessTexture")),
+        ),
+        (
+            "iridescence",
+            iridescence_ext.and_then(|v| tex_coord_idx(v, "iridescenceTexture")),
+        ),
+        (
+            "iridescenceThickness",
+            iridescence_ext.and_then(|v| tex_coord_idx(v, "iridescenceThicknessTexture")),
+        ),
+        (
+            "anisotropy",
+            anisotropy_ext.and_then(|v| tex_coord_idx(v, "anisotropyTexture")),
+        ),
+        (
+            "transmission",
+            m.transmission().and_then(|t| t.transmission_texture()).map(|t| t.tex_coord()),
+        ),
+        (
+            "diffuseTransmission",
+            diffuse_transmission_ext.and_then(|v| tex_coord_idx(v, "diffuseTransmissionTexture")),
+        ),
+        (
+            "diffuseTransmissionColor",
+            diffuse_transmission_ext
+                .and_then(|v| tex_coord_idx(v, "diffuseTransmissionColorTexture")),
+        ),
+    ] {
+        if let Some(n) = tex_coord
+            && n > 1
+        {
+            geometry_report_lines.push(format!(
+                "{label}: {slot} texture uses TEXCOORD_{n} — only UV sets 0 and 1 are supported; it falls back to UV0"
+            ));
+        }
+    }
+
+    let emissive = m.emissive_factor();
+    let emissive_strength = m.emissive_strength().unwrap_or(1.0);
+    // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): one lookup per map
+    // family, keyed off the same texture index each map's own
+    // field above already resolved — `None` (map unwired) reads
+    // `GltfSamplerInfo::default()` inside the helper.
+    let base_color_sampler = sampler_info_for(document, base_color_texture);
+    let normal_sampler = sampler_info_for(document, normal_texture);
+    let mr_sampler = sampler_info_for(document, mr_texture_index);
+    let occlusion_sampler = sampler_info_for(document, occlusion_texture);
+    let emissive_sampler = sampler_info_for(document, emissive_texture);
+    let extension_maps = [
+        extension_map_info(document, sheen_ext, "sheenColorTexture"),
+        extension_map_info(document, sheen_ext, "sheenRoughnessTexture"),
+        extension_map_info(document, iridescence_ext, "iridescenceTexture"),
+        extension_map_info(document, iridescence_ext, "iridescenceThicknessTexture"),
+        extension_map_info(document, anisotropy_ext, "anisotropyTexture"),
+        extension_map_info(document, clearcoat_ext, "clearcoatTexture"),
+        extension_map_info(document, clearcoat_ext, "clearcoatRoughnessTexture"),
+        extension_map_info(document, clearcoat_ext, "clearcoatNormalTexture"),
+        if spec_gloss_present {
+            MaterialMapInfo::default()
+        } else {
+            extension_map_info(
+                document,
+                m.extension_value("KHR_materials_specular"),
+                "specularTexture",
+            )
+        },
+        if spec_gloss_present {
+            spec_gloss_color_map.unwrap_or_default()
+        } else {
+            extension_map_info(
+                document,
+                m.extension_value("KHR_materials_specular"),
+                "specularColorTexture",
+            )
+        },
+        extension_map_info(
+            document,
+            m.extension_value("KHR_materials_transmission"),
+            "transmissionTexture",
+        ),
+        extension_map_info(
+            document,
+            m.extension_value("KHR_materials_volume"),
+            "thicknessTexture",
+        ),
+        extension_map_info(
+            document,
+            diffuse_transmission_ext,
+            "diffuseTransmissionTexture",
+        ),
+        extension_map_info(
+            document,
+            diffuse_transmission_ext,
+            "diffuseTransmissionColorTexture",
+        ),
+    ];
+
+    GltfMaterialInfo {
+        base_color_factor,
+        metallic,
+        roughness,
+        emissive,
+        alpha_mask,
+        alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
+        base_color_texture,
+        normal_texture,
+        normal_scale: m.normal_texture().map(|t| t.scale()).unwrap_or(1.0),
+        mr_texture: mr_texture_index,
+        occlusion_texture,
+        occlusion_strength: m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0),
+        emissive_texture,
+        emissive_strength,
+        ior,
+        specular_factor,
+        specular_color_factor,
+        specular_texture,
+        specular_color_texture,
+        base_color_uv_transform,
+        normal_uv_transform,
+        mr_uv_transform,
+        occlusion_uv_transform,
+        emissive_uv_transform,
+        core_tex_coords,
+            transmission_factor: m
+            .transmission()
+            .map(|t| t.transmission_factor())
+            .unwrap_or(0.0),
+        transmission_texture: m
+            .transmission()
+            .and_then(|t| t.transmission_texture())
+            .map(|t| t.texture().index() as u32),
+        diffuse_transmission_factor,
+        diffuse_transmission_color,
+        diffuse_transmission_texture,
+        diffuse_transmission_color_texture,
+        clearcoat_factor,
+        clearcoat_roughness_factor,
+        clearcoat_normal_scale,
+        clearcoat_texture,
+        clearcoat_roughness_texture,
+        clearcoat_normal_texture,
+        sheen_color_factor,
+        sheen_roughness_factor,
+        sheen_color_texture,
+        sheen_roughness_texture,
+        iridescence_factor,
+        iridescence_ior,
+        iridescence_thickness_minimum,
+        iridescence_thickness_maximum,
+        iridescence_texture,
+        iridescence_thickness_texture,
+        anisotropy_strength,
+        anisotropy_rotation,
+        anisotropy_texture,
+        dispersion,
+        volume_thickness_factor,
+        volume_attenuation_distance,
+        volume_attenuation_color,
+        volume_thickness_texture,
+        was_blend,
+        mr_texture_is_gloss_alpha,
+        base_color_sampler,
+        normal_sampler,
+        mr_sampler,
+        occlusion_sampler,
+        emissive_sampler,
+        extension_maps,
+    }
+}
+
+/// The file at `path` as the scene compiler reads it.
+#[cfg(test)]
+fn test_model(path: &std::path::Path) -> std::rc::Rc<crate::node_graph::gltf_import::model_file::ModelFile> {
+    crate::node_graph::gltf_import::model_file::model_file(&path.to_string_lossy())
+        .unwrap_or_else(|| panic!("{} reads as a model", path.display()))
+}
+
+/// The glTF material named `name` in the file at `path`, as the compiler
+/// reads it, and its index.
+#[cfg(test)]
+fn test_material(path: &std::path::Path, name: &str) -> (u32, GltfMaterialInfo) {
+    let (document, _) = parse_document_and_buffers(path).expect("parse model");
+    let index = document
+        .materials()
+        .position(|m| m.name() == Some(name))
+        .unwrap_or_else(|| panic!("material {name} in {}", path.display()));
+    (index as u32, test_model(path).materials[index].clone())
+}
+
 #[cfg(test)]
 mod animation_tests {
     use super::*;
+    use crate::node_graph::gltf_import::model_file::Rig;
+
+    // Parallel tests in this module can create and remove synthetic GLBs at
+    // the same clock tick. The process-local counter keeps each path unique.
+    static SYNTHETIC_COLOR0_COUNTER: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
 
     fn khronos_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2849,6 +3672,96 @@ mod animation_tests {
         let t = node.translation.as_ref().expect("translation track");
         assert_eq!(t.mode, GltfInterp::Step);
         assert_eq!(t.times, vec![0.0, 0.5, 1.0, 1.5]);
+    }
+
+    /// Same as [`step_interp_fixture_parses_as_step_not_dropped`] for
+    /// `cubicspline_interp.glb` — also asserts the in/out tangents
+    /// de-interleaved correctly (all-zero in this fixture) and the
+    /// keyframe VALUES survived the de-interleave untouched.
+    #[test]
+    fn cubicspline_interp_fixture_parses_with_tangents_deinterleaved() {
+        let path = hostile_dir().join("cubicspline_interp.glb");
+        assert!(path.exists(), "cubicspline_interp.glb fixture missing at {}", path.display());
+        let (document, buffers, _images, _image_report_lines) =
+            import_glb(&path).expect("parse cubicspline_interp.glb");
+        let animations = parse_animations(&document, &buffers);
+        assert_eq!(animations.len(), 1);
+        assert!(animations[0].skipped_channels.is_empty(), "CUBICSPLINE must not be skipped");
+        let node = &animations[0].nodes[0];
+        let t = node.translation.as_ref().expect("translation track");
+        assert_eq!(t.mode, GltfInterp::CubicSpline);
+        assert_eq!(t.times, vec![0.0, 0.5, 1.0, 1.5]);
+        assert_eq!(
+            t.values,
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 0.0]],
+            "de-interleaving must not disturb the value triple's own numbers"
+        );
+        assert_eq!(t.in_tangents.len(), 4);
+        assert_eq!(t.out_tangents.len(), 4);
+        for tangent in t.in_tangents.iter().chain(t.out_tangents.iter()) {
+            assert_eq!(*tangent, [0.0, 0.0, 0.0], "this fixture's tangents are authored all-zero");
+        }
+    }
+
+    /// GLTF_ANIMATION_DESIGN.md A1 gate fixture. Re-derived inventory
+    /// finding (this session): `BoxAnimated.glb` is NOT the "one node,
+    /// one mesh, one material" asset the phase brief assumed — it has
+    /// TWO materials ("inner"/"outer") and its single animated object
+    /// splits translation onto an ANCESTOR node (node zero) from rotation
+    /// on the mesh's own node (node two), via an intermediate no-op node.
+    /// `resolve_object_animation`'s ancestor-chain walk identifies the
+    /// split channels, while the node-slot palette now carries the final
+    /// hierarchy transform because one channel lives on an ancestor.
+    #[test]
+    fn box_animated_resolves_split_translation_and_rotation_onto_one_object() {
+        let path = khronos_dir().join("BoxAnimated.glb");
+        if !path.exists() {
+            println!(
+                "box_animated_resolves_split_translation_and_rotation_onto_one_object: \
+                 fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let (document, buffers, _, _) = import_glb(&path).unwrap();
+        let animations = parse_animations(&document, &buffers);
+        assert_eq!(animations.len(), 1, "one animation clip");
+        assert!(
+            animations[0].skipped_channels.is_empty(),
+            "BoxAnimated's two channels are both LINEAR — nothing should be skipped: {:?}",
+            animations[0].skipped_channels
+        );
+
+        let model = test_model(&path);
+        let (inner, _) = test_material(&path, "inner");
+        let (outer, _) = test_material(&path, "outer");
+        let rig_of = |material: u32| {
+            model
+                .nodes
+                .values()
+                .find(|facts| facts.parts.iter().any(|part| part.material == Some(material)))
+                .and_then(|facts| facts.rig.clone())
+        };
+        // The ancestor's animation drives the inner box through its node
+        // chain as a one-slot palette.
+        let Some(Rig::Chain { node_index, .. }) = rig_of(inner) else {
+            panic!("inner part resolves the hierarchy palette");
+        };
+        // The palette needs original local vertices. Baking the ancestor bind
+        // transform here would apply it twice when the animation is sampled.
+        let node = document.nodes().nth(node_index as usize).unwrap();
+        let mesh = node.mesh().unwrap();
+        let primitive = mesh.primitives().find(|p| p.material().index() == Some(inner as usize)).unwrap();
+        let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+        let source: Vec<_> = reader.read_positions().unwrap().collect();
+        let first_index = reader.read_indices().unwrap().into_u32().next().unwrap() as usize;
+        let node_path = model.nodes.iter().find(|(_, facts)| facts.parts.iter().any(|p| p.material == Some(inner))).unwrap().0;
+        let (vertices, joints, weights) = load_gltf_skinned_mesh(&path, inner, node_path).unwrap();
+        assert_eq!(vertices[0].position, source[first_index]);
+        assert_eq!(joints[0], [0.0; 4]);
+        assert_eq!(weights[0], [1.0, 0.0, 0.0, 0.0]);
+
+        assert!(rig_of(outer).is_none(), "outer_box is static in this fixture");
     }
 
     /// Held-out parse-only smoke test (A1 deliverable 1): proves the
@@ -2906,11 +3819,296 @@ mod animation_tests {
         assert_eq!(mode_of("CubicSpline Rotation"), GltfInterp::CubicSpline);
     }
 
+    /// BUG-5mma: minimal single-triangle `.glb` with an explicit COLOR_0
+    /// accessor (VEC4 FLOAT, one value per vertex), so the fold/varies
+    /// logic can be proven directly rather than depending on a specific
+    /// Khronos fixture's exact authored colors. Same hand-rolled
+    /// binary-container shape as
+    /// `gltf_import::tests::write_synthetic_multimaterial_glb`.
+    fn write_synthetic_color0_glb(
+        base_color_factor: [f32; 4],
+        vertex_colors: [[f32; 4]; 3],
+    ) -> std::path::PathBuf {
+        let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut bin: Vec<u8> = Vec::new();
+        for v in &tri {
+            for c in v {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let color_byte_offset = bin.len();
+        for c in &vertex_colors {
+            for ch in c {
+                bin.extend_from_slice(&ch.to_le_bytes());
+            }
+        }
+
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [{
+                "attributes": { "POSITION": 0, "COLOR_0": 1 },
+                "material": 0,
+            }] }],
+            "accessors": [
+                {
+                    "bufferView": 0,
+                    "componentType": 5126, // FLOAT
+                    "count": 3,
+                    "type": "VEC3",
+                    "min": [0.0, 0.0, 0.0],
+                    "max": [1.0, 1.0, 0.0],
+                },
+                {
+                    "bufferView": 1,
+                    "componentType": 5126, // FLOAT
+                    "count": 3,
+                    "type": "VEC4",
+                },
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": color_byte_offset, "byteLength": 48 },
+            ],
+            "materials": [
+                {
+                    "name": "ColoredTri",
+                    "pbrMetallicRoughness": { "baseColorFactor": base_color_factor },
+                },
+            ],
+            "buffers": [{ "byteLength": bin.len() }],
+        });
+        let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
+
+        // GLB container: header + JSON chunk (space-padded to 4 bytes) + BIN
+        // chunk (zero-padded to 4 bytes). Chunk type magics per the Binary
+        // glTF spec: 0x4E4F534A = "JSON", 0x004E4942 = "BIN\0".
+        let mut json_padded = json_bytes;
+        while !json_padded.len().is_multiple_of(4) {
+            json_padded.push(b' ');
+        }
+        let mut bin_padded = bin;
+        while !bin_padded.len().is_multiple_of(4) {
+            bin_padded.push(0);
+        }
+        let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+        let mut glb = Vec::with_capacity(total_len);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_padded);
+        glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin_padded);
+
+        let path = std::env::temp_dir().join(format!(
+            "manifold_synthetic_color0_{}_{}.glb",
+            std::process::id(),
+            SYNTHETIC_COLOR0_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
+        path
+    }
+
+    /// Two local-space triangles share one material and sit below a common
+    /// parent. The parent translates and rotates at t=1, while each child has
+    /// its own bind translation. This exercises the same source/palette shape
+    /// as a multi-node rigid object without depending on a checked-in asset.
+    fn write_synthetic_common_parent_animation_glb() -> std::path::PathBuf {
+        let mut bin = Vec::new();
+        let push_f32 = |bin: &mut Vec<u8>, value: f32| bin.extend_from_slice(&value.to_le_bytes());
+        for position in [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 0.5, 0.0]] {
+            for component in position {
+                push_f32(&mut bin, component);
+            }
+        }
+        let child_two_offset = bin.len();
+        for position in [[0.0, 0.0, 0.0], [-0.5, 0.0, 0.0], [0.0, -0.5, 0.0]] {
+            for component in position {
+                push_f32(&mut bin, component);
+            }
+        }
+        let time_offset = bin.len();
+        for time in [0.0, 1.0] {
+            push_f32(&mut bin, time);
+        }
+        let translation_offset = bin.len();
+        for translation in [[0.0, 0.0, 0.0], [3.0, 2.0, 0.0]] {
+            for component in translation {
+                push_f32(&mut bin, component);
+            }
+        }
+        let rotation_offset = bin.len();
+        for rotation in [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.70710677, 0.70710677]] {
+            for component in rotation {
+                push_f32(&mut bin, component);
+            }
+        }
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [
+                { "children": [1, 2] },
+                { "mesh": 0, "translation": [1.0, 0.0, 0.0] },
+                { "mesh": 1, "translation": [-1.0, 0.0, 0.0] }
+            ],
+            "meshes": [
+                { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
+                { "primitives": [{ "attributes": { "POSITION": 1 }, "material": 0 }] }
+            ],
+            "materials": [{ "name": "Shared" }],
+            "accessors": [
+                {
+                    "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                    "min": [0.0, 0.0, 0.0], "max": [0.5, 0.5, 0.0]
+                },
+                {
+                    "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3",
+                    "min": [-0.5, -0.5, 0.0], "max": [0.0, 0.0, 0.0]
+                },
+                { "bufferView": 2, "componentType": 5126, "count": 2, "type": "SCALAR" },
+                { "bufferView": 3, "componentType": 5126, "count": 2, "type": "VEC3" },
+                { "bufferView": 4, "componentType": 5126, "count": 2, "type": "VEC4" }
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": child_two_offset, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": time_offset, "byteLength": 8 },
+                { "buffer": 0, "byteOffset": translation_offset, "byteLength": 24 },
+                { "buffer": 0, "byteOffset": rotation_offset, "byteLength": 32 }
+            ],
+            "animations": [{
+                "samplers": [
+                    { "input": 2, "output": 3 },
+                    { "input": 2, "output": 4 }
+                ],
+                "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "translation" } },
+                    { "sampler": 1, "target": { "node": 0, "path": "rotation" } }
+                ]
+            }],
+            "buffers": [{ "byteLength": bin.len() }]
+        });
+        let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic hierarchy glTF JSON");
+        let mut json_padded = json_bytes;
+        while !json_padded.len().is_multiple_of(4) {
+            json_padded.push(b' ');
+        }
+        let mut bin_padded = bin;
+        while !bin_padded.len().is_multiple_of(4) {
+            bin_padded.push(0);
+        }
+        let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+        let mut glb = Vec::with_capacity(total_len);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_padded);
+        glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin_padded);
+        let path = std::env::temp_dir().join(format!(
+            "manifold_synthetic_common_parent_{}_{}.glb",
+            std::process::id(),
+            SYNTHETIC_COLOR0_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, &glb).expect("write synthetic hierarchy glb to temp dir");
+        path
+    }
+
+    #[test]
+    fn synthetic_common_parent_material_uses_palette_and_moves_child_vertices() {
+        let path = write_synthetic_common_parent_animation_glb();
+        let model = test_model(&path);
+        let mut chains: Vec<u32> = model
+            .nodes
+            .values()
+            .filter_map(|facts| match facts.rig {
+                Some(Rig::Chain { node_index, .. }) => Some(node_index),
+                _ => None,
+            })
+            .collect();
+        chains.sort_unstable();
+        assert_eq!(chains, [1, 2], "both child mesh nodes move by their node chain");
+
+        let (document, buffers, _, _) = import_glb(&path).expect("import synthetic hierarchy glb");
+        let animations = parse_animations(&document, &buffers);
+        let parent = animations[0]
+            .nodes
+            .iter()
+            .find(|node| node.node_index == 0)
+            .expect("common parent animation");
+        let parent_translation = parent.translation.as_ref().unwrap().values[1];
+        let parent_rotation = parent.rotation.as_ref().unwrap().values[1];
+        let parent_world = mat4_from_trs(parent_translation, parent_rotation, [1.0; 3]);
+        let (vertices, joints, weights) = load_gltf_skinned_mesh(&path, 0, "").expect("load palette vertices");
+        assert_eq!(vertices.len(), 6, "two triangle contributors stay in local space");
+        assert_eq!(joints[0], [0.0; 4]);
+        assert_eq!(joints[3], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(weights[0], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(weights[3], [1.0, 0.0, 0.0, 0.0]);
+
+        let child_world = |node_index: usize| {
+            let node = document.nodes().nth(node_index).unwrap();
+            let (translation, rotation, scale) = node.transform().decomposed();
+            mat4_mul(&parent_world, &mat4_from_trs(translation, rotation, scale))
+        };
+        let child_one_position = mat4_transform_point(&child_world(1), vertices[0].position);
+        let child_two_position = mat4_transform_point(&child_world(2), vertices[3].position);
+        assert_eq!(child_one_position, [3.0, 3.0, 0.0]);
+        assert_eq!(child_two_position, [3.0, 1.0, 0.0]);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// BUG-5mma core case: every vertex on the (sole) primitive sharing this
+    /// material agrees on one constant COLOR_0. The material factor remains
+    /// untouched while the authored color arrives on every loaded vertex.
+    #[test]
+    fn constant_vertex_color_preserves_factor_and_loads_color() {
+        let base = [0.8, 0.6, 0.4, 1.0];
+        let tint = [0.5, 1.0, 0.25, 0.5];
+        let path = write_synthetic_color0_glb(base, [tint, tint, tint]);
+        let m = &test_model(&path).materials[0];
+        assert_eq!(m.base_color_factor, base, "COLOR_0 must not be folded into the material factor");
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .expect("load synthetic constant-color vertices");
+        assert_eq!(verts.len(), 3);
+        assert!(verts.iter().all(|vertex| vertex.color == tint));
+        std::fs::remove_file(&path).expect("remove synthetic constant-color glb");
+    }
+
+    /// BUG-5mma varying case: three distinct authored colors remain distinct
+    /// in the loaded vertices, while the material factor stays untouched.
+    #[test]
+    fn varying_vertex_color_preserves_factor_and_loads_each_vertex() {
+        let base = [0.8, 0.6, 0.4, 1.0];
+        let path = write_synthetic_color0_glb(
+            base,
+            [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
+        );
+        let m = &test_model(&path).materials[0];
+        assert_eq!(m.base_color_factor, base, "varying color must leave base_color_factor untouched");
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .expect("load synthetic varying-color vertices");
+        assert_eq!(verts.len(), 3);
+        let colors: Vec<[f32; 4]> = verts.iter().map(|vertex| vertex.color).collect();
+        assert_eq!(colors, vec![[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]);
+        std::fs::remove_file(&path).expect("remove synthetic varying-color glb");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::gltf_import::model_file::Rig;
 
     /// One self-contained triangle exercises every loader variant under test:
     /// a reflected nonuniform node transform, authored tangent frame, UV1,
@@ -3042,6 +4240,85 @@ mod tests {
         path
     }
 
+    /// The multi-node shared-skin merge, against the real fixture that
+    /// motivated it: surveillance_cam.glb's material 0 is fed by THREE
+    /// skinned mesh nodes (arm/cam/joint), all bound to the same 4-joint
+    /// skin — the Sketchfab FBX-convert shape. Pre-fix this object
+    /// imported unskinned (the whole model frozen; only the 4-vertex glass
+    /// pane animated). The resolve must now produce skin 0, and the runtime
+    /// load must concatenate all three nodes' geometry with every JOINTS_0
+    /// index still inside the one shared 4-slot palette.
+    #[test]
+    fn multi_node_shared_skin_material_resolves_and_concatenates() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/surveillance_cam.glb");
+        // Skip-if-missing (azalea convention): the fixture is a local
+        // look-test drop, deliberately untracked per .gitignore's
+        // licensing-vet note.
+        if !path.exists() {
+            println!("multi_node_shared_skin_material_resolves_and_concatenates: fixture not found, skipping");
+            return;
+        }
+
+        let model = test_model(&path);
+        let skins_of = |material: u32| -> Vec<(u32, u32)> {
+            model
+                .nodes
+                .values()
+                .filter(|facts| facts.parts.iter().any(|part| part.material == Some(material)))
+                .filter_map(|facts| match facts.rig {
+                    Some(Rig::Skin { skin_index, joint_count, .. }) => Some((skin_index, joint_count)),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(skins_of(0), [(0, 4); 3], "material 0's three contributors share 4-joint skin 0");
+
+        let (verts, joints, weights) = load_gltf_skinned_mesh(&path, 0, "")
+            .unwrap_or_else(|e| panic!("load_gltf_skinned_mesh({}): {e}", path.display()));
+        // arm (1260) + cam (2748) + joint (96) triangle indices, one
+        // emitted vertex per index entry.
+        assert_eq!(verts.len(), 4104, "all three contributing nodes' geometry, concatenated");
+        assert_eq!(joints.len(), verts.len(), "coincident joints");
+        assert_eq!(weights.len(), verts.len(), "coincident weights");
+        assert!(
+            joints.iter().all(|j| j.iter().all(|&x| (0.0..4.0).contains(&x))),
+            "every JOINTS_0 entry indexes the shared 4-slot palette"
+        );
+
+        // The single-node glass material (4 verts, one contributing node)
+        // must keep resolving exactly as before the merge.
+        assert_eq!(skins_of(1).len(), 1, "single-node skinned material still resolves");
+    }
+
+    /// The single-node path through the same collect-all loop the merge
+    /// introduced: kuma_heavy_robot's two materials are each fed by exactly
+    /// one skinned node (12-joint skin) — vertex counts must match the
+    /// file's index counts exactly (no double-collection, no loss).
+    #[test]
+    fn single_node_skinned_materials_unchanged_by_collect_all() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/kuma_heavy_robot_r-9000s.glb");
+        if !path.exists() {
+            println!("single_node_skinned_materials_unchanged_by_collect_all: fixture not found, skipping");
+            return;
+        }
+        let model = test_model(&path);
+        for (material_index, expected_verts) in [(0u32, 34014usize), (1u32, 34017usize)] {
+            let (node_path, facts) = model
+                .nodes
+                .iter()
+                .find(|(_, facts)| facts.parts.iter().any(|part| part.material == Some(material_index)))
+                .expect("robot material has geometry");
+            let Some(Rig::Skin { joint_count, .. }) = facts.rig else {
+                panic!("robot material resolves skinned");
+            };
+            assert_eq!(joint_count, 12);
+            let (verts, _, _) = load_gltf_skinned_mesh(&path, material_index, node_path)
+                .unwrap_or_else(|e| panic!("load_gltf_skinned_mesh({material_index}): {e}"));
+            assert_eq!(verts.len(), expected_verts, "material {material_index} vertex count");
+        }
+    }
     /// Decisive seam-split for the robot's black-body report: the decoded
     /// baseColor image (texture 0 → image 0, a 4096² JPEG) must arrive
     /// bright CPU-side. If this fails, the vendored decoder is the bug;
@@ -3068,7 +4345,6 @@ mod tests {
             / (img.width as usize * img.height as usize) as f64;
         assert!(mean > 40.0, "the KUMA atlas is mostly bright orange/white — mean {mean:.1} says decode is dark");
     }
-
 
     /// BUG-wfxe red proof: `NormalTangentMirrorTest.glb` (Khronos'
     /// conformance asset for exactly this path — authored tangents with
@@ -3105,6 +4381,52 @@ mod tests {
             (len - 1.0).abs() < 0.05,
             "authored tangent direction must be ~unit (world-transformed), got |t|={len}"
         );
+    }
+
+    #[test]
+    fn texture_transform_multi_preserves_extension_map_metadata() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/TextureTransformMultiTest.glb");
+        assert!(path.exists(), "TextureTransformMultiTest.glb missing at {}", path.display());
+        let materials = &test_model(&path).materials;
+
+        // Materials 20 and 23 are the fixture's clearcoat transform cases;
+        // their authored maps exercise two extension families independently.
+        let clearcoat = &materials[20].extension_maps[5];
+        let clearcoat_roughness = &materials[23].extension_maps[6];
+        assert_ne!(clearcoat.uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_ne!(clearcoat_roughness.uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_eq!(clearcoat.tex_coord, 0);
+        assert_eq!(clearcoat_roughness.tex_coord, 0);
+        assert_eq!(clearcoat.sampler.wrap_u, manifold_gpu::GpuAddressMode::Repeat);
+        assert_eq!(clearcoat_roughness.sampler.min_filter, manifold_gpu::GpuFilterMode::Linear);
+
+        let normal = &materials[9];
+        let occlusion = &materials[15];
+        assert_ne!(normal.normal_uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_eq!(normal.core_tex_coords[1], 1);
+        assert_ne!(occlusion.occlusion_uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_eq!(occlusion.core_tex_coords[3], 1);
+    }
+
+    #[test]
+    fn texture_settings_preserves_sampler_wrap_and_mip_choice() {
+        let settings = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/TextureSettingsTest.glb");
+        let settings_materials = &test_model(&settings).materials;
+        assert_eq!(settings_materials[0].base_color_sampler.mip_filter, Some(GltfFilterMode::Linear));
+        assert_eq!(settings_materials[0].base_color_sampler.wrap_v, GltfWrapMode::MirrorRepeat);
+        assert_eq!(settings_materials[1].base_color_sampler.wrap_u, GltfWrapMode::MirrorRepeat);
+
+        let nearest_mip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/MaterialsVariantsShoe.glb");
+        let nearest_materials = &test_model(&nearest_mip).materials;
+        assert_eq!(nearest_materials[0].mr_sampler.mip_filter, Some(GltfFilterMode::Nearest));
+
+        let no_mip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/SpecularSilkPouf.glb");
+        let no_mip_materials = &test_model(&no_mip).materials;
+        assert_eq!(no_mip_materials[0].occlusion_sampler.mip_filter, None);
     }
 
     #[test]
@@ -3148,6 +4470,54 @@ mod tests {
         std::fs::remove_file(&path).expect("remove synthetic tangent fixture");
     }
 
+    #[test]
+    fn skinned_and_morph_loaders_preserve_uv1() {
+        let path = write_synthetic_loader_proof_glb();
+        let expected_uv1 = [[0.2, 0.3], [0.4, 0.7], [0.8, 0.9]];
+
+        let model = test_model(&path);
+        assert_eq!(model.nodes.len(), 1);
+        let facts = model.nodes.values().next().unwrap();
+        assert!(matches!(facts.rig, Some(Rig::Skin { .. })), "synthetic fixture must resolve a skin");
+        assert!(!facts.morphs.is_empty(), "synthetic fixture must resolve morph targets");
+
+        let base = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .expect("load synthetic morph base mesh");
+        assert_eq!(base.len(), expected_uv1.len());
+        for (vertex, expected) in base.iter().zip(expected_uv1) {
+            assert_eq!(vertex._pad2, expected, "base mesh UV1 must survive static loading");
+        }
+
+        let (skinned, joints, weights) =
+            load_gltf_skinned_mesh(&path, 0, "").expect("load synthetic skinned mesh");
+        assert_eq!(skinned.len(), expected_uv1.len());
+        assert_eq!(joints.len(), skinned.len());
+        assert_eq!(weights.len(), skinned.len());
+        for ((vertex, joint), (weight, expected)) in skinned
+            .iter()
+            .zip(joints)
+            .zip(weights.into_iter().zip(expected_uv1))
+        {
+            assert_eq!(vertex._pad2, expected, "skinned UV1 must survive loading");
+            assert_eq!(joint, [0.0, 0.0, 0.0, 0.0]);
+            assert_eq!(weight, [1.0, 0.0, 0.0, 0.0]);
+        }
+
+        let (deltas, target_count, vertex_count) =
+            load_gltf_morph_deltas(&path, 0, false, "").expect("load synthetic morph deltas");
+        assert_eq!(target_count, 1);
+        assert_eq!(vertex_count, 3);
+        assert_eq!(deltas.len(), 3);
+        assert!(
+            deltas.iter().any(|vertex| vertex.position != [0.0, 0.0, 0.0]),
+            "synthetic morph target must produce nonzero position deltas"
+        );
+        assert!(
+            deltas.iter().all(|vertex| vertex._pad2 == [0.0, 0.0]),
+            "morph deltas must leave UV1 zero for base-mesh preservation"
+        );
+        std::fs::remove_file(&path).expect("remove synthetic loader proof fixture");
+    }
 
     /// BUG-wfxe fallback half: a mesh WITHOUT a TANGENT accessor keeps the
     /// zero sentinel, so the shader takes the derived cotangent frame
@@ -3254,6 +4624,421 @@ mod tests {
         );
     }
 
+    /// The per-material import summary the P1c importer builds its
+    /// `render_scene` objects from. Skips when the fixture is absent;
+    /// otherwise asserts the azalea's known shape (2 textured materials,
+    /// each with a base-color texture, no glTF cameras) and that the
+    /// `Material` selector actually extracts each material's geometry at
+    /// the summarized vertex count.
+    #[test]
+    fn import_summary_and_material_selector_on_azalea() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+        if !path.exists() {
+            println!("import_summary_and_material_selector_on_azalea: fixture not found, skipping");
+            return;
+        }
+        // Known azalea shape: 2 distinct textured materials, no cameras,
+        // no default-material geometry. Both materials declare
+        // `KHR_materials_unlit`; the parse reads every field genuinely, so
+        // `base_color_texture` stays wired as for a lit material.
+        let model = test_model(&path);
+        let (document, _) = parse_document_and_buffers(&path).expect("parse azalea");
+        assert_eq!(parse_cameras(&document, &build_parent_map(&document)).0.len(), 0);
+        let mut counts: std::collections::BTreeMap<Option<u32>, u32> = std::collections::BTreeMap::new();
+        for part in model.nodes.values().flat_map(|facts| &facts.parts) {
+            *counts.entry(part.material).or_default() += part.vertex_count;
+        }
+        assert_eq!(counts.keys().copied().collect::<Vec<_>>(), [Some(0), Some(1)], "2 materials with geometry");
+        for (material, vertex_count) in counts {
+            let material_index = material.unwrap();
+            let m = &model.materials[material_index as usize];
+            assert!(
+                m.base_color_texture.is_some(),
+                "material {material_index} should carry a base-color texture (parsed genuinely, unremapped)"
+            );
+            assert!(vertex_count > 0);
+            // The Material selector must extract exactly that many verts.
+            let verts = load_gltf_mesh(&path, GltfMeshSelector::Material { material_index }).expect("material selector");
+            assert_eq!(
+                verts.len() as u32,
+                vertex_count,
+                "Material selector vertex count must match the import's parts for material {material_index}"
+            );
+            assert_eq!(verts.len() % 3, 0, "triangle list");
+        }
+    }
+
+    /// BUG-d2qz: `euler_from_fwd_up` inverts `Camera::from_pos_euler`'s own
+    /// basis construction — round-trip every non-degenerate angle triple
+    /// (pitch away from ±90°, where yaw isn't observable from `fwd` alone,
+    /// matches `from_pos_euler`'s own documented pole limits) through
+    /// `from_pos_euler` to get `(fwd, up)`, decompose back, and recover the
+    /// SAME angles.
+    #[test]
+    fn euler_from_fwd_up_round_trips_from_pos_euler() {
+        use manifold_node_engine::scene::camera::Camera;
+
+        for yaw in [-2.4_f32, -0.7, 0.0, 0.3, 1.1, 2.9] {
+            for pitch in [-1.3_f32, -0.5, 0.0, 0.4, 1.3] {
+                for roll in [0.0_f32, 0.5, -1.8, 3.0] {
+                    let cam = Camera::from_pos_euler([0.0, 0.0, 0.0], yaw, pitch, roll, 0.9, 0.05, 200.0);
+                    let (yaw2, pitch2, roll2) = euler_from_fwd_up(cam.fwd, cam.up);
+                    let cam2 = Camera::from_pos_euler([0.0, 0.0, 0.0], yaw2, pitch2, roll2, 0.9, 0.05, 200.0);
+                    for axis in 0..3 {
+                        assert!(
+                            (cam.fwd[axis] - cam2.fwd[axis]).abs() < 1e-4,
+                            "fwd mismatch at yaw={yaw} pitch={pitch} roll={roll}: {:?} vs {:?}",
+                            cam.fwd,
+                            cam2.fwd
+                        );
+                        assert!(
+                            (cam.up[axis] - cam2.up[axis]).abs() < 1e-4,
+                            "up mismatch at yaw={yaw} pitch={pitch} roll={roll}: {:?} vs {:?}",
+                            cam.up,
+                            cam2.up
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// BUG-d2qz: Khronos `Duck.glb` (CC-BY 4.0 — attribution in
+    /// `tests/fixtures/gltf/README.md`) carries one embedded perspective
+    /// camera on a child node under a uniformly-scaled root — the real
+    /// shape `parse_cameras` has to resolve (world transform through an
+    /// ancestor chain, not just the camera node's own local matrix). Proof
+    /// that the resolved pose actually reproduces the glb's authored
+    /// direction: rebuild a `Camera` from the parsed yaw/pitch/roll and
+    /// check its `fwd`/`up` against the SAME world matrix decomposed
+    /// directly — an independent check, not a re-assertion of
+    /// `parse_cameras`' own math. (`AntiqueCamera.glb`, despite its name,
+    /// carries no embedded glTF camera — it's a model of a camera object,
+    /// not a scene camera — so it can't serve as this fixture.)
+    #[test]
+    fn duck_embedded_camera_resolves_to_authored_world_pose() {
+        use manifold_node_engine::scene::camera::Camera;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/Duck.glb");
+        if !path.exists() {
+            println!("duck_embedded_camera_resolves_to_authored_world_pose: fixture not found, skipping");
+            return;
+        }
+        let (document, _buffers, _images, _image_report_lines) = import_glb(&path).expect("parse Duck.glb");
+        assert_eq!(document.cameras().count(), 1, "Duck.glb carries exactly one embedded camera");
+        let (cameras, camera_report_lines) = parse_cameras(&document, &build_parent_map(&document));
+        assert_eq!(cameras.len(), 1, "Duck's one camera is perspective — must resolve");
+        assert!(camera_report_lines.is_empty(), "no orthographic camera to skip");
+
+        let parsed = &cameras[0];
+
+        // Independent oracle: re-derive world position/fwd/up straight off
+        // the document's node tree (root's uniform scale composed with the
+        // camera node's local matrix), bypassing `parse_cameras` entirely.
+        let cam_node = document
+            .nodes()
+            .find(|n| n.camera().is_some())
+            .expect("Duck.glb has exactly one camera node");
+        let parent_of = build_parent_map(&document);
+        let world = static_world_matrix(&document, cam_node.index(), &parent_of);
+        let expected_pos = [world[3][0], world[3][1], world[3][2]];
+        let expected_fwd = normalize3([-world[2][0], -world[2][1], -world[2][2]]);
+        let expected_up = normalize3([world[1][0], world[1][1], world[1][2]]);
+
+        for axis in 0..3 {
+            assert!(
+                (parsed.pos[axis] - expected_pos[axis]).abs() < 1e-3,
+                "pos mismatch: {:?} vs {:?}",
+                parsed.pos,
+                expected_pos
+            );
+        }
+
+        let rebuilt =
+            Camera::from_pos_euler(parsed.pos, parsed.yaw, parsed.pitch, parsed.roll, parsed.fov_y, parsed.near, parsed.far);
+        for axis in 0..3 {
+            assert!(
+                (rebuilt.fwd[axis] - expected_fwd[axis]).abs() < 1e-3,
+                "fwd mismatch: {:?} vs {:?}",
+                rebuilt.fwd,
+                expected_fwd
+            );
+            assert!(
+                (rebuilt.up[axis] - expected_up[axis]).abs() < 1e-3,
+                "up mismatch: {:?} vs {:?}",
+                rebuilt.up,
+                expected_up
+            );
+        }
+
+        // FOV/clip planes pass through untouched from the glTF accessor.
+        assert!((parsed.fov_y - 0.660_592_56_f32).abs() < 1e-5);
+        assert!((parsed.near - 1.0).abs() < 1e-5);
+        assert!((parsed.far - 10000.0).abs() < 1e-5);
+    }
+
+    /// An unlit-authored material is lit by the scene like any other: every
+    /// field (`base_color_factor`, `base_color_texture`, `metallic`,
+    /// `roughness`) stays the real parsed glTF value, never remapped.
+    /// Khronos's `UnlitTest.glb` carries two unlit, factor-only materials.
+    #[test]
+    fn unlit_materials_read_genuinely_without_remapping() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/UnlitTest.glb");
+        assert!(path.exists(), "UnlitTest.glb fixture missing at {}", path.display());
+        let expected_base_color: &[(&str, [f32; 3])] = &[
+            ("Orange", [1.0, 0.217_637_64, 0.0]),
+            ("Blue", [0.0, 0.217_637_64, 1.0]),
+        ];
+        for (name, expected) in expected_base_color {
+            let (_, m) = test_material(&path, name);
+            for (c, expected_c) in expected.iter().enumerate() {
+                assert!(
+                    (m.base_color_factor[c] - expected_c).abs() < 1e-6,
+                    "{name}: base_color_factor[{c}] = {}, expected {} (genuine glTF value, unremapped)",
+                    m.base_color_factor[c],
+                    expected_c
+                );
+            }
+            assert_eq!(m.base_color_factor[3], 1.0, "{name}: alpha untouched");
+            assert_eq!(m.base_color_texture, None, "{name}: UnlitTest.glb has no textures");
+            assert_eq!(m.emissive, [0.0, 0.0, 0.0], "{name}: no emissiveFactor declared");
+            assert_eq!(m.metallic, 1.0, "{name}: metallic stays the glTF-spec default, unremapped");
+            assert_eq!(m.roughness, 1.0, "{name}: roughness stays the glTF-spec default, unremapped");
+        }
+    }
+
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167) value-level gate: known
+    /// spec-gloss factors → expected metal-rough numbers. Full gloss (1.0)
+    /// is a mirror — roughness 0.0 (perfectly smooth, `glossiness_factor`'s
+    /// own documented meaning); full rough spec-gloss (glossiness 0.0) →
+    /// roughness 1.0. The authored RGB factor is recovered as an exact
+    /// dielectric F0 tint (`specular_tint = clamp(rgb, 0, 1) / 0.04`), with
+    /// unit scalar weight; `metallic` is always the dielectric default 0.0 —
+    /// spec-gloss has no metalness channel.
+    #[test]
+    fn convert_spec_gloss_maps_glossiness_and_specular_factor() {
+        let smooth = convert_spec_gloss(1.0, [0.5, 0.5, 0.5]);
+        assert_eq!(smooth.roughness, 0.0);
+        assert_eq!(smooth.metallic, 0.0);
+        assert_eq!(smooth.specular_factor, 1.0);
+        for tint in smooth.specular_tint {
+            assert!((0.04 * tint - 0.5).abs() < 1e-6);
+        }
+
+        let rough = convert_spec_gloss(0.0, [1.0, 1.0, 1.0]);
+        assert_eq!(rough.roughness, 1.0);
+        assert!((rough.specular_factor - 1.0).abs() < 1e-6);
+        for tint in rough.specular_tint {
+            assert!((0.04 * tint - 1.0).abs() < 1e-6);
+        }
+
+        // Non-uniform RGB specular factors recover each authored F0 channel.
+        let tinted = convert_spec_gloss(0.25, [0.2, 0.4, 0.6]);
+        assert!((tinted.roughness - 0.75).abs() < 1e-6);
+        assert_eq!(tinted.specular_factor, 1.0);
+        for (tint, authored) in tinted.specular_tint.into_iter().zip([0.2, 0.4, 0.6]) {
+            assert!((0.04 * tint - authored).abs() < 1e-6);
+        }
+
+        // Out-of-[0,1] glossiness (spec-illegal, but defensive) still
+        // clamps to a valid roughness rather than producing a negative or
+        // >1 value that would corrupt `resolve_mr`'s `max(t.g, 0.01)`.
+        let over = convert_spec_gloss(1.5, [2.0, 2.0, 2.0]);
+        assert_eq!(over.roughness, 0.0);
+        assert_eq!(over.specular_factor, 1.0);
+        for tint in over.specular_tint {
+            assert!((0.04 * tint - 1.0).abs() < 1e-6);
+        }
+
+        let clamped = convert_spec_gloss(0.5, [-1.0, 0.25, 2.0]);
+        for (tint, authored) in clamped.specular_tint.into_iter().zip([0.0, 0.25, 1.0]) {
+            assert!((0.04 * tint - authored).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn spec_gloss_texture_routes_rgb_to_typed_specular_color_metadata() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/SpecGlossVsMetalRough.glb");
+        assert!(path.exists(), "SpecGlossVsMetalRough.glb missing at {}", path.display());
+        let (_, material) = test_material(&path, "BottleMat_SpecGloss");
+
+        assert_eq!(material.mr_texture, Some(6));
+        assert!(material.mr_texture_is_gloss_alpha);
+        assert_eq!(material.specular_factor, 1.0);
+        assert_eq!(material.specular_color_factor, [25.0, 25.0, 25.0]);
+        assert_eq!(material.ior, 1.5);
+        assert_eq!(material.specular_texture, None);
+        assert_eq!(material.specular_color_texture, Some(6));
+        assert_eq!(material.extension_maps[9].uv_transform, IDENTITY_UV_TRANSFORM);
+        assert_eq!(material.extension_maps[9].tex_coord, 0);
+    }
+
+    #[test]
+    fn spec_gloss_texture_preserves_authored_typed_sampler_and_transform() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/SpecGlossVsMetalRough.glb");
+        assert!(source.exists(), "SpecGlossVsMetalRough.glb missing at {}", source.display());
+        let bytes = std::fs::read(&source).expect("read spec-gloss fixture");
+        let mut offset = 12usize;
+        let mut chunks = Vec::new();
+        while offset < bytes.len() {
+            let length = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+            let chunk_type = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap());
+            let start = offset + 8;
+            let end = start + length;
+            chunks.push((chunk_type, bytes[start..end].to_vec()));
+            offset = end;
+        }
+        let json_chunk = chunks
+            .iter_mut()
+            .find(|(chunk_type, _)| *chunk_type == 0x4e4f534a)
+            .expect("fixture JSON chunk");
+        let mut document: serde_json::Value = serde_json::from_slice(&json_chunk.1)
+            .expect("parse fixture JSON chunk");
+        let texture_info = &mut document["materials"][0]["extensions"]
+            ["KHR_materials_pbrSpecularGlossiness"]["specularGlossinessTexture"];
+        texture_info["texCoord"] = serde_json::json!(1);
+        texture_info["extensions"]["KHR_texture_transform"] = serde_json::json!({
+            "offset": [0.125, -0.25],
+            "rotation": 0.0,
+            "scale": [0.5, 0.75],
+            "texCoord": 1,
+        });
+        let samplers = document
+            .as_object_mut()
+            .expect("fixture JSON object")
+            .entry("samplers")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .expect("fixture sampler array");
+        let sampler_index = samplers.len();
+        samplers.push(serde_json::json!({
+            "magFilter": 9728,
+            "minFilter": 9984,
+            "wrapS": 33648,
+            "wrapT": 33648,
+        }));
+        document["textures"][6]["sampler"] = serde_json::json!(sampler_index);
+        json_chunk.1 = serde_json::to_vec(&document).expect("serialize mutated fixture JSON");
+        while json_chunk.1.len() % 4 != 0 {
+            json_chunk.1.push(b' ');
+        }
+
+        let total_length = 12 + chunks.iter().map(|(_, payload)| 8 + payload.len()).sum::<usize>();
+        let mut mutated = Vec::with_capacity(total_length);
+        mutated.extend_from_slice(b"glTF");
+        mutated.extend_from_slice(&2u32.to_le_bytes());
+        mutated.extend_from_slice(&(total_length as u32).to_le_bytes());
+        for (chunk_type, payload) in chunks {
+            mutated.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            mutated.extend_from_slice(&chunk_type.to_le_bytes());
+            mutated.extend_from_slice(&payload);
+        }
+        let path = std::env::temp_dir().join(format!(
+            "manifold-spec-gloss-typed-metadata-{}.glb",
+            std::process::id()
+        ));
+        std::fs::write(&path, mutated).expect("write mutated spec-gloss fixture");
+        let (_, material) = test_material(&path, "BottleMat_SpecGloss");
+        let map = &material.extension_maps[9];
+        assert_eq!(map.tex_coord, 1);
+        assert!((map.uv_transform[0] - 0.5).abs() < 1e-6);
+        assert!((map.uv_transform[1] - 0.0).abs() < 1e-6);
+        assert!((map.uv_transform[2] - 0.0).abs() < 1e-6);
+        assert!((map.uv_transform[3] - 0.75).abs() < 1e-6);
+        assert!((map.uv_transform[4] - 0.125).abs() < 1e-6);
+        assert!((map.uv_transform[5] + 0.25).abs() < 1e-6);
+        assert_eq!(map.sampler.wrap_u, manifold_gpu::GpuAddressMode::MirrorRepeat);
+        assert_eq!(map.sampler.wrap_v, manifold_gpu::GpuAddressMode::MirrorRepeat);
+        assert_eq!(map.sampler.mag_filter, manifold_gpu::GpuFilterMode::Nearest);
+        assert_eq!(map.sampler.min_filter, manifold_gpu::GpuFilterMode::Nearest);
+        assert_eq!(map.sampler.mip_filter, Some(manifold_gpu::GpuFilterMode::Nearest));
+        std::fs::remove_file(path).expect("remove mutated spec-gloss fixture");
+    }
+
+    /// BUG-5uqg: `KHR_lights_punctual` was listed in
+    /// `MANIFOLD_SUPPORTED_EXTENSIONS` but never actually parsed — this
+    /// pins `collect_punctual_lights` against the
+    /// Khronos conformance fixture's single directional light: identity
+    /// node transform at the origin, so world_pos is the origin and
+    /// world_forward is the untouched local -Z axis.
+    #[test]
+    fn directional_light_fixture_imports_one_light_with_expected_shape() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/DirectionalLight.glb");
+        if !path.exists() {
+            println!(
+                "directional_light_fixture_imports_one_light_with_expected_shape: fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let (document, _) = parse_document_and_buffers(&path).expect("parse light fixture");
+        let lights = collect_punctual_lights(&document);
+        assert_eq!(lights.len(), 1, "expected exactly one KHR_lights_punctual light");
+        let light = &lights[0];
+        assert_eq!(light.kind, GltfLightKind::Directional);
+        assert!((light.color[0] - 0.9).abs() < 1e-4);
+        assert!((light.color[1] - 0.8).abs() < 1e-4);
+        assert!((light.color[2] - 0.1).abs() < 1e-4);
+        assert!((light.intensity - 1.0).abs() < 1e-4);
+        assert_eq!(light.range, None);
+        assert!(
+            (light.world_pos[0]).abs() < 1e-4
+                && (light.world_pos[1]).abs() < 1e-4
+                && (light.world_pos[2]).abs() < 1e-4,
+            "identity node transform should leave the light at the origin, got {:?}",
+            light.world_pos
+        );
+        assert!(
+            (light.world_forward[0]).abs() < 1e-4
+                && (light.world_forward[1]).abs() < 1e-4
+                && (light.world_forward[2] - (-1.0)).abs() < 1e-4,
+            "identity node transform should leave the light aiming down -Z, got {:?}",
+            light.world_forward
+        );
+    }
+
+    /// BUG-5uqg: the multi-light Khronos fixture — one directional and one
+    /// point light on non-identity node transforms — pins that both
+    /// spec kinds parse with the RAW (unconverted) intensity units;
+    /// `gltf_import::scene`'s conversion is exercised separately by the
+    /// import-graph assembly tests.
+    #[test]
+    fn playset_light_test_fixture_imports_directional_and_point_lights() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/PlaysetLightTest.glb");
+        if !path.exists() {
+            println!(
+                "playset_light_test_fixture_imports_directional_and_point_lights: fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let (document, _) = parse_document_and_buffers(&path).expect("parse light fixture");
+        let lights = collect_punctual_lights(&document);
+        assert_eq!(lights.len(), 2, "expected the fixture's two KHR_lights_punctual lights");
+
+        let directional = lights
+            .iter()
+            .find(|l| l.kind == GltfLightKind::Directional)
+            .expect("expected one Directional light");
+        assert!((directional.intensity - 512.25).abs() < 1e-2);
+
+        let point = lights
+            .iter()
+            .find(|l| l.kind == GltfLightKind::Point)
+            .expect("expected one Point light");
+        assert!((point.intensity - 1500.0).abs() < 1e-1);
+        assert_eq!(point.name.as_deref(), Some("LEDlight"));
+        // Non-identity node transform (translation ~[0.117, 0.124, 0.001]):
+        // world_pos must actually carry it, not fall back to the origin.
+        assert!(point.world_pos[0].abs() > 1e-3 || point.world_pos[1].abs() > 1e-3);
+    }
 }
 
 #[cfg(test)]

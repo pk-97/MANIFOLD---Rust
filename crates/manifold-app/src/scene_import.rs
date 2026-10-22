@@ -27,10 +27,11 @@ pub(crate) struct ModelSwap {
     pub toast: Option<String>,
 }
 
-/// Point import Group `group` of scene layer `layer` at `file`. Parts whose
-/// file node path still exists keep their edits; the rest are removed and new
-/// paths are added, all in the returned commands.
-pub(crate) fn swap_model_file(project: &Project, layer: &LayerId, group: &ItemId, file: &Path) -> Result<ModelSwap, String> {
+/// Point import `item` of scene layer `layer` at `file`: an import Group
+/// reconciles its parts by file node path (survivors keep their edits, the
+/// rest are removed, new paths are added); a single imported Object keeps
+/// itself and its edits and draws the new mesh. All in the returned commands.
+pub(crate) fn swap_model_file(project: &Project, layer: &LayerId, item: &ItemId, file: &Path) -> Result<ModelSwap, String> {
     let doc: &SceneDoc = project
         .timeline
         .find_layer_by_id(layer.as_str())
@@ -38,7 +39,7 @@ pub(crate) fn swap_model_file(project: &Project, layer: &LayerId, group: &ItemId
         .and_then(|fx| fx.scene.as_ref())
         .ok_or_else(|| "this layer has no scene".to_owned())?;
     let model = import_model(file)?;
-    let plan = swap_model_file_commands(layer, doc, group, &file.to_string_lossy(), &model)?;
+    let plan = swap_model_file_commands(layer, doc, item, &file.to_string_lossy(), &model)?;
     let toast = (plan.removed > 0).then(|| match plan.removed {
         1 => "The new file has no part for 1 object; it was removed".to_owned(),
         n => format!("The new file has no part for {n} objects; they were removed"),

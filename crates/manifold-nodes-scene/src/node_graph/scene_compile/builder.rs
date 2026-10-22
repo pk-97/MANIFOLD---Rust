@@ -7,7 +7,7 @@ use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     ParamSpecDef, PresetMetadata, SerializedParamValue,
 };
-use manifold_core::scene_doc::{Item, SceneDoc, param_id};
+use manifold_core::scene_doc::{Item, ItemId, SceneDoc, param_id};
 use manifold_core::scene_exposure::NodeParamMetadata;
 use manifold_core::scene_schema::{self, CardFacts, Exposure, PropertyRow, Reach};
 use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
@@ -34,6 +34,11 @@ pub(crate) struct Builder<'d> {
     pub(crate) lights: Vec<u32>,
     /// Whether the camera emitter wired the render's output chain.
     pub(crate) output_wired: bool,
+    /// Each Material's texture sources and the `node.scene_object` port
+    /// each feeds, by material id.
+    pub(crate) material_maps: BTreeMap<String, Vec<(u32, &'static str)>>,
+    /// Every imported part's animation clocks: (part id, clock node).
+    pub(crate) clocks: Vec<(ItemId, u32)>,
 }
 
 impl<'d> Builder<'d> {
@@ -51,6 +56,8 @@ impl<'d> Builder<'d> {
             objects: Vec::new(),
             lights: Vec::new(),
             output_wired: false,
+            material_maps: BTreeMap::new(),
+            clocks: Vec::new(),
         };
         b.add(SCENE, "input", "system.generator_input");
         b.add(SCENE, "render", "node.render_scene");
@@ -160,11 +167,25 @@ impl<'d> Builder<'d> {
     /// with a kind default write it. A row whose node was not emitted is
     /// skipped. Automatic rows were set by the emitter.
     pub(crate) fn rows(&mut self, item: &Item) {
+        self.apply_rows(item, false);
+    }
+
+    /// Apply the item's rows that reach the animation clocks below it, once
+    /// its parts have compiled.
+    pub(crate) fn clock_rows(&mut self, item: &Item) {
+        self.apply_rows(item, true);
+    }
+
+    fn apply_rows(&mut self, item: &Item, clocks: bool) {
         for row in scene_schema::applicable(&item.fields) {
+            if clocks != (row.reach == Reach::Clocks) {
+                continue;
+            }
             let targets: Vec<u32> = match row.reach {
                 Reach::Own(role) => self.id(item.id.as_str(), role).into_iter().collect(),
                 Reach::Scene(role) => self.id(SCENE, role).into_iter().collect(),
                 Reach::EveryCameraLens => self.lenses.clone(),
+                Reach::Clocks => self.clocks_below(item),
             };
             if targets.is_empty() {
                 continue;
@@ -181,6 +202,24 @@ impl<'d> Builder<'d> {
                 Exposure::Automatic(_) => {}
             }
         }
+    }
+
+    /// The clock nodes of every part inside `item`.
+    fn clocks_below(&self, item: &Item) -> Vec<u32> {
+        let mut inside = Vec::new();
+        fn visit<'a>(item: &'a Item, out: &mut Vec<&'a ItemId>) {
+            for child in &item.children {
+                out.push(&child.id);
+                visit(child, out);
+            }
+        }
+        visit(item, &mut inside);
+        self.clocks.iter().filter(|(part, _)| inside.contains(&part)).map(|(_, clock)| *clock).collect()
+    }
+
+    /// The number a node param was set to, if it was.
+    pub(crate) fn started(&mut self, id: u32, param: &str) -> Option<f32> {
+        self.node_mut(id).and_then(|node| node.params.get(param).map(number))
     }
 
     fn card(&mut self, item: &Item, row: &PropertyRow, facts: &CardFacts, targets: &[u32]) {

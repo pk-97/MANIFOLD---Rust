@@ -21,6 +21,7 @@ mod group;
 mod light;
 mod material;
 mod mesh;
+mod model_material;
 mod object;
 mod world;
 

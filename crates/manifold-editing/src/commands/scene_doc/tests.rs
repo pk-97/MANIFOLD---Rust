@@ -164,7 +164,10 @@ fn part(path: &str) -> manifold_core::scene_doc::ImportedNode {
         key: format!("{path}#mesh"),
         name: path.to_owned(),
         mesh_node: Some(path.to_owned()),
+        primitives: manifold_core::scene_doc::MeshPrimitives::All,
+        material: None,
         vertex_count: 3,
+        center: [0.0; 3],
         children: Vec::new(),
     }
 }
@@ -176,9 +179,16 @@ fn model(paths: &[&str]) -> manifold_core::scene_doc::ImportedModel {
             key: "rig".into(),
             name: "rig".into(),
             mesh_node: None,
+            primitives: manifold_core::scene_doc::MeshPrimitives::All,
+            material: None,
             vertex_count: 0,
+            center: [0.0; 3],
             children: paths.iter().map(|p| part(p)).collect(),
         }],
+        materials: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        clips: 0,
         bounds: None,
     }
 }

@@ -46,6 +46,9 @@ pub enum Reach {
     EveryCameraLens,
     /// A node the compiler emits once for the whole scene, by role.
     Scene(&'static str),
+    /// The animation clock of every imported part below an import Group
+    /// (its skeleton pose and morph weights), so one row plays them all.
+    Clocks,
 }
 
 /// What a row is to the performer.

@@ -507,7 +507,7 @@ impl Primitive for GltfMeshSource {
                 // (the importer's per-material object). Otherwise the
                 // mesh_index / primitive_index path applies.
                 let selector = if !node_path.is_empty() {
-                    GltfMeshSelector::Node { path: node_path.as_str().into() }
+                    GltfMeshSelector::Node { path: node_path.as_str().into(), material: material_index }
                 } else if material_index == DEFAULT_MATERIAL_MESH_PARAM {
                     // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): the
                     // synthetic default-material object — every primitive

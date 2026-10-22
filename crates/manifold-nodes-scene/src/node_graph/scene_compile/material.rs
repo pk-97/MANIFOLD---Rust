@@ -1,8 +1,9 @@
 //! Material: one shared surface node per Material item, every param on its
 //! card (the material family rule), its features set from the features
 //! field, and its texture source feeding the base colour of each object
-//! drawing with it. An object with no material anywhere above it draws with
-//! the scene's plain material.
+//! drawing with it. A material of a model file starts at the file's factors
+//! and feeds every map the file gives it (`model_material.rs`). An object
+//! with no material anywhere above it draws with the scene's plain material.
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::material_inspector::{MATERIAL_FEATURE_MODE_PARAMS, MATERIAL_FEATURES};
@@ -12,6 +13,7 @@ use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardLabel, SurfaceRole, Unit};
 
 use super::builder::{Builder, SCENE, card_spec, number};
+use crate::node_graph::gltf_import::model_file::model_file;
 
 /// The family's placement: Scene tab rows in the Material section.
 const SURFACE_FACTS: CardFacts = CardFacts {
@@ -45,6 +47,26 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     };
     let owner = item.id.as_str();
     let surface = b.add(owner, MATERIAL_FAMILY.node, MATERIAL_FAMILY.type_id);
+    // A model material's surface starts at the file's values, so its card
+    // rows do too.
+    let maps = match &fields.texture {
+        TextureSource::None => Vec::new(),
+        TextureSource::Layer { layer } => {
+            let texture = b.add(owner, "texture", "node.layer_source");
+            b.set(texture, "layer", SerializedParamValue::String { value: layer.to_string() });
+            vec![(texture, "base_color_map")]
+        }
+        TextureSource::File { path } => {
+            let texture = b.add(owner, "texture", "node.gltf_texture_source");
+            b.set(texture, "path", SerializedParamValue::String { value: path.clone() });
+            vec![(texture, "base_color_map")]
+        }
+        TextureSource::Model { file, material } => match model_file(file) {
+            Some(model) => super::model_material::emit(b, owner, surface, file, &model, *material),
+            None => Vec::new(),
+        },
+    };
+    b.material_maps.insert(owner.to_owned(), maps);
     for meta in b.type_params(MATERIAL_FAMILY.type_id) {
         if MATERIAL_FAMILY.automatic.contains(&meta.name.as_str()) {
             continue;
@@ -54,7 +76,8 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             facts.unit = Some(Unit::Nanometres);
         }
         let id = manifold_core::scene_doc::param_id(&item.id, &meta.name);
-        let mut spec = card_spec(id, &meta.label, &meta, number(&meta.default_value), MATERIAL_FAMILY.section, &facts);
+        let default = b.started(surface, &meta.name).unwrap_or_else(|| number(&meta.default_value));
+        let mut spec = card_spec(id, &meta.label, &meta, default, MATERIAL_FAMILY.section, &facts);
         spec.material_role = meta.material_role;
         b.declare(spec, &meta, &[surface], &meta.name);
     }
@@ -63,31 +86,21 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             b.set_number(surface, param, setting.mode as f32);
         }
     }
-    match &fields.texture {
-        TextureSource::None => {}
-        TextureSource::Layer { layer } => {
-            let texture = b.add(owner, "texture", "node.layer_source");
-            b.set(texture, "layer", SerializedParamValue::String { value: layer.to_string() });
-        }
-        TextureSource::File { path } => {
-            let texture = b.add(owner, "texture", "node.gltf_texture_source");
-            b.set(texture, "path", SerializedParamValue::String { value: path.clone() });
-        }
-    }
     b.rows(item);
 }
 
-/// The surface node and texture node an item draws with: its effective
-/// material's, else the scene's plain material (made on first use).
-pub(crate) fn surface_for(b: &mut Builder<'_>, item: &ItemId) -> (u32, Option<u32>) {
+/// The surface node an item draws with, and each texture source and the
+/// `node.scene_object` port it feeds: its effective material's, else the
+/// scene's plain material (made on first use).
+pub(crate) fn surface_for(b: &mut Builder<'_>, item: &ItemId) -> (u32, Vec<(u32, &'static str)>) {
     if let Some(material) = b.doc.effective_material(item)
         && let Some(surface) = b.id(material.as_str(), MATERIAL_FAMILY.node)
     {
-        return (surface, b.id(material.as_str(), "texture"));
+        return (surface, b.material_maps.get(material.as_str()).cloned().unwrap_or_default());
     }
     let plain = match b.id(SCENE, "default_material") {
         Some(id) => id,
         None => b.add(SCENE, "default_material", MATERIAL_FAMILY.type_id),
     };
-    (plain, None)
+    (plain, Vec::new())
 }
