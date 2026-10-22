@@ -224,13 +224,15 @@ pub fn tube_grid(points: &[[f32; 2]], lift: &[f32], radius: f32, sides: u32, cap
         let right = unit_or(cross([0.0, 1.0, 0.0], tangent), [1.0, 0.0, 0.0]);
         let ring_up = cross(tangent, right);
         for col in 0..cols {
-            let theta = std::f32::consts::TAU * col as f32 / sides as f32;
+            // The ring turns clockwise seen down the path, so the grid's
+            // winding faces out of the tube as its normals do.
+            let theta = -std::f32::consts::TAU * col as f32 / sides as f32;
             let ring = add(scale(right, theta.cos()), scale(ring_up, theta.sin()));
             let rim = |centre: bool| if centre { center } else { add(center, scale(ring, radius)) };
             let (position, normal) = match role {
-                CapRow::Side => (rim(false), scale(ring, -signum(radius))),
-                CapRow::Start { centre } => (rim(centre), tangent),
-                CapRow::End { centre } => (rim(centre), scale(tangent, -1.0)),
+                CapRow::Side => (rim(false), scale(ring, signum(radius))),
+                CapRow::Start { centre } => (rim(centre), scale(tangent, -1.0)),
+                CapRow::End { centre } => (rim(centre), tangent),
             };
             grid.positions.push(position);
             grid.normals.push(normal);

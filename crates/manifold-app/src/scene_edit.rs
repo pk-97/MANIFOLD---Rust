@@ -297,7 +297,11 @@ pub(crate) fn set_field(project: &Project, layer: &LayerId, item: &ItemId, field
     if let (ItemFields::Object(old), ItemFields::Object(new)) = (&found.fields, &fields)
         && old.shape != new.shape
     {
-        return Ok(Some(batch(shape_change(layer, doc, found, &old.shape, fields.clone()), "Set Shape", None)));
+        let mut commands = shape_change(layer, doc, found, &old.shape, fields.clone());
+        if new.shape == Shape::Ocean {
+            commands.extend(ocean_material(project, layer, doc, found, &fields)?);
+        }
+        return Ok(Some(batch(commands, "Set Shape", None)));
     }
     // A layer fed into Emission shows at once: an emission the performer has
     // not touched starts as the Emission feature does, white at full strength.
@@ -337,6 +341,45 @@ fn shape_change(layer: &LayerId, doc: &SceneDoc, object: &Item, old: &Shape, fie
     }
     commands.insert(0, Box::new(SetSceneItemFieldsCommand::new(layer.clone(), object.id.clone(), fields)));
     commands
+}
+
+/// A new sea looks like water at once: the Ocean's own Material takes the
+/// water look ([`scene_schema::OCEAN_LOOK`]). A Material it shares or
+/// inherits is left alone and the Ocean gets its own, named Water. Runs
+/// after the Shape is set, so `fields` are the Ocean's.
+fn ocean_material(project: &Project, layer: &LayerId, doc: &SceneDoc, object: &Item, fields: &ItemFields) -> Result<Vec<Box<dyn Command>>, String> {
+    let Some(inst) = instance(project, layer) else {
+        return Ok(Vec::new());
+    };
+    let ItemFields::Object(new) = fields else {
+        return Ok(Vec::new());
+    };
+    let own = new.material.clone().filter(|material| material_users(doc, material) == 1);
+    let mut commands: Vec<Box<dyn Command>> = Vec::new();
+    let (material, source) = match own {
+        Some(material) => (material.clone(), Some(material)),
+        None => {
+            let source = doc.effective_material(&object.id);
+            let mut staged = doc.clone();
+            if let Some(item) = staged.find_mut(&object.id) {
+                item.fields = fields.clone();
+            }
+            let material = new_id();
+            let name = unique_name(WATER_MATERIAL_NAME, &names(doc));
+            commands.extend(own_material_commands(layer, &staged, &object.id, material.clone(), &name)?);
+            (material, source)
+        }
+    };
+    for (property, value) in scene_schema::OCEAN_LOOK {
+        // A new Material starts at its source's values (or its own
+        // defaults); undo removes it whole, so its old value only needs to
+        // be a number.
+        let old = source.as_ref().and_then(|source| base(inst, source, property)).unwrap_or(value);
+        if source.as_ref() != Some(&material) || (old - value).abs() > f32::EPSILON {
+            commands.push(write(layer, &material, property, old, value));
+        }
+    }
+    Ok(commands)
 }
 
 /// How many Objects, Groups and Waters draw with `material`.

@@ -65,6 +65,7 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             b.set(texture, "layer", SerializedParamValue::String { value: layer.to_string() });
             vec![(texture, feeds)]
         }
+        // The texture source reads a picture file whole (`parse_texture_snapshot`).
         TextureSource::File { path } => {
             let texture = b.add(owner, "texture", "node.gltf_texture_source");
             b.set(texture, "path", SerializedParamValue::String { value: path.clone() });

@@ -269,6 +269,16 @@ impl<'d> Builder<'d> {
         self.roles.get(&(owner.to_owned(), role)).copied()
     }
 
+    /// The node and port of an Object's undeformed mesh vertices: its mesh
+    /// node's, or a curve shape's swept triangles (a curve's `mesh` is split
+    /// into the drawn triangles and the CPU solid). An Ocean has none.
+    pub(crate) fn mesh_vertices(&self, owner: &str) -> Option<(u32, &'static str)> {
+        if let Some(mesh) = self.id(owner, "mesh") {
+            return Some((mesh, "vertices"));
+        }
+        self.id(owner, scene_schema::SOLID).and_then(|_| self.id(owner, scene_schema::TRIANGLES)).map(|triangles| (triangles, "out"))
+    }
+
     pub(crate) fn scene(&self, role: &'static str) -> u32 {
         self.id(SCENE, role).expect("scene-level node")
     }

@@ -11,7 +11,7 @@ arrayvec = "0.7"
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 gltf = { version = "1", features = ["KHR_materials_emissive_strength", "KHR_materials_transmission", "extensions", "KHR_lights_punctual", "KHR_texture_transform", "KHR_materials_specular", "KHR_materials_ior", "KHR_materials_pbrSpecularGlossiness", "KHR_materials_volume", "KHR_materials_unlit", "allow_empty_texture"] }
 half = "2"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr", "hdr", "tga"] }
 inventory = "0.3"
 log = { workspace = true }
 manifold-core = { path = "../manifold-core" }

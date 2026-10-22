@@ -1,7 +1,9 @@
 //! `node.gltf_texture_source` — read one embedded image out of a
 //! `.glb`/`.gltf` file and emit it as a `Texture2D` wire, so an imported
 //! mesh's baked-in albedo/alpha map can feed `node.render_scene`'s
-//! `base_color_map_N`.
+//! `base_color_map_N`. A picture file (PNG, JPG, EXR and the rest) is read
+//! whole as its one image, so a scene Material's File texture and Displace
+//! by Texture's File source load through the same decode jobs and mips.
 //!
 //! File I/O and image decoding/repacking happen
 //! on bounded reusable CPU workers with shared decode jobs, so the

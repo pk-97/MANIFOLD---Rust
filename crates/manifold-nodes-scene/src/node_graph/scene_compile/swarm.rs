@@ -194,8 +194,8 @@ pub(crate) fn finish(b: &mut Builder<'_>) {
         if let EmitFrom::Item(target) = &fields.emit_from
             && let Some(target) = doc.find(target)
         {
-            if let Some(mesh) = emit_mesh(b, owner, target) {
-                b.wire(mesh, "vertices", seed, "vertices");
+            if let Some((mesh, port)) = emit_mesh(b, owner, target) {
+                b.wire(mesh, port, seed, "vertices");
             }
             frame = emit_frame(b, owner, target).or(frame);
         }
@@ -221,12 +221,12 @@ fn nearest_group(doc: &manifold_core::scene_doc::SceneDoc, id: &ItemId) -> Optio
     found
 }
 
-/// The node whose `vertices` a swarm emitting from `target` seeds from: an
-/// Object's own mesh, or every part of a Group merged in the group's frame,
-/// each where it sits in the group.
-fn emit_mesh(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
+/// The vertices a swarm emitting from `target` seeds from: an Object's own
+/// mesh, or every part of a Group merged in the group's frame, each where it
+/// sits in the group.
+fn emit_mesh(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<(u32, &'static str)> {
     if matches!(target.fields, ItemFields::Object(_)) {
-        return b.id(target.id.as_str(), "mesh");
+        return b.mesh_vertices(target.id.as_str());
     }
     let ItemFields::Group(group) = &target.fields else {
         return None;
@@ -240,7 +240,7 @@ fn emit_mesh(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
     // A group with Combine Meshes on is one shape, placed by its combined
     // transform inside the group.
     let parts = match (b.id(target.id.as_str(), "mesh"), b.id(target.id.as_str(), "combined_transform")) {
-        (Some(shape), Some(placed)) => vec![(shape, placed, frame.filter(|_| !b.wired_into(placed, "parent")))],
+        (Some(shape), Some(placed)) => vec![((shape, "vertices"), placed, frame.filter(|_| !b.wired_into(placed, "parent")))],
         _ => {
             let mut parts = Vec::new();
             parts_below(b, target, in_group, &mut parts);
@@ -253,7 +253,7 @@ fn emit_mesh(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
     let merge = b.add(owner, "emit_parts", "node.merge_meshes");
     b.set_number(merge, "parts", parts.len() as f32);
     for (k, (mesh, placed, within)) in parts.into_iter().enumerate() {
-        b.wire(mesh, "vertices", merge, &format!("mesh_{k}"));
+        b.wire(mesh.0, mesh.1, merge, &format!("mesh_{k}"));
         b.wire(placed, "transform", merge, &format!("place_{k}"));
         if let Some(within) = within {
             b.wire(within, "transform", merge, &format!("within_{k}"));
@@ -266,14 +266,17 @@ fn emit_mesh(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<u32> {
     if let Some(forces) = b.id(owner, "forces") {
         b.wire(forces, "epoch", merge, "reset_trigger");
     }
-    Some(merge)
+    Some((merge, "vertices"))
 }
 
-/// Every Object at or below `item` with a mesh: (mesh node, transform node,
-/// the frame it is drawn in when its transform does not already carry it).
-fn parts_below(b: &Builder<'_>, item: &Item, in_group: bool, out: &mut Vec<(u32, u32, Option<u32>)>) {
+/// One part of a merged group mesh: its vertices, its transform node, and
+/// the frame it is drawn in when its transform does not already carry it.
+type Part = ((u32, &'static str), u32, Option<u32>);
+
+/// Every Object at or below `item` with a mesh.
+fn parts_below(b: &Builder<'_>, item: &Item, in_group: bool, out: &mut Vec<Part>) {
     if matches!(item.fields, ItemFields::Object(_))
-        && let (Some(mesh), Some(placed)) = (b.id(item.id.as_str(), "mesh"), b.id(item.id.as_str(), "transform"))
+        && let (Some(mesh), Some(placed)) = (b.mesh_vertices(item.id.as_str()), b.id(item.id.as_str(), "transform"))
     {
         let within = if in_group || b.wired_into(placed, "parent") {
             None
@@ -299,12 +302,12 @@ pub(crate) fn nest_layout(b: &mut Builder<'_>, item: &Item, transform: u32, nest
     b.nests.insert(nest, Some(body));
 }
 
-/// The mesh node of the first Object at or below `item` that compiled one.
-pub(crate) fn first_mesh(b: &Builder<'_>, item: &Item) -> Option<u32> {
+/// The vertices of the first Object at or below `item` that compiled a mesh.
+pub(crate) fn first_mesh(b: &Builder<'_>, item: &Item) -> Option<(u32, &'static str)> {
     if matches!(item.fields, ItemFields::Object(_))
-        && let Some(mesh) = b.id(item.id.as_str(), "mesh")
+        && let Some(vertices) = b.mesh_vertices(item.id.as_str())
     {
-        return Some(mesh);
+        return Some(vertices);
     }
     item.children.iter().find_map(|child| first_mesh(b, child))
 }

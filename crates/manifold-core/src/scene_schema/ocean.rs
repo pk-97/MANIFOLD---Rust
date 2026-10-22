@@ -145,5 +145,18 @@ static SURFACE: [PropertyRow; 27] = [
     auto("triangle_rows", "triangles", "src_rows", "the grid's rows"),
 ];
 
+/// The material an Ocean takes when its Shape is set, the starter sea's:
+/// white, so the grid's deep water colour shows untinted, with water's
+/// index of refraction and a calm sea's gloss.
+pub const OCEAN_LOOK: [(&str, f32); 7] = [
+    ("color_r", 1.0),
+    ("color_g", 1.0),
+    ("color_b", 1.0),
+    ("ambient", 0.0),
+    ("metallic", 0.0),
+    ("roughness", 0.22),
+    ("ior", 1.333),
+];
+
 /// Every table an Ocean's rows come from.
 pub static OCEAN_TABLES: [&[PropertyRow]; 5] = [&SWELL, &CHOP, &RIPPLE, &FIELDS, &SURFACE];
