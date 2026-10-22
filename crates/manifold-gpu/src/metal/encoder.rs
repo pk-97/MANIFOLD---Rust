@@ -1796,7 +1796,23 @@ impl GpuEncoder {
         draws: &[DepthMsaaDraw],
         label: &str,
     ) {
-        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Clear, label);
+        let full = [depth_target.width, depth_target.height];
+        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Clear, full, label);
+    }
+
+    /// Clear `depth_target` and draw into its top-left `viewport` square only.
+    /// Shadow maps share one layer size; a light asking for less detail
+    /// renders its own resolution in the corner of its layer.
+    pub fn draw_instanced_depth_only_batch_viewport(
+        &mut self,
+        depth_target: &GpuTexture,
+        depth_stencil_state: &GpuDepthStencilState,
+        draws: &[DepthMsaaDraw],
+        viewport: [u32; 2],
+        label: &str,
+    ) {
+        let viewport = [viewport[0].min(depth_target.width), viewport[1].min(depth_target.height)];
+        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Clear, viewport, label);
     }
 
     fn draw_depth_only_batch(
@@ -1805,6 +1821,7 @@ impl GpuEncoder {
         depth_stencil_state: &GpuDepthStencilState,
         draws: &[DepthMsaaDraw],
         load_action: MTLLoadAction,
+        viewport: [u32; 2],
         label: &str,
     ) {
         self.end_current();
@@ -1832,8 +1849,8 @@ impl GpuEncoder {
             enc.setViewport(MTLViewport {
                 originX: 0.0,
                 originY: 0.0,
-                width: depth_target.width as f64,
-                height: depth_target.height as f64,
+                width: viewport[0] as f64,
+                height: viewport[1] as f64,
                 znear: 0.0,
                 zfar: 1.0,
             });
@@ -1878,7 +1895,8 @@ impl GpuEncoder {
         draws: &[DepthMsaaDraw],
         label: &str,
     ) {
-        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Load, label);
+        let full = [depth_target.width, depth_target.height];
+        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Load, full, label);
     }
 
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.

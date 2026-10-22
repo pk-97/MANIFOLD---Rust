@@ -45,6 +45,8 @@ impl GpuTextureFormat {
 pub enum GpuTextureDimension {
     D2,
     D3,
+    /// A stack of 2D layers; `GpuTextureDesc::depth` is the layer count.
+    D2Array,
 }
 
 /// Texture usage flags.

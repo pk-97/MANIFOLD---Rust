@@ -1990,7 +1990,12 @@ impl GpuDevice {
             mtl_desc.setPixelFormat(to_mtl_pixel_format(desc.format));
             mtl_desc.setWidth(desc.width as usize);
             mtl_desc.setHeight(desc.height as usize);
-            mtl_desc.setDepth(desc.depth as usize);
+            if desc.dimension == GpuTextureDimension::D2Array {
+                mtl_desc.setDepth(1);
+                mtl_desc.setArrayLength(desc.depth.max(1) as usize);
+            } else {
+                mtl_desc.setDepth(desc.depth as usize);
+            }
             mtl_desc.setTextureType(to_mtl_texture_type(desc.dimension, desc.depth));
             mtl_desc.setUsage(to_mtl_texture_usage(desc.usage));
             if desc.usage.contains(GpuTextureUsage::CPU_UPLOAD) {
