@@ -9,8 +9,9 @@
 //! them by the frame's radius), so a deformer reads a small prop and a whole
 //! scene the same way. Normal Wave is Surface Waves (`node.normal_wave_mesh`)
 //! and is not repeated here. Displace Mesh is Displace by Texture: it reads
-//! noise, a layer or a file across any mesh (`node.push_mesh` only displaces
-//! a row-major grid), so it has no type of its own.
+//! noise, a layer or a file across any mesh, by place or by the mesh's UVs
+//! (`node.push_mesh` only displaces a row-major grid along Y), so it has no
+//! type of its own.
 
 use manifold_foundation::scene_surface::Unit;
 
@@ -41,13 +42,16 @@ pub static ROTATE_ROWS: [PropertyRow; 14] = join(
     mask_rows!(20),
 );
 
-pub static DISPLACE_TEXTURE_ROWS: [PropertyRow; 16] = join(
+pub static DISPLACE_TEXTURE_ROWS: [PropertyRow; 17] = join(
     [
         radii("amount", 1),
         live("scale", 2),
         live("offset_x", 3),
         live("offset_y", 4),
         live("bias", 5),
+        // Box reads by place, seamless on any mesh; UV reads an image
+        // painted for the mesh's UVs (Blender's Displace coordinates).
+        live("mapping", 6),
         held("enabled", ON_IS_THE_TOGGLE),
     ],
     mask_rows!(20),

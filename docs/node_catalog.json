@@ -24592,9 +24592,23 @@
           "label": "Source Offset Z",
           "name": "source_offset_z",
           "type": "float"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Box",
+            "UV"
+          ],
+          "label": "Mapping",
+          "name": "mapping",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
         }
       ],
-      "purpose": "One f32 weight per vertex of an Array<MeshVertex>: the red channel of `field` box-projected at the vertex's frame position q = (position + source_offset) / frame_radius * scale. Three samples on the yz, xz and xy planes (each shifted by offset_x/offset_y) blend by the normal's fourth power; coordinates repeat mirrored so any image tiles seamlessly. weight = blend - bias. A function of position and normal only, so split copies of a corner with one welded normal read one weight.",
+      "purpose": "One f32 weight per vertex of an Array<MeshVertex>: the red channel of `field` box-projected at the vertex's frame position q = (position + source_offset) / frame_radius * scale. Three samples on the yz, xz and xy planes (each shifted by offset_x/offset_y) blend by the normal's fourth power; coordinates repeat mirrored so any image tiles seamlessly. weight = blend - bias. A function of position and normal only, so split copies of a corner with one welded normal read one weight. Mapping UV reads one sample at the vertex's own uv * scale (shifted by offset_x/offset_y) instead, for an image painted for the mesh's UVs.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Reads a picture across a 3D mesh from all three sides at once, giving every point a value that can push the surface in or out.",

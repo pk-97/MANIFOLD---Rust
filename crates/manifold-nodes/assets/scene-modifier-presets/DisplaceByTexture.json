@@ -44,6 +44,18 @@
         "defaultValue": 0.5
       },
       {
+        "id": "mapping",
+        "name": "Mapping",
+        "defaultValue": 0,
+        "min": 0.0,
+        "max": 1.0,
+        "valueLabels": [
+          "Box",
+          "UV"
+        ],
+        "wholeNumbers": true
+      },
+      {
         "id": "mask_amount",
         "name": "Mask Amount",
         "min": 0.0,
@@ -284,6 +296,19 @@
           "kind": "node",
           "nodeId": "texture_weights",
           "param": "bias"
+        }
+      },
+      {
+        "id": "mapping",
+        "label": "Mapping",
+        "defaultValue": 0,
+        "target": {
+          "kind": "node",
+          "nodeId": "texture_weights",
+          "param": "mapping"
+        },
+        "convert": {
+          "type": "EnumRound"
         }
       },
       {
