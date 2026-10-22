@@ -1,7 +1,7 @@
 //! Shape Mesh: the geometry of a model file (SCENE_DOCUMENT_DESIGN.md section
 //! 7.7 (Imports)). An Object draws one file node's own mesh, already placed
-//! in the file's world; a Group with Combine Meshes on draws every mesh
-//! below it as one.
+//! in the file's world; a Group with Combine Meshes on is one object of
+//! every mesh below it, each part keeping its material and animation.
 //!
 //! A part keeps what the old importer gave it: a static part is recentred on
 //! its own box so its Transform turns it about itself, and records the
@@ -66,6 +66,20 @@ pub(crate) fn emit_part(
     vertex_count: u32,
     primitives: MeshPrimitives,
 ) -> Part {
+    emit_part_in(b, item, file, node_path, vertex_count, primitives, true)
+}
+
+/// [`emit_part`], with a static part recentred on its own box only when
+/// `own_centre`; otherwise it stays where the file puts it.
+fn emit_part_in(
+    b: &mut Builder<'_>,
+    item: &Item,
+    file: &str,
+    node_path: &str,
+    vertex_count: u32,
+    primitives: MeshPrimitives,
+    own_centre: bool,
+) -> Part {
     let owner = item.id.as_str();
     let model = model_file(file);
     let facts = model.as_deref().and_then(|model| model.nodes.get(node_path).map(|facts| (model, facts)));
@@ -88,7 +102,7 @@ pub(crate) fn emit_part(
         let mut center = None;
         if let Some((model, _)) = facts {
             b.set(source, "source_bbox_radius", SerializedParamValue::Float { value: model.radius });
-            if let Some(part) = part {
+            if let Some(part) = part.filter(|_| own_centre) {
                 for (axis, param) in ["translate_x", "translate_y", "translate_z"].into_iter().enumerate() {
                     b.set(source, param, SerializedParamValue::Float { value: -part.center[axis] });
                 }
@@ -199,9 +213,12 @@ fn import_clip(doc: &SceneDoc, item: &ItemId) -> u32 {
     clip
 }
 
-/// A Group whose Source is a file and whose Combine Meshes is on: one draw
-/// of the whole file's meshes, in the group's frame, in place of its
-/// children. Returns whether it drew, so the walk skips the children.
+/// A Group whose Source is a file and whose Combine Meshes is on: one object
+/// of the whole file, in the group's frame, in place of its children. Its
+/// shape (the body's and the copies' collision shape) is the whole file as
+/// one mesh. Each part still draws with its own material, skin, morphs and
+/// clip, where the file puts it, since a draw takes one material. Returns
+/// whether it drew, so the walk skips the children.
 pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) -> bool {
     let ItemFields::Group(fields) = &group.fields else {
         return false;
@@ -209,52 +226,74 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
     let Some(file) = fields.source.as_deref().filter(|_| fields.combine_meshes) else {
         return false;
     };
-    let mut vertices = 0u32;
+    let mut parts = Vec::new();
     for child in &group.children {
-        meshes_below(child, &mut |shape| {
-            if let Shape::Mesh { vertex_count, .. } = shape {
-                vertices = vertices.saturating_add(*vertex_count);
-            }
-        });
+        parts_below(child, &mut parts);
     }
+    let vertices = parts.iter().fold(0u32, |total, part| match &part.fields {
+        ItemFields::Object(object) => match object.shape {
+            Shape::Mesh { vertex_count, .. } => total.saturating_add(vertex_count),
+            _ => total,
+        },
+        _ => total,
+    });
     let owner = group.id.as_str();
-    let mesh = emit_source(b, owner, file, "", vertices);
+    // Nothing draws the shape, so it loads only when a body or copies read it.
+    let shape = emit_source(b, owner, file, "", vertices);
     if let Some(model) = model_file(file) {
-        b.set(mesh, "source_bbox_radius", SerializedParamValue::Float { value: model.radius });
+        b.set(shape, "source_bbox_radius", SerializedParamValue::Float { value: model.radius });
     }
     let transform = b.add(owner, "combined_transform", "node.transform_3d");
-    let object = b.add(owner, "combined_object", "node.scene_object");
-    let (surface, maps) = surface_for(b, &group.id);
-    for w in object_wires(mesh, surface, transform, object) {
-        b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
-    }
-    for (source, port) in maps {
-        b.wire(source, "out", object, port);
-    }
-    b.wire(frame.visible, "out", object, "parent_visible");
     if let Some(body) = frame.copies {
         // Inside one copy, as an Object under copies is.
         if let Some(parent) = frame.transform {
             b.wire(parent, "transform", transform, "parent");
         }
-        super::copies::add_part(b, body, mesh, transform);
-        super::copies::draw_instances(b, body, object, true);
+        super::copies::add_part(b, body, shape, transform);
     } else {
-        if let Some(parent) = frame.transform {
+        super::physics::combined(b, group, shape, transform);
+    }
+    for part in parts {
+        let ItemFields::Object(object_fields) = &part.fields else {
+            continue;
+        };
+        let Shape::Mesh { file, node_path, vertex_count, primitives } = &object_fields.shape else {
+            continue;
+        };
+        let drawn = emit_part_in(b, part, file, node_path, *vertex_count, *primitives, false);
+        let object = b.add(part.id.as_str(), "object", "node.scene_object");
+        let (surface, maps) = surface_for(b, &part.id);
+        for w in object_wires(drawn.source, surface, transform, object) {
+            if w.to_port == "vertices" {
+                b.wire(drawn.vertices.0, drawn.vertices.1, object, "vertices");
+            } else {
+                b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
+            }
+        }
+        for (source, port) in maps {
+            b.wire(source, "out", object, port);
+        }
+        b.wire(frame.visible, "out", object, "parent_visible");
+        if let Some(body) = frame.copies {
+            super::copies::draw_instances(b, body, object, true);
+        } else if let Some(parent) = frame.transform {
             b.wire(parent, "transform", object, "parent_transform");
         }
-        super::physics::combined(b, group, mesh, transform);
+        b.objects.push(object);
+        // A click on any part picks the combined group.
+        b.object_items.push(group.id.clone());
     }
-    b.objects.push(object);
-    b.object_items.push(group.id.clone());
     true
 }
 
-fn meshes_below(item: &Item, f: &mut impl FnMut(&Shape)) {
-    if let ItemFields::Object(object) = &item.fields {
-        f(&object.shape);
+/// Every Object below `item` (itself included) whose Shape is a file mesh.
+fn parts_below<'a>(item: &'a Item, out: &mut Vec<&'a Item>) {
+    if let ItemFields::Object(object) = &item.fields
+        && matches!(object.shape, Shape::Mesh { .. })
+    {
+        out.push(item);
     }
     for child in &item.children {
-        meshes_below(child, f);
+        parts_below(child, out);
     }
 }

@@ -45,7 +45,7 @@ pub fn import_model(path: &Path) -> Result<ImportedModel, String> {
         .map(|stem| stem.to_string_lossy().into_owned())
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| "Model".to_owned());
-    let bounds = gltf_load::file_bounds(&document);
+    let bounds = gltf_load::file_bounds(&document, &buffers);
     let radius = bounds.map_or(1.0, |(lo, hi)| {
         ((0..3).map(|axis| (hi[axis] - lo[axis]).powi(2)).sum::<f32>().sqrt() * 0.5).max(1e-3)
     });

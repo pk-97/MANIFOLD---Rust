@@ -1563,7 +1563,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-172 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2, D5): missing default_scene now falls back to the union of all scenes' roots via the shared scene-fallback helper"
+    "note": "BUG-172 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2, D5): missing default_scene now falls back to the union of all scenes' roots via the shared scene-fallback helper. Golden re-captured 2026-10-22 (BUG-elwvu.14, RecursiveSkeletons skinning against its golden): the old golden was the old importer bailing out to one unskinned column (84 distinct skins on one material); it now shows the file, four skinned trees with their branches, straight because every joint rotation is identity at time 0."
   },
   {
     "asset": "NodePerformanceTest.glb",
