@@ -32,7 +32,7 @@ fn navigated_frame_warms_up_under_the_pipeline_frame_order() {
     let index = project.timeline.add_layer(
         "Navigated",
         LayerType::Generator,
-        PresetTypeId::new("PreviewNavigationScene"),
+        PresetTypeId::new("Scene"),
     );
     let layer = &mut project.timeline.layers[index];
     layer.gen_params_mut().unwrap().graph = Some(rt_scene());
@@ -105,7 +105,7 @@ fn navigated_frame_warms_up_under_the_pipeline_frame_order() {
 /// A lit ground plane rendered through `render_scene` with ray tracing on,
 /// so the viewport pass has an asynchronous acceleration build to finish.
 fn rt_scene() -> EffectGraphDef {
-    serde_json::from_str(
+    serde_json::from_str(&manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(
         r#"{"version":2,"name":"PreviewNavigationScene","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},
         {"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
@@ -145,6 +145,6 @@ fn rt_scene() -> EffectGraphDef {
         {"fromNode":5,"fromPort":"out","toNode":20,"toPort":"light_0"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
     ]}"#,
-    )
+    ))
     .expect("viewport frame-order scene parses")
 }
