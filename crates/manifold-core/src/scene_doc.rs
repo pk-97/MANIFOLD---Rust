@@ -63,6 +63,7 @@ pub enum ItemFields {
     WaterSource(WaterSourceFields),
     Swarm(SwarmFields),
     Force(ForceFields),
+    Modifier(ModifierFields),
     World(WorldFields),
 }
 
@@ -78,6 +79,7 @@ impl ItemFields {
             ItemFields::WaterSource(_) => ItemKind::WaterSource,
             ItemFields::Swarm(_) => ItemKind::Swarm,
             ItemFields::Force(_) => ItemKind::Force,
+            ItemFields::Modifier(_) => ItemKind::Modifier,
             ItemFields::World(_) => ItemKind::World,
         }
     }
@@ -94,6 +96,7 @@ impl ItemFields {
             ItemKind::WaterSource => ItemFields::WaterSource(WaterSourceFields::default()),
             ItemKind::Swarm => ItemFields::Swarm(SwarmFields::default()),
             ItemKind::Force => ItemFields::Force(ForceFields::default()),
+            ItemKind::Modifier => ItemFields::Modifier(ModifierFields::default()),
             ItemKind::World => ItemFields::World(WorldFields::default()),
         }
     }
@@ -162,78 +165,6 @@ pub struct ObjectFields {
     pub material: Option<ItemId>,
     pub physics: PhysicsSetting,
     pub copies: bool,
-    /// The mesh modifiers on this object, in the order they apply. Adding,
-    /// removing and reordering are one `Set` each (section 6, difference 9).
-    pub modifiers: Vec<MeshModifier>,
-}
-
-/// One entry in an Object's modifier list. The key names it inside its
-/// object for good, so its params keep their ids when the list is reordered.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct MeshModifier {
-    pub key: String,
-    pub kind: MeshModifierKind,
-}
-
-/// The mesh modifiers the picker offers: the available scene modifier
-/// recipes that act on each object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum MeshModifierKind {
-    SurfacePeel,
-    OrderedRecon,
-    SurfaceWaves,
-    SpatialEchoes,
-}
-
-impl MeshModifierKind {
-    pub const ALL: [MeshModifierKind; 4] = [
-        MeshModifierKind::SurfacePeel,
-        MeshModifierKind::OrderedRecon,
-        MeshModifierKind::SurfaceWaves,
-        MeshModifierKind::SpatialEchoes,
-    ];
-
-    /// The stock scene modifier recipe this compiles.
-    pub fn recipe(self) -> &'static str {
-        match self {
-            MeshModifierKind::SurfacePeel => "SurfacePeel",
-            MeshModifierKind::OrderedRecon => "OrderedRecon",
-            MeshModifierKind::SurfaceWaves => "SurfaceWaves",
-            MeshModifierKind::SpatialEchoes => "SpatialEchoes",
-        }
-    }
-}
-
-impl ObjectFields {
-    /// These fields with `modifier` added at the end of the list.
-    #[must_use]
-    pub fn with_modifier(&self, key: impl Into<String>, kind: MeshModifierKind) -> Self {
-        let mut next = self.clone();
-        next.modifiers.push(MeshModifier { key: key.into(), kind });
-        next
-    }
-
-    /// These fields without the modifier `key`.
-    #[must_use]
-    pub fn without_modifier(&self, key: &str) -> Self {
-        let mut next = self.clone();
-        next.modifiers.retain(|modifier| modifier.key != key);
-        next
-    }
-
-    /// These fields with the modifier `key` moved to `index` (clamped to the
-    /// end). An unknown key leaves the list alone.
-    #[must_use]
-    pub fn with_modifier_moved(&self, key: &str, index: usize) -> Self {
-        let mut next = self.clone();
-        if let Some(from) = next.modifiers.iter().position(|modifier| modifier.key == key) {
-            let modifier = next.modifiers.remove(from);
-            next.modifiers.insert(index.min(next.modifiers.len()), modifier);
-        }
-        next
-    }
 }
 
 /// An Object's Shape: the built-in solids, Ocean, or a mesh from a file.
@@ -517,6 +448,56 @@ pub enum ForceTargets {
     /// Everything with physics.
     #[default]
     Physics,
+    Items(Vec<ItemId>),
+}
+
+/// One card of the scene's modifier chain (SCENE_DOCUMENT_DESIGN.md section
+/// 7.19 (Modifiers)). The chain is the scene's Modifier items in tree order,
+/// which is the order they apply. Type, On, Targets, Pieces and the place in
+/// the chain are structural; every other row is a live param.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct ModifierFields {
+    pub modifier: ModifierType,
+    /// Off leaves the card in the chain acting on nothing.
+    pub on: bool,
+    pub targets: ModifierTargets,
+    /// How many pieces Shatter breaks a body into. Setup: it decides which
+    /// bodies exist.
+    pub pieces: u32,
+}
+
+/// Shatter's Pieces when a card is new.
+pub const DEFAULT_PIECES: u32 = 16;
+
+impl Default for ModifierFields {
+    fn default() -> Self {
+        Self { modifier: ModifierType::default(), on: true, targets: ModifierTargets::default(), pieces: DEFAULT_PIECES }
+    }
+}
+
+/// What a modifier card does. Each type's recipe, rows and label are one
+/// entry of `scene_schema::modifier::MODIFIER_TYPES`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModifierType {
+    #[default]
+    SurfacePeel,
+    OrderedRecon,
+    SurfaceWaves,
+    SpatialEchoes,
+    ElasticSculpture,
+    VortexFragments,
+    Shatter,
+}
+
+/// What a modifier card acts on: the whole scene, as one group of
+/// everything, or chosen Objects and Groups.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModifierTargets {
+    #[default]
+    Scene,
     Items(Vec<ItemId>),
 }
 

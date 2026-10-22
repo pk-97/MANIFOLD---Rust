@@ -240,14 +240,14 @@ pub(super) fn dispatch_project(
         // built here from the document and sent as one undo step.
         // An entry with no fields is "Mesh from file": the native picker, then
         // the same import a drop runs, into this layer.
-        ProjectAction::SceneAdd { layer_id, entry, parent } => {
+        ProjectAction::SceneAdd { layer_id, entry, parent, selected } => {
             if manifold_core::scene_schema::add_entry(entry).is_some_and(|found| found.fields.is_none()) {
                 let Some(path) = crate::file_dialogs::pick_file(crate::file_dialogs::DialogAction::ImportModel, dialogs, user_prefs) else {
                     return DispatchResult::handled();
                 };
                 return DispatchResult { import_model: Some((path, layer_id.clone())), ..DispatchResult::handled() };
             }
-            let built = crate::scene_edit::add(project, layer_id, entry, parent.as_ref()).map(Some);
+            let built = crate::scene_edit::add(project, layer_id, entry, parent.as_ref(), selected).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneRemove(layer_id, item) => {
@@ -274,8 +274,8 @@ pub(super) fn dispatch_project(
             let built = crate::scene_edit::material_feature(project, layer_id, material, *feature, *add);
             send_scene_edit(content_tx, layer_id, built)
         }
-        ProjectAction::SceneModifierEdit { layer_id, item, key, to } => {
-            let built = crate::scene_edit::modifier_edit(project, layer_id, item, key, *to).map(Some);
+        ProjectAction::SceneChainMove { layer_id, item, to } => {
+            let built = crate::scene_edit::chain_move(project, layer_id, item, *to).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneMaterialLook { layer_id, material, look } => {

@@ -1,22 +1,17 @@
-//! Forces and mesh modifiers (SCENE_DOCUMENT_DESIGN.md section 7.12 (Forces)
-//! and section 6, difference 9): each compiles to one scene modifier
-//! instance on the layer's graph, from the stock recipe its type names, and
-//! the `load/expand` passes build the rest at load. The recipe's own params
-//! become the item's manifest params, `<item id>.<param>` for a Force and
-//! `<object id>.<modifier key>.<param>` for an Object's modifier, each
-//! bound to the instance's param. Which of them are on the card, and where, is
-//! the (kind, property) table (`scene_schema::force`, `scene_schema::modifier`).
+//! Forces (SCENE_DOCUMENT_DESIGN.md section 7.12 (Forces)): each compiles to
+//! one scene modifier instance on the layer's graph, from the stock recipe
+//! its type names, and the `load/expand` passes build the rest at load. The
+//! recipe's own params become the item's manifest params, `<item id>.<param>`,
+//! each bound to the instance's param. Which of them are on the card, and
+//! where, is the (kind, property) table (`scene_schema::force`). Modifier
+//! cards reuse [`recipe_card`] and [`bindings`] (`modifiers.rs`).
 
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{BindingDef, BindingTarget, ParamSpecDef};
+use manifold_core::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef};
 use manifold_core::effects::ParamConvert;
-use manifold_core::scene_doc::{
-    ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, MeshModifier, PhysicsSetting, param_id,
-};
-use manifold_core::scene_modifier_preset::{
-    MAX_STAGE_CARRYING_MODIFIERS, SceneModifierInstanceDef, SceneTargetSelection, force_slots_message,
-};
-use manifold_core::scene_schema::{self, Exposure, PropertyRow, modifier_param_id, modifier_rows, modifiers_unavailable};
+use manifold_core::scene_doc::{ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, PhysicsSetting, param_id};
+use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
+use manifold_core::scene_schema::{self, Exposure, PropertyRow};
 use manifold_foundation::scene_surface::SurfaceRole;
 
 use super::builder::{Builder, SCENE};
@@ -35,7 +30,7 @@ fn recipe_of(force: ForceType) -> &'static str {
     }
 }
 
-/// Emit every Force and every Object's modifiers, in tree order.
+/// Emit every Force, in tree order.
 pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
     let doc = b.doc;
     let mut found: Vec<Placed<'_>> = Vec::new();
@@ -46,14 +41,8 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
         found.push(Placed { item, physical, lineage });
     });
     for Placed { item, .. } in &found {
-        match &item.fields {
-            ItemFields::Force(force) => emit_force(b, item, force, &found)?,
-            ItemFields::Object(object) => {
-                for modifier in &object.modifiers {
-                    emit_mesh_modifier(b, item, modifier)?;
-                }
-            }
-            _ => {}
+        if let ItemFields::Force(force) = &item.fields {
+            emit_force(b, item, force, &found)?;
         }
     }
     Ok(())
@@ -67,7 +56,7 @@ struct Placed<'d> {
     lineage: Vec<ItemId>,
 }
 
-fn node(owner: &str, role: &str) -> NodeId {
+pub(super) fn node(owner: &str, role: &str) -> NodeId {
     NodeId::new(format!("{owner}:{role}"))
 }
 
@@ -94,47 +83,33 @@ fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Pl
         }
     };
     let lookup = |param: &str| scene_schema::row_for(&item.fields, param);
-    attach(b, item, "force", recipe_of(force.force), targets, &|param| param_id(&item.id, param), &lookup)
-}
-
-fn emit_mesh_modifier(b: &mut Builder<'_>, item: &Item, modifier: &MeshModifier) -> Result<(), String> {
-    if let ItemFields::Object(object) = &item.fields
-        && let Some(reason) = modifiers_unavailable(&object.shape)
-    {
-        return Err(format!("{}: {reason}", item.name));
-    }
-    // An object that compiled to no draw (a mesh from a file before its
-    // emitter) has nothing to modify.
-    let Some(target) = object_ref(b, item) else {
-        return Ok(());
+    let (graph, specs) = recipe_card(recipe_of(force.force), &lookup, &|param| param_id(&item.id, param), &[])?;
+    let id = node(item.id.as_str(), "force");
+    let bindings = bindings(&specs, &id);
+    let instance = SceneModifierInstanceDef {
+        id,
+        scene: node(SCENE, "render"),
+        targets,
+        mesh_frames: Vec::new(),
+        legacy_math_view_carrier: None,
+        graph: Box::new(graph),
     };
-    let key = modifier.key.as_str();
-    let lookup = |param: &str| modifier_rows(modifier.kind).iter().find(|row| row.property == param);
-    attach(
-        b,
-        item,
-        &format!("mod:{key}"),
-        modifier.kind.recipe(),
-        SceneTargetSelection::Explicit { objects: vec![target] },
-        &|param| modifier_param_id(&item.id, key, param),
-        &lookup,
-    )
+    b.push_modifier(instance, specs.into_iter().map(|(spec, _)| spec).collect(), bindings, None);
+    Ok(())
 }
 
-/// One scene modifier instance of `recipe` for `item`, with a manifest param
-/// for every recipe param its row puts on the card.
-fn attach(
-    b: &mut Builder<'_>,
-    item: &Item,
-    role: &str,
+/// One manifest param and the recipe param it drives.
+pub(super) type CardParam = (ParamSpecDef, String);
+
+/// The stock `recipe`, tuned to its rows' defaults and to `held` (values
+/// the item's fields set), with a manifest param for every recipe param its
+/// row puts on the card, named by `host_id`.
+pub(super) fn recipe_card(
     recipe: &str,
-    targets: SceneTargetSelection,
-    host_id: &dyn Fn(&str) -> String,
     lookup: &dyn Fn(&str) -> Option<&'static PropertyRow>,
-) -> Result<(), String> {
-    if b.modifier_count() >= MAX_STAGE_CARRYING_MODIFIERS {
-        return Err(force_slots_message("Adding a force or modifier", 1, 0, MAX_STAGE_CARRYING_MODIFIERS));
-    }
+    host_id: &dyn Fn(&str) -> String,
+    held: &[(&str, f32)],
+) -> Result<(EffectGraphDef, Vec<CardParam>), String> {
     let mut graph = stock_force(recipe, &[])?;
     let local = graph.preset_metadata.clone().ok_or_else(|| format!("The stock {recipe} recipe has no card"))?;
     let preparation: &[String] = local.scene_modifier.as_ref().map_or(&[], |recipe| &recipe.preparation_params);
@@ -146,49 +121,50 @@ fn attach(
         rows.push((spec, row));
     }
     // The kind's defaults reach the recipe itself, so its graph agrees with its card.
-    let held: Vec<(&str, f32)> = rows.iter().filter_map(|(spec, row)| row.default.map(|value| (spec.id.as_str(), value))).collect();
-    tune_force_card(&mut graph, &held)?;
+    let mut tuning: Vec<(&str, f32)> =
+        rows.iter().filter_map(|(spec, row)| row.default.map(|value| (spec.id.as_str(), value))).collect();
+    tuning.extend_from_slice(held);
+    tune_force_card(&mut graph, &tuning)?;
     let tuned = graph.preset_metadata.as_ref().map_or(&[][..], |meta| meta.params.as_slice()).to_vec();
 
-    let modifier_id = node(item.id.as_str(), role);
     let mut specs = Vec::new();
-    let mut bindings = Vec::new();
     for (spec, row) in rows {
         let Exposure::Card(facts) = row.exposure else {
             continue;
         };
         let current = tuned.iter().find(|candidate| candidate.id == spec.id).unwrap_or(spec);
-        let id = host_id(&spec.id);
         let mut host: ParamSpecDef = current.clone();
-        host.id = id.clone();
+        host.id = host_id(&spec.id);
         if let Some(name) = row.name {
             host.name = name.to_owned();
+        }
+        if let Some((min, max)) = facts.range {
+            host.min = min;
+            host.max = max;
         }
         host.scene = Some(facts.desc(row.section));
         host.card_visible = facts.role == SurfaceRole::Performance;
         host.limit = facts.limit;
         host.unit = facts.unit;
-        bindings.push(BindingDef {
-            id,
+        specs.push((host, spec.id.clone()));
+    }
+    Ok((graph, specs))
+}
+
+/// The bindings that drive instance `modifier`'s recipe params from `specs`.
+pub(super) fn bindings(specs: &[CardParam], modifier: &NodeId) -> Vec<BindingDef> {
+    specs
+        .iter()
+        .map(|(host, param)| BindingDef {
+            id: host.id.clone(),
             label: host.name.clone(),
             default_value: host.default_value,
-            target: BindingTarget::SceneModifier { modifier_id: modifier_id.clone(), param_id: spec.id.clone() },
+            target: BindingTarget::SceneModifier { modifier_id: modifier.clone(), param_id: param.clone() },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
             offset: 0.0,
             default_mirrors_node_param: false,
-        });
-        specs.push(host);
-    }
-    let instance = SceneModifierInstanceDef {
-        id: modifier_id,
-        scene: node(SCENE, "render"),
-        targets,
-        mesh_frames: Vec::new(),
-        legacy_math_view_carrier: None,
-        graph: Box::new(graph),
-    };
-    b.push_modifier(instance, specs, bindings);
-    Ok(())
+        })
+        .collect()
 }

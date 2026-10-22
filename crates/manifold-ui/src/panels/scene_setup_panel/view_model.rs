@@ -16,6 +16,9 @@ pub struct FieldOptionVm {
     pub pick: FieldPick,
     /// The value the field holds now (a set field checks every member).
     pub checked: bool,
+    /// Why this value cannot be picked here: drawn disabled, the reason in
+    /// its label.
+    pub disabled: Option<String>,
 }
 
 /// How a field row picks its value, with the choices resolved to names.
@@ -95,18 +98,6 @@ pub struct SceneItemVm {
     /// Why a manifest row cannot be used right now, by param id: drawn
     /// dimmed with the reason on hover.
     pub row_reasons: Vec<(String, String)>,
-    /// An Object's mesh modifiers, in the order they apply: each is its own
-    /// section.
-    pub modifiers: Vec<ModifierVm>,
-}
-
-/// One mesh modifier on an Object's card.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ModifierVm {
-    /// Its key: its params are `<object>.<key>.<param>`.
-    pub key: String,
-    /// Its section title, unique on the card.
-    pub label: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

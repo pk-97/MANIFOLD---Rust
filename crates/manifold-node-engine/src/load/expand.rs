@@ -41,7 +41,7 @@ pub use compiler::{
 };
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
-pub use frames::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
+pub use frames::{capture_mesh_frames, resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
 
 use manifold_core::scene_modifier_preset::SceneModifierSchemaError;
 

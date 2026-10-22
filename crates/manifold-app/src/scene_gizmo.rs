@@ -549,7 +549,7 @@ mod tests {
         let mut project = Project::default();
         let index = project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
         let layer = project.timeline.layers[index].layer_id.clone();
-        let mut edit = crate::scene_edit::add(&project, &layer, "object.cube", None).expect("a cube adds to the base scene");
+        let mut edit = crate::scene_edit::add(&project, &layer, "object.cube", None, &[]).expect("a cube adds to the base scene");
         edit.command.execute(&mut project);
         let second = edit.select.expect("the add selects the new cube");
         project.with_preset_graph_mut(&GraphTarget::Generator(layer.clone()), |inst| {

@@ -19,7 +19,6 @@ fn item(id: &str, kind: ItemKind, name: &str, depth: usize, parent: Option<&str>
         copy_view: false,
         aim_sun_file: None,
         row_reasons: Vec::new(),
-        modifiers: Vec::new(),
     }
 }
 
@@ -31,8 +30,8 @@ fn physics_field() -> FieldRowVm {
         control: FieldControlVm::Pick {
             current: "None".into(),
             options: vec![
-                FieldOptionVm { label: "None".into(), pick: FieldPick::Choice("none".into()), checked: true },
-                FieldOptionVm { label: "Body".into(), pick: FieldPick::Choice("body".into()), checked: false },
+                FieldOptionVm { label: "None".into(), pick: FieldPick::Choice("none".into()), checked: true, disabled: None },
+                FieldOptionVm { label: "Body".into(), pick: FieldPick::Choice("body".into()), checked: false, disabled: None },
             ],
         },
         disabled: None,

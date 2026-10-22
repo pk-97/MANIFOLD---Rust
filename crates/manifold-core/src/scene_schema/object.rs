@@ -7,13 +7,14 @@ use manifold_foundation::scene_surface::{ControlGroup, Unit};
 
 use super::fields::{COPIES, Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, PHYSICS, enabled, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, row, setup};
-use crate::scene_doc::{Item, ItemFields, MeshModifierKind, ObjectFields, SceneDoc, Shape};
+use crate::scene_doc::{Item, ItemFields, ObjectFields, SceneDoc, Shape};
 
 const T: Reach = Reach::Own("transform");
 const DRAW: Reach = Reach::Own("object");
 const MESH: Reach = Reach::Own("mesh");
 const POSE: Reach = Reach::Own("pose");
 const SKIN: Reach = Reach::Own("skin");
+const DETAIL: Reach = Reach::Own("detail");
 const WEIGHTS: Reach = Reach::Own("morph_weights");
 const DELTAS: Reach = Reach::Own("morph_deltas");
 const BLEND: Reach = Reach::Own("morph_blend");
@@ -53,7 +54,7 @@ const OWN_CENTRE: &str = "the part's own centre, so it turns about itself";
 const GROUP_CLOCK: &str = "the import Group's Animation rows";
 const CLOCK_PAYLOAD: &str = "the clip data loads from the model file";
 
-pub static OBJECT_ROWS: [PropertyRow; 75] = [
+pub static OBJECT_ROWS: [PropertyRow; 76] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -89,6 +90,9 @@ pub static OBJECT_ROWS: [PropertyRow; 75] = [
         .param("radius")
         .default(0.5)
         .when(platonic),
+    // A built-in shape a deforming Modifier reaches gets its triangles split
+    // (`node.subdivide_mesh`) so the bend has vertices to move.
+    row("detail_level", DETAIL, Transform, Exposure::Automatic("set while a Modifier bends this shape")).param("level"),
     // The model file's mesh node (`node.gltf_mesh_source`): the Shape field names the file and the
     // file node; the rest keeps the importer's defaults.
     row("file", MESH, Transform, Exposure::Automatic("the Shape field")).param("path").when(from_file),
@@ -259,25 +263,7 @@ fn part_of_import(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     inside.then_some("This part comes from its group's Model File; swap it there")
 }
 
-const MODIFIER_KINDS: &[Choice] = &[
-    Choice { key: "surface_peel", label: "Surface Peel" },
-    Choice { key: "ordered_recon", label: "Ordered Recon" },
-    Choice { key: "surface_waves", label: "Surface Waves" },
-    Choice { key: "spatial_echoes", label: "Spatial Echoes" },
-];
-
-/// The label a modifier kind shows: its section title and Add entry.
-pub fn modifier_label(kind: MeshModifierKind) -> &'static str {
-    MODIFIER_KINDS[MeshModifierKind::ALL.iter().position(|k| *k == kind).unwrap_or(0)].label
-}
-
-/// Only a mesh from a file takes modifiers, so a built-in solid has no Add
-/// Modifier row at all.
-fn takes_modifiers(fields: &ItemFields) -> bool {
-    matches!(fields, ItemFields::Object(object) if super::modifiers_unavailable(&object.shape).is_none())
-}
-
-pub static OBJECT_FIELDS: [FieldRow; 7] = [
+pub static OBJECT_FIELDS: [FieldRow; 6] = [
     FieldRow {
         id: "shape",
         label: "Shape",
@@ -320,26 +306,4 @@ pub static OBJECT_FIELDS: [FieldRow; 7] = [
     MATERIAL_BINDING,
     PHYSICS,
     COPIES,
-    // Adds a modifier at the end of the list; each modifier is its own
-    // section, removed and reordered from its header.
-    FieldRow {
-        id: "add_modifier",
-        label: "Add Modifier",
-        section: ControlGroup::Modifier,
-        control: FieldControl::Closed(MODIFIER_KINDS),
-        applies: takes_modifiers,
-        disabled: enabled,
-        read: |_| FieldValue::Choice(String::new()),
-        write: |fields, value| {
-            let (ItemFields::Object(object), FieldValue::Choice(key)) = (&*fields, value) else {
-                return Err(wrong_value("add_modifier", value));
-            };
-            let Some(at) = MODIFIER_KINDS.iter().position(|choice| choice.key == key) else {
-                return Err(wrong_value("add_modifier", value));
-            };
-            let next = object.with_modifier(crate::math::short_id(), MeshModifierKind::ALL[at]);
-            *fields = ItemFields::Object(next);
-            Ok(())
-        },
-    },
 ];

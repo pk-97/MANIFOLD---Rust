@@ -3,7 +3,8 @@
 //! the app read this list and nothing else.
 
 use crate::scene_doc::{
-    CameraFields, CameraRig, ForceFields, ForceType, ItemFields, ItemKind, LightFields, LightType, ObjectFields, Shape,
+    CameraFields, CameraRig, ForceFields, ForceType, ItemFields, ItemKind, LightFields, LightType, ModifierFields, ModifierType,
+    ObjectFields, Shape,
 };
 
 /// One thing the Add menu adds: an item of `kind` whose fields are
@@ -41,6 +42,10 @@ fn force(force: ForceType) -> ItemFields {
     ItemFields::Force(ForceFields { force, ..ForceFields::default() })
 }
 
+fn modifier(modifier: ModifierType) -> ItemFields {
+    ItemFields::Modifier(ModifierFields { modifier, ..ModifierFields::default() })
+}
+
 const fn entry(
     key: &'static str,
     group: &'static str,
@@ -58,7 +63,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 23] = [
+pub static ADD_ENTRIES: [AddEntry; 30] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
@@ -83,6 +88,19 @@ pub static ADD_ENTRIES: [AddEntry; 23] = [
     entry("force.drag", "Force", "Drag", ItemKind::Force, "Drag", || force(ForceType::Drag)),
     entry("force.attractor", "Force", "Attractor", ItemKind::Force, "Attractor", || force(ForceType::Attractor)),
     entry("force.explosion", "Force", "Explosion", ItemKind::Force, "Explosion", || force(ForceType::Explosion)),
+    // A new card aims at the selection, or the whole scene when nothing is
+    // selected, at the end of the chain (section 7.2).
+    entry("modifier.surface_peel", "Modifier", "Surface Peel", ItemKind::Modifier, "Surface Peel", || modifier(ModifierType::SurfacePeel)),
+    entry("modifier.ordered_recon", "Modifier", "Ordered Recon", ItemKind::Modifier, "Ordered Recon", || modifier(ModifierType::OrderedRecon)),
+    entry("modifier.surface_waves", "Modifier", "Surface Waves", ItemKind::Modifier, "Surface Waves", || modifier(ModifierType::SurfaceWaves)),
+    entry("modifier.spatial_echoes", "Modifier", "Spatial Echoes", ItemKind::Modifier, "Spatial Echoes", || modifier(ModifierType::SpatialEchoes)),
+    entry("modifier.elastic_sculpture", "Modifier", "Elastic Sculpture", ItemKind::Modifier, "Elastic Sculpture", || {
+        modifier(ModifierType::ElasticSculpture)
+    }),
+    entry("modifier.vortex_fragments", "Modifier", "Vortex Fragments", ItemKind::Modifier, "Vortex Fragments", || {
+        modifier(ModifierType::VortexFragments)
+    }),
+    entry("modifier.shatter", "Modifier", "Shatter", ItemKind::Modifier, "Shatter", || modifier(ModifierType::Shatter)),
     model_file("object.mesh", "Object", "Mesh from file\u{2026}"),
 ];
 

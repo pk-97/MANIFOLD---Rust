@@ -13,8 +13,7 @@ use manifold_editing::commands::effects::ChangeGraphParamCommand;
 use manifold_editing::commands::scene_doc::{
     AddSceneItemCommand, RemoveSceneItemCommand, RenameSceneItemCommand, ReparentSceneItemCommand, SetSceneItemFieldsCommand,
     add_object_commands, group_commands, new_material, own_material_commands,
-    move_modifier,
-    remove_modifier,
+    add_modifier, move_modifier, new_modifier,
     ungroup_commands,
 };
 use manifold_core::scene_surface::FieldPick;
@@ -52,8 +51,10 @@ fn new_id() -> ItemId {
 }
 
 /// Add the entry `key` of the Add menu under `parent` (the root when the
-/// parent cannot hold it), named so no other item shares the name.
-pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<&ItemId>) -> Result<SceneEdit, String> {
+/// parent cannot hold it), named so no other item shares the name. A
+/// Modifier card joins the end of the chain, aimed at the `selected` Objects
+/// and Groups, or the whole scene when none is selected.
+pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<&ItemId>, selected: &[ItemId]) -> Result<SceneEdit, String> {
     let doc = doc(project, layer)?;
     let entry = add_entry(key).ok_or_else(|| format!("There is no \"{key}\" to add"))?;
     let parent = parent.and_then(|id| doc.find(id)).filter(|p| manifold_core::scene_doc::can_hold(Some(p.kind()), entry.kind));
@@ -63,6 +64,11 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
     let names = names(doc);
     let name = unique_name(entry.name, &names);
     let id = new_id();
+    if let ItemFields::Modifier(card) = fields() {
+        let mut item = new_modifier(doc, id.clone(), card.modifier, selected);
+        item.name = name;
+        return Ok(batch(vec![Box::new(add_modifier(layer, doc, item))], &format!("Add {}", entry.label), Some(id)));
+    }
     // An Object comes with its own Material, so its colour is on its card
     // at once.
     let mut commands: Vec<Box<dyn Command>> = if entry.kind == ItemKind::Object {
@@ -92,11 +98,14 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
     };
     if entry.kind == ItemKind::Swarm {
         let mut taken = names.iter().map(|taken| (*taken).to_owned()).collect::<Vec<_>>();
+        // Forces sit at the top of the scene: after the swarm when it is
+        // there too, else at the end.
+        let force_index = if parent.is_none() { index + 1 } else { doc.items.len() };
         for (offset, (base, force, values)) in SWARM_FORCES.iter().enumerate() {
             let force_id = new_id();
             let name = unique_name(base, &taken.iter().map(String::as_str).collect::<Vec<_>>());
             taken.push(name.clone());
-            commands.push(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Force, parent.clone(), index + 1 + offset, None, force_id.clone())));
+            commands.push(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Force, None, force_index + offset, None, force_id.clone())));
             commands.push(Box::new(SetSceneItemFieldsCommand::new(
                 layer.clone(),
                 force_id.clone(),
@@ -192,10 +201,12 @@ pub(crate) fn set_field(project: &Project, layer: &LayerId, item: &ItemId, field
         FieldPick::Item(target) => FieldValue::Item(target.clone()),
         FieldPick::Layer(target) => FieldValue::Layer(target.clone()),
         FieldPick::File(path) => FieldValue::File(path.clone()),
-        FieldPick::All => FieldValue::Items(Vec::new()),
+        FieldPick::All => FieldValue::Everything,
         FieldPick::Toggle(target) => {
-            let FieldValue::Items(mut set) = (row.read)(&found.fields) else {
-                return Err(format!("{field} does not take a set of items"));
+            let mut set = match (row.read)(&found.fields) {
+                FieldValue::Items(set) => set,
+                FieldValue::Everything => Vec::new(),
+                _ => return Err(format!("{field} does not take a set of items")),
             };
             match set.iter().position(|member| member == target) {
                 Some(at) => {
@@ -520,9 +531,18 @@ pub(crate) fn copy_view(
     Ok(Some(batch(writes, "Use this view", None)))
 }
 
-/// Move an item `delta` places among its siblings. `None` at either end.
+/// Move an item `delta` places among its siblings, a Modifier card among
+/// the chain's cards. `None` at either end.
 pub(crate) fn nudge(project: &Project, layer: &LayerId, item: &ItemId, delta: i32) -> Result<Option<SceneEdit>, String> {
     let doc = doc(project, layer)?;
+    if doc.find(item).is_some_and(|found| found.kind() == ItemKind::Modifier) {
+        let chain: Vec<&ItemId> = doc.items.iter().filter(|card| card.kind() == ItemKind::Modifier).map(|card| &card.id).collect();
+        let Some(at) = chain.iter().position(|card| *card == item) else {
+            return Ok(None);
+        };
+        let to = (at as i64 + i64::from(delta)).clamp(0, chain.len() as i64 - 1) as usize;
+        return if to == at { Ok(None) } else { chain_move(project, layer, item, to).map(Some) };
+    }
     let (parent, index) = doc.locate(item).ok_or("That item is no longer in the scene")?;
     let siblings = match &parent {
         Some(id) => doc.find(id).map_or(0, |p| p.children.len()),
@@ -543,13 +563,8 @@ pub(crate) struct SceneItemClipboard {
     pub items: Vec<ItemId>,
 }
 
-/// Remove an Object's modifier `key` (`to` is `None`) or move it to `to` in
-/// its list: one undo step either way.
-pub(crate) fn modifier_edit(project: &Project, layer: &LayerId, object: &ItemId, key: &str, to: Option<usize>) -> Result<SceneEdit, String> {
-    let doc = doc(project, layer)?;
-    let (command, description) = match to {
-        None => (remove_modifier(layer, doc, object, key)?, "Remove Modifier"),
-        Some(index) => (move_modifier(layer, doc, object, key, index)?, "Move Modifier"),
-    };
-    Ok(batch(vec![Box::new(command)], description, Some(object.clone())))
+/// Move the Modifier card `card` to place `to` in the chain: one undo step.
+pub(crate) fn chain_move(project: &Project, layer: &LayerId, card: &ItemId, to: usize) -> Result<SceneEdit, String> {
+    let command = move_modifier(layer, doc(project, layer)?, card, to)?;
+    Ok(SceneEdit { command: Box::new(command), select: None })
 }

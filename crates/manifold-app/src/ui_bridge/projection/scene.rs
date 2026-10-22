@@ -9,13 +9,13 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, SceneDoc, Shape, param_id, split_param_id};
 use manifold_core::scene_schema::{
-    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, bodies_past_capacity, impulse_unavailable, modifier_label,
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, bodies_past_capacity, break_unavailable, impulse_unavailable,
 };
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
 use manifold_core::scene_surface::FieldPick;
 use manifold_ui::panels::scene_setup_panel::{
-    AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, ModifierVm, SceneItemVm, SceneSetupState, SceneSetupVm,
+    AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, SceneItemVm, SceneSetupState, SceneSetupVm,
 };
 
 /// The panel's state for the selected layer.
@@ -112,38 +112,20 @@ fn item_vm(
         environment,
         aim_sun_file,
         row_reasons: row_reasons(doc, item),
-        modifiers: modifiers(item),
     }
 }
 
 /// Why rows of `item` cannot be used: a Force whose Impulse has nothing to
-/// push.
+/// push, a Shatter card with no Body to break.
 fn row_reasons(doc: &SceneDoc, item: &Item) -> Vec<(String, String)> {
     let mut reasons = Vec::new();
     if let Some(reason) = impulse_unavailable(doc, item) {
         reasons.push((param_id(&item.id, "fire"), reason.to_owned()));
     }
+    if let Some(reason) = break_unavailable(doc, item) {
+        reasons.push((param_id(&item.id, "shatter"), reason.to_owned()));
+    }
     reasons
-}
-
-/// An Object's modifiers, each titled by its kind, numbered when the kind
-/// repeats.
-fn modifiers(item: &Item) -> Vec<ModifierVm> {
-    let ItemFields::Object(object) = &item.fields else {
-        return Vec::new();
-    };
-    object
-        .modifiers
-        .iter()
-        .enumerate()
-        .map(|(at, modifier)| {
-            let label = modifier_label(modifier.kind);
-            let before = object.modifiers[..at].iter().filter(|other| other.kind == modifier.kind).count();
-            let repeats = object.modifiers.iter().filter(|other| other.kind == modifier.kind).count() > 1;
-            let label = if repeats { format!("{label} {}", before + 1) } else { label.to_owned() };
-            ModifierVm { key: modifier.key.clone(), label }
-        })
-        .collect()
 }
 
 fn material_block(
@@ -198,6 +180,7 @@ fn closed(choices: &[Choice], held: &FieldValue) -> Vec<FieldOptionVm> {
             label: choice.label.to_owned(),
             pick: FieldPick::Choice(choice.key.to_owned()),
             checked: matches!(held, FieldValue::Choice(key) if key == choice.key),
+            disabled: None,
         })
         .collect()
 }
@@ -210,6 +193,7 @@ fn item_options(doc: &SceneDoc, item: &Item, passes: fn(&Item) -> bool, held: &F
                 label: other.name.clone(),
                 pick: FieldPick::Item(Some(other.id.clone())),
                 checked: matches!(held, FieldValue::Item(Some(id)) if *id == other.id),
+                disabled: None,
             });
         }
     });
@@ -237,22 +221,27 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                 label: none.to_owned(),
                 pick: FieldPick::Item(None),
                 checked: matches!(held, FieldValue::Item(None)),
+                disabled: None,
             }];
             options.extend(item_options(doc, item, items, &held));
             pick(options)
         }
-        FieldControl::ItemSet { items, all } => {
+        FieldControl::ItemSet { items, all, refused } => {
             let set = match &held {
                 FieldValue::Items(set) => set.as_slice(),
                 _ => &[],
             };
-            let mut options = vec![FieldOptionVm { label: all.to_owned(), pick: FieldPick::All, checked: set.is_empty() }];
+            let everything = held == FieldValue::Everything;
+            let mut options = vec![FieldOptionVm { label: all.to_owned(), pick: FieldPick::All, checked: everything, disabled: None }];
             doc.walk(|other, _| {
                 if other.id != item.id && items(other) {
+                    let checked = set.contains(&other.id);
                     options.push(FieldOptionVm {
                         label: other.name.clone(),
                         pick: FieldPick::Toggle(other.id.clone()),
-                        checked: set.contains(&other.id),
+                        checked,
+                        // A held target stays pickable, so it can be taken off.
+                        disabled: refused(&item.fields, other).filter(|_| !checked).map(str::to_owned),
                     });
                 }
             });
@@ -264,6 +253,7 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                 label: name.clone(),
                 pick: FieldPick::Layer(id.clone()),
                 checked: matches!(&held, FieldValue::Layer(held) if held == id),
+                disabled: None,
             }));
             pick(options)
         }
@@ -274,7 +264,7 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
                 .map(|(index, name)| {
                     let key = index.to_string();
                     let checked = matches!(&held, FieldValue::Choice(held) if *held == key);
-                    FieldOptionVm { label: name.clone(), pick: FieldPick::Choice(key), checked }
+                    FieldOptionVm { label: name.clone(), pick: FieldPick::Choice(key), checked, disabled: None }
                 })
                 .collect(),
         ),

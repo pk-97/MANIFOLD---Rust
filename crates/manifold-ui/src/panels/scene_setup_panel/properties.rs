@@ -32,15 +32,6 @@ struct Slot {
     section: String,
     feature: Option<MaterialFeature>,
     material: bool,
-    /// The Object's modifier this row belongs to, by list position.
-    modifier: Option<usize>,
-}
-
-/// Which of `item`'s modifiers the param `id` (`<item>.<key>.<param>`) is one
-/// of, by list position.
-fn modifier_of(item: &SceneItemVm, id: &str) -> Option<usize> {
-    let rest = id.strip_prefix(item.id.as_str())?.strip_prefix('.')?;
-    item.modifiers.iter().position(|modifier| rest.strip_prefix(modifier.key.as_str()).is_some_and(|tail| tail.starts_with('.')))
 }
 
 /// A field row, as a row of the shared param surface.
@@ -202,12 +193,7 @@ impl ScenePanel {
                 continue;
             }
             let switch_first = p.spec.scene.is_none_or(|scene| scene.switch.is_none());
-            // Each modifier is its own section, in list order, after Add.
-            let order = match modifier_of(item, p.id.as_ref()) {
-                Some(at) => 10 + 2 * at as u32 + u32::from(switch_first),
-                None => 1 + u32::from(switch_first),
-            };
-            picked.push(((self.group_key(p), order), i));
+            picked.push(((self.group_key(p), 1 + u32::from(switch_first)), i));
         }
         // Structural fields: the item's own, then its Material's.
         let mut field_rows: Vec<&FieldRowVm> = item.fields.iter().collect();
@@ -252,12 +238,8 @@ impl ScenePanel {
         for index in order {
             let row = &config.rows[index];
             let group = self.property_group(row);
-            let modifier = modifier_of(item, row.id.as_ref());
-            let section = match modifier {
-                Some(at) => item.modifiers[at].label.clone(),
-                None => self.material_section_name(row).unwrap_or_default(),
-            };
-            slots.push(Slot { group, section, feature: row_feature(row), material: row.spec.material_role.is_some(), modifier });
+            let section = self.material_section_name(row).unwrap_or_default();
+            slots.push(Slot { group, section, feature: row_feature(row), material: row.spec.material_role.is_some() });
             retained.push(index);
         }
     }
@@ -290,14 +272,7 @@ impl ScenePanel {
             let run_end = (i..range.end).find(|&j| slots[j].section != name).unwrap_or(range.end);
             let feature = slots[i].feature.filter(|_| slots[i].material);
             let removable = feature.zip(item.material.as_ref());
-            let modifier = slots[i].modifier;
-            let header_w = if removable.is_some() {
-                inner_w - ROW_H - ROW_GAP
-            } else if modifier.is_some() {
-                inner_w - 3.0 * ROW_H - ROW_GAP
-            } else {
-                inner_w
-            };
+            let header_w = if removable.is_some() { inner_w - ROW_H - ROW_GAP } else { inner_w };
             let folded = self.material_section_folded(&name);
             self.section_folded.entry(name.clone()).or_insert(folded);
             let folded = self.section_folded.get(&name).copied().unwrap_or(folded);
@@ -319,9 +294,6 @@ impl ScenePanel {
             self.properties_card.row_host.row_index.insert(tree.widget_of(header_id), i, RowRole::SectionHeader);
             if let Some((feature, material)) = removable {
                 self.build_feature_remove(tree, inner_x + inner_w - ROW_H, cy, &material.item, feature);
-            }
-            if let Some(at) = modifier {
-                self.build_modifier_buttons(tree, inner_x + inner_w - 3.0 * ROW_H, cy, item, at);
             }
             cy += ROW_H;
             if !folded {
@@ -537,35 +509,5 @@ impl ScenePanel {
             &mut copied_flash,
             &mut self.section_folded,
         )
-    }
-}
-
-impl ScenePanel {
-    /// A modifier section's header buttons: move up, move down, remove.
-    fn build_modifier_buttons(&mut self, tree: &mut UITree, x: f32, cy: f32, item: &SceneItemVm, at: usize) {
-        let Some(modifier) = item.modifiers.get(at) else { return };
-        let last = item.modifiers.len() - 1;
-        let buttons = [("\u{25b2}", "up", (at > 0).then(|| Some(at - 1))), ("\u{25bc}", "down", (at < last).then_some(Some(at + 1))), ("\u{d7}", "remove", Some(None))];
-        for (slot, (glyph, name, to)) in buttons.into_iter().enumerate() {
-            let Some(to) = to else { continue };
-            let button = tree.add_button_keyed(
-                Some(self.content_parent),
-                x + slot as f32 * ROW_H,
-                cy,
-                ROW_H,
-                ROW_H,
-                super::btn_style(),
-                glyph,
-                crate::param_surface::stable_key(&format!("scene.modifier.{name}.{}.{}", item.id, modifier.key)),
-            );
-            tree.set_name(button, format!("scene_setup.modifier.{name}.{}", modifier.label));
-            self.modifier_buttons.push((button, item.id.clone(), modifier.key.clone(), to));
-        }
-    }
-
-    /// A click on a modifier section's header button.
-    pub(super) fn modifier_click(&self, node_id: NodeId, vm: &SceneSetupVm) -> Option<PanelAction> {
-        let (_, item, key, to) = self.modifier_buttons.iter().find(|(button, ..)| *button == node_id)?;
-        Some(PanelAction::Project(ProjectAction::SceneModifierEdit { layer_id: vm.layer_id.clone(), item: item.clone(), key: key.clone(), to: *to }))
     }
 }

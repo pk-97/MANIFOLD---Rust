@@ -29,9 +29,10 @@ pub enum FieldControl {
     ClosedOrItem { closed: &'static [Choice], items: fn(&Item) -> bool },
     /// One item reference, or none (`none` names the empty value).
     Item { items: fn(&Item) -> bool, none: &'static str },
-    /// Any number of items, or everything when none is picked (`all`). A
-    /// pick toggles the item in the set.
-    ItemSet { items: fn(&Item) -> bool, all: &'static str },
+    /// Any number of items, or everything (`all`). A pick toggles the item in
+    /// the set. `refused` gives why the item holding the row (its fields
+    /// first) cannot take a candidate: the choice is drawn disabled.
+    ItemSet { items: fn(&Item) -> bool, all: &'static str, refused: fn(&ItemFields, &Item) -> Option<&'static str> },
     /// A closed set, then every layer in the project.
     ClosedOrLayer(&'static [Choice]),
     /// A file picker.
@@ -46,8 +47,10 @@ pub enum FieldControl {
 pub enum FieldValue {
     Choice(String),
     Item(Option<ItemId>),
-    /// What an `ItemSet` holds (empty is "everything").
+    /// What an `ItemSet` holds when items are chosen; empty is nothing.
     Items(Vec<ItemId>),
+    /// What an `ItemSet` holds when none is chosen: everything.
+    Everything,
     File(String),
     Layer(LayerId),
 }
@@ -113,6 +116,7 @@ pub fn field_rows(kind: ItemKind) -> &'static [FieldRow] {
         ItemKind::WaterSource => &super::water_source::WATER_SOURCE_FIELDS,
         ItemKind::Swarm => &super::swarm::SWARM_FIELDS,
         ItemKind::Force => &super::force::FORCE_FIELDS,
+        ItemKind::Modifier => &super::modifier::MODIFIER_FIELDS,
         ItemKind::World => &super::world::WORLD_FIELDS,
     }
 }

@@ -144,7 +144,7 @@ mod scene_card_convergence_tests {
         let mut project = Project::default();
         let index = project.timeline.add_layer("Material test", LayerType::Generator, PresetTypeId::SCENE);
         let layer_id = project.timeline.layers[index].layer_id.clone();
-        let mut edit = crate::scene_edit::add(&project, &layer_id, "material", None).expect("a material adds to the base scene");
+        let mut edit = crate::scene_edit::add(&project, &layer_id, "material", None, &[]).expect("a material adds to the base scene");
         manifold_editing::command::Command::execute(&mut *edit.command, &mut project);
         let material = edit.select.expect("the add selects the new material");
         let ids = ["color_r", "color_g", "color_b"].map(|name| manifold_core::effects::ParamId::from(manifold_core::scene_doc::param_id(&material, name)));

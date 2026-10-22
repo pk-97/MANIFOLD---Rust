@@ -12,7 +12,12 @@ use crate::command::Command;
 /// selected item moves with it.
 pub fn group_commands(layer: &LayerId, doc: &SceneDoc, selection: &[ItemId], group: ItemId) -> Vec<Box<dyn Command>> {
     let order = doc.ids();
-    let mut chosen: Vec<&ItemId> = order.iter().filter(|id| selection.contains(id)).collect();
+    // Forces and Modifiers stay at the top of the scene.
+    let mut chosen: Vec<&ItemId> = order
+        .iter()
+        .filter(|id| selection.contains(id))
+        .filter(|id| doc.find(id).is_some_and(|item| !matches!(item.kind(), ItemKind::Force | ItemKind::Modifier)))
+        .collect();
     chosen.retain(|id| {
         let mut inside_another = false;
         doc.walk(|item, ancestors| {

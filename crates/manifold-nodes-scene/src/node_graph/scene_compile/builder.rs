@@ -1,7 +1,7 @@
 //! The compiler's working state: the nodes and wires it has emitted, which
 //! node plays which role for which item, and the manifest the card rows make.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
@@ -15,7 +15,8 @@ use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 use manifold_core::scene_schema::{self, CardFacts, Exposure, PropertyRow, Reach};
 use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
 
-use manifold_node_engine::load::expand::resolve_modifier_mesh_frames;
+use manifold_core::NodeId;
+use manifold_node_engine::load::expand::{capture_mesh_frames, resolve_modifier_mesh_frames};
 
 use crate::node_graph::scene_graph::{plain_node, wire};
 
@@ -65,8 +66,45 @@ pub(crate) struct Builder<'d> {
     pub(crate) swarm_draws: BTreeMap<ItemId, u32>,
     /// The emitter transform each swarm copies node is placed in.
     pub(crate) swarm_frames: BTreeMap<u32, u32>,
-    /// The scene modifiers (forces, mesh modifiers), in application order.
+    /// The scene modifiers (forces, then modifier cards), in application order.
     modifiers: Vec<SceneModifierInstanceDef>,
+    /// Each modifier instance's rest-pose frame, by instance: its targets'
+    /// source offsets and the frame's radius.
+    frames: BTreeMap<NodeId, FramePlan>,
+    /// Every drawn object a modifier can measure, in draw order.
+    pub(crate) drawn: Vec<Drawn>,
+    /// The Objects a deforming Modifier that is on reaches: their built-in
+    /// shapes get mesh detail.
+    pub(crate) deformed: BTreeSet<ItemId>,
+}
+
+/// A mesh's rest pose (SCENE_DOCUMENT_DESIGN.md ruling 20): every shape
+/// supplies one, and every modifier recipe reads it the same way.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Rest {
+    /// The mesh's bounds about its own origin.
+    pub lo: [f32; 3],
+    pub hi: [f32; 3],
+    /// Where that origin sits at rest in the frame of what holds the item.
+    pub offset: [f32; 3],
+    pub vertices: u32,
+}
+
+/// One drawn object whose mesh has a rest pose.
+#[derive(Debug, Clone)]
+pub(crate) struct Drawn {
+    /// The `node.scene_object`.
+    pub object: u32,
+    /// The Object item it draws.
+    pub item: ItemId,
+    pub rest: Rest,
+}
+
+/// One modifier instance's frame: each target's source offset, and the
+/// frame's radius.
+pub(crate) struct FramePlan {
+    pub offsets: Vec<(NodeId, [f64; 3])>,
+    pub radius: f64,
 }
 
 impl<'d> Builder<'d> {
@@ -97,6 +135,9 @@ impl<'d> Builder<'d> {
             swarm_draws: BTreeMap::new(),
             swarm_frames: BTreeMap::new(),
             modifiers: Vec::new(),
+            frames: BTreeMap::new(),
+            drawn: Vec::new(),
+            deformed: super::modifiers::deformed_items(doc),
         };
         b.add(SCENE, "input", "system.generator_input");
         b.add(SCENE, "render", "node.render_scene");
@@ -379,45 +420,100 @@ impl<'d> Builder<'d> {
             Some(tail) => self.wire(tail, "out", output, "in"),
             None => self.wire(render, "color", output, "in"),
         }
+        let bounds = self.scene_bounds();
+        let mut metadata = scene_metadata(self.params, self.bindings);
+        metadata.scene_bounds = bounds;
         let mut def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION_WITH_METADATA,
             name: Some("Scene".into()),
             description: None,
-            preset_metadata: Some(scene_metadata(self.params, self.bindings)),
+            preset_metadata: Some(metadata),
             scene_modifiers: Vec::new(),
             nodes: self.nodes,
             wires: self.wires,
         };
         if !self.modifiers.is_empty() {
             def.version = EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS;
-            // A recipe that reads the source mesh's placement captures it
-            // once, from the scene it is attached to.
+            // A recipe that reads the source mesh's placement takes it from
+            // the rest pose its targets compiled with.
             for modifier in &mut self.modifiers {
-                modifier.mesh_frames = resolve_modifier_mesh_frames(&def, modifier)
-                    .map_err(|error| format!("{}: {error}", modifier.id))?;
+                let frames = match self.frames.get(&modifier.id) {
+                    Some(plan) => capture_mesh_frames(&def, modifier, &plan.offsets, plan.radius),
+                    None => resolve_modifier_mesh_frames(&def, modifier),
+                };
+                modifier.mesh_frames = frames.map_err(|error| format!("{}: {error}", modifier.id))?;
             }
             def.scene_modifiers = self.modifiers;
         }
         Ok(def)
     }
 
-    /// How many scene modifiers are attached so far.
-    pub(crate) fn modifier_count(&self) -> usize {
-        self.modifiers.len()
+    /// The rest-pose box of everything drawn: the whole scene's bounds.
+    fn scene_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
+        rest_box(self.drawn.iter().map(|drawn| &drawn.rest))
     }
 
     /// Attach a scene modifier instance with the host params and bindings
-    /// that drive its recipe's params.
+    /// that drive its recipe's params, and its rest-pose frame when its
+    /// owner measured one.
     pub(crate) fn push_modifier(
         &mut self,
         instance: SceneModifierInstanceDef,
         params: Vec<ParamSpecDef>,
         bindings: Vec<BindingDef>,
+        frame: Option<FramePlan>,
     ) {
+        if let Some(frame) = frame {
+            self.frames.insert(instance.id.clone(), frame);
+        }
         self.modifiers.push(instance);
         self.params.extend(params);
         self.bindings.extend(bindings);
     }
+
+    /// Declare manifest params that drive no node yet (a modifier card with
+    /// nothing to act on keeps its values).
+    pub(crate) fn push_params(&mut self, params: impl IntoIterator<Item = ParamSpecDef>) {
+        self.params.extend(params);
+    }
+
+    /// The node and port wired into `to`'s `port`, if any.
+    pub(crate) fn input(&self, to: u32, port: &str) -> Option<(u32, String)> {
+        self.wires.iter().find(|wire| wire.to_node == to && wire.to_port == port).map(|wire| (wire.from_node, wire.from_port.clone()))
+    }
+
+    /// The type of node `id`.
+    pub(crate) fn node_type(&self, id: u32) -> Option<&str> {
+        fn find(nodes: &[EffectGraphNode], id: u32) -> Option<&EffectGraphNode> {
+            nodes.iter().find_map(|node| {
+                if node.id == id {
+                    Some(node)
+                } else {
+                    node.group.as_deref().and_then(|body| find(&body.nodes, id))
+                }
+            })
+        }
+        find(&self.nodes, id).map(|node| node.type_id.as_str())
+    }
+
+    /// The stable id of node `id`.
+    pub(crate) fn node_id_of(&mut self, id: u32) -> Option<NodeId> {
+        self.node_mut(id).map(|node| node.node_id.clone())
+    }
+}
+
+/// The box holding every rest pose in `rests`, each placed at its offset.
+pub(crate) fn rest_box<'r>(rests: impl IntoIterator<Item = &'r Rest>) -> Option<([f32; 3], [f32; 3])> {
+    let mut found: Option<([f32; 3], [f32; 3])> = None;
+    for rest in rests {
+        let lo: [f32; 3] = std::array::from_fn(|axis| rest.offset[axis] + rest.lo[axis]);
+        let hi: [f32; 3] = std::array::from_fn(|axis| rest.offset[axis] + rest.hi[axis]);
+        found = Some(match found {
+            None => (lo, hi),
+            Some((min, max)) => (std::array::from_fn(|axis| min[axis].min(lo[axis])), std::array::from_fn(|axis| max[axis].max(hi[axis]))),
+        });
+    }
+    found.filter(|(min, max)| min.iter().chain(max.iter()).all(|value| value.is_finite()))
 }
 
 /// A param's default as a number.

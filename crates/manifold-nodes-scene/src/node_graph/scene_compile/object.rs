@@ -6,7 +6,9 @@ use manifold_core::effect_graph_def::{EffectGraphWire, SerializedParamValue};
 use manifold_core::scene_doc::{Item, ItemFields, Shape};
 use manifold_core::scene_schema::can_copy;
 
-use super::builder::Builder;
+use manifold_node_engine::scene::mesh_source::MeshSource;
+
+use super::builder::{Builder, Drawn, Rest, number};
 use super::copies;
 use super::group::Frame;
 use super::material::surface_for;
@@ -39,6 +41,65 @@ fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
     })
 }
 
+/// A built-in shape's rest pose: the bounds and count of the vertices its
+/// mesh node makes at its own size, read from the same mesh source the node
+/// describes, so every shape is measured the same way.
+fn builtin_rest(b: &mut Builder<'_>, mesh_type: &str, solid: Option<u32>) -> Option<Rest> {
+    let mut param = |name: &str| b.param_meta(mesh_type, name).map(|meta| number(&meta.default_value));
+    let source = match mesh_type {
+        "node.cube_mesh" => MeshSource::Cube { size: param("size")? },
+        "node.sphere_mesh" => MeshSource::Sphere {
+            radius: param("radius")?,
+            segments: param("segments")? as u32,
+            rings: param("rings")? as u32,
+        },
+        "node.plane_mesh" => MeshSource::Plane { width: param("width")?, height: param("height")? },
+        "node.platonic_solid_mesh" => MeshSource::Platonic { shape: solid?, radius: param("radius")? },
+        _ => return None,
+    };
+    let vertices = source.load_vertices().ok()?;
+    let mut lo = [f32::INFINITY; 3];
+    let mut hi = [f32::NEG_INFINITY; 3];
+    for vertex in &vertices {
+        for axis in 0..3 {
+            lo[axis] = lo[axis].min(vertex.position[axis]);
+            hi[axis] = hi[axis].max(vertex.position[axis]);
+        }
+    }
+    lo.iter().chain(hi.iter()).all(|value| value.is_finite()).then_some(Rest {
+        lo,
+        hi,
+        offset: [0.0; 3],
+        vertices: u32::try_from(vertices.len()).unwrap_or(u32::MAX),
+    })
+}
+
+/// The vertex count a deformed built-in shape is split up to: enough for a
+/// cube face to curve smoothly under a bend or a wave.
+const DETAIL_VERTICES: u32 = 6000;
+
+/// The deepest split (`node.subdivide_mesh`'s Level range).
+const MAX_DETAIL_LEVEL: u32 = 5;
+
+/// How many times to split a built-in shape's triangles: none unless a
+/// deforming Modifier that is on reaches it, then the fewest splits that give
+/// it [`DETAIL_VERTICES`]. Each split multiplies the count by four.
+fn detail_level(b: &Builder<'_>, item: &Item, rest: Option<&Rest>) -> u32 {
+    let Some(rest) = rest else {
+        return 0;
+    };
+    if !b.deformed.contains(&item.id) {
+        return 0;
+    }
+    let mut level = 0;
+    let mut count = u64::from(rest.vertices);
+    while level < MAX_DETAIL_LEVEL && count < u64::from(DETAIL_VERTICES) {
+        level += 1;
+        count *= 4;
+    }
+    level
+}
+
 pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let ItemFields::Object(fields) = &item.fields else {
         return;
@@ -48,9 +109,11 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let group_copies = frame.and_then(|frame| frame.copies).or_else(|| b.swarm_draws.get(&item.id).copied());
     let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
     let mut center = None;
+    let rest;
     let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
         let part = super::mesh::emit_part(b, item, file, node_path, *vertex_count, *primitives);
         center = part.center;
+        rest = part.rest;
         (part.source, part.vertices)
     } else {
         let Some((mesh_type, solid)) = mesh_type(&fields.shape) else {
@@ -60,7 +123,16 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         if let Some(solid) = solid {
             b.set(mesh, "shape", SerializedParamValue::Enum { value: solid });
         }
-        (mesh, (mesh, "vertices"))
+        rest = builtin_rest(b, mesh_type, solid);
+        let level = detail_level(b, item, rest.as_ref());
+        if level > 0 {
+            let detail = b.add(owner, "detail", "node.subdivide_mesh");
+            b.set(detail, "level", SerializedParamValue::Int { value: level as i32 });
+            b.wire(mesh, "vertices", detail, "in");
+            (mesh, (detail, "out"))
+        } else {
+            (mesh, (mesh, "vertices"))
+        }
     };
     let transform = b.add(owner, "transform", "node.transform_3d");
     if let Some(center) = center {
@@ -69,6 +141,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         }
     }
     let object = b.add(owner, "object", "node.scene_object");
+    if let Some(rest) = rest {
+        b.drawn.push(Drawn { object, item: item.id.clone(), rest });
+    }
     let (surface, maps) = surface_for(b, &item.id);
     // An object that is its own body draws at the body's solved pose.
     let pose = super::physics::object(b, item, frame, mesh, transform);

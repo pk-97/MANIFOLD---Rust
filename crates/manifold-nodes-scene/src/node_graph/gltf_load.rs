@@ -988,6 +988,9 @@ pub(crate) struct FilePart {
     pub vertex_count: u32,
     /// The centre of their bounding box in the file's world space.
     pub center: [f32; 3],
+    /// Half that box's size on each axis: with `center`, the part's rest-pose
+    /// bounds, which a modifier measures it by.
+    pub half_extent: [f32; 3],
 }
 
 /// The file's node tree under the same roots the mesh loader walks
@@ -1019,7 +1022,7 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
             let at = match parts.iter().position(|(part, _, _)| part.material == material) {
                 Some(at) => at,
                 None => {
-                    let empty = FilePart { material, vertex_count: 0, center: [0.0; 3] };
+                    let empty = FilePart { material, vertex_count: 0, center: [0.0; 3], half_extent: [0.0; 3] };
                     parts.push((empty, [f32::INFINITY; 3], [f32::NEG_INFINITY; 3]));
                     parts.len() - 1
                 }
@@ -1045,6 +1048,7 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
             .map(|(mut part, lo, hi)| {
                 if lo.iter().chain(hi.iter()).all(|v| v.is_finite()) {
                     part.center = [0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5);
+                    part.half_extent = [0, 1, 2].map(|axis| (hi[axis] - lo[axis]) * 0.5);
                 }
                 part
             })

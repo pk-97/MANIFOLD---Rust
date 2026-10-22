@@ -375,21 +375,6 @@ fn scene_modifier_expand_conformance_control_stage_broadcasts_once() {
 }
 
 #[test]
-fn scene_modifier_expand_conformance_rejects_modifier_stack_over_capacity() {
-    let mut owner = fixture();
-    let template = owner.scene_modifiers[0].clone();
-    for index in 0..16 {
-        let mut instance = template.clone();
-        instance.id = NodeId::new(format!("modifier_{index}"));
-        owner.scene_modifiers.push(instance);
-    }
-    assert!(matches!(
-        expand_scene_modifiers(&owner, &registry()),
-        Err(SceneModifierExpandError::CapacityExceeded { .. })
-    ));
-}
-
-#[test]
 fn scene_modifier_expand_conformance_preflights_replication_and_actual_ports() {
     let mut invalid = fixture();
     invalid.scene_modifiers[0].graph.nodes[0]

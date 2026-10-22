@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use super::{
-    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, SceneDoc,
+    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, ModifierTargets, SceneDoc,
 };
 
 /// Why a document edit was refused. The document is untouched.
@@ -45,10 +45,11 @@ impl std::fmt::Display for SceneEditError {
 
 /// Whether an item of `kind` may sit under `parent` (None is the top).
 /// Groups hold anything placeable; a Water holds its sources and looks;
-/// a Water Source sits only in a Water; the World sits only at the top.
+/// a Water Source sits only in a Water; the World, Forces and Modifiers sit
+/// only at the top (their own sections of the tree).
 pub fn can_hold(parent: Option<ItemKind>, kind: ItemKind) -> bool {
     match (parent, kind) {
-        (_, ItemKind::World) => parent.is_none(),
+        (_, ItemKind::World | ItemKind::Force | ItemKind::Modifier) => parent.is_none(),
         (Some(ItemKind::Water), ItemKind::WaterSource | ItemKind::Material) => true,
         (_, ItemKind::WaterSource) => false,
         (None | Some(ItemKind::Group), _) => true,
@@ -242,6 +243,12 @@ impl SceneDoc {
                     ids.retain(|id| !gone(id));
                 }
             }
+            // A card left with no target acts on nothing.
+            ItemFields::Modifier(m) => {
+                if let ModifierTargets::Items(ids) = &mut m.targets {
+                    ids.retain(|id| !gone(id));
+                }
+            }
             ItemFields::World(w) if w.active_camera.as_ref().is_some_and(gone) => w.active_camera = None,
             ItemFields::Camera(c) if c.target.as_ref().is_some_and(gone) => c.target = None,
             _ => {}
@@ -279,6 +286,11 @@ impl SceneDoc {
                 }
                 ItemFields::Force(f) => {
                     if let ForceTargets::Items(ids) = &mut f.targets {
+                        ids.iter_mut().for_each(|id| *id = swap(id));
+                    }
+                }
+                ItemFields::Modifier(m) => {
+                    if let ModifierTargets::Items(ids) = &mut m.targets {
                         ids.iter_mut().for_each(|id| *id = swap(id));
                     }
                 }

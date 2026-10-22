@@ -14,16 +14,6 @@ use crate::NodeId;
 /// Bundled recipe id of the standalone Math View modifier.
 pub const MATH_VIEW_RECIPE_ID: &str = "MathView";
 
-/// Separate admission cap for stage-less Math View instances, split from the
-/// stage-carrier limit in `prepare_scene_modifiers`. Per view and sampled
-/// object the parent graph gains two triangle samplers and one diagram, plus
-/// one route per shared control, a switch and two overs per view; the
-/// modifier buffer budget (`buffer_budget.rs`) is byte-based, so it
-/// self-limits regardless of view count. Nothing scales quadratically in
-/// views, so the view cap matches the stage-carrier cap: 16 carriers
-/// migrating to 16 views yields 32 total modifiers, which must fit (BUG-ty86).
-pub const MAX_MATH_VIEW_MODIFIERS: usize = 16;
-
 pub const CONTROL_PREFIX: &str = "math_view_";
 pub const CONTROLS: &[(&str, &str, f32, f32, f32)] = &[
     ("mode", "Mode", 0.0, 0.0, 2.0),

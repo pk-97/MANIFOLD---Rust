@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 395 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 396 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -166,7 +166,7 @@ _Generated from the node registry. Do not hand-edit. 395 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (95)
+### 3D Geometry (96)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -254,6 +254,7 @@ _Generated from the node registry. Do not hand-edit. 395 nodes registered, group
 | Slice | `node.slice_mesh` | Filter | Clamps all vertices past a plane onto the plane, turning a mesh into a flat cut face you can sweep across. |
 | Smooth Surface Mesh | `node.smooth_surface_mesh` | Filter | Smooths a liquid's surface mesh by easing each point toward its neighbours, rounding off the small facets and steps. |
 | Sphere Mesh | `node.sphere_mesh` | Source | Builds a smooth round ball of mesh, the sphere among the built-in solids. |
+| Subdivide Mesh | `node.subdivide_mesh` | Filter | Splits every triangle of a mesh into smaller ones without changing its shape, so a bend or a wave has enough points to curve smoothly. |
 | Surface Mesh Normals | `node.surface_mesh_normals` | Filter | Rebuilds smooth normals from the final surface triangles so lighting follows the smoothed water. |
 | Taper Mesh | `node.taper_mesh` | Filter | Narrows a mesh toward a point along one axis, like sharpening a pencil or a candle flame. The lighting normals scale with it so the taper still shades correctl… |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
