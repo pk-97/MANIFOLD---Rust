@@ -844,7 +844,8 @@ impl GpuFlipDomain {
             return Ok(None);
         }
         let coupled_geometries = self.coupled.owner.as_ref().map_or_else(|| self.observed.geometries(), LiquidRigidOwner::geometries);
-        if self.bodies.prepare(roles, coupled_geometries, geometry.setup.lattice.cell_size(), offline)?
+        let coupled_rows = self.coupled.owner.as_ref().map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
+        if self.bodies.prepare(roles, coupled_geometries, coupled_rows, self.coupled.walls.bounds(), geometry.setup.lattice.cell_size(), offline)?
             == BodiesStatus::Pending
         {
             return Ok(None);
@@ -885,7 +886,7 @@ impl GpuFlipDomain {
             && owner.wants_rebind()
         {
             owner.rebind()?;
-            if self.bodies.prepare(roles, owner.geometries(), geometry.setup.lattice.cell_size(), offline)?
+            if self.bodies.prepare(roles, owner.geometries(), owner.rows(), self.coupled.walls.bounds(), geometry.setup.lattice.cell_size(), offline)?
                 == BodiesStatus::Pending
             {
                 return Ok(None);

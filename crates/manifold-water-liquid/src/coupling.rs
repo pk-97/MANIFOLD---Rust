@@ -129,6 +129,11 @@ impl DomainWalls {
         Self { min: layout.min, size, closed }
     }
 
+    /// The domain's box, min then max.
+    pub fn bounds(&self) -> [[f32; 3]; 2] {
+        [self.min, std::array::from_fn(|axis| self.min[axis] + self.size[axis])]
+    }
+
     /// One Fixed slab per closed face, in face order.
     fn slabs(&self) -> impl Iterator<Item = RigidBody> + '_ {
         let extent = self.size.iter().fold(0.0f32, |a, &b| a.max(b));
@@ -615,6 +620,7 @@ fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle, body: Option<&RigidBo
         }),
         _ => None,
     });
+    let fixed = exact.is_some();
     let mut meshes = match exact {
         Some(mesh) => vec![mesh],
         None => world.hull_meshes(handle).map_err(|error| error.to_string())?,
@@ -635,7 +641,9 @@ fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle, body: Option<&RigidBo
     }
     let size: [f32; 3] = std::array::from_fn(|axis| high[axis] - low[axis]);
     let face = (size[0] * size[1]).max(size[1] * size[2]).max(size[0] * size[2]);
-    Ok((Arc::new(PreparedFluidGeometry::new(meshes)), face))
+    // A static collider never moves, so each water crops its lattice to its domain.
+    let geometry = if fixed { PreparedFluidGeometry::fixed(meshes) } else { PreparedFluidGeometry::new(meshes) };
+    Ok((Arc::new(geometry), face))
 }
 
 /// Each coupled body's state as a row: its centre of mass, 1/m, velocities,
