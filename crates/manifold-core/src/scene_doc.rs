@@ -21,7 +21,7 @@ pub use import::{
     ImportPlacement, ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, camera_item, import_child_id,
     is_import_child, light_item, material_item, node_item,
 };
-pub use tree::{ONE_ENVIRONMENT, SceneEditError, can_hold};
+pub use tree::{ONE_ENVIRONMENT, ONE_FILL, SceneEditError, can_hold};
 
 use serde::{Deserialize, Serialize};
 
@@ -93,7 +93,8 @@ impl ItemFields {
             ItemKind::Light => ItemFields::Light(LightFields::default()),
             ItemKind::Material => ItemFields::Material(MaterialFields::default()),
             ItemKind::Water => ItemFields::Water(WaterFields::default()),
-            ItemKind::WaterSource => ItemFields::WaterSource(WaterSourceFields::default()),
+            // An Inflow, so a new source never makes a second Fill; Add sets its role next.
+            ItemKind::WaterSource => ItemFields::WaterSource(WaterSourceFields { role: SourceRole::Inflow, ..WaterSourceFields::default() }),
             ItemKind::Swarm => ItemFields::Swarm(SwarmFields::default()),
             ItemKind::Force => ItemFields::Force(ForceFields::default()),
             ItemKind::Modifier => ItemFields::Modifier(ModifierFields::default()),

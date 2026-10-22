@@ -288,6 +288,44 @@ fn a_second_environment_is_refused_with_its_reason() {
     assert!(undo.execute(Box::new(ReparentSceneItemCommand::new(layer, id("environment"), None, 3)), &mut project), "the one Environment still moves");
 }
 
+/// A Water takes one Fill: a Fill added, duplicated or set into a filled
+/// Water is refused with the reason; an Inflow still joins.
+#[test]
+fn a_second_fill_is_refused_with_its_reason() {
+    use manifold_core::scene_doc::{ONE_FILL, SourceRole, WaterSourceFields};
+    let (mut project, layer) = project();
+    let fill = |role| ItemFields::WaterSource(WaterSourceFields { role, ..WaterSourceFields::default() });
+    let mut undo = UndoRedoManager::new();
+    assert!(undo.execute(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Water, None, 0, None, id("water"))), &mut project));
+    let add = |source: &str, role| -> Box<dyn Command> {
+        Box::new(CompositeCommand::new(
+            vec![
+                Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::WaterSource, Some(id("water")), 0, None, id(source))),
+                Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id(source), fill(role))),
+            ],
+            "Add Source".into(),
+        ))
+    };
+    assert!(undo.execute(add("fill", SourceRole::Fill), &mut project), "the first Fill joins");
+    let before = state(&project);
+
+    let mut second = add("fill2", SourceRole::Fill);
+    second.execute(&mut project);
+    assert!(!second.was_applied());
+    assert_eq!(second.rejection_reason(), Some(ONE_FILL));
+    assert_eq!(state(&project), before, "a refused Add changes nothing");
+
+    let mut duplicate = AddSceneItemCommand::new(layer.clone(), ItemKind::WaterSource, Some(id("water")), 1, Some(id("fill")), id("fill3"));
+    duplicate.execute(&mut project);
+    assert_eq!(duplicate.rejection_reason(), Some(ONE_FILL));
+    assert_eq!(state(&project), before, "a refused duplicate changes nothing");
+
+    assert!(undo.execute(add("inflow", SourceRole::Inflow), &mut project), "an Inflow still joins");
+    let mut set = SetSceneItemFieldsCommand::new(layer, id("inflow"), fill(SourceRole::Fill));
+    set.execute(&mut project);
+    assert_eq!(set.rejection_reason(), Some(ONE_FILL), "an Inflow cannot become a second Fill");
+}
+
 /// A param write changes a value, never the scene's structure.
 #[test]
 fn a_param_write_never_recompiles() {

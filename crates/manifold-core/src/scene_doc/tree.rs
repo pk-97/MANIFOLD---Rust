@@ -53,6 +53,13 @@ fn is_environment(item: &Item) -> bool {
     matches!(&item.fields, ItemFields::Light(light) if matches!(light.light, LightType::Environment { .. }))
 }
 
+/// Why a Water refuses a second Fill.
+pub const ONE_FILL: &str = "This Water already has a Fill; a Water takes one";
+
+fn is_fill(item: &Item) -> bool {
+    matches!(&item.fields, ItemFields::WaterSource(source) if source.role == super::SourceRole::Fill)
+}
+
 /// Whether an item of `kind` may sit under `parent` (None is the top).
 /// Groups hold anything placeable; a Water holds its sources and looks;
 /// a Water Source sits only in a Water; the World, Forces and Modifiers sit
@@ -230,10 +237,30 @@ impl SceneDoc {
         if environments + existing_environments > 1 {
             return Err(SceneEditError::SecondOfType(ONE_ENVIRONMENT));
         }
+        if is_fill(item) && self.parent_kind(parent)? == Some(ItemKind::Water) && self.fills_under(parent) > 0 {
+            return Err(SceneEditError::SecondOfType(ONE_FILL));
+        }
         if let Some(reason) = self.second_of_type(item) {
             return Err(SceneEditError::SecondOfType(reason));
         }
         Ok(())
+    }
+
+    /// How many Fill sources sit directly under `parent`.
+    fn fills_under(&self, parent: Option<&ItemId>) -> usize {
+        let children = match parent {
+            Some(id) => self.find(id).map_or(&[][..], |item| item.children.as_slice()),
+            None => self.items.as_slice(),
+        };
+        children.iter().filter(|child| is_fill(child)).count()
+    }
+
+    /// Why the Water holding `item` refuses it: a second Fill. A field set
+    /// checks this after it writes, as an insert checks before.
+    pub fn second_fill(&self, item: &ItemId) -> Option<&'static str> {
+        let (parent, _) = self.locate(item)?;
+        let water = self.find(parent.as_ref()?).filter(|water| water.kind() == ItemKind::Water)?;
+        (water.children.iter().filter(|child| is_fill(child)).count() > 1).then_some(ONE_FILL)
     }
 
     /// Why `item` would be a second card of a type a scene holds one of.
@@ -303,7 +330,13 @@ impl SceneDoc {
 
     /// Clear every reference to an item in `removed`.
     fn drop_references(&mut self, removed: &[ItemId]) {
-        let gone = |id: &ItemId| removed.contains(id);
+        self.retain_references(|id| !removed.contains(id));
+    }
+
+    /// Clear every reference to an item `keep` refuses; each falls back to
+    /// its default, as a removal does.
+    pub fn retain_references(&mut self, keep: impl Fn(&ItemId) -> bool) {
+        let gone = |id: &ItemId| !keep(id);
         fn each(items: &mut [Item], f: &mut impl FnMut(&mut ItemFields)) {
             for item in items {
                 f(&mut item.fields);

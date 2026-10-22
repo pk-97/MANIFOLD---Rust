@@ -133,7 +133,7 @@ pub fn choice_unavailable(doc: &SceneDoc, item: &Item, field: &str, key: &str) -
             let filled = water.children.iter().any(|child| {
                 child.id != item.id && matches!(&child.fields, ItemFields::WaterSource(s) if s.role == SourceRole::Fill)
             });
-            filled.then_some("This Water already has a Fill; a Water takes one")
+            filled.then_some(crate::scene_doc::ONE_FILL)
         }
         ("shape", "sphere") if fields.role == SourceRole::Fill => Some("A Fill fills a box; set Role to Inflow or Drain first"),
         ("role", "inflow" | "drain")
