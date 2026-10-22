@@ -26,6 +26,9 @@ mod edges_from_grid_uv;
 mod edges_from_mesh;
 mod edges_from_hypercube;
 mod facet_normals;
+mod smooth_normals;
+mod mesh_texture_weights;
+mod drop_hidden_triangles;
 mod subdivide_mesh;
 mod fold_mesh;
 manifold_core::testkit_visible! { mod generate_cube_mesh; }

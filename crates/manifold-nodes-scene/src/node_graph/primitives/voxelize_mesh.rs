@@ -24,19 +24,26 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 struct VoxelizeUniforms {
     amount: f32,
     cell_size: f32,
+    source_offset_x: f32,
+    source_offset_y: f32,
+    source_offset_z: f32,
     weights_len: u32,
     dispatch_count: u32,
+    _pad0: u32,
 }
 
 manifold_node_engine::primitive! {
     name: VoxelizeMesh,
     type_id: "node.voxelize_mesh",
-    purpose: "Per-vertex voxel snap of an Array<MeshVertex>. mix(pos, round(pos/cell_size)*cell_size, amount*w). `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Normals, uv, and tangent pass through unchanged — wire node.facet_normals downstream after a heavy voxelize if the unchanged normals start reading wrong under lighting.",
+    purpose: "Per-vertex voxel snap of an Array<MeshVertex>. mix(pos, round(pos/cell_size)*cell_size, amount*w). `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Normals, uv, and tangent pass through unchanged — wire node.facet_normals downstream after a heavy voxelize if the unchanged normals start reading wrong under lighting. source_offset_x/y/z shift the frame: the vertex is deformed at position + source_offset and shifted back, so the parts of a group, each offset by its place in the group, deform as one piece about the frame's origin (all zero = the mesh's own origin).",
     inputs: {
         in: Array(MeshVertex) required,
         weights: Array(f32) optional,
         amount: ScalarF32 optional,
         cell_size: ScalarF32 optional,
+        source_offset_x: ScalarF32 optional,
+        source_offset_y: ScalarF32 optional,
+        source_offset_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(MeshVertex),
@@ -56,6 +63,30 @@ manifold_node_engine::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.001, 100.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_x"),
+            label: "Source Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_y"),
+            label: "Source Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_z"),
+            label: "Source Offset Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -107,6 +138,9 @@ impl Primitive for VoxelizeMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let amount = ctx.scalar_or_param("amount", 0.0);
         let cell_size = ctx.scalar_or_param("cell_size", 1.0);
+        let source_offset_x = ctx.scalar_or_param("source_offset_x", 0.0);
+        let source_offset_y = ctx.scalar_or_param("source_offset_y", 0.0);
+        let source_offset_z = ctx.scalar_or_param("source_offset_z", 0.0);
 
         let Some(src) = ctx.inputs.array("in") else {
             return;
@@ -132,8 +166,12 @@ impl Primitive for VoxelizeMesh {
         let uniforms = VoxelizeUniforms {
             amount,
             cell_size,
+            source_offset_x,
+            source_offset_y,
+            source_offset_z,
             weights_len,
             dispatch_count: count,
+            _pad0: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -244,8 +282,12 @@ mod gpu_tests {
         let uniforms = VoxelizeUniforms {
             amount,
             cell_size,
+            source_offset_x: 0.0,
+            source_offset_y: 0.0,
+            source_offset_z: 0.0,
             weights_len,
             dispatch_count: src.len() as u32,
+            _pad0: 0,
         };
 
         let bindings = [

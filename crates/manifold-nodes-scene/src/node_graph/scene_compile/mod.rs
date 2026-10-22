@@ -20,6 +20,7 @@
 mod builder;
 mod camera;
 mod copies;
+mod deformers;
 mod forces;
 mod group;
 mod light;

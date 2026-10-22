@@ -19,6 +19,21 @@ use manifold_core::scene_index::FlatSceneIndex;
 
 use {super::SceneModifierExpandError, super::bindings, super::frames, super::namespace, crate::load::expand::routes, super::routes::PreparedSceneModifierGraph};
 
+/// The key of a context value node: one per (instance, target, value), with
+/// the target only for a per-object value.
+fn context_key(instance: &str, target: Option<&NodeId>, value: SceneContextValue) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&(instance, target, value))
+}
+
+/// The node id the expansion gives instance `instance`'s per-object context
+/// `value` for `target`. The scene compiler binds a part's live position rows
+/// to its source offset node, so a part moved inside a bent group moves
+/// through the bend.
+pub fn context_node_id(instance: &NodeId, target: &NodeId, value: SceneContextValue) -> NodeId {
+    let key = context_key(instance.as_str(), Some(target), value).expect("a context key serializes");
+    namespace::namespace_node_id(&["context", &key])
+}
+
 manifold_core::testkit_visible! {
 #[doc(hidden)]
 pub(crate) type PortAddress = (u32, String);
@@ -1154,12 +1169,8 @@ impl Builder<'_> {
                 "per-object context is unavailable in a shared Scene stage",
             ));
         }
-        let key = serde_json::to_string(&(
-            instance.id.as_str(),
-            if per_object { target } else { None },
-            value,
-        ))
-        .map_err(|error| invalid(instance.id.to_string(), error.to_string()))?;
+        let key = context_key(instance.id.as_str(), if per_object { target } else { None }, value)
+            .map_err(|error| invalid(instance.id.to_string(), error.to_string()))?;
         if let Some(address) = self.contexts.get(&key) {
             return Ok(address.clone());
         }

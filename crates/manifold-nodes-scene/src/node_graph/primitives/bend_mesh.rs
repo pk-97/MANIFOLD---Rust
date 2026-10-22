@@ -40,22 +40,25 @@ struct BendUniforms {
     axis: u32,
     angle: f32,
     center: f32,
+    source_offset_x: f32,
+    source_offset_y: f32,
+    source_offset_z: f32,
     weights_len: u32,
     dispatch_count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
     name: BendMesh,
     type_id: "node.bend_mesh",
-    purpose: "Classic per-vertex bend of an Array<MeshVertex>. axis selects the bend coordinate A (X/Y/Z); the rotation happens about the third axis B (the one that is neither A nor its cyclic-next companion C), pivoting A's own coordinate by `center`: axis=X rotates (x,y) about Z pivoting x; axis=Y rotates (y,z) about X pivoting y; axis=Z rotates (z,x) about Y pivoting z. theta = angle * (coord(A) - center) * w, where w is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Position AND normal rotate by the same theta — exact, not approximate (normal has no center pivot, since it's a direction not a point). `angle` is UNBOUNDED (range None) — a saw LFO doing full revolutions is a valid performer gesture, never clamp it.",
+    purpose: "Classic per-vertex bend of an Array<MeshVertex>. axis selects the bend coordinate A (X/Y/Z); the rotation happens about the third axis B (the one that is neither A nor its cyclic-next companion C), pivoting A's own coordinate by `center`: axis=X rotates (x,y) about Z pivoting x; axis=Y rotates (y,z) about X pivoting y; axis=Z rotates (z,x) about Y pivoting z. theta = angle * (coord(A) - center) * w, where w is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Position AND normal rotate by the same theta — exact, not approximate (normal has no center pivot, since it's a direction not a point). `angle` is UNBOUNDED (range None) — a saw LFO doing full revolutions is a valid performer gesture, never clamp it. source_offset_x/y/z shift the frame: the vertex is deformed at position + source_offset and shifted back, so the parts of a group, each offset by its place in the group, deform as one piece about the frame's origin (all zero = the mesh's own origin).",
     inputs: {
         in: Array(MeshVertex) required,
         weights: Array(f32) optional,
         angle: ScalarF32 optional,
         center: ScalarF32 optional,
+        source_offset_x: ScalarF32 optional,
+        source_offset_y: ScalarF32 optional,
+        source_offset_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(MeshVertex),
@@ -83,6 +86,30 @@ manifold_node_engine::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-100.0, 100.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_x"),
+            label: "Source Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_y"),
+            label: "Source Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_z"),
+            label: "Source Offset Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -139,6 +166,9 @@ impl Primitive for BendMesh {
         };
         let angle = ctx.scalar_or_param("angle", 0.5);
         let center = ctx.scalar_or_param("center", 0.0);
+        let source_offset_x = ctx.scalar_or_param("source_offset_x", 0.0);
+        let source_offset_y = ctx.scalar_or_param("source_offset_y", 0.0);
+        let source_offset_z = ctx.scalar_or_param("source_offset_z", 0.0);
 
         let Some(src) = ctx.inputs.array("in") else {
             return;
@@ -168,11 +198,11 @@ impl Primitive for BendMesh {
             axis,
             angle,
             center,
+            source_offset_x,
+            source_offset_y,
+            source_offset_z,
             weights_len,
             dispatch_count: count,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -305,11 +335,11 @@ mod gpu_tests {
             axis,
             angle,
             center,
+            source_offset_x: 0.0,
+            source_offset_y: 0.0,
+            source_offset_z: 0.0,
             weights_len,
             dispatch_count: src.len() as u32,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
 
         let bindings = [

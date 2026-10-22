@@ -8,6 +8,7 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire,
     ParamSpecDef, PresetMetadata, SerializedParamValue,
 };
+use manifold_core::effects::ParamConvert;
 use manifold_core::scene_doc::{Item, SceneDoc, param_id};
 use manifold_foundation::ItemId;
 use manifold_core::param_lookup::NodeParamMetadata;
@@ -231,6 +232,27 @@ impl<'d> Builder<'d> {
                 if let Some(convert) = convert {
                     binding.convert = convert;
                 }
+                binding
+            })
+            .collect();
+        self.bindings.extend(followed);
+    }
+
+    /// [`Self::follow_offset`] into param `to_param` of `to`, a node the
+    /// loader makes (named, not yet in this graph).
+    pub(crate) fn follow_into(&mut self, from: u32, from_param: &str, to: &NodeId, to_param: &str, offset: f32) {
+        let Some(source) = self.node_mut(from).map(|node| node.node_id.clone()) else {
+            return;
+        };
+        let followed: Vec<BindingDef> = self
+            .bindings
+            .iter()
+            .filter(|binding| matches!(&binding.target, BindingTarget::Node { node_id, param } if *node_id == source && param == from_param))
+            .map(|binding| {
+                let mut binding = binding.clone();
+                binding.target = BindingTarget::Node { node_id: to.clone(), param: to_param.to_owned() };
+                binding.offset += offset;
+                binding.convert = ParamConvert::Float;
                 binding
             })
             .collect();

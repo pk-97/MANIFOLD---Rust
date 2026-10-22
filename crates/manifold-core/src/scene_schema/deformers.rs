@@ -8,7 +8,9 @@
 //! Lengths on a card are in the target's radius units (the recipe multiplies
 //! them by the frame's radius), so a deformer reads a small prop and a whole
 //! scene the same way. Normal Wave is Surface Waves (`node.normal_wave_mesh`)
-//! and is not repeated here.
+//! and is not repeated here. Displace Mesh is Displace by Texture: it reads
+//! noise, a layer or a file across any mesh (`node.push_mesh` only displaces
+//! a row-major grid), so it has no type of its own.
 
 use manifold_foundation::scene_surface::Unit;
 

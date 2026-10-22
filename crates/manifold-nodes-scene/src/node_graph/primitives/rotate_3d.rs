@@ -25,13 +25,17 @@ struct Rotate3DUniforms {
     angle_x: f32,
     angle_y: f32,
     angle_z: f32,
+    source_offset_x: f32,
+    source_offset_y: f32,
+    source_offset_z: f32,
     dispatch_count: u32,
+    _pad0: u32,
 }
 
 manifold_node_engine::primitive! {
     name: Rotate3D,
     type_id: "node.rotate_3d",
-    purpose: "Apply XYZ Euler rotation to an Array<MeshVertex>. Rotates position and normal of each vertex in X → Y → Z order (matches generator_math::rotate_3d bit-for-bit). The 3D-equivalent of node.rotate_4d, used in Wireframe-shaped graphs: polytope_vertices → Rotate3D → (project) → render.",
+    purpose: "Apply XYZ Euler rotation to an Array<MeshVertex>. Rotates position and normal of each vertex in X → Y → Z order (matches generator_math::rotate_3d bit-for-bit). The 3D-equivalent of node.rotate_4d, used in Wireframe-shaped graphs: polytope_vertices → Rotate3D → (project) → render. source_offset_x/y/z shift the frame: the vertex is deformed at position + source_offset and shifted back, so the parts of a group, each offset by its place in the group, deform as one piece about the frame's origin (all zero = the mesh's own origin).",
     inputs: {
         in: Array(MeshVertex) required,
         // Port-shadows-param: when a wire is connected, the wired
@@ -41,6 +45,9 @@ manifold_node_engine::primitive! {
         angle_x: ScalarF32 optional,
         angle_y: ScalarF32 optional,
         angle_z: ScalarF32 optional,
+        source_offset_x: ScalarF32 optional,
+        source_offset_y: ScalarF32 optional,
+        source_offset_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(MeshVertex),
@@ -68,6 +75,30 @@ manifold_node_engine::primitive! {
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_x"),
+            label: "Source Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_y"),
+            label: "Source Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_offset_z"),
+            label: "Source Offset Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
             enum_values: &[],
         },
     ],
@@ -103,6 +134,9 @@ impl Primitive for Rotate3D {
         let angle_x = ctx.scalar_or_param("angle_x", 0.0);
         let angle_y = ctx.scalar_or_param("angle_y", 0.0);
         let angle_z = ctx.scalar_or_param("angle_z", 0.0);
+        let source_offset_x = ctx.scalar_or_param("source_offset_x", 0.0);
+        let source_offset_y = ctx.scalar_or_param("source_offset_y", 0.0);
+        let source_offset_z = ctx.scalar_or_param("source_offset_z", 0.0);
 
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;
@@ -125,7 +159,11 @@ impl Primitive for Rotate3D {
             angle_x,
             angle_y,
             angle_z,
+            source_offset_x,
+            source_offset_y,
+            source_offset_z,
             dispatch_count: capacity,
+            _pad0: 0,
         };
 
         gpu.native_enc.dispatch_compute(

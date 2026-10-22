@@ -19,7 +19,8 @@ use super::fields::{
 };
 use super::{Exposure, PropertyRow, Reach, perform, row};
 use crate::scene_doc::{
-    DEFAULT_PIECES, Item, ItemFields, ModifierFields, ModifierTargets, ModifierType, PhysicsSetting, SceneDoc,
+    DEFAULT_PIECES, Item, ItemFields, ModifierFields, ModifierTargets, ModifierTexture, ModifierType, PhysicsSetting,
+    SceneDoc,
 };
 
 const M: ControlGroup = ControlGroup::Modifier;
@@ -323,6 +324,18 @@ fn is_shatter(fields: &ItemFields) -> bool {
     card(fields).is_some_and(|m| m.modifier == ModifierType::Shatter)
 }
 
+fn reads_texture(fields: &ItemFields) -> bool {
+    card(fields).is_some_and(|m| m.modifier == ModifierType::DisplaceByTexture)
+}
+
+fn reads_file(fields: &ItemFields) -> bool {
+    reads_texture(fields) && card(fields).is_some_and(|m| matches!(m.texture, ModifierTexture::File { .. }))
+}
+
+/// Displace by Texture's sources: the built-in noise or a file, then every
+/// layer.
+const TEXTURE_SOURCES: &[Choice] = &[Choice { key: "noise", label: "Noise" }, Choice { key: "file", label: "File" }];
+
 /// Shatter's Pieces: a closed set, since a piece is a body the world makes.
 const PIECES: &[Choice] = &[
     Choice { key: "2", label: "2" },
@@ -342,7 +355,7 @@ fn target_refused(card_fields: &ItemFields, target: &Item) -> Option<&'static st
     is_shatter(card_fields).then(|| shatter_refuses(target)).flatten()
 }
 
-pub static MODIFIER_FIELDS: [FieldRow; 4] = [
+pub static MODIFIER_FIELDS: [FieldRow; 6] = [
     FieldRow {
         id: "modifier_type",
         label: "Type",
@@ -419,6 +432,51 @@ pub static MODIFIER_FIELDS: [FieldRow; 4] = [
             }
             let pieces = key.parse().map_err(|_| wrong_value("pieces", value))?;
             card_mut(fields, "pieces", value)?.pieces = pieces;
+            Ok(())
+        },
+    },
+    FieldRow {
+        id: "texture",
+        label: "Texture",
+        section: M,
+        control: FieldControl::ClosedOrLayer(TEXTURE_SOURCES),
+        applies: reads_texture,
+        disabled: enabled,
+        read: |fields| match card(fields).map(|m| &m.texture) {
+            Some(ModifierTexture::File { .. }) => FieldValue::Choice("file".to_owned()),
+            Some(ModifierTexture::Layer { layer }) => FieldValue::Layer(layer.clone()),
+            _ => FieldValue::Choice("noise".to_owned()),
+        },
+        write: |fields, value| {
+            let m = card_mut(fields, "texture", value)?;
+            m.texture = match value {
+                FieldValue::Choice(key) if key == "noise" => ModifierTexture::Noise,
+                FieldValue::Choice(key) if key == "file" => match &m.texture {
+                    ModifierTexture::File { .. } => m.texture.clone(),
+                    _ => ModifierTexture::File { path: String::new() },
+                },
+                FieldValue::Layer(layer) => ModifierTexture::Layer { layer: layer.clone() },
+                other => return Err(wrong_value("texture", other)),
+            };
+            Ok(())
+        },
+    },
+    FieldRow {
+        id: "texture_file",
+        label: "Texture File",
+        section: M,
+        control: FieldControl::File { extensions: &["png", "jpg", "jpeg", "tga", "bmp", "exr", "hdr"] },
+        applies: reads_file,
+        disabled: enabled,
+        read: |fields| match card(fields).map(|m| &m.texture) {
+            Some(ModifierTexture::File { path }) => FieldValue::File(path.clone()),
+            _ => FieldValue::File(String::new()),
+        },
+        write: |fields, value| {
+            let FieldValue::File(path) = value else {
+                return Err(wrong_value("texture_file", value));
+            };
+            card_mut(fields, "texture_file", value)?.texture = ModifierTexture::File { path: path.clone() };
             Ok(())
         },
     },

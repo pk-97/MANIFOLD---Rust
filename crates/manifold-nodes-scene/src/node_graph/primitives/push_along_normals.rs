@@ -27,29 +27,30 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`amount`,
 /// `field_bias` f32), then the derived `weights_len` (u32 — 0 when unwired,
 /// collapsing the "absent" and "short" degrade-to-1.0 cases into one bounds
-/// check), then the injected optional-texture flag `use_field` (u32), then the
-/// codegen-injected `dispatch_count`, padded to a 16-byte multiple. 5 words +
-/// 3 pad = 32 bytes. Matches `standalone_for_spec::<PushAlongNormals>()`.
+/// check), the derived `direction_len` (the same for `direction`), then the
+/// injected optional-texture flag `use_field` (u32), then the codegen-injected
+/// `dispatch_count`, padded to a 16-byte multiple. 6 words + 2 pad = 32 bytes. Matches `standalone_for_spec::<PushAlongNormals>()`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct PushUniforms {
     amount: f32,
     field_bias: f32,
     weights_len: u32,
+    direction_len: u32,
     use_field: u32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
     name: PushAlongNormals,
     type_id: "node.push_along_normals",
-    purpose: "Displace each vertex of an Array<MeshVertex> outward (or inward) along its own normal: pos += normal * amount * w * f. `w` is the optional per-vertex `weights` input (from node.mesh_ramp or any weights producer) — a short or unwired weights buffer degrades to 1.0 (full push), never to silent 0. `f` is an optional Texture2D `field` sampled bilinear at the vertex's own UV as (sample.r - field_bias), or 1.0 when unwired. Normals pass through unchanged — approximate at extremes, correct-looking for moderate organic-motion amounts; wire node.facet_normals downstream after a heavy push if the faceted look isn't wanted, or keep amount moderate to keep the source mesh's smooth normals.",
+    purpose: "Displace each vertex of an Array<MeshVertex> outward (or inward) along its own normal: pos += normal * amount * w * f. `w` is the optional per-vertex `weights` input (from node.mesh_ramp or any weights producer) — a short or unwired weights buffer degrades to 1.0 (full push), never to silent 0. `f` is an optional Texture2D `field` sampled bilinear at the vertex's own UV as (sample.r - field_bias), or 1.0 when unwired. Normals pass through unchanged — approximate at extremes, correct-looking for moderate organic-motion amounts; wire node.facet_normals downstream after a heavy push if the faceted look isn't wanted, or keep amount moderate to keep the source mesh's smooth normals. When the optional `direction` mesh is wired, the push follows its normals instead of the vertex's own (a node.smooth_normals output keeps a hard-edged mesh closed), and the output keeps the vertex's own normals; a short direction buffer degrades to the own normal past its end.",
     inputs: {
         in: Array(MeshVertex) required,
         weights: Array(f32) optional,
+        direction: Array(MeshVertex) optional,
         field: Texture2D optional,
         amount: ScalarF32 optional,
         field_bias: ScalarF32 optional,
@@ -89,7 +90,7 @@ manifold_node_engine::primitive! {
     // pointwise/fusable, so a breathe→twist→taper chain fuses to ~1 dispatch
     // (design D#10). `weights_len` is a frame-derived uniform the body uses to
     // bounds-check the coincident weight read (degrade to 1.0 past the buffer).
-    derived_uniforms: ["weights_len:u32"],
+    derived_uniforms: ["weights_len:u32", "direction_len:u32"],
     extra_fields: {
         dummy_field: Option<GpuTexture> = None,
     },
@@ -103,8 +104,13 @@ manifold_node_engine::primitive! {
 inventory::submit! {
     manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.push_along_normals",
-        array_ports: &["weights"],
-        recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
+        array_ports: &["weights", "direction"],
+        recompute: |ctx| {
+            Some(vec![
+                (ctx.array_len)("weights").unwrap_or(0) as f32,
+                (ctx.array_len)("direction").unwrap_or(0) as f32,
+            ])
+        },
     }
 }
 
@@ -135,6 +141,8 @@ impl Primitive for PushAlongNormals {
         // same pattern as node.torus_wrap_field's `normal_disp`).
         let weights_wired = ctx.inputs.array("weights");
         let weights_buf = weights_wired.unwrap_or(src);
+        let direction_wired = ctx.inputs.array("direction");
+        let direction_buf = direction_wired.unwrap_or(src);
         let field_wired = ctx.inputs.texture_2d("field");
         let Some(dst) = ctx.outputs.array("out") else {
             return;
@@ -148,6 +156,7 @@ impl Primitive for PushAlongNormals {
             return;
         }
         let weights_len = weights_wired.map(|b| (b.size / 4) as u32).unwrap_or(0);
+        let direction_len = direction_wired.map(|b| (b.size / vertex_size) as u32).unwrap_or(0);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -177,11 +186,11 @@ impl Primitive for PushAlongNormals {
             amount,
             field_bias,
             weights_len,
+            direction_len,
             use_field: u32::from(field_wired.is_some()),
             dispatch_count: count,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -201,16 +210,21 @@ impl Primitive for PushAlongNormals {
                     buffer: weights_buf,
                     offset: 0,
                 },
-                GpuBinding::Texture {
+                GpuBinding::Buffer {
                     binding: 3,
+                    buffer: direction_buf,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
                     texture: field_tex,
                 },
                 GpuBinding::Sampler {
-                    binding: 4,
+                    binding: 5,
                     sampler,
                 },
                 GpuBinding::Buffer {
-                    binding: 5,
+                    binding: 6,
                     buffer: dst,
                     offset: 0,
                 },
@@ -352,20 +366,21 @@ mod gpu_tests {
             amount,
             field_bias,
             weights_len,
+            direction_len: 0,
             use_field: u32::from(field.is_some()),
             dispatch_count: src.len() as u32,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
 
         let bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
             GpuBinding::Buffer { binding: 1, buffer: &sbuf, offset: 0 },
             GpuBinding::Buffer { binding: 2, buffer: &wbuf, offset: 0 },
-            GpuBinding::Texture { binding: 3, texture: field_ref },
-            GpuBinding::Sampler { binding: 4, sampler: &sampler },
-            GpuBinding::Buffer { binding: 5, buffer: &dbuf, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: &sbuf, offset: 0 },
+            GpuBinding::Texture { binding: 4, texture: field_ref },
+            GpuBinding::Sampler { binding: 5, sampler: &sampler },
+            GpuBinding::Buffer { binding: 6, buffer: &dbuf, offset: 0 },
         ];
         let mut enc = device.create_encoder("push-normals-test");
         enc.dispatch_compute(

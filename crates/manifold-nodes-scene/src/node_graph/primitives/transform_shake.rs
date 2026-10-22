@@ -37,7 +37,7 @@ const DEFAULT_POSITION_STRENGTH: f32 = 0.25;
 manifold_node_engine::primitive! {
     name: TransformShake,
     type_id: "node.transform_shake",
-    purpose: "Stateless shake on a Transform wire, a Camera wire, or both. Adds a summed-sine noise offset (rotation and position each scaled by their own strength) driven by time × frequency. A Camera shakes in its own axes about its own position (camera_out), as a handheld camera does; a Transform's offset adds to its position and Euler rotation (out). amount² response means amount = 0 is a byte-identical passthrough.",
+    purpose: "Stateless shake on a Transform wire, a Camera wire, or both. Adds a summed-sine noise offset (rotation and position each scaled by their own strength) driven by time × frequency. A Camera shakes in its own axes about its own position (camera_out), as a handheld camera does; a Transform's offset adds to its position and Euler rotation (out). amount² response means amount = 0 is a byte-identical passthrough. source_offset_x/y/z are the object's place in a shared frame: the rotation offset also swings the position about that frame's origin, so the parts of a group shake as one piece (all zero = about the object's own origin).",
     inputs: {
         transform: Transform optional,
         camera: Camera optional,
@@ -46,6 +46,9 @@ manifold_node_engine::primitive! {
         position_strength: ScalarF32 optional,
         rotation_strength: ScalarF32 optional,
         time: ScalarF32 optional,
+        source_offset_x: ScalarF32 optional,
+        source_offset_y: ScalarF32 optional,
+        source_offset_z: ScalarF32 optional,
     },
     outputs: {
         out: Transform,
@@ -92,6 +95,7 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        // source_offset_x/y/z are wire-only: the frame placement, never a setting.
     ],
     depth_rule: Terminal,
     composition_notes: "Insert between node.transform_3d and node.scene_object (or node.render_scene's transform_n) to add physical weight — a kick drum on amount, a subtle idle shimmer at low values. For a camera, wire the rig's Camera into camera and camera_out on to the lens: the camera wobbles in place, wherever the rig put it. Drive time from a beat ramp or leave it unwired for continuous playback-clock animation. No state: reconnecting the wire or reloading the project produces identical output for the same time.",
@@ -148,13 +152,21 @@ impl Primitive for TransformShake {
         let Some(input) = transform else {
             return;
         };
+        // The object turns about its frame's origin, which sits at
+        // -source_offset from the object: the rotation also swings it there.
+        let offset = [
+            ctx.scalar_or_param("source_offset_x", 0.0),
+            ctx.scalar_or_param("source_offset_y", 0.0),
+            ctx.scalar_or_param("source_offset_z", 0.0),
+        ];
+        let swung = rotate_xyz(offset, rot_offset);
         ctx.outputs.set_transform(
             "out",
             Transform {
                 pos: [
-                    input.pos[0] + pos_offset[0],
-                    input.pos[1] + pos_offset[1],
-                    input.pos[2] + pos_offset[2],
+                    input.pos[0] + pos_offset[0] + swung[0] - offset[0],
+                    input.pos[1] + pos_offset[1] + swung[1] - offset[1],
+                    input.pos[2] + pos_offset[2] + swung[2] - offset[2],
                 ],
                 rot_euler: [
                     input.rot_euler[0] + rot_offset[0],
@@ -167,6 +179,17 @@ impl Primitive for TransformShake {
             },
         );
     }
+}
+
+/// `v` turned by Euler `rot` in the transform's order, `Rz · Ry · Rx`.
+fn rotate_xyz(v: [f32; 3], rot: [f32; 3]) -> [f32; 3] {
+    let (sx, cx) = rot[0].sin_cos();
+    let (sy, cy) = rot[1].sin_cos();
+    let (sz, cz) = rot[2].sin_cos();
+    let [x, y, z] = v;
+    let (y, z) = (y * cx - z * sx, y * sx + z * cx);
+    let (x, z) = (x * cy + z * sy, -x * sy + z * cy);
+    [x * cz - y * sz, x * sz + y * cz, z]
 }
 
 /// Helper so tests can compute the expected noise vector for a given

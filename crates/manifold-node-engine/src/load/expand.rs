@@ -36,7 +36,7 @@ pub use value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
 pub use value_writes::PreparedGraphValueWrites;
 
 pub use compiler::{
-    expand_scene_modifiers, flatten_expanded, prepare_scene_modifiers,
+    context_node_id, expand_scene_modifiers, flatten_expanded, prepare_scene_modifiers,
     validate_modifier_attachment, validate_modifier_runtime,
 };
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
