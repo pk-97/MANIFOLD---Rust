@@ -64,6 +64,10 @@ pub enum Reach {
     EveryCameraLens,
     /// A node the compiler emits once for the whole scene, by role.
     Scene(&'static str),
+    /// A node the compiler emits for this item and one it emits once for
+    /// the scene, the same param on both (HDRI Rotation turns the sky
+    /// behind the scene and the render's lighting together).
+    OwnAndScene(&'static str, &'static str),
     /// The animation clock of every imported part below an import Group
     /// (its skeleton pose and morph weights), so one row plays them all.
     Clocks,

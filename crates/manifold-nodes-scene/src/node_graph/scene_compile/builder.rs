@@ -286,6 +286,9 @@ impl<'d> Builder<'d> {
             let targets: Vec<u32> = match row.reach {
                 Reach::Own(role) => self.id(item.id.as_str(), role).into_iter().collect(),
                 Reach::Scene(role) => self.id(SCENE, role).into_iter().collect(),
+                Reach::OwnAndScene(own, scene) => {
+                    self.id(item.id.as_str(), own).into_iter().chain(self.id(SCENE, scene)).collect()
+                }
                 Reach::EveryCameraLens => self.lenses.clone(),
                 Reach::Clocks => self.clocks_below(item),
                 // A scene modifier's params are declared with the modifier.

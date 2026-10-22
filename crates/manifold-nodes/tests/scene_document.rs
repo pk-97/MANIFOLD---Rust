@@ -234,6 +234,9 @@ mod every_param_has_a_row {
                     && match row.reach {
                         Reach::Own(r) => item.id.as_str() == owner && r == role,
                         Reach::Scene(r) => owner == "scene" && r == role,
+                        Reach::OwnAndScene(own, scene) => {
+                            (item.id.as_str() == owner && own == role) || (owner == "scene" && scene == role)
+                        }
                         Reach::EveryCameraLens => role == "lens",
                         Reach::Clocks => role == "pose",
                         // A scene modifier's params live on its instance, not a compiled node.

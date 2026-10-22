@@ -6,23 +6,29 @@
 //! and `tan(fov_y/2)`, then looks the ray up with render_scene's own
 //! direction→uv convention (`pbr_equirect_uv`), so the backdrop matches the
 //! reflections exactly. Composite the scene over it with `node.over`.
+//! `env_rotation` turns the lookup as render_scene's own `env_rotation`
+//! does, so a turned environment stays one with its reflections.
 //!
 //! The camera is read only through derived uniforms, never as a GPU binding,
 //! so the atom fuses with its neighbours (`docs/CINEMATIC_POST_DESIGN.md` D7).
 //! Aspect comes from the output's own dims inside the body.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuSamplerDesc;
 
 use manifold_node_engine::scene::camera::{Camera, CameraMode};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
-/// Generated layout: no params, then the ten derived fields in declaration
-/// order, padded to 16 bytes.
+/// Generated layout: the one param, then the ten derived fields in
+/// declaration order, padded to 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraSkyUniforms {
+    env_rotation: f32,
     fwd_x: f32,
     fwd_y: f32,
     fwd_z: f32,
@@ -34,13 +40,12 @@ struct CameraSkyUniforms {
     up_z: f32,
     tan_y: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 manifold_node_engine::primitive! {
     name: CameraSky,
     type_id: "node.camera_sky",
-    purpose: "Draws an equirect environment (an HDRI) as the wired Camera sees it: each pixel's ray d = normalize(fwd + ndc.x·tan(fov_y/2)·aspect·right + ndc.y·tan(fov_y/2)·up) is looked up at uv = (atan2(d.z, d.x)/2π + 0.5, asin(d.y)/π + 0.5), render_scene's own env convention, so the backdrop lines up with the scene's reflections. Alpha is 1. Composite render_scene's colour over it with node.over to put the sky behind a scene. An orthographic camera falls back to a 60° field of view.",
+    purpose: "Draws an equirect environment (an HDRI) as the wired Camera sees it: each pixel's ray d = normalize(fwd + ndc.x·tan(fov_y/2)·aspect·right + ndc.y·tan(fov_y/2)·up) is looked up at uv = (atan2(d.z, d.x)/2π + 0.5, asin(d.y)/π + 0.5), render_scene's own env convention, so the backdrop lines up with the scene's reflections. `env_rotation` turns the environment about the up axis (counter-clockwise seen from above) by adding env_rotation/2π to u, as render_scene's own `env_rotation` does. Alpha is 1. Composite render_scene's colour over it with node.over to put the sky behind a scene. An orthographic camera falls back to a 60° field of view.",
     inputs: {
         sky: Texture2D required,
         camera: Camera required,
@@ -48,9 +53,18 @@ manifold_node_engine::primitive! {
     outputs: {
         out: Texture2D,
     },
-    params: [],
+    params: [
+        ParamDef {
+            name: Cow::Borrowed("env_rotation"),
+            label: "Environment Rotation",
+            ty: ParamType::Angle,
+            default: ParamValue::Float(0.0),
+            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
+            enum_values: &[],
+        },
+    ],
     depth_rule: Warp,
-    composition_notes: "Wire the same environment texture render_scene's `envmap` reads (after any exposure node) into `sky`, and the same Camera render_scene reads into `camera`. Output is canvas-sized. Then node.over with render_scene.color as `top` and this as `bottom`, before bokeh/motion blur/tone map so the sky is graded with the scene.",
+    composition_notes: "Wire the same environment texture render_scene's `envmap` reads (after any exposure node) into `sky`, and the same Camera render_scene reads into `camera`; give `env_rotation` the same value as render_scene's. Output is canvas-sized. Then node.over with render_scene.color as `top` and this as `bottom`, before bokeh/motion blur/tone map so the sky is graded with the scene.",
     examples: ["preset.generator.ocean"],
     picker: { label: "Camera Sky", category: Atom },
     summary: "Shows the HDRI sky behind a 3D scene, seen through the scene's camera so it moves and lines up with the reflections.",
@@ -84,9 +98,9 @@ inventory::submit! {
     }
 }
 
-fn uniforms(cam: &Camera) -> CameraSkyUniforms {
+fn uniforms(cam: &Camera, env_rotation: f32) -> CameraSkyUniforms {
     let [fwd_x, fwd_y, fwd_z, right_x, right_y, right_z, up_x, up_y, up_z, tan_y] = derive(cam);
-    CameraSkyUniforms { fwd_x, fwd_y, fwd_z, right_x, right_y, right_z, up_x, up_y, up_z, tan_y, _pad0: 0.0, _pad1: 0.0 }
+    CameraSkyUniforms { env_rotation, fwd_x, fwd_y, fwd_z, right_x, right_y, right_z, up_x, up_y, up_z, tan_y, _pad0: 0.0 }
 }
 
 impl Primitive for CameraSky {
@@ -104,6 +118,10 @@ impl Primitive for CameraSky {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let env_rotation = match ctx.params.get("env_rotation") {
+            Some(ParamValue::Float(turn)) => *turn,
+            _ => 0.0,
+        };
         let Some(sky) = ctx.inputs.texture_2d("sky") else {
             return;
         };
@@ -122,7 +140,7 @@ impl Primitive for CameraSky {
         dispatch_standalone_2d(
             gpu,
             pipeline,
-            bytemuck::bytes_of(&uniforms(&cam)),
+            bytemuck::bytes_of(&uniforms(&cam, env_rotation)),
             &[sky],
             Some(sampler),
             out,
@@ -263,7 +281,7 @@ mod gpu_tests {
         for (yaw, pitch) in [(std::f32::consts::FRAC_PI_2, 0.0), (0.0, 0.5), (0.9, -1.0)] {
             let cam = camera(yaw, pitch);
             let out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "camera-sky-out");
-            let u = uniforms(&cam);
+            let u = uniforms(&cam, 0.0);
             let mut enc = device.create_encoder("camera-sky");
             enc.dispatch_compute(
                 pipeline,

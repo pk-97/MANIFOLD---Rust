@@ -23,7 +23,7 @@ impl RenderScene {
         single_object: Option<SceneObject>,
     ) -> Option<(Vec<ObjectDraw<'ctx>>, bool)> {
         let FramePrelude {
-            objects, cam, envmap_wired, envmap_pending, atmosphere, render_mode, view_proj, prev_view_proj,
+            objects, cam, envmap_wired, envmap_pending, env_rotation, atmosphere, render_mode, view_proj, prev_view_proj,
             jitter_ndc, prev_jitter_ndc, light_count, velocity_wired,
             ao_mask_wired, denoise_aux_ready, rt_enabled, ..
         } = pre;
@@ -294,6 +294,7 @@ impl RenderScene {
                 render_mode.point_size,
             );
             uniforms.instance_inner = instance_inner;
+            uniforms.appearance[3] = *env_rotation;
             uniforms.prev_instance_inner = prev_inner_n;
             if single_object.is_some() {
                 uniforms.appearance[2] = (1u32
@@ -594,6 +595,10 @@ impl RenderScene {
             .unwrap_or_else(Camera::default_perspective);
         let envmap_pending = ctx.inputs.port_pending("envmap");
         let envmap_wired = ctx.inputs.texture_2d("envmap").filter(|_| !envmap_pending);
+        let env_rotation = match ctx.params.get("env_rotation") {
+            Some(ParamValue::Float(turn)) => *turn,
+            _ => 0.0,
+        };
         // Scene-wide atmosphere (P3). Unwired = Atmosphere::default() = fog
         // density 0 = no fog (the shader's exp fog collapses to identity), so
         // an unwired atmosphere is byte-identical to no atmosphere.
@@ -1021,6 +1026,7 @@ impl RenderScene {
                 cam,
                 envmap_wired,
                 envmap_pending,
+                env_rotation,
                 atmosphere,
                 render_mode,
                 light_data,

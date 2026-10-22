@@ -63,6 +63,9 @@ pub struct MaterialBlockVm {
     pub fields: Vec<FieldRowVm>,
     /// The starting look its features and values match, if any.
     pub look: Option<crate::param_surface::MaterialLook>,
+    /// Whether it shades PBR. Looks and features are PBR, so an Unlit or Cel
+    /// Material offers neither.
+    pub pbr: bool,
 }
 
 /// One item of the Scene tab tree, in document preorder.

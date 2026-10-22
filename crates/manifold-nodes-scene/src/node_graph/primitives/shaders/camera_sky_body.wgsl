@@ -2,12 +2,14 @@
 // environment as the camera sees it: each pixel's camera ray, looked up with
 // render_scene's own env convention (u = atan2(z, x)/2π + 0.5,
 // v = asin(y)/π + 0.5), so the sky lines up with the scene's reflections.
-// PARAMS: none; the camera basis and tan(fov_y/2) arrive derived.
+// `env_rotation` turns it about the up axis as render_scene does: u gains
+// env_rotation/2π. The camera basis and tan(fov_y/2) arrive derived.
 fn body(
     tex_sky: texture_2d<f32>,
     samp: sampler,
     uv: vec2<f32>,
     dims: vec2<f32>,
+    env_rotation: f32,
     fwd_x: f32,
     fwd_y: f32,
     fwd_z: f32,
@@ -25,6 +27,6 @@ fn body(
         + ndc.x * tan_y * aspect * vec3<f32>(right_x, right_y, right_z)
         + ndc.y * tan_y * vec3<f32>(up_x, up_y, up_z));
     let pi = 3.14159265358979;
-    let env_uv = vec2<f32>(fract(atan2(d.z, d.x) / (2.0 * pi) + 0.5), asin(clamp(d.y, -1.0, 1.0)) / pi + 0.5);
+    let env_uv = vec2<f32>(fract((atan2(d.z, d.x) + env_rotation) / (2.0 * pi) + 0.5), asin(clamp(d.y, -1.0, 1.0)) / pi + 0.5);
     return vec4<f32>(textureSampleLevel(tex_sky, samp, env_uv, 0.0).rgb, 1.0);
 }

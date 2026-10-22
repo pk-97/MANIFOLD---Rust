@@ -742,8 +742,9 @@ struct RenderSceneUniforms {
     /// Both RT slots are written per object in the Pass 1 loop; non-mask
     /// pipelines never read `z`, and `w` is inert when RT is off.
     fog_params: [f32; 4],
-    /// Appearance gain and per-vertex-weight presence flag. `x` is gain,
-    /// `y` is 1 when the weights buffer is wired, and `z/w` are reserved.
+    /// `x` is the appearance gain, `y` is 1 when the weights buffer is wired,
+    /// `z` carries the single-object legacy map bits and `w` is the envmap's
+    /// turn in radians (the `env_rotation` param, read by `env_lookup_uv`).
     appearance: [f32; 4],
     /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
     ambient_tint: [f32; 4],
@@ -1608,6 +1609,7 @@ fn compute_rt_lighting_key(
     rt_casters: &[manifold_gpu::raytrace::RtCasterParams],
     ambient_tint: &[f32],
     envmap_content: Option<ContentVersion>,
+    env_rotation: f32,
     light_data: &[[f32; 4]],
 ) -> u64 {
     let mut k = 0xcbf2_9ce4_8422_2325u64;
@@ -1630,6 +1632,8 @@ fn compute_rt_lighting_key(
     for f in ambient_tint {
         mix(f.to_bits());
     }
+    // A turned environment lights from new directions with the same map.
+    mix(env_rotation.to_bits());
     // Logical environment content changes lighting; moving identical pixels
     // between pool allocations does not. Resource identity and lifetime are
     // part of ContentVersion, so equal local revision numbers cannot collide.
@@ -2049,6 +2053,8 @@ struct FramePrelude<'ctx> {
     /// A pending envmap renders as absent (black image lighting); only a
     /// material that cannot draw without one abandons the frame.
     envmap_pending: bool,
+    /// The `env_rotation` param: radians every envmap lookup turns by.
+    env_rotation: f32,
     atmosphere: manifold_node_engine::scene::atmosphere::Atmosphere,
     render_mode: manifold_node_engine::scene::render_mode::RenderMode,
     light_data: Vec<[f32; 4]>,
@@ -2778,7 +2784,7 @@ impl RenderScene {
             return;
         };
         let FramePrelude {
-            objects: _, cam: _, envmap_wired: _, envmap_pending: _, atmosphere: _,
+            objects: _, cam: _, envmap_wired: _, envmap_pending: _, env_rotation: _, atmosphere: _,
             render_mode: _, light_data: _, light_count: _, casters: _,
             caster_table: _,
             native_width: _, native_height: _, width: _, height: _, aspect: _, temporal_upscale: _,

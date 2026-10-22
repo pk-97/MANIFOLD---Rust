@@ -81,8 +81,7 @@ fn mode_index(params: &ParamValues) -> u32 {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HdriCopyUniforms {
     intensity: f32,
-    /// Radians about the up axis, counter-clockwise seen from above.
-    rotation: f32,
+    _pad0: f32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -126,7 +125,7 @@ fn sun_uniform(light: Option<Light>, mode: u32, uniform_mode: u32, disc_intensit
 manifold_node_engine::primitive! {
     name: BakeEquirectEnvmap,
     type_id: "node.bake_environment",
-    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. `mode = HDRI` outputs the wired `hdri` texture (a node.hdri_source) times `intensity`, at the file's own resolution, turned about the up axis by `rotation` (counter-clockwise seen from above); with nothing wired it bakes black. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. `mode = HDRI` outputs the wired `hdri` texture (a node.hdri_source) times `intensity`, at the file's own resolution; with nothing wired it bakes black. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
     inputs: {
         sun: Light optional,
         hdri: Texture2D optional,
@@ -274,16 +273,6 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
-        ParamDef {
-            name: Cow::Borrowed("rotation"),
-            label: "Rotation",
-            ty: ParamType::Angle,
-            // HDRI mode only: turns the capture about the up axis,
-            // counter-clockwise seen from above. Any angle wraps.
-            default: ParamValue::Float(0.0),
-            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
-            enum_values: &[],
-        },
     ],
     // depth_rule: procedural HDR envmap bake (no texture input, math-defined, not a file load) — used as a Material/PBR side-channel rather than the main color chain, but structurally a procedural producer like noise/gradient
     depth_rule: SourceHeight,
@@ -301,8 +290,6 @@ manifold_node_engine::primitive! {
         // The `hdri` input's logical content version at the last copy. `None`
         // reads as changed: a pending or unbound input is never assumed still.
         last_hdri_version: Option<ContentVersion> = None,
-        // The rotation of the last HDRI copy; `None` reads as changed.
-        last_hdri_rotation: Option<f32> = None,
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 (D7): the full
         // uniform set the shader was last dispatched with, plus the output
         // texture's physical identity at that time. `run()`'s dispatch is
@@ -423,11 +410,7 @@ impl Primitive for BakeEquirectEnvmap {
         // slot must be re-baked even with identical params, the same
         // precedent `gltf_texture_source`'s `last_mip_identity` established.
         let output_identity = envmap.identity_key();
-        let rotation = read_float("rotation", 0.0);
-        let hdri_unchanged = hdri.is_none()
-            || (hdri_version.is_some()
-                && self.last_hdri_version == hdri_version
-                && self.last_hdri_rotation == Some(rotation));
+        let hdri_unchanged = hdri.is_none() || (hdri_version.is_some() && self.last_hdri_version == hdri_version);
         let content_unchanged = self.last_uniforms == Some(uniforms) && hdri_unchanged;
         let unchanged =
             content_unchanged && self.last_output_identity == Some(output_identity);
@@ -439,7 +422,7 @@ impl Primitive for BakeEquirectEnvmap {
 
         let gpu = ctx.gpu_encoder();
         if let Some(hdri) = hdri {
-            let copy = HdriCopyUniforms { intensity, rotation, _pad1: 0.0, _pad2: 0.0 };
+            let copy = HdriCopyUniforms { intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
             let pipeline = self.hdri_pipeline.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(
                     include_str!("shaders/bake_environment_hdri.wgsl"),
@@ -489,7 +472,6 @@ impl Primitive for BakeEquirectEnvmap {
         self.last_uniforms = Some(uniforms);
         self.last_output_identity = Some(output_identity);
         self.last_hdri_version = hdri_version;
-        self.last_hdri_rotation = Some(rotation);
     }
 }
 
@@ -1235,7 +1217,7 @@ mod hdri_gpu_tests {
             "bake-env-hdri-test",
         );
         let intensity = 2.0f32;
-        let uniforms = HdriCopyUniforms { intensity, rotation: 0.0, _pad1: 0.0, _pad2: 0.0 };
+        let uniforms = HdriCopyUniforms { intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
         let mut enc = device.create_encoder("bake-env-hdri");
         enc.dispatch_compute(
             &pipeline,

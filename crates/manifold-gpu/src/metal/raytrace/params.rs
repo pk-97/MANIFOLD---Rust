@@ -38,7 +38,8 @@ pub struct SubsurfaceParams {
     pub light_count: u32,
     pub material_count: u32,
     pub query_units_per_pixel: u32,
-    pub _pad: u32,
+    /// Radians every environment lookup turns by (the render's `env_rotation`).
+    pub env_rotation: f32,
 }
 
 const _: () = assert!(std::mem::size_of::<SubsurfaceParams>() == 112);
@@ -50,7 +51,7 @@ const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, slot_row_base) == 9
 const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, light_count) == 96);
 const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, material_count) == 100);
 const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, query_units_per_pixel) == 104);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, _pad) == 108);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, env_rotation) == 108);
 
 /// One shadow-casting light's ray-tracing params — the per-caster payload
 /// of [`ShadowRayParams::casters`]. Field order/packing mirrors the MSL
@@ -182,7 +183,10 @@ pub struct ShadowRayParams {
     /// sun caster whose rgb transmission tint fills `out_svt`;
     /// SVT_SLOT_NONE = no designated sun.
     pub svt_slot: u32,
-    pub _pad_emissive: [u32; 3],
+    /// Radians every environment lookup turns by, counter-clockwise seen
+    /// from above: the render's `env_rotation` (`refl_env_sample`).
+    pub env_rotation: f32,
+    pub _pad_emissive: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
     /// RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows in
@@ -251,7 +255,8 @@ impl ShadowRayParams {
             refl_max_roughness,
             refl_rough_band,
             svt_slot,
-            _pad_emissive: [0; 3],
+            env_rotation: 0.0,
+            _pad_emissive: [0; 2],
             inv_view_proj,
             slot_row_base: 0,
             light_count: 0,
@@ -272,6 +277,12 @@ impl ShadowRayParams {
     pub fn with_lights(mut self, light_count: u32, light_data_addr: u64) -> Self {
         self.light_count = light_count;
         self.light_data_addr = light_data_addr;
+        self
+    }
+
+    /// Turn every environment lookup by `radians`, as the raster does.
+    pub fn with_env_rotation(mut self, radians: f32) -> Self {
+        self.env_rotation = radians;
         self
     }
 }
@@ -384,6 +395,7 @@ impl GiMaterial {
 // RT_INSTANCING_DESIGN.md D11: slot_row_base appended after inv_view_proj
 // (offset 400). The light table count/address then occupy offsets 404/408;
 // the u64 naturally rounds the complete payload to 416 bytes.
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, env_rotation) == 324);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 336);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, slot_row_base) == 400);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, light_count) == 404);

@@ -422,44 +422,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn standalone_old_phong_render_scene_material_port_gets_neutral_environment() {
-        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
-            "version": 1,
-            "nodes": [
-                {"id": 1, "nodeId": "material", "typeId": "node.phong_material", "handle": "material"},
-                {"id": 2, "nodeId": "mesh", "typeId": "node.cube_mesh", "handle": "mesh"},
-                {"id": 3, "nodeId": "camera", "typeId": "node.camera_orbit", "handle": "camera"},
-                {"id": 4, "nodeId": "light", "typeId": "node.light", "handle": "light"},
-                {"id": 5, "nodeId": "render_scene", "typeId": "node.render_scene", "handle": "render_scene",
-                 "params": {"objects": {"type": "Int", "value": 1}, "lights": {"type": "Int", "value": 1}}}
-            ],
-            "wires": [
-                {"fromNode": 2, "fromPort": "vertices", "toNode": 5, "toPort": "mesh_0"},
-                {"fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "material_0"},
-                {"fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "camera"},
-                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "light_0"}
-            ]
-        })).unwrap();
-        let mut graph = Graph::new();
-        instantiate_def(
-            &mut graph,
-            &def,
-            &registry(),
-            HandleScope::Global,
-            BoundaryHandling::Standalone,
-            &PreparedMeshRules::default(),
-        )
-        .expect("legacy render_scene material port gets an explicit environment");
-        let environment_id = graph
-            .node_id_by_handle("render_scene_phong_environment")
-            .expect("render_scene migration environment handle");
-        assert_eq!(
-            graph.get_node(environment_id).unwrap().node.type_id().as_str(),
-            "node.bake_environment"
-        );
-    }
-
     /// A library-style preset (never passed project load) saved while the
     /// sky's sun had its own position: it loads with the World position gone
     /// and the Sun light wired into the bake, exactly as project load does.

@@ -2144,19 +2144,9 @@
           "label": "White Furnace",
           "name": "uniform",
           "type": "bool"
-        },
-        {
-          "default": "0",
-          "label": "Rotation",
-          "name": "rotation",
-          "range": [
-            "-3.1415927",
-            "3.1415927"
-          ],
-          "type": "angle"
         }
       ],
-      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. `mode = HDRI` outputs the wired `hdri` texture (a node.hdri_source) times `intensity`, at the file's own resolution, turned about the up axis by `rotation` (counter-clockwise seen from above); with nothing wired it bakes black. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional sun disc painted where the Sun light wired into `sun` shines from, in that light's colour, sized by `sun_disc_size` and brightened by `sun_disc_intensity` (0 = no disc). With no light on `sun`, or a Point or Spot light there, the disc is off. `mode = HDRI` outputs the wired `hdri` texture (a node.hdri_source) times `intensity`, at the file's own resolution; with nothing wired it bakes black. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
@@ -3610,8 +3600,19 @@
           "type": "Texture2D"
         }
       ],
-      "params": [],
-      "purpose": "Draws an equirect environment (an HDRI) as the wired Camera sees it: each pixel's ray d = normalize(fwd + ndc.x·tan(fov_y/2)·aspect·right + ndc.y·tan(fov_y/2)·up) is looked up at uv = (atan2(d.z, d.x)/2π + 0.5, asin(d.y)/π + 0.5), render_scene's own env convention, so the backdrop lines up with the scene's reflections. Alpha is 1. Composite render_scene's colour over it with node.over to put the sky behind a scene. An orthographic camera falls back to a 60° field of view.",
+      "params": [
+        {
+          "default": "0",
+          "label": "Environment Rotation",
+          "name": "env_rotation",
+          "range": [
+            "-3.1415927",
+            "3.1415927"
+          ],
+          "type": "angle"
+        }
+      ],
+      "purpose": "Draws an equirect environment (an HDRI) as the wired Camera sees it: each pixel's ray d = normalize(fwd + ndc.x·tan(fov_y/2)·aspect·right + ndc.y·tan(fov_y/2)·up) is looked up at uv = (atan2(d.z, d.x)/2π + 0.5, asin(d.y)/π + 0.5), render_scene's own env convention, so the backdrop lines up with the scene's reflections. `env_rotation` turns the environment about the up axis (counter-clockwise seen from above) by adding env_rotation/2π to u, as render_scene's own `env_rotation` does. Alpha is 1. Composite render_scene's colour over it with node.over to put the sky behind a scene. An orthographic camera falls back to a 60° field of view.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Shows the HDRI sky behind a 3D scene, seen through the scene's camera so it moves and lines up with the reflections.",
@@ -36769,6 +36770,16 @@
             "64"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Environment Rotation",
+          "name": "env_rotation",
+          "range": [
+            "-3.1415927",
+            "3.1415927"
+          ],
+          "type": "angle"
         },
         {
           "default": "0",
