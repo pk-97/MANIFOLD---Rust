@@ -60,6 +60,17 @@ fn is_fill(item: &Item) -> bool {
     matches!(&item.fields, ItemFields::WaterSource(source) if source.role == super::SourceRole::Fill)
 }
 
+/// Whether `item` draws with its effective Material: an Object, Group or
+/// Water, and a Swarm whose particles are its own solids (one drawing
+/// another item draws that item's Material).
+pub fn draws_with_material(item: &Item) -> bool {
+    match &item.fields {
+        ItemFields::Object(_) | ItemFields::Group(_) | ItemFields::Water(_) => true,
+        ItemFields::Swarm(swarm) => !matches!(swarm.draw_as, DrawAs::Item(_)),
+        _ => false,
+    }
+}
+
 /// Whether an item of `kind` may sit under `parent` (None is the top).
 /// Groups hold anything placeable; a Water holds its sources and looks;
 /// a Water Source sits only in a Water; the World, Forces and Modifiers sit
@@ -425,12 +436,12 @@ impl SceneDoc {
         effective
     }
 
-    /// How many Objects, Groups and Waters draw with each Material.
+    /// How many items draw with each Material ([`draws_with_material`]).
     pub fn material_users(&self) -> HashMap<ItemId, usize> {
         let effective = self.effective_materials();
         let mut users = HashMap::new();
         self.walk(|item, _| {
-            if matches!(item.kind(), ItemKind::Object | ItemKind::Group | ItemKind::Water)
+            if draws_with_material(item)
                 && let Some(material) = effective.get(&item.id)
             {
                 *users.entry(material.clone()).or_insert(0) += 1;

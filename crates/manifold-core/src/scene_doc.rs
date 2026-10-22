@@ -21,7 +21,7 @@ pub use import::{
     ImportPlacement, ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, camera_item, import_child_id,
     is_import_child, light_item, material_item, node_item,
 };
-pub use tree::{ONE_ENVIRONMENT, ONE_FILL, SceneEditError, can_hold};
+pub use tree::{ONE_ENVIRONMENT, ONE_FILL, SceneEditError, can_hold, draws_with_material};
 
 use serde::{Deserialize, Serialize};
 

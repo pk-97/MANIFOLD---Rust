@@ -2401,6 +2401,26 @@ mod scene_card_convergence_tests {
             assert!(on_card(&side.project, &layer_id, &roll), "the macro keeps roll on the card");
         }
 
+        /// A scene item's field id (`cube#physics`) is no manifest param:
+        /// neither a macro nor an Ableton macro maps to it (ruling 3).
+        #[test]
+        fn a_field_id_never_maps() {
+            let (project, layer_id, _) = roll_rig();
+            let mut side = ContentSide::new(&project);
+            let mut h = Harness::new(Some(layer_id));
+            let field = manifold_core::effects::ParamId::from("cube#physics");
+            let map = PanelAction::Mapping(MappingAction::MapParamToMacro(gpt(), field.clone(), 0));
+            land(&mut side, &mut h, map);
+            assert!(side.project.settings.macro_bank.slots[0].mappings.is_empty(), "a field id mapped to a macro");
+            let mut local = side.project.clone();
+            let ableton = PanelAction::Mapping(MappingAction::MapParamToAbleton(gpt(), field, Default::default()));
+            h.dispatch(&ableton, &mut local);
+            assert!(
+                !h.drain().iter().any(|command| matches!(command, ContentCommand::AbletonMapParam { .. })),
+                "a field id mapped to an Ableton macro"
+            );
+        }
+
         // ── Clip gestures (timeline host path) ───────────────────
 
         use manifold_ui::timeline_editing_host::TimelineEditingHost;

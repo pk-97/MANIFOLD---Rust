@@ -188,6 +188,23 @@ fn an_inline_material_row_sets_the_material_not_its_owner() {
     ), "{:?}", items[0].action);
 }
 
+/// A structural field row is no manifest param: right-clicking it opens no
+/// param menu, so it can never be mapped (ruling 3).
+#[test]
+fn a_field_row_opens_no_param_menu() {
+    let (panel, tree) = live_panel(vec![physics_field()]);
+    let ids = panel.properties_card.row_host.toggle_ids.iter().flatten().next().expect("the Physics row is a button row");
+    let mut intents = crate::intent::IntentRegistry::new();
+    panel.register_intents(&mut intents);
+    for node in std::iter::once(ids.button_id).chain(ids.label_id) {
+        let action = intents.resolve(&tree, Some(node), crate::intent::Gesture::RightClick);
+        assert!(
+            !matches!(action, Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(..)))),
+            "a field row opened the param menu: {action:?}"
+        );
+    }
+}
+
 /// Every base scene names its cube "cube": unlinking one layer's cube scale
 /// leaves another layer's cube linked.
 #[test]
