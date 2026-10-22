@@ -61,6 +61,8 @@ pub struct MaterialBlockVm {
     pub parameter_ids: Vec<String>,
     /// The Material's own field rows (its texture source).
     pub fields: Vec<FieldRowVm>,
+    /// The starting look its features and values match, if any.
+    pub look: Option<crate::param_surface::MaterialLook>,
 }
 
 /// One item of the Scene tab tree, in document preorder.

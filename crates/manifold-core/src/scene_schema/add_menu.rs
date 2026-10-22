@@ -7,7 +7,9 @@ use crate::scene_doc::{
 };
 
 /// One thing the Add menu adds: an item of `kind` whose fields are
-/// `fields()`, named `name`.
+/// `fields()`, named `name`. An entry with no `fields` opens the model file
+/// picker and imports the picked file as a drop does: a Group of its parts,
+/// or one Object for a single-mesh file.
 #[derive(Clone, Copy)]
 pub struct AddEntry {
     /// What a click sends.
@@ -18,7 +20,7 @@ pub struct AddEntry {
     pub kind: ItemKind,
     /// The new item's name; a name already taken gets a number.
     pub name: &'static str,
-    pub fields: fn() -> ItemFields,
+    pub fields: Option<fn() -> ItemFields>,
 }
 
 impl std::fmt::Debug for AddEntry {
@@ -47,12 +49,18 @@ const fn entry(
     name: &'static str,
     fields: fn() -> ItemFields,
 ) -> AddEntry {
-    AddEntry { key, group, label, kind, name, fields }
+    AddEntry { key, group, label, kind, name, fields: Some(fields) }
+}
+
+/// The entry that imports a model file the user picks.
+const fn model_file(key: &'static str, group: &'static str, label: &'static str) -> AddEntry {
+    AddEntry { key, group, label, kind: ItemKind::Object, name: "", fields: None }
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 20] = [
+pub static ADD_ENTRIES: [AddEntry; 21] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
+    entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
     entry("object.tetrahedron", "Object", "Tetrahedron", ItemKind::Object, "Tetrahedron", || object(Shape::Tetrahedron)),
     entry("object.octahedron", "Object", "Octahedron", ItemKind::Object, "Octahedron", || object(Shape::Octahedron)),
@@ -73,9 +81,7 @@ pub static ADD_ENTRIES: [AddEntry; 20] = [
     entry("force.drag", "Force", "Drag", ItemKind::Force, "Drag", || force(ForceType::Drag)),
     entry("force.attractor", "Force", "Attractor", ItemKind::Force, "Attractor", || force(ForceType::Attractor)),
     entry("force.explosion", "Force", "Explosion", ItemKind::Force, "Explosion", || force(ForceType::Explosion)),
-    entry("object.mesh", "Object", "Mesh from file", ItemKind::Object, "Mesh", || {
-        object(Shape::Mesh { file: String::new(), node_path: String::new(), vertex_count: 0, primitives: Default::default() })
-    }),
+    model_file("object.mesh", "Object", "Mesh from file\u{2026}"),
 ];
 
 /// The entry a click on `key` means.
@@ -99,7 +105,9 @@ mod tests {
     #[test]
     fn every_entry_makes_fields_of_its_kind_and_keys_are_unique() {
         for entry in &ADD_ENTRIES {
-            assert_eq!((entry.fields)().kind(), entry.kind, "{}", entry.key);
+            if let Some(fields) = entry.fields {
+                assert_eq!(fields().kind(), entry.kind, "{}", entry.key);
+            }
             assert_eq!(ADD_ENTRIES.iter().filter(|other| other.key == entry.key).count(), 1, "{}", entry.key);
         }
     }

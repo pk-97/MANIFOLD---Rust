@@ -77,6 +77,10 @@ pub struct DispatchResult {
         manifold_ui::panels::picker_core::Source,
         String,
     )>,
+    /// Set by the Scene tab's "Mesh from file" Add entry: the picked model
+    /// file and the scene layer it joins. Only the caller can start the
+    /// import worker a drop uses, so the handoff rides here.
+    pub import_model: Option<(std::path::PathBuf, LayerId)>,
 }
 
 impl DispatchResult {
@@ -84,15 +88,13 @@ impl DispatchResult {
         Self {
             begin_save_preset: None,
             begin_rename_preset: None,
+            import_model: None,
         }
     }
     /// Distinction retired with the chain router (P-D); kept as call-site
     /// documentation for unclaimed variants — identical to `handled()`.
     pub(crate) fn unhandled() -> Self {
-        Self {
-            begin_save_preset: None,
-            begin_rename_preset: None,
-        }
+        Self::handled()
     }
 }
 

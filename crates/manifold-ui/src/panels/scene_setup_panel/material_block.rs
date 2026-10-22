@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::panels::dropdown::DropdownItem;
-use crate::param_surface::{MATERIAL_FEATURES, MaterialFeature, MaterialGroup, MaterialParamRole};
+use crate::param_surface::{MATERIAL_FEATURES, MaterialFeature, MaterialGroup, MaterialLook, MaterialParamRole};
 
 /// The block's buttons built this frame, cleared on every rebuild.
 #[derive(Default)]
@@ -15,8 +15,11 @@ pub(super) struct MaterialButtons {
     remove: Vec<(NodeId, ItemId, MaterialFeature)>,
     /// "+ Add feature": `(button, material)`.
     add: Option<(NodeId, ItemId)>,
-    /// Make Unique: `(button, the item that draws with the material)`.
+    /// Make Unique, or New Material on an item with none: `(button, the
+    /// item that draws with the material)`.
     unique: Option<(NodeId, ItemId)>,
+    /// The Preset menu: `(button, material, the look it matches)`.
+    look: Option<(NodeId, ItemId, Option<MaterialLook>)>,
 }
 
 impl MaterialButtons {
@@ -24,6 +27,7 @@ impl MaterialButtons {
         self.remove.clear();
         self.add = None;
         self.unique = None;
+        self.look = None;
     }
 }
 
@@ -89,43 +93,69 @@ impl ScenePanel {
     }
 
     /// "Used by N" and, for an item that draws with a shared Material, Make
-    /// Unique. Built under the Material section's fields.
+    /// Unique; then the Preset menu. An Object or Group that draws with no
+    /// Material gets New Material instead, so its colour is always one click
+    /// away. Built under the Material section's fields.
     pub(super) fn build_material_summary(
         &mut self,
         tree: &mut UITree,
         (inner_x, inner_w): (f32, f32),
         mut cy: f32,
         owner: &SceneItemVm,
-        block: &MaterialBlockVm,
+        block: Option<&MaterialBlockVm>,
+        (label_width, slider_w): (f32, f32),
     ) -> f32 {
-        let unique_w = tree.text_width("Make Unique", color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0;
-        let shows_unique = owner.id != block.item && block.used_by > 1;
-        let text = if owner.id == block.item {
-            format!("Used by {}", block.used_by)
-        } else if block.used_by > 1 {
-            format!("{} \u{b7} used by {}", block.name, block.used_by)
-        } else {
-            block.name.clone()
+        let (text, button) = match block {
+            Some(block) if owner.id == block.item => (format!("Used by {}", block.used_by), None),
+            Some(block) if block.used_by > 1 => (format!("{} \u{b7} used by {}", block.name, block.used_by), Some("Make Unique")),
+            Some(block) => (block.name.clone(), None),
+            None => ("Default".to_owned(), Some("New Material")),
         };
-        let label_w = if shows_unique { inner_w - unique_w - GAP } else { inner_w };
+        let button_w = button.map_or(0.0, |label| tree.text_width(label, color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0);
+        let label_w = if button.is_some() { inner_w - button_w - GAP } else { inner_w };
         let label = tree.add_label(Some(self.content_parent), inner_x, cy, label_w.max(0.0), ROW_H, &text, label_style());
         tree.set_name(label, "scene_setup.material.used_by");
-        if shows_unique {
+        if let Some(button) = button {
             let id = tree.add_button_keyed(
                 Some(self.content_parent),
-                inner_x + inner_w - unique_w,
+                inner_x + inner_w - button_w,
                 cy,
-                unique_w,
+                button_w,
                 ROW_H,
                 btn_style(),
-                "Make Unique",
+                button,
                 crate::param_surface::stable_key(&format!("scene.material.unique.{}", owner.id)),
             );
-            tree.set_name(id, "scene_setup.material.make_unique");
+            tree.set_name(id, if block.is_some() { "scene_setup.material.make_unique" } else { "scene_setup.material.new" });
             self.material_block.unique = Some((id, owner.id.clone()));
         }
         cy += ROW_H + ROW_GAP;
+        if let Some(block) = block {
+            cy = self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w));
+        }
         cy
+    }
+
+    /// The Preset row: the look the Material matches, or Custom; a click
+    /// lists every look.
+    fn build_material_look(&mut self, tree: &mut UITree, inner_x: f32, cy: f32, block: &MaterialBlockVm, (label_width, slider_w): (f32, f32)) -> f32 {
+        use crate::panels::param_slider_shared::TOGGLE_BTN_H;
+        tree.add_label(Some(self.content_parent), inner_x, cy, label_width, ROW_H, "Preset", label_style());
+        let start = label_width.min(slider_w);
+        let current = block.look.map_or("Custom", MaterialLook::label);
+        let id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + start,
+            cy + (ROW_H - TOGGLE_BTN_H) * 0.5,
+            (slider_w - start).max(0.0),
+            TOGGLE_BTN_H,
+            crate::chrome::components::dropdown_trigger_style(btn_style().font_size),
+            current,
+            crate::param_surface::stable_key(&format!("scene.material.look.{}", block.item)),
+        );
+        tree.set_name(id, "scene_setup.material.preset");
+        self.material_block.look = Some((id, block.item.clone(), block.look));
+        cy + ROW_H + ROW_GAP
     }
 
     /// A feature section's "×", at the right end of its header row.
@@ -178,6 +208,17 @@ impl ScenePanel {
         }
         if let Some((_, item)) = self.material_block.unique.as_ref().filter(|(button, _)| *button == node_id) {
             return Some(PanelAction::Project(ProjectAction::SceneMakeMaterialUnique(layer(), item.clone())));
+        }
+        if let Some((_, material, current)) = self.material_block.look.as_ref().filter(|(button, ..)| *button == node_id) {
+            let items = MaterialLook::ALL
+                .into_iter()
+                .map(|look| {
+                    DropdownItem::new(look.label()).with_check(Some(look) == *current).with_action(PanelAction::Project(
+                        ProjectAction::SceneMaterialLook { layer_id: layer(), material: material.clone(), look },
+                    ))
+                })
+                .collect();
+            return Some(PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id: node_id, items }));
         }
         let (_, material) = self.material_block.add.as_ref().filter(|(button, _)| *button == node_id)?;
         let present: &[MaterialFeature] =

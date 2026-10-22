@@ -50,7 +50,7 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
         .collect();
     let mut items = Vec::new();
     doc.walk(|item, ancestors| {
-        items.push(item_vm(doc, item, ancestors, &owned, &layers));
+        items.push(item_vm(doc, inst, item, ancestors, &owned, &layers));
     });
     // A body the world has no room for: its physics rows say so.
     for body in bodies_past_capacity(doc) {
@@ -67,7 +67,14 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
     SceneSetupVm { layer_id, items, add_entries }
 }
 
-fn item_vm(doc: &SceneDoc, item: &Item, ancestors: &[&Item], owned: &ahash::AHashMap<&str, Vec<String>>, layers: &[(LayerId, String)]) -> SceneItemVm {
+fn item_vm(
+    doc: &SceneDoc,
+    inst: &PresetInstance,
+    item: &Item,
+    ancestors: &[&Item],
+    owned: &ahash::AHashMap<&str, Vec<String>>,
+    layers: &[(LayerId, String)],
+) -> SceneItemVm {
     let params_of = |id: &ItemId| owned.get(id.as_str()).cloned().unwrap_or_default();
     let fields = field_rows(doc, item, layers);
     let material_item = match item.kind() {
@@ -75,7 +82,7 @@ fn item_vm(doc: &SceneDoc, item: &Item, ancestors: &[&Item], owned: &ahash::AHas
         ItemKind::Object | ItemKind::Group => doc.effective_material(&item.id),
         _ => None,
     };
-    let material = material_item.and_then(|id| doc.find(&id)).map(|mat| material_block(doc, mat, owned, layers));
+    let material = material_item.and_then(|id| doc.find(&id)).map(|mat| material_block(doc, inst, mat, owned, layers));
     let (environment, aim_sun_file) = match &item.fields {
         ItemFields::Light(light) => match &light.light {
             LightType::Environment { source } => (
@@ -139,7 +146,13 @@ fn modifiers(item: &Item) -> Vec<ModifierVm> {
         .collect()
 }
 
-fn material_block(doc: &SceneDoc, material: &Item, owned: &ahash::AHashMap<&str, Vec<String>>, layers: &[(LayerId, String)]) -> MaterialBlockVm {
+fn material_block(
+    doc: &SceneDoc,
+    inst: &PresetInstance,
+    material: &Item,
+    owned: &ahash::AHashMap<&str, Vec<String>>,
+    layers: &[(LayerId, String)],
+) -> MaterialBlockVm {
     let mut used_by = 0;
     doc.walk(|item, _| {
         if matches!(item.kind(), ItemKind::Object | ItemKind::Group) && doc.effective_material(&item.id).as_ref() == Some(&material.id) {
@@ -150,13 +163,19 @@ fn material_block(doc: &SceneDoc, material: &Item, owned: &ahash::AHashMap<&str,
         ItemFields::Material(fields) => fields.features.iter().map(|setting| super::material::feature(setting.feature)).collect(),
         _ => Vec::new(),
     };
+    let parameter_ids = owned.get(material.id.as_str()).cloned().unwrap_or_default();
+    let look = match &material.fields {
+        ItemFields::Material(fields) => crate::scene_material_look::matching(inst, &material.id, &parameter_ids, fields),
+        _ => None,
+    };
     MaterialBlockVm {
         item: material.id.clone(),
         name: material.name.clone(),
         used_by,
         features,
-        parameter_ids: owned.get(material.id.as_str()).cloned().unwrap_or_default(),
+        parameter_ids,
         fields: field_rows(doc, material, layers),
+        look,
     }
 }
 

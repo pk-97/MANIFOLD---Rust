@@ -146,11 +146,12 @@ impl ImportedModel {
         vec![group]
     }
 
-    /// A new scene around the model: the base scene without its cube, and the
-    /// model as `id` (what a dropped model on a project with no scene makes).
+    /// A new scene around the model: the base scene without its cube and the
+    /// cube's Material, and the model as `id` (what a dropped model on a
+    /// project with no scene makes).
     pub fn scene_doc(&self, file: &str, id: ItemId) -> SceneDoc {
         let mut doc = SceneDoc::base();
-        doc.items.retain(|item| item.id.as_str() != "cube");
+        doc.items.retain(|item| ![super::BASE_CUBE, super::BASE_CUBE_MATERIAL].contains(&item.id.as_str()));
         doc.items.extend(self.into_items(file, id));
         doc
     }
