@@ -106,3 +106,86 @@ impl Primitive for DropHiddenTriangles {
         );
     }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    //! Real-GPU value-level proof: the generated standalone kernel against the
+    //! committed formula, computed on the CPU.
+    use super::*;
+
+    fn vertex(position: [f32; 3], alpha: f32) -> MeshVertex {
+        MeshVertex {
+            position,
+            normal: [0.0, 0.0, 1.0],
+            uv: [position[0], position[1]],
+            color: [1.0, 0.5, 0.25, alpha],
+            ..bytemuck::Zeroable::zeroed()
+        }
+    }
+
+    fn dispatch(src: &[MeshVertex], cutoff: f32) -> Vec<MeshVertex> {
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<DropHiddenTriangles>()
+            .expect("drop_hidden_triangles buffer codegen");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "drop-hidden-test");
+        let bytes = std::mem::size_of_val(src) as u64;
+        let input = device.create_buffer_shared(bytes);
+        unsafe {
+            input.write(0, bytemuck::cast_slice(src));
+        }
+        let output = device.create_buffer_shared(bytes);
+        let uniforms = DropUniforms { cutoff, dispatch_count: src.len() as u32, _pad0: 0, _pad1: 0 };
+        let mut enc = device.create_encoder("drop-hidden-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &input, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &output, offset: 0 },
+            ],
+            [(src.len() as u32).div_ceil(256), 1, 1],
+            "drop-hidden-test",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = output.mapped_ptr().expect("shared output buffer");
+        unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
+    }
+
+    /// The formula: a whole triangle at or below the cutoff moves onto its
+    /// first vertex; everything else, and every other field, passes through.
+    fn expected(src: &[MeshVertex], cutoff: f32) -> Vec<MeshVertex> {
+        src.iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let base = i / 3 * 3;
+                if base + 2 >= src.len() || src[base..base + 3].iter().any(|corner| corner.color[3] > cutoff) {
+                    return *v;
+                }
+                MeshVertex { position: src[base].position, ..*v }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hidden_triangles_collapse_and_the_rest_pass_through() {
+        let src = vec![
+            // All three at or below the cutoff: collapses.
+            vertex([0.0, 0.0, 0.0], 0.0),
+            vertex([1.0, 0.0, 0.0], 0.2),
+            vertex([0.0, 1.0, 0.0], 0.5),
+            // One corner shows: the triangle stays.
+            vertex([2.0, 0.0, 0.0], 0.0),
+            vertex([3.0, 0.0, 0.0], 1.0),
+            vertex([2.0, 1.0, 0.0], 0.0),
+            // A trailing partial triangle passes through.
+            vertex([5.0, 5.0, 0.0], 0.0),
+        ];
+        let got = dispatch(&src, 0.5);
+        let want = expected(&src, 0.5);
+        for (i, (got, want)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(bytemuck::bytes_of(got), bytemuck::bytes_of(want), "vertex {i}: {:?} vs {:?}", got.position, want.position);
+        }
+        assert_eq!(got[1].position, [0.0, 0.0, 0.0], "a hidden triangle has no area");
+        assert_eq!(got[4].position, [3.0, 0.0, 0.0], "a shown triangle keeps its shape");
+    }
+}

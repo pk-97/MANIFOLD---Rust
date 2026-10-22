@@ -11,8 +11,9 @@ use manifold_core::scene_doc::{ModifierFields, ModifierTexture, ModifierType};
 const TEXTURE_NODE: &str = "noise";
 
 /// Point Displace by Texture at the card's Texture: the recipe's built-in
-/// noise, a layer (`node.layer_source`) or a file (`node.gltf_texture_source`),
-/// the sources a Material's texture uses. A file not yet picked keeps the
+/// noise, a layer (`node.layer_source`) or a picture file
+/// (`node.gltf_texture_source`, which reads a picture whole), the sources a
+/// Material's texture uses. A file not yet picked keeps the
 /// noise, so the card never displaces by a blank image.
 pub(crate) fn tune(graph: &mut EffectGraphDef, card: &ModifierFields) {
     if card.modifier != ModifierType::DisplaceByTexture {

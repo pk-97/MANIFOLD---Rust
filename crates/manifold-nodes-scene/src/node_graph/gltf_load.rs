@@ -1334,14 +1334,26 @@ pub(crate) struct GltfTextureSnapshot {
     pub identity: [u8; 32],
 }
 
+/// The encoded image `texture_index` of a glTF document names, or the whole
+/// file when it is a picture (PNG, JPG and the rest): a picture is its own
+/// one image, so a Material's File texture reads it as it reads a model's
+/// map. The file's own bytes decide which it is; the extension only names a
+/// picture format that has no signature (TGA).
 pub(crate) fn parse_texture_snapshot(
     path: &std::path::Path,
     texture_index: u32,
 ) -> Result<GltfTextureSnapshot, String> {
     use sha2::{Digest, Sha256};
-    let (document, buffers) = parse_document_and_buffers(path)?;
-    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
-    let (encoded, format) = texture_encoded(&document, &buffers, base, texture_index)?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let picture = image::guess_format(&bytes).or_else(|_| image::ImageFormat::from_path(path));
+    let (encoded, format) = match picture {
+        Ok(format) => (bytes, Ok(format)),
+        Err(_) => {
+            let (document, buffers) = parse_document_and_buffers_from_slice(path, &bytes)?;
+            let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
+            texture_encoded(&document, &buffers, base, texture_index)?
+        }
+    };
     let mut hash = Sha256::new();
     hash.update(b"manifold.gltf-texture-snapshot.v1");
     match &format {
@@ -1456,11 +1468,11 @@ pub(crate) fn decode_texture_snapshot(
         image::DynamicImage::ImageLumaA8(_) => gltf::image::Format::R8G8,
         image::DynamicImage::ImageRgb8(_) => gltf::image::Format::R8G8B8,
         image::DynamicImage::ImageRgba8(_) => gltf::image::Format::R8G8B8A8,
+        // 16-bit and float pictures (EXR, HDR, 16-bit PNG) arrive as 8-bit
+        // colour, clamped to 0..1.
         _ => {
-            return Err(format!(
-                "unsupported glTF image format {:?}",
-                decoded.color()
-            ));
+            let rgba = decoded.to_rgba8();
+            return Ok((rgba.width(), rgba.height(), rgba.into_raw()));
         }
     };
     image_data_to_rgba8(gltf::image::Data {

@@ -135,3 +135,132 @@ impl Primitive for MeshTextureWeights {
         );
     }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    //! Real-GPU value-level proof: the generated standalone kernel against the
+    //! committed box-projection formula, computed on the CPU. The field is two
+    //! texels wide and every sample lands on a texel centre, so filtering
+    //! reads each texel exactly.
+    use super::*;
+    use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+
+    /// The two texels' red values: 51/255 and 255/255.
+    const TEXELS: [f32; 2] = [0.2, 1.0];
+
+    struct Settings {
+        scale: f32,
+        shift: [f32; 2],
+        bias: f32,
+        radius: f32,
+        source_offset: [f32; 3],
+    }
+
+    const PLAIN: Settings = Settings { scale: 1.0, shift: [0.0, 0.0], bias: 0.5, radius: 1.0, source_offset: [0.0; 3] };
+
+    fn vertex(position: [f32; 3], normal: [f32; 3]) -> MeshVertex {
+        MeshVertex { position, normal, color: [1.0; 4], ..bytemuck::Zeroable::zeroed() }
+    }
+
+    fn mirrored(t: f32) -> f32 {
+        1.0 - ((t * 0.5).rem_euclid(1.0) * 2.0 - 1.0).abs()
+    }
+
+    /// A texel-centre read of the two-texel field.
+    fn sample(u: f32) -> f32 {
+        TEXELS[usize::from(u >= 0.5)]
+    }
+
+    /// The formula: three planar reads blended by the normal's fourth power.
+    fn expected(v: &MeshVertex, s: &Settings) -> f32 {
+        let q: [f32; 3] = std::array::from_fn(|k| (v.position[k] + s.source_offset[k]) / s.radius * s.scale);
+        let w: [f32; 3] = std::array::from_fn(|k| v.normal[k].powi(4));
+        let total: f32 = w.iter().sum();
+        let reads = [sample(mirrored(q[1] + s.shift[0])), sample(mirrored(q[0] + s.shift[0])), sample(mirrored(q[0] + s.shift[0]))];
+        (0..3).map(|k| w[k] / total * reads[k]).sum::<f32>() - s.bias
+    }
+
+    fn dispatch(src: &[MeshVertex], s: &Settings) -> Vec<f32> {
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MeshTextureWeights>()
+            .expect("mesh_texture_weights buffer codegen");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "texture-weights-test");
+        let field = device.create_texture(&GpuTextureDesc {
+            width: 2,
+            height: 1,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "texture-weights-field",
+            mip_levels: 1,
+        });
+        device.upload_texture(&field, &[51, 0, 0, 255, 255, 0, 0, 255]);
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+        let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        unsafe {
+            input.write(0, bytemuck::cast_slice(src));
+        }
+        let output = device.create_buffer_shared((src.len() * 4) as u64);
+        let uniforms = TextureWeightsUniforms {
+            scale: s.scale,
+            offset_x: s.shift[0],
+            offset_y: s.shift[1],
+            bias: s.bias,
+            frame_radius: s.radius,
+            source_offset_x: s.source_offset[0],
+            source_offset_y: s.source_offset[1],
+            source_offset_z: s.source_offset[2],
+            dispatch_count: src.len() as u32,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        let mut enc = device.create_encoder("texture-weights-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &input, offset: 0 },
+                GpuBinding::Texture { binding: 2, texture: &field },
+                GpuBinding::Sampler { binding: 3, sampler: &sampler },
+                GpuBinding::Buffer { binding: 4, buffer: &output, offset: 0 },
+            ],
+            [(src.len() as u32).div_ceil(256), 1, 1],
+            "texture-weights-test",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = output.mapped_ptr().expect("shared weights buffer");
+        unsafe { std::slice::from_raw_parts(ptr as *const f32, src.len()) }.to_vec()
+    }
+
+    fn check(src: &[MeshVertex], s: &Settings) {
+        for (i, (got, v)) in dispatch(src, s).iter().zip(src).enumerate() {
+            let want = expected(v, s);
+            assert!((got - want).abs() < 2e-3, "vertex {i}: got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn box_projection_matches_the_formula() {
+        let up = [0.0, 0.0, 1.0];
+        let side = [1.0, 0.0, 0.0];
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        let src = [
+            // Facing Z: the xy plane, mirrored past 1.
+            vertex([0.25, 0.0, 0.0], up),
+            vertex([0.75, 0.0, 0.0], up),
+            vertex([1.25, 0.0, 0.0], up),
+            // Facing X: the yz plane.
+            vertex([0.0, 0.25, 0.0], side),
+            vertex([0.0, 0.75, 0.0], side),
+            // Between X and Y: half of each plane.
+            vertex([0.25, 0.75, 0.0], [half, half, 0.0]),
+        ];
+        check(&src, &PLAIN);
+        assert!((dispatch(&src[..1], &PLAIN)[0] - (0.2 - 0.5)).abs() < 2e-3, "a dark texel pushes in by the bias");
+        // Shift, scale, frame radius and source offset move where it reads.
+        let moved = Settings { scale: 2.0, shift: [0.5, 0.0], bias: 0.0, radius: 2.0, source_offset: [0.5, 0.0, 0.0] };
+        check(&src, &moved);
+    }
+}

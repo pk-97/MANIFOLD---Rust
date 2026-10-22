@@ -19,8 +19,9 @@
 // NaN/zero-length `right` vector; it does not fix the degeneracy —
 // parallel-transport frames are deferred to a future 3D-path design.
 //
-// Normals are exact (the ring's direction; a cap faces along the path),
-// oriented as make_triangles' finite differences orient them. Where the tube
+// Normals are exact and face out of the tube (the ring's direction; a cap
+// faces away from the path), oriented as make_triangles' finite differences
+// orient them, so a push along the normals swells the tube. Where the tube
 // is thicker than its path's tightest turn the inner wall folds through
 // itself; finite differences flip there, the exact normals do not. Wire
 // node.make_triangles with Keep Normals downstream.
@@ -108,18 +109,20 @@ fn body(
     let ring_up = cross(tangent, right);
 
     let sides_f = max(f32(sides), 1.0);
-    let theta = 6.2831855 * f32(col) / sides_f;
+    // The ring turns clockwise seen down the path, so the grid's winding
+    // faces out of the tube as its normals do.
+    let theta = -6.2831855 * f32(col) / sides_f;
     let r_eff = radius * rscale;
     let ring = cos(theta) * right + sin(theta) * ring_up;
     var pos = center + ring * r_eff;
-    var normal = -ring;
+    var normal = ring;
     if r_eff < 0.0 {
-        normal = ring;
+        normal = -ring;
     }
     if cap == 1 {
-        normal = tangent;
-    } else if cap == 2 {
         normal = -tangent;
+    } else if cap == 2 {
+        normal = tangent;
     }
     if centre {
         pos = center;

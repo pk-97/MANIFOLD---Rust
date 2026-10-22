@@ -52,6 +52,7 @@ pub use modifier::{
 };
 pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
 use ocean::OCEAN_TABLES;
+pub use ocean::OCEAN_LOOK;
 pub use physics::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
 pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};

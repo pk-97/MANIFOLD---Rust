@@ -147,6 +147,8 @@ fn texture_snapshot_owns_selected_dependency_bytes() {
     assert_ne!(original.identity, edited.identity);
     assert_eq!(decode_texture_snapshot(original).unwrap().2[0], 17);
     assert_eq!(decode_texture_snapshot(edited).unwrap().2[0], 201);
+    // A picture file is read whole, as a Material's File texture reads it.
+    assert_eq!(load_gltf_texture(&fixture.image_path(), 0).unwrap().2[0], 201);
     std::fs::remove_file(fixture.image_path()).unwrap();
     assert!(parse_texture_snapshot(&fixture.path, 0).is_err());
     // Restore a valid source and prove failures are not sticky.

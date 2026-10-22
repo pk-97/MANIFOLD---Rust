@@ -160,7 +160,7 @@ fn place_on_surfaces(b: &mut Builder<'_>) {
         };
         let draws = draws_of(b, item, body);
         let scatter = b.add(owner, SURFACE_ROLE, "node.scatter_on_mesh");
-        b.wire(mesh, "vertices", scatter, "vertices");
+        b.wire(mesh.0, mesh.1, scatter, "vertices");
         b.set_number(scatter, "max_capacity", MAX_COPIES as f32);
         b.follow(body, "copy_count", scatter, "count");
         b.apply_rows(item, COPIES_ROWS.iter().filter(|row| row.reach == Reach::Own(SURFACE_ROLE) && (row.applies)(&item.fields)));
