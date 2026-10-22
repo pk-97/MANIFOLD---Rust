@@ -1,4 +1,4 @@
-//! Force: the rows of each of the seven types, from today's force recipes
+//! Force: the rows of each of the seven types, from the force recipes
 //! (`scene-modifier-presets`). A force compiles to one scene modifier
 //! instance, so a row reaches a param of that instance's recipe: the row's
 //! property is the recipe's own param id. Drag is the Wind recipe with its

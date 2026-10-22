@@ -10,7 +10,7 @@ use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, is_object_or_group, wrong_value,
 };
-use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
+use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::scene_doc::{DrawAs, EmitFrom, ItemFields};
 
 /// Particles a swarm holds: the seed's capacity and Count's ceiling.
@@ -67,11 +67,6 @@ const EMIT_FRAME: &str = "the emit-from item's own frame, mirrored from its Tran
 
 const fn frame(property: &'static str, param: &'static str) -> PropertyRow {
     row(property, FRAME, Source, Exposure::Automatic(EMIT_FRAME)).param(param)
-}
-
-/// A value node that follows one of the World's controls.
-const fn follows(role: &'static str, why: &'static str) -> PropertyRow {
-    row(role, Reach::Own(role), Simulation, Exposure::Automatic(why)).param("value")
 }
 
 pub static SWARM_ROWS: [PropertyRow; 74] = [

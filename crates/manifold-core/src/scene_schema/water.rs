@@ -20,7 +20,7 @@ use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, wrong_value};
-use super::{Exposure, PropertyRow, Reach, perform, row, setup};
+use super::{Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use crate::fluid_domain::DOMAIN_EXTENT_METRES;
 use crate::scene_doc::{Item, ItemFields, SourceRole, WaterDraw, WaterFields, WaterSolver};
@@ -157,10 +157,6 @@ fn mpm(fields: &ItemFields) -> bool {
 
 fn surface(fields: &ItemFields) -> bool {
     water(fields).is_some_and(|water| water.draw == WaterDraw::Surface)
-}
-
-const fn follows(role: &'static str, why: &'static str) -> PropertyRow {
-    row(role, Reach::Own(role), Simulation, Exposure::Automatic(why)).param("value")
 }
 
 pub static WATER_ROWS: [PropertyRow; 37] = [

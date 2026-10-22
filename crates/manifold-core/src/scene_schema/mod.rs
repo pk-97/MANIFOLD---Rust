@@ -180,6 +180,11 @@ const fn row(property: &'static str, reach: Reach, section: ControlGroup, exposu
     PropertyRow { property, reach, param: property, section, exposure, default: None, name: None, applies: always }
 }
 
+/// A value node that follows one of the World's controls.
+const fn follows(role: &'static str, why: &'static str) -> PropertyRow {
+    row(role, Reach::Own(role), ControlGroup::Simulation, Exposure::Automatic(why)).param("value")
+}
+
 /// A card row set up in the Scene tab.
 const fn setup() -> Exposure {
     Exposure::Card(facts(SurfaceRole::Setup))

@@ -182,7 +182,7 @@ pub struct ObjectFields {
 }
 
 /// An Object's Shape: the built-in solids, Ocean, or a mesh from a file.
-/// The built-ins are the solids a node generates today.
+/// The built-ins are the solids a mesh node generates.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Shape {
@@ -424,8 +424,7 @@ pub enum TextureFeeds {
     Emission,
 }
 
-/// A Material's image: none, a file, or another layer's output (today's
-/// Skin Source).
+/// A Material's image: none, a file, or another layer's output.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TextureSource {

@@ -1,5 +1,5 @@
 //! The deformer Modifier types (SCENE_DOCUMENT_DESIGN.md section 7.19
-//! (Modifiers), lane L18): Bend, Twist, Taper, Inflate, Rotate, Displace by
+//! (Modifiers)): Bend, Twist, Taper, Inflate, Rotate, Displace by
 //! Texture, Morph, Boil, Ripple, Melt, Glitch Jitter, Shatter Mesh, Slice,
 //! Voxelize, Fold, Facet Normals, Wave Shear, Cut Out Box and Shake. Each is
 //! one entry here wiring one stock recipe in `scene-modifier-presets`; its

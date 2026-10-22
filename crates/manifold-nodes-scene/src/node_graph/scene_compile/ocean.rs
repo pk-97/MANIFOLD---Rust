@@ -1,5 +1,5 @@
 //! Ocean (SCENE_DOCUMENT_DESIGN.md section 7.10 (Water, Water Source,
-//! Ocean)): an Object whose Shape is Ocean draws the starter sea's chain.
+//! Ocean)): an Object whose Shape is Ocean draws the sea chain.
 //! Three wave cascades (`node.ocean_spectrum` into `node.inverse_fft_2d`) feed
 //! `node.ocean_displace`, which moves a grid cast from the active camera onto
 //! the sea plane (`node.projected_grid`); `node.make_triangles` turns the grid
@@ -17,7 +17,7 @@ use manifold_core::scene_doc::Item;
 
 use super::builder::Builder;
 
-/// The grid's density: columns by rows of cast points, the starter sea's.
+/// The grid's density: columns by rows of cast points.
 const COLUMNS: u32 = 640;
 const ROWS: u32 = 360;
 

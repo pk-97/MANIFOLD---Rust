@@ -1,7 +1,7 @@
 {
   "ceilings": {
     "crates/manifold-app/src/app_render.rs": 3210,
-    "crates/manifold-app/src/content_pipeline.rs": 4437,
+    "crates/manifold-app/src/content_pipeline.rs": 4433,
     "crates/manifold-app/src/content_thread.rs": 2523,
     "crates/manifold-app/src/editor_bridge.rs": 2872,
     "crates/manifold-app/src/input_host.rs": 2603,

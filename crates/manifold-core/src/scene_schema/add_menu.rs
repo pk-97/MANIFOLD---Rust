@@ -1,6 +1,5 @@
-//! The Scene tab's Add menu as data: one entry per thing the menu adds. A
-//! lane that makes a new kind addable appends its entries here; the panel and
-//! the app read this list and nothing else.
+//! The Scene tab's Add menu as data: one entry per thing the menu adds. The
+//! panel and the app read this list and nothing else.
 
 use crate::scene_doc::{
     CameraFields, CameraRig, ForceFields, ForceType, ItemFields, ItemKind, LightFields, LightType, ModifierFields, ModifierType,

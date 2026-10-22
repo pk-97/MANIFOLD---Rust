@@ -28,6 +28,8 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use manifold_node_engine::scene::transform::Mat4;
 
+use crate::node_graph::gltf_load::{MAT4_IDENTITY, cross3, mat4_mul};
+
 pub const MERGE_MESHES_TYPE_ID: &str = "node.merge_meshes";
 
 const DEFAULT_PARTS: usize = 2;
@@ -113,14 +115,8 @@ fn cached_type_id() -> &'static EffectNodeType {
     CELL.get_or_init(|| EffectNodeType::new(MERGE_MESHES_TYPE_ID))
 }
 
-const IDENTITY: Mat4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
-
 fn column(m: &Mat4, c: usize) -> [f32; 3] {
     [m[c][0], m[c][1], m[c][2]]
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -131,7 +127,7 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// an axis.
 fn inverse_rows(m: &Mat4) -> Option<[[f32; 3]; 3]> {
     let [a, b, c] = [0, 1, 2].map(|i| column(m, i));
-    let rows = [cross(b, c), cross(c, a), cross(a, b)];
+    let rows = [cross3(b, c), cross3(c, a), cross3(a, b)];
     let det = dot(a, rows[0]);
     let size = [a, b, c].iter().map(|v| dot(*v, *v).sqrt()).product::<f32>();
     (det.is_finite() && det.abs() > 1e-6 * size).then(|| rows.map(|row| row.map(|v| v / det)))
@@ -150,9 +146,6 @@ fn affine_inverse(m: &Mat4) -> Option<Mat4> {
     ])
 }
 
-fn mat4_mul(a: &Mat4, b: &Mat4) -> Mat4 {
-    std::array::from_fn(|col| std::array::from_fn(|row| (0..4).map(|k| a[k][row] * b[col][k]).sum()))
-}
 
 impl EffectNode for MergeMeshes {
     fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
@@ -218,7 +211,7 @@ impl EffectNode for MergeMeshes {
             }
         }
         let to_frame = match ctx.inputs.transform("frame") {
-            None => IDENTITY,
+            None => MAT4_IDENTITY,
             Some(frame) => match affine_inverse(&frame.world()) {
                 Some(inverse) => inverse,
                 None => {
@@ -247,7 +240,7 @@ impl EffectNode for MergeMeshes {
             if count == 0 {
                 continue;
             }
-            let world = |port: &NodeInput| ctx.inputs.transform(&port.name).map_or(IDENTITY, |t| t.world());
+            let world = |port: &NodeInput| ctx.inputs.transform(&port.name).map_or(MAT4_IDENTITY, |t| t.world());
             let place = mat4_mul(&world(&ports[2]), &world(&ports[1]));
             let matrix = mat4_mul(&to_frame, &place);
             let normals = inverse_rows(&matrix).map_or([[0.0; 4]; 3], |rows| rows.map(|r| [r[0], r[1], r[2], 0.0]));
@@ -258,7 +251,7 @@ impl EffectNode for MergeMeshes {
         // A part smaller than planned leaves a tail: zeroed, so it adds no
         // area, volume or stale vertex.
         if offset < capacity {
-            let uniforms = PartUniforms { matrix: IDENTITY, normals: [[0.0; 4]; 3], offset, count: capacity - offset, clear: 1, _pad: 0 };
+            let uniforms = PartUniforms { matrix: MAT4_IDENTITY, normals: [[0.0; 4]; 3], offset, count: capacity - offset, clear: 1, _pad: 0 };
             dispatch(gpu, pipeline, &uniforms, out, out);
         }
     }
@@ -316,7 +309,7 @@ mod tests {
         let back = mat4_mul(&affine_inverse(&frame).unwrap(), &frame);
         for (c, col) in back.iter().enumerate() {
             for (r, v) in col.iter().enumerate() {
-                assert!((v - IDENTITY[c][r]).abs() < 1e-5, "{back:?}");
+                assert!((v - MAT4_IDENTITY[c][r]).abs() < 1e-5, "{back:?}");
             }
         }
         let flat = manifold_node_engine::scene::transform::trs_matrix([0.0; 3], [0.0; 3], [1.0, 0.0, 1.0]);

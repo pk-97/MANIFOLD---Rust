@@ -266,7 +266,7 @@ pub(super) const PHYSICS: FieldRow = FieldRow {
     write: write_physics,
 };
 
-/// Copies on or off; the numbers are live params (lane L5).
+/// Copies on or off; the numbers are live params.
 pub(super) const COPIES: FieldRow = FieldRow {
     id: "copies",
     label: "Copies",

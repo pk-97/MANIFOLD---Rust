@@ -1,5 +1,5 @@
 //! The curve shapes: Extrude, Revolve and Tube, each made from a built-in
-//! curve (SCENE_DOCUMENT_DESIGN.md lane L20). Which curve is a structural
+//! curve. Which curve is a structural
 //! field; every curve row and Depth, Sweep, Offset and Thickness are
 //! performance rows, so the drawers reshape the solid live. The detail (curve
 //! samples, the steps, segments and sides around it) is fixed, so a live row

@@ -859,8 +859,8 @@ mod scene_card_convergence_tests {
             std::borrow::Cow::Owned(real)
         }
 
-        /// A genuine momentary parameter for ParamFire coverage. The
-        /// SceneStarter card has ordinary continuous controls, so this keeps
+        /// A genuine momentary parameter for ParamFire coverage. The scene
+        /// card has ordinary continuous controls, so this keeps
         /// the fire fixture explicit instead of dispatching an invalid click
         /// against a slider-shaped parameter.
         fn trigger_param(

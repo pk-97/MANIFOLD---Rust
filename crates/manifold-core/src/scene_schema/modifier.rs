@@ -186,8 +186,8 @@ pub static VORTEX_FRAGMENTS_ROWS: [PropertyRow; 18] = join(
 pub static SHATTER_ROWS: [PropertyRow; 2] = [live("shatter", 1).name("Break"), held("clip_trigger", NO_HITS)];
 
 /// One modifier type: everything the card, the Add menu and the compiler
-/// know about it. A later lane adds a type with one entry here and one
-/// `ModifierType` variant.
+/// know about it. A new type is one entry here and one `ModifierType`
+/// variant.
 #[derive(Debug, Clone, Copy)]
 pub struct ModifierTypeEntry {
     pub modifier: ModifierType,
@@ -212,7 +212,7 @@ pub(super) const fn entry(
     ModifierTypeEntry { modifier, key, label, recipe, deforms, rows }
 }
 
-/// The mesh and scene modifiers of lane L15.
+/// The mesh and scene modifiers.
 const CORE_TYPES: [ModifierTypeEntry; 7] = [
     entry(ModifierType::SurfacePeel, "surface_peel", "Surface Peel", "SurfacePeel", true, &SURFACE_PEEL_ROWS),
     entry(ModifierType::OrderedRecon, "ordered_recon", "Ordered Recon", "OrderedRecon", true, &ORDERED_RECON_ROWS),

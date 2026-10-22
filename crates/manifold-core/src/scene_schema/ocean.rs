@@ -7,7 +7,7 @@
 //! The dials are the swell cascade's wind, size and speed, the displacement's
 //! Choppiness and Foam, all performance rows. The chop and ripple cascades
 //! follow the swell's dials (`Builder::follow`), so one knob moves the whole
-//! sea. Everything else is the starter sea's fixed setup.
+//! sea. Everything else is fixed setup.
 
 use manifold_foundation::scene_surface::{CardBand, ControlGroup};
 
@@ -145,7 +145,7 @@ static SURFACE: [PropertyRow; 27] = [
     auto("triangle_rows", "triangles", "src_rows", "the grid's rows"),
 ];
 
-/// The material an Ocean takes when its Shape is set, the starter sea's:
+/// The material an Ocean takes when its Shape is set:
 /// white, so the grid's deep water colour shows untinted, with water's
 /// index of refraction and a calm sea's gloss.
 pub const OCEAN_LOOK: [(&str, f32); 7] = [

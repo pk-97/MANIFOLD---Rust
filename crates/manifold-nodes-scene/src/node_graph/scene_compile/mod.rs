@@ -1,5 +1,5 @@
 //! The scene compiler (SCENE_DOCUMENT_DESIGN.md section 7.3 (The compiler)):
-//! a pure function from a scene document to today's `EffectGraphDef`, with
+//! a pure function from a scene document to an `EffectGraphDef`, with
 //! the layer's manifest in its `preset_metadata`. Shaped like
 //! `manifold_node_engine::load::physics_members::compile`: nothing below the
 //! loader changes.
@@ -11,7 +11,7 @@
 //! its node param; the (kind, property) table in `manifold_core::scene_schema`
 //! decides which rows exist.
 //!
-//! An Ocean shape is the starter sea's chain (`ocean.rs`). Water and its sources
+//! An Ocean shape is the sea chain (`ocean.rs`). Water and its sources
 //! splice the water family template (`water.rs`). Forces (`forces.rs`) and
 //! Modifier cards (`modifiers.rs`, in chain order) compile to scene modifier
 //! instances; Copies emit a copies body per item (`copies.rs`); physics

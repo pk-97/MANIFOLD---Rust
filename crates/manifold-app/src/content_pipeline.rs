@@ -477,14 +477,10 @@ pub struct ContentPipeline {
     last_node_atlas_layout: Vec<(NodeId, u32)>,
 
     // ── Clip thumbnail atlas (section 24 5c) ──────────────────────────────
-    // BUG-119 root fix (2026-07-11): ONE IOSurface-backed texture shared by
-    // both threads, replacing a private persistent texture plus a
-    // `SharedTextureBridge` triple-buffer ring. Every cell blit uses
-    // `LoadAction::Load`; the ring's periodic full-surface publish blit (the
-    // ONLY `clear=true` write the atlas ever got) is gone, and with it the
-    // race where a wrapped writer cleared the surface the UI was concurrently
-    // sampling. `clip_atlas_persistent` IS the surface the UI reads — there
-    // is no separate write target and no front-buffer flip to publish.
+    // One IOSurface-backed texture shared by both threads. Every cell blit
+    // loads and nothing ever clears it, so the UI never samples a half-cleared
+    // atlas. `clip_atlas_persistent` is the surface the UI reads: there is no
+    // separate write target and no front-buffer flip.
     /// Clips that currently want a timeline thumbnail (sent by the UI, deduped).
     /// Empty = no timeline visible, so the whole snapshot path is skipped.
     clip_atlas_visible: Vec<manifold_core::ClipId>,
@@ -1671,7 +1667,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         &self.last_clip_atlas_layout
     }
 
-
     /// Request a one-shot dump of every output of `effect_id` to `dir` on the
     /// next render (the watched effect's node outputs, read back to disk as
     /// 16-bit PNGs + a manifest).
@@ -1928,8 +1923,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
 
         // === NATIVE METAL PATH ===
-        // When manifold-gpu is initialized, use raw Metal encoding.
-        // Native Metal encoding path.
         #[cfg(target_os = "macos")]
         if self.native_device.is_some() {
             self.render_content_native(

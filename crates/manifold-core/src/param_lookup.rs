@@ -77,7 +77,7 @@ pub fn scene_radius_from_bounds(bounds: ([f32; 3], [f32; 3])) -> f32 {
 /// band is a multiple of it so a scene twice as big gets sliders twice as wide.
 /// Returns `None` for params not in the table (the generic refresh path).
 ///
-/// Multiplier rationale (compressed from `scene_scale.rs` doc comments):
+/// Why each multiplier:
 /// - Position (`pos_*`, `aim_*`): ±2·radius — one radius covers the model,
 ///   two gives the model plus neighbourhood, enough to dock at the edge of
 ///   the shot without squeezing the useful band into the first few percent.

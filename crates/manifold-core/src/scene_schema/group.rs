@@ -44,8 +44,8 @@ pub static GROUP_ROWS: [PropertyRow; 18] = [
     row("anim_clip", Reach::Clocks, Animation, Exposure::Automatic("the Group's clip field")).param("clip_index").when(import),
 ];
 
-/// A Group's Source file is an import; its children come from the file (lane
-/// L3 owns the swap that keeps the children whose path still exists).
+/// A Group's Source file is an import; its children come from the file. A
+/// new file keeps the children whose path still exists.
 fn has_clips(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Group(g) if g.source.is_some() && !g.clip_names.is_empty())
 }

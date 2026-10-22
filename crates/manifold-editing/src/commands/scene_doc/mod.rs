@@ -3,7 +3,7 @@
 //! Duplicate), Remove, Reparent, Rename and Set, plus the Group and Ungroup
 //! composites. Each is one undo step. Each edits the layer's document, then
 //! installs the graph compiled from it (`PresetInstance::install_scene_document`)
-//! on the content thread. Param writes are not here: they stay today's param
+//! on the content thread. Param writes are not here: they are the ordinary param
 //! commands, addressed by `<item id>.<property>`, and never recompile.
 
 mod commands;
