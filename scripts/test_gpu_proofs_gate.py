@@ -54,6 +54,23 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertEqual(targets(commands[1]), {"gpu_proofs"})
         self.assertTrue(all("--no-run" in command and "--" not in command for command in commands))
 
+    def test_check_mode_type_checks_the_same_targets_in_the_test_profile(self):
+        runs = [dict(package="catalog", targets=[], lib=True, full=False),
+                dict(package="catalog", targets=["main"], lib=False, full=False),
+                dict(package="scene", targets=None, lib=False, full=True)]
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as cargo:
+            self.assertEqual(gate.build_tests(Path("/tmp/Cargo.toml"), runs, check=True), 0)
+        selected, full = [call.args[0] for call in cargo.call_args_list]
+        for cmd in (selected, full):
+            self.assertEqual(cmd[:4], ["cargo", "check", "--profile", "test"])
+            self.assertNotIn("--no-run", cmd)
+            self.assertNotIn("--no-fail-fast", cmd)
+            self.assertIn("gpu-proofs", cmd[cmd.index("--features") + 1])
+        self.assertIn("--lib", selected)
+        self.assertEqual(selected[selected.index("--test") + 1], "main")
+        self.assertNotIn("--tests", selected)
+        self.assertIn("--tests", full)
+
     def test_build_tests_resolves_relative_manifest_and_sets_workspace_cwd(self):
         runs = [dict(package="catalog", targets=["gpu_proofs"], lib=False, full=False)]
         manifest = Path("nested/worktree/Cargo.toml")

@@ -305,8 +305,29 @@ def main():
         ["python3", "scripts/bridge_probe_gate.py"],
     ]
 
+    # Reports print into the night's log and never go red or file a bead:
+    # their findings are housekeeping, not a broken instrument.
+    reports = [
+        ["python3", ".claude/hooks/design_status.py", "--lifecycle-check"],
+        ["python3", "scripts/docs_cited_paths.py"],
+    ]
+
     green_gates = []
     red_gates = []
+
+    def run_report(cmd):
+        cmd_str = " ".join(cmd)
+        log_lines.append(f"\n=== report: {cmd_str} ===\n")
+        if args.dry_run:
+            print(f"[dry-run] would report: {cmd_str}")
+            return
+        try:
+            _, out, err, duration = run_cmd(cmd, cwd=MAIN_CHECKOUT, timeout=600)
+        except Exception as e:
+            out, err, duration = "", f"report could not run: {e}\n", 0
+        print(f"[REPORT] {cmd_str} ({duration:.0f}s)")
+        print(out + err, end="")
+        log_lines.append(out + err + f"\n[REPORT] ({duration:.0f}s)\n")
 
     def run_gate(cmd):
         cmd_str = " ".join(cmd)
@@ -372,6 +393,8 @@ def main():
             log_lines.append(f"[FAIL] ({e})\n")
             red_gates.append((cmd_str, f"[FAIL] {cmd_str}", str(e)[:800]))
 
+    for cmd in reports:
+        run_report(cmd)
     for cmd in cpu_gates:
         if defer_if_reserved(log_path, log_lines, args.dry_run):
             return 0

@@ -10,7 +10,8 @@ completion with `--no-fail-fast`. Never nextest — process-per-test
 defeats the GPU device lock. The test binaries are compiled first with no
 lock held (`cargo test --no-run`, same arguments); then the test run holds the
 machine-wide GPU queue (scripts/gpu_queue.py) and waits its turn behind any
-other GPU run. `--build-only` stops after the compile. Landing nextest and
+other GPU run. `--build-only` stops after the compile; `--check-only` type-checks
+the same targets (`cargo check --profile test`) and stops, for `landing_gate.py --cheap`. Landing nextest and
 catalog checks use the same proof feature to reuse the renderer artifacts.
 Builds disable incremental compilation so sccache can cache workspace crates.
 
@@ -168,10 +169,22 @@ def build_environment():
     return environment
 
 
-def build_tests(manifest_path: Path, runs: list[dict]) -> int:
+def check_cmd(test_cmd: list[str]) -> list[str]:
+    """The `cargo test` build as a type check of the same targets in the test
+    profile, so `#[cfg(test)]` proof modules are checked too. A full-suite
+    build names no target, which `cargo check` reads as lib and bins only."""
+    cmd = ["cargo", "check", "--profile", "test",
+           *(arg for arg in test_cmd[2:] if arg != "--no-fail-fast")]
+    if "--lib" not in cmd and "--test" not in cmd:
+        cmd.append("--tests")
+    return cmd
+
+
+def build_tests(manifest_path: Path, runs: list[dict], check: bool = False) -> int:
     """Compile every run's test binaries with no GPU lock held, so the hold
     covers test time only: the run that follows re-checks fingerprints and
-    starts testing. Returns the first nonzero cargo exit, else 0."""
+    starts testing. `check` type-checks instead and links nothing. Returns
+    the first nonzero cargo exit, else 0."""
     manifest_path = Path(manifest_path).resolve()
     packages = {}
     for run in runs:
@@ -190,7 +203,8 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
         cmd = cargo_test_cmd(manifest_path,
                              None if build["full"] else sorted(build["targets"]),
                              build["full"], build["lib"], package,
-                             list(features)) + ["--no-run"]
+                             list(features))
+        cmd = check_cmd(cmd) if check else cmd + ["--no-run"]
         print(f"$ {' '.join(cmd)}", flush=True)
         code = subprocess.run(cmd, cwd=manifest_path.parent, env=build_environment()).returncode
         if code:
@@ -1058,6 +1072,9 @@ def _main() -> int:
     parser.add_argument("--build-only", action="store_true",
                         help="compile the selected test binaries and stop (no GPU lock); "
                         "the landing gate runs this before taking its hold")
+    parser.add_argument("--check-only", action="store_true",
+                        help="type-check the selected test targets and stop (no binaries, "
+                        "no GPU lock); landing_gate.py --cheap runs this")
     parser.add_argument("--timings-md", type=Path, default=None,
                         help="write the 25 slowest tests as markdown to this path")
     parser.add_argument("--record-times", type=Path, default=None, metavar="PATH",
@@ -1153,7 +1170,11 @@ def _main() -> int:
     reuse = not (args.all_tests or args.record_times or args.timings_md or args.hang_allowance)
     passes = [gate_passes.proof_pass(repo, run) if reuse else None for run in runs]
     pending = [run for run, p in zip(runs, passes) if not (p and p.record)]
-    build_code = build_tests(manifest_path, pending) if pending else 0
+    build_code = build_tests(manifest_path, pending, check=args.check_only) if pending else 0
+    if args.check_only:
+        print(f"GPU-PROOFS GATE: {'FAIL' if build_code else 'CHECKED'} "
+              "(--check-only; nothing built or run, no GPU lock taken)")
+        return 1 if build_code == INPUTS_CHANGED else build_code
     if build_code:
         print(f"GPU-PROOFS GATE: FAIL (test build failed, exit {build_code}; no GPU lock taken)")
         return 1 if build_code == INPUTS_CHANGED else build_code

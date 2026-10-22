@@ -670,12 +670,9 @@ PREFIX_ROWS += [(prefix, ".rs", "manifold-app" if module in APP_CATALOG_MODULES 
 # binary) for every change under what it reads. A changed doc selects them too,
 # although the diff scope excludes docs from every other check (repo_scan_doc).
 REPO_SCAN_ROWS = [
-    # docs_cited_paths: a citation can name any repo path, so any change can break one.
-    ("", "", "manifold-core", [], ["docs_cited_paths"]),
-    # docs_index_sync lists docs/*.md; docs_lifecycle reads every doc, CLAUDE.md and the hooks.
-    ("docs/", ".md", "manifold-core", [], ["docs_index_sync", "docs_lifecycle"]),
-    ("CLAUDE.md", "", "manifold-core", [], ["docs_lifecycle"]),
-    (".claude/", "", "manifold-core", [], ["docs_lifecycle"]),
+    # docs_index_sync lists docs/*.md. Dead doc citations and uncited shipped
+    # docs are nightly reports (scripts/trunk_health.py), not landing tests.
+    ("docs/", ".md", "manifold-core", [], ["docs_index_sync"]),
     # Walks of every crates/**/*.rs.
     ("crates/", ".rs", "manifold-core", ["test:liquid_type_ids_live_in_one_place"],
      ["bug080_project_deserialize_single_door"]),
