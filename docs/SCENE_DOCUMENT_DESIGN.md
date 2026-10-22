@@ -787,14 +787,14 @@ Files: the whole branch diff against main. Runs alone, after every other lane.
 - **Water reads every Collider and Body in its World whose bounds touch the domain.** A collider that should not touch the water must be kept out of the domain; there are no collision groups in this cut.
 - **Automatic collision detail** may miss on hard scans, and there are no manual overrides. The better method is a follow-up (section 14).
 - **The input gate refuses bad physics input** instead of simulating it. A scene with a NaN scale shows a refusal on its card and that item stays out of the solver.
-- **No graph view of a scene layer.** Power users lose free graph editing of a whole scene and any inspection of the compiled graph.
+- **The scene is sealed in the graph editor.** A scene layer's graph shows the scene as one node with post-processing wired around it (ruling 18). Nodes inside the scene are edited only in the Scene panel and cannot be inspected.
 
 ## 14. Deferred
 
 Each has a trigger; none is built in this work.
 - **Convex decomposition by CoACD** (Wei et al., SIGGRAPH 2022) or V-HACD for bodies. Trigger: the automatic spatial split misses on a real scan. Ported code needs file-header credit and `THIRD_PARTY_NOTICES.md`.
 - **Swarm collisions** using the water's distance lattice. Trigger: after the swarm lane lands and Peter asks.
-- **Material and geometry node assets** (Material source = graph asset, a geometry graph on an Object, a sky graph on an Environment), attached to items, never replacing the scene. The curve-based geometry of section 15.3 would arrive this way. Trigger: a node feature for materials or geometry exists, or Peter asks for curves.
+- **Material and geometry node assets** (Material source = graph asset, a geometry graph on an Object, a sky graph on an Environment), attached to items, never replacing the scene. Hand-drawn curves for Extrude, Revolve and Tube would arrive this way; the built-in curves ship now (L20). Trigger: a node feature for materials or geometry exists, or Peter asks for hand-drawn curves.
 - **A read-only view of the compiled graph.** Trigger: a debugging need the logs cannot meet.
 - **Hover preview of a structural edit's effect** (keep, install, restart item, restart world) before the click. Trigger: Peter loses a simulation to a structural click on stage.
 - **Water collision groups** and a "Water collision: off" switch. Trigger: a collider that must stay out of the water but sits in its domain.
