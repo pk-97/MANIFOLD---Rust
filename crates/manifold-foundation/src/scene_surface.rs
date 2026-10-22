@@ -84,6 +84,9 @@ pub enum ControlGroup {
     Fog,
     RayTracing,
     RenderMode,
+    /// The colours and point size the render modes draw in.
+    Shading,
+    AmbientOcclusion,
     Animation,
 }
 
@@ -117,6 +120,8 @@ impl ControlGroup {
             Self::Fog => "Fog",
             Self::RayTracing => "Ray Tracing",
             Self::RenderMode => "Render Mode",
+            Self::Shading => "Shading",
+            Self::AmbientOcclusion => "Ambient Occlusion",
             Self::Animation => "Animation",
         }
     }
@@ -164,12 +169,14 @@ pub enum Feature {
     /// A fluid source's role: 0 Initial Fill, 1 Inflow, 2 Outflow, 3
     /// Collider.
     SourceRole,
+    /// The World's render mode: 0 Rendered, 1 Solid, 2 Wireframe, 3 Points.
+    RenderMode,
 }
 
 impl Feature {
     /// Whether the switch picks a mode rather than turning the feature on.
     pub fn has_modes(self) -> bool {
-        matches!(self, Self::LightType | Self::EnvironmentMode | Self::Background | Self::SourceRole)
+        matches!(self, Self::LightType | Self::EnvironmentMode | Self::Background | Self::SourceRole | Self::RenderMode)
     }
 
     /// Why a row gated on this feature does nothing right now.
@@ -181,6 +188,7 @@ impl Feature {
             Self::EnvironmentMode => "This environment mode does not use it",
             Self::Background => "The background is off",
             Self::SourceRole => "This source role does not use it",
+            Self::RenderMode => "This render mode does not use it",
         }
     }
 }

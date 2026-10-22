@@ -69,7 +69,7 @@ const fn softbox_row(property: &'static str) -> PropertyRow {
     row(property, ENV, Environment, setup()).when(softbox)
 }
 
-pub static LIGHT_ROWS: [PropertyRow; 42] = [
+pub static LIGHT_ROWS: [PropertyRow; 43] = [
     // Sun, Point, Spot. A new light starts where the compiler's lamp body
     // puts it (`scene_compile::light::lamp_params`).
     row("light_type", LIGHT, Light, Exposure::Automatic("the light's type")).param("mode").when(lamp),
@@ -124,6 +124,12 @@ pub static LIGHT_ROWS: [PropertyRow; 42] = [
         .param("uniform")
         .when(environment),
     row("hdri_file", HDRI, Environment, Exposure::Automatic("the HDRI file field")).param("path").when(hdri),
+    // Turns the HDRI about the up axis: its lighting, reflections and the
+    // background behind the scene together.
+    row("hdri_rotation", ENV, Environment, perform(CardBand::Lighting, 3))
+        .param("rotation")
+        .limit(HardLimit::Unlimited)
+        .when(hdri),
     row("hdri_width", HDRI, Environment, Exposure::Internal("the file's own size")).param("width").when(hdri),
     row("hdri_height", HDRI, Environment, Exposure::Internal("the file's own size")).param("height").when(hdri),
     row("bg_enabled", BG_SELECT, Environment, setup()).param("selector").switch(Feature::Background).toggle().default(0.0).when(hdri),

@@ -92,7 +92,7 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
         let hdri = b.add(owner, "hdri", "node.hdri_source");
         b.set(hdri, "path", SerializedParamValue::String { value: file.clone() });
         b.wire(hdri, "out", environment, "hdri");
-        background(b, owner, hdri);
+        background(b, owner, environment);
     }
     if let Some(sun) = sun {
         b.wire(sun, "out", environment, "sun");
@@ -104,9 +104,10 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
 
 /// The HDRI as a picture behind the scene, off by default: `bg_select` picks
 /// the finished scene (0) or the scene over the sky (1), and the switch
-/// prunes the sky chain while it is off. The finished image becomes the
-/// select's output.
-fn background(b: &mut Builder<'_>, owner: &str, hdri: u32) {
+/// prunes the sky chain while it is off. The sky is the baked environment,
+/// so it turns with HDRI Rotation and follows Intensity as the lighting
+/// does. The finished image becomes the select's output.
+fn background(b: &mut Builder<'_>, owner: &str, environment: u32) {
     let (Some(tail), Some(lens)) = (b.tail, b.active_lens) else {
         return;
     };
@@ -120,7 +121,7 @@ fn background(b: &mut Builder<'_>, owner: &str, hdri: u32) {
     b.set(blur, "radius", SerializedParamValue::Float { value: 0.0 });
     b.wire(tail, "out", select, "in_0");
     b.wire(tail, "out", over, "top");
-    b.wire(hdri, "out", sky, "sky");
+    b.wire(environment, "envmap", sky, "sky");
     b.wire(lens, "out", sky, "camera");
     b.wire(sky, "out", blur, "source");
     b.wire(blur, "out", gain, "in");
