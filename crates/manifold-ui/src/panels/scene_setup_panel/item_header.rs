@@ -49,7 +49,7 @@ impl ScenePanel {
     pub(super) fn build_item_header(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, item: &SceneItemVm) -> f32 {
         // Frame needs two icon-cell widths for its label.
         let frame_w = STEP_W * 2.0;
-        let framed = !matches!(item.kind, ItemKind::World | ItemKind::Material | ItemKind::Camera | ItemKind::Modifier);
+        let framed = can_frame(item.kind);
         let view_w = if item.copy_view {
             tree.text_width(USE_VIEW, color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0
         } else {
@@ -184,6 +184,13 @@ impl ScenePanel {
             return Some(PanelAction::Project(ProjectAction::SceneDuplicate(layer(), item.clone())));
         }
         let (_, item) = self.header_buttons.remove.iter().find(|(button, _)| *button == node_id)?;
-        Some(PanelAction::Project(ProjectAction::SceneRemove(layer(), item.clone())))
+        Some(PanelAction::Project(ProjectAction::SceneRemove(layer(), vec![item.clone()])))
     }
+}
+
+/// Whether Frame applies to an item of `kind`, from its header button or the
+/// keyboard: a Camera is the view itself, and the World and a Material have
+/// no place to frame.
+pub(super) fn can_frame(kind: ItemKind) -> bool {
+    !matches!(kind, ItemKind::World | ItemKind::Material | ItemKind::Camera | ItemKind::Modifier)
 }

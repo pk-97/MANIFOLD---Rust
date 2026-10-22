@@ -1010,7 +1010,7 @@ mod command_site_plan_tests {
         let layer_id = project.timeline.layers[idx].layer_id.clone();
         let before = serde_json::to_value(&project).unwrap();
         {
-            let action = ProjectAction::SceneRemove(layer_id.clone(), manifold_core::scene_doc::ItemId::new("cube"));
+            let action = ProjectAction::SceneRemove(layer_id.clone(), vec![manifold_core::scene_doc::ItemId::new("cube")]);
             let (_, stamps, sent) = dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
             assert_eq!(serde_json::to_value(&project).unwrap(), before, "{action:?}: UI snapshot untouched");
             assert!(plan_after(&stamps).projections == Default::default(), "{action:?}: nothing to project yet");

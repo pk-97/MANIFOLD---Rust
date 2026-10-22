@@ -207,8 +207,8 @@ pub enum ProjectAction {
     /// `parent` when it is a group. A Modifier aims at the `selected` Objects
     /// and Groups, or the whole scene when there are none. One undo step.
     SceneAdd { layer_id: LayerId, entry: String, parent: Option<ItemId>, selected: Vec<ItemId> },
-    /// Remove an item and everything under it. One undo step.
-    SceneRemove(LayerId, ItemId),
+    /// Remove the items and everything under them. One undo step.
+    SceneRemove(LayerId, Vec<ItemId>),
     /// Duplicate an item with everything under it. One undo step.
     SceneDuplicate(LayerId, ItemId),
     /// Wrap the items in a new Group (Cmd+G). One undo step.

@@ -38,7 +38,7 @@ mod world;
 pub use add_menu::{ADD_ENTRIES, AddEntry, add_entry, unique_name};
 pub use camera::{CAMERA_ROWS, FAR_CLIP, NEAR_CLIP};
 pub use fields::{
-    Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, field_rows, is_material,
+    Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, item_disabled, field_rows, is_material,
     is_object_or_group, set_field,
 };
 pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, SURFACE_ROLE, acts_on_copies, can_copy, copies_unavailable};
@@ -48,7 +48,7 @@ pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily, node_type as material_node_type};
 pub use modifier::{
-    MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_rows, modifier_type, shatter_refuses,
+    MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_refuses, modifier_rows, modifier_type, shatter_refuses,
 };
 pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
 use ocean::OCEAN_TABLES;

@@ -21,7 +21,7 @@ use super::fields::{
 use super::{Exposure, PropertyRow, Reach, perform, row};
 use crate::scene_doc::{
     DEFAULT_PIECES, Item, ItemFields, ModifierFields, ModifierTargets, ModifierTexture, ModifierType, PhysicsSetting,
-    SceneDoc,
+    SceneDoc, Shape,
 };
 
 const M: ControlGroup = ControlGroup::Modifier;
@@ -285,7 +285,11 @@ pub fn modifier_rows(fields: &ItemFields) -> &'static [PropertyRow] {
 /// Why Shatter cannot break `target`: it breaks rigid bodies only. The
 /// Targets menu shows it after the item's name, so it does not name Shatter.
 pub fn shatter_refuses(target: &Item) -> Option<&'static str> {
-    (target.fields.physics() != PhysicsSetting::Body).then_some("Not a Body: set its Physics to Body")
+    if target.fields.physics() != PhysicsSetting::Body {
+        return Some("Not a Body: set its Physics to Body");
+    }
+    // Copies are a group of bodies the world lays out, not one body.
+    target.fields.copies().then_some("Copies on: each copy is a body of the copies, not one body to break")
 }
 
 /// Why a Shatter card's Break does nothing: no target is a Body.
@@ -364,12 +368,22 @@ const PIECES: &[Choice] = &[
     Choice { key: "16", label: "16" },
     Choice { key: "24", label: "24" },
     Choice { key: "32", label: "32" },
+    Choice { key: "48", label: "48" },
+    Choice { key: "64", label: "64" },
 ];
 
-/// A Modifier's target picks: Objects and Groups; Shatter refuses a target
-/// that is not a Body.
+/// Why no card can aim at `target`: an Ocean is an endless sea cast from
+/// the camera each frame, so it has no bounds for a modifier's frame. A
+/// card aimed at the whole scene or at a Group passes over it.
+pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
+    matches!(&target.fields, ItemFields::Object(object) if object.shape == Shape::Ocean)
+        .then_some("An Ocean is endless: it has no bounds for a modifier to bend in")
+}
+
+/// A Modifier's target picks: Objects and Groups; never an Ocean; Shatter
+/// refuses a target that is not a Body.
 fn target_refused(card_fields: &ItemFields, target: &Item) -> Option<&'static str> {
-    is_shatter(card_fields).then(|| shatter_refuses(target)).flatten()
+    modifier_refuses(target).or_else(|| is_shatter(card_fields).then(|| shatter_refuses(target)).flatten())
 }
 
 pub static MODIFIER_FIELDS: [FieldRow; 6] = [

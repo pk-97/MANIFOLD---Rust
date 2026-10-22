@@ -19,7 +19,13 @@ use crate::command::{Command, CompositeCommand};
 use crate::commands::effects::ChangeGraphParamCommand;
 use crate::undo::UndoRedoManager;
 
+thread_local! {
+    /// How many times this thread compiled a scene.
+    static COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn stand_in(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
+    COMPILES.with(|count| count.set(count.get() + 1));
     let ids = doc.ids();
     let node = |id: &ItemId| format!("{id}:item");
     let mut nodes: Vec<_> = ids
@@ -191,6 +197,9 @@ fn every_scene_edit_undoes_exactly() {
     ];
     for (name, edit) in card_edits {
         let mut project = carded();
+        // A row both types share starts at the new type's default on a swap.
+        let shared = param_id(&id("peel"), "value");
+        assert!(project.timeline.layers[0].gen_params_mut().unwrap().set_base_param(&shared, 0.9));
         let before = state(&project);
         let mut undo = UndoRedoManager::new();
         assert!(undo.execute(edit, &mut project), "{name} applies");
@@ -203,6 +212,7 @@ fn every_scene_edit_undoes_exactly() {
                 let peel = card(&project, "peel");
                 assert_eq!(chain(&project), ["peel", "waves"], "a swap keeps the card's place");
                 assert!(peel.on && peel.targets == ModifierTargets::Items(vec![id(CUBE)]), "and its toggle and targets");
+                assert_eq!(scene(&project).get_base_param(&shared), 0.5, "its rows start at the new type's defaults");
             }
             "remove target" => assert_eq!(card(&project, "peel").targets, ModifierTargets::Items(Vec::new())),
             _ => {}
@@ -216,8 +226,10 @@ fn every_scene_edit_undoes_exactly() {
     // Ungroup, from a grouped scene.
     let (mut project, layer) = self::project();
     let mut undo = UndoRedoManager::new();
+    let compiled = COMPILES.with(std::cell::Cell::get);
     let group = CompositeCommand::new(group_commands(&layer, &doc, &[id(CUBE)], id("rig")), "Group".into());
     assert!(undo.execute(Box::new(group), &mut project));
+    assert_eq!(COMPILES.with(std::cell::Cell::get) - compiled, 1, "a composite of scene edits compiles once");
     let before = state(&project);
     let grouped = scene(&project).scene.clone().unwrap();
     let ungroup = CompositeCommand::new(ungroup_commands(&layer, &grouped, &id("rig")), "Ungroup".into());
@@ -247,6 +259,18 @@ fn every_scene_edit_undoes_exactly() {
     assert!(!undo.execute(Box::new(inside), &mut project), "an edit inside the Scene node is refused");
     assert!(!undo.execute(Box::new(RemoveGraphNodeCommand::new(target, sealed, catalog)), &mut project), "and so is its removal");
     assert_eq!(state(&project), before);
+
+    // Undo puts back only what the edit changed: a knob turned since, outside
+    // undo (a MIDI-mapped dial), keeps its value.
+    let (mut project, layer) = self::project();
+    let mut undo = UndoRedoManager::new();
+    let lamp = AddSceneItemCommand::new(layer.clone(), ItemKind::Light, None, 0, None, id("lamp"));
+    assert!(undo.execute(Box::new(lamp), &mut project));
+    let knob = param_id(&id(CUBE), "value");
+    assert!(project.timeline.layers[0].gen_params_mut().unwrap().set_base_param(&knob, 0.3));
+    assert!(undo.undo(&mut project));
+    assert!(scene(&project).scene.as_ref().unwrap().find(&id("lamp")).is_none(), "the light goes");
+    assert_eq!(scene(&project).get_base_param(&knob), 0.3, "the knob turned since stays where it is");
 }
 
 /// A rename or a move compiles the same item under the same id, so its

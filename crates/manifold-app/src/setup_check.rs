@@ -1,5 +1,7 @@
-//! The setup check on the cards and the gizmos (SCENE_SETUP_PROGRAMME.md
-//! section 3 B3). The check itself is `SceneVm::problems` (declared shapes at
+//! The setup check on the cards and the gizmos (SCENE_DOCUMENT_DESIGN.md
+//! section 7.18 (Fit with the water end game), Setup check). The scene model
+//! comes from the app's one seam, `scene_gizmo::layer_scene_vm`, and only for
+//! a scene that holds a Water. The check itself is `SceneVm::problems` (declared shapes at
 //! the values the knobs show) plus `problems_with_runtime` (what each
 //! solver's fit did to the values it ran). This module carries the solver's
 //! half from the content thread to the cards whatever Show gizmos says
@@ -19,9 +21,10 @@ use manifold_core::fluid_domain::FluidDomainSnapshot;
 use manifold_core::layer::Layer;
 use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
 use manifold_core::project::Project;
+use manifold_core::scene_doc::ItemKind;
 use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_nodes_scene::node_graph::scene_vm::{
-    BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneVm, SetupProblem, body_anchors, body_problems, card_param, copies_anchors,
+    BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneStructure, SceneVm, SetupProblem, body_anchors, body_problems, card_param, copies_anchors,
     copies_problems, problems_with_runtime,
 };
 use manifold_ui::param_surface::{ParamRow, ParamSurface};
@@ -341,18 +344,26 @@ pub(crate) fn mark_layer_card(card: &mut ParamSurface, layer: &Layer, report: &[
     with_layer_def(layer, |def| {
         let mut problems = problems_of(def, runtime_fits(report, &layer.layer_id));
         body_problems(&body_anchors(def), refused_bodies(report, &layer.layer_id), &mut problems);
-        problems.extend(water_problems(layer, report));
+        problems.extend(water_problems(layer, report, &mut None));
         mark_rows(&mut card.rows, &problems, def);
     });
 }
 
 /// `layer`'s Water problems: each domain and its sources at the card values,
 /// with what the solver reported (clipped water, bodies past what it couples).
-fn water_problems(layer: &Layer, report: &[SetupFitEntry]) -> Vec<SetupProblem> {
-    let Some((doc, inst)) = layer.gen_params().and_then(|inst| inst.scene.as_ref().map(|doc| (doc, inst))) else {
+/// `structure` is the scene's structure from the last check of this same
+/// graph, kept so a value write never lays out the compile again.
+fn water_problems(layer: &Layer, report: &[SetupFitEntry], structure: &mut Option<Arc<SceneStructure>>) -> Vec<SetupProblem> {
+    // Only a Water has problems here; a scene without one builds nothing,
+    // so a row drag on any other scene costs no scene model per frame.
+    let mut has_water = false;
+    if let Some(doc) = layer.gen_params().and_then(|inst| inst.scene.as_ref()) {
+        doc.walk(|item, _| has_water |= item.kind() == ItemKind::Water);
+    }
+    let Some(vm) = has_water.then(|| crate::scene_gizmo::layer_scene_vm_over(layer, structure.as_ref())).flatten() else {
         return Vec::new();
     };
-    let vm = SceneVm::from_doc(doc, &|id| inst.params.contains(id).then(|| inst.get_base_param(id)));
+    *structure = Some(Arc::clone(vm.structure()));
     let mut problems = Vec::new();
     problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime_fits(report, &layer.layer_id), &mut problems);
     problems
@@ -391,6 +402,8 @@ struct SlotCheck {
     copies: Vec<CopiesAnchor>,
     /// The Physics Worlds' wired bodies, read once per graph.
     bodies: Vec<BodyAnchor>,
+    /// The scene's structure, read once per graph.
+    structure: Option<Arc<SceneStructure>>,
     report: Option<SetupFitReport>,
     problems: Vec<SetupProblem>,
     /// What the card shows of the problems; 0 when none.
@@ -419,6 +432,7 @@ impl SlotCheck {
             if self.layer.take().is_some() || self.hash != 0 {
                 self.copies.clear();
                 self.bodies.clear();
+                self.structure = None;
                 self.report = None;
                 self.problems.clear();
                 self.hash = 0;
@@ -432,6 +446,7 @@ impl SlotCheck {
             self.layer = Some(layer.layer_id.clone());
             self.copies = with_layer_def(layer, copies_anchors).unwrap_or_default();
             self.bodies = with_layer_def(layer, body_anchors).unwrap_or_default();
+            self.structure = None;
             self.graph = graph;
             moved = true;
         }
@@ -444,7 +459,7 @@ impl SlotCheck {
         self.problems.clear();
         copies_problems(&self.copies, runtime_fits(report, &layer.layer_id), &mut self.problems);
         body_problems(&self.bodies, refused_bodies(report, &layer.layer_id), &mut self.problems);
-        self.problems.extend(water_problems(layer, report));
+        self.problems.extend(water_problems(layer, report, &mut self.structure));
         let mut hasher = DefaultHasher::new();
         for problem in &self.problems {
             problem.hash_card(&mut hasher);

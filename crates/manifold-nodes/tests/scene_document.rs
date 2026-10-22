@@ -112,6 +112,24 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
     assert_eq!(fx.drivers.as_ref().unwrap()[0].param_id, "cube.pos_y", "the LFO still points at the cube");
     assert!(fx.params.get(radius).is_some_and(|p| p.exposed), "the blur's control is back on the card");
     assert_eq!(fx.drivers.as_ref().unwrap()[1].param_id, radius, "and its LFO with it");
+
+    // The format is closed inside an enum variant too.
+    fn open_sky(value: &mut serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Object(sky)) = map.get_mut("sky") {
+                    sky.insert("bogus".into(), serde_json::json!(1));
+                    return true;
+                }
+                map.values_mut().any(open_sky)
+            }
+            serde_json::Value::Array(items) => items.iter_mut().any(open_sky),
+            _ => false,
+        }
+    }
+    let mut json = serde_json::to_value(&doc).unwrap();
+    assert!(open_sky(&mut json), "the base scene's environment has a Sky source");
+    assert!(serde_json::from_value::<SceneDoc>(json).is_err(), "an unknown key inside a variant is refused");
 }
 
 thread_local! {
@@ -696,4 +714,135 @@ mod every_kind_and_choice_survives {
         }
         assert!(failures.is_empty(), "{} cases failed:\n{}", failures.len(), failures.join("\n"));
     }
+}
+
+/// Group, Ungroup and a move out of a turned, scaled Group keep every item
+/// where it is on screen (SCENE_DOCUMENT_DESIGN.md section 7.2), and undo
+/// puts the item's rows back.
+#[test]
+fn moving_an_item_between_groups_keeps_it_in_place() {
+    use manifold_core::scene_doc::param_id;
+    use manifold_core::scene_doc::transform::{Mat4, frame_of, mat4_mul, trs_matrix};
+    use manifold_editing::command::CompositeCommand;
+    use manifold_editing::commands::scene_doc::{ReparentSceneItemCommand, group_commands, ungroup_commands};
+    use manifold_editing::undo::UndoRedoManager;
+
+    let (cube, rig, outer) = (ItemId::new("cube"), ItemId::new("rig"), ItemId::new("outer"));
+    let mut doc = SceneDoc::base();
+    doc.insert(None, 0, Item::new(outer.clone(), "Outer", ItemFields::default_for(ItemKind::Group))).unwrap();
+    doc.insert(Some(&outer), 0, Item::new(rig.clone(), "Rig", ItemFields::default_for(ItemKind::Group))).unwrap();
+    doc.reparent(&cube, Some(&rig), 0).unwrap();
+    let mut layer = scene_layer(doc);
+    layer.layer_id = manifold_core::LayerId::new("scene");
+    let layer_id = layer.layer_id.clone();
+    {
+        let fx = layer.gen_params_mut().unwrap();
+        for (item, values) in [
+            (&outer, [3.0, -1.0, 2.0, 0.2, 0.0, -0.4, 2.0, 2.0, 2.0]),
+            (&rig, [1.0, 2.0, -3.0, 0.3, -0.7, 1.1, 0.5, 0.5, 0.5]),
+            (&cube, [0.5, -1.0, 0.25, -0.2, 0.4, 0.9, 1.5, 1.5, 1.5]),
+        ] {
+            for (name, value) in ["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z"].into_iter().zip(values) {
+                assert!(fx.set_base_param(&param_id(item, name), value), "{item} has {name}");
+            }
+        }
+    }
+    let mut project = Project::default();
+    project.timeline.layers.push(layer);
+    let world = |project: &Project| -> Mat4 {
+        let fx = project.timeline.layers[0].gen_params().unwrap();
+        let doc = fx.scene.as_ref().unwrap();
+        let values = |id: &str| fx.params.contains(id).then(|| fx.get_base_param(id));
+        let read = |names: [&str; 3]| names.map(|name| fx.get_base_param(&param_id(&cube, name)));
+        let parent = doc.locate(&cube).unwrap().0;
+        mat4_mul(
+            frame_of(doc, parent.as_ref(), &values),
+            trs_matrix(read(["pos_x", "pos_y", "pos_z"]), read(["rot_x", "rot_y", "rot_z"]), read(["scale_x", "scale_y", "scale_z"])),
+        )
+    };
+    let same = |a: Mat4, b: Mat4| a.iter().flatten().zip(b.iter().flatten()).all(|(x, y)| (x - y).abs() < 1e-3);
+    let start = world(&project);
+    let doc_now = |project: &Project| project.timeline.layers[0].gen_params().unwrap().scene.clone().unwrap();
+    let mut undo = UndoRedoManager::new();
+
+    let out = ReparentSceneItemCommand::new(layer_id.clone(), cube.clone(), None, 0);
+    assert!(undo.execute(Box::new(out), &mut project));
+    assert!(same(world(&project), start), "a move to the root keeps the cube in place");
+    assert!(undo.undo(&mut project));
+    assert!(same(world(&project), start) && doc_now(&project).locate(&cube).unwrap().0 == Some(rig.clone()), "undo puts it back");
+
+    let ungroup = CompositeCommand::new(ungroup_commands(&layer_id, &doc_now(&project), &rig), "Ungroup".into());
+    assert!(undo.execute(Box::new(ungroup), &mut project));
+    assert!(same(world(&project), start), "ungrouping keeps the cube in place");
+
+    let group = CompositeCommand::new(group_commands(&layer_id, &doc_now(&project), std::slice::from_ref(&cube), ItemId::new("new")), "Group".into());
+    assert!(undo.execute(Box::new(group), &mut project));
+    assert!(same(world(&project), start), "grouping keeps the cube in place");
+}
+
+/// A swarm drawing a group with Copies on nests the layout at its live
+/// particles only: Count drives how many carry it, not the seed's capacity.
+#[test]
+fn a_swarm_nests_a_copied_group_at_its_live_count() {
+    use manifold_core::effect_graph_def::BindingTarget;
+    use manifold_core::scene_doc::{DrawAs, param_id};
+    let (rack, swarm) = (ItemId::new("rack"), ItemId::new("swarm"));
+    let mut doc = SceneDoc::base();
+    let mut group = ItemFields::default_for(ItemKind::Group);
+    if let ItemFields::Group(fields) = &mut group {
+        fields.copies = true;
+    }
+    let mut fields = ItemFields::default_for(ItemKind::Swarm);
+    if let ItemFields::Swarm(s) = &mut fields {
+        s.draw_as = DrawAs::Item(rack.clone());
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(rack.clone(), "Rack", group)).unwrap();
+    doc.reparent(&ItemId::new("cube"), Some(&rack), 0).unwrap();
+    doc.insert(None, end + 1, Item::new(swarm.clone(), "Swarm", fields)).unwrap();
+    let layer = scene_layer(doc);
+    let fx = layer.gen_params().unwrap();
+    let def = flat(fx);
+    let nest = def.nodes.iter().find(|n| n.type_id == "node.nest_copies").expect("the drawn group's layout is nested");
+    let bindings = &fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings;
+    let count = param_id(&swarm, "count");
+    assert!(
+        bindings.iter().any(|binding| binding.id == count
+            && matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id.as_str().ends_with(nest.node_id.as_str()) && param == "outer_count")),
+        "Count drives how many particles carry the layout"
+    );
+}
+
+/// Shatter breaks a built-in shape, not only an imported mesh: the load
+/// pass cuts each piece from the shape the body collided with
+/// (node.mesh_fragment), draws it and gives its body the same piece.
+#[test]
+fn shatter_breaks_a_built_in_cube() {
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
+    let cube = ItemId::new("cube");
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&cube) {
+        object.physics = PhysicsSetting::Body;
+    }
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields { modifier: ModifierType::Shatter, on: true, targets: ModifierTargets::Items(vec![cube.clone()]), pieces: 24, ..fields.clone() };
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("break"), "Break", card)).unwrap();
+    let layer = scene_layer(doc);
+    // The load pass runs on the sealed layer graph, as the runtime loads it.
+    let def = layer.gen_params().unwrap().graph.clone().unwrap();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
+    let prepared = prepare_scene_modifiers(&def, &registry).unwrap();
+    let cuts: Vec<_> = prepared.def.nodes.iter().filter(|n| n.type_id == "node.mesh_fragment").collect();
+    assert_eq!(cuts.len(), 24, "one cut per piece");
+    for cut in &cuts {
+        let feeds = |port: &str| prepared.def.wires.iter().filter(|w| w.from_node == cut.id && w.from_port == port).count();
+        assert_eq!((feeds("vertices"), feeds("source")), (1, 1), "the piece draws it and its body collides with it");
+    }
+    prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
 }

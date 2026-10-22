@@ -153,7 +153,11 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             b.object_items.push(item.id.clone());
         }
         None => {
-            if let DrawAs::Item(prototype) = &fields.draw_as {
+            // One copy source draws an item: the first swarm in tree order
+            // keeps it (the Draw As picker refuses a second, with its reason).
+            if let DrawAs::Item(prototype) = &fields.draw_as
+                && !b.swarm_draws.contains_key(prototype)
+            {
                 // A Group or Object with Copies on keeps them: its whole
                 // layout rides every particle ([`nest_layout`] wires the
                 // layout in).
@@ -177,6 +181,11 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     }
     b.swarms.push(item.id.clone());
     b.rows(item);
+    // Only the live particles carry the drawn layout, so the nest sizes by
+    // Count, not by the seed's capacity.
+    if let (Some(seed), Some(nest)) = (b.id(owner, "seed"), b.id(owner, "nest")) {
+        b.follow(seed, "active_count", nest, "outer_count");
+    }
 }
 
 /// Place each swarm in its frame and read the mesh an item emits from,

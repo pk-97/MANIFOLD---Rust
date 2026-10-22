@@ -17,6 +17,7 @@ mod bake_equirect_envmap;
 mod pack_curve_xy;
 mod polygon_curve;
 mod curve_solid_source;
+mod mesh_fragment;
 mod consecutive_edges;
 manifold_core::testkit_visible! { mod copy_positions; }
 mod cylinder_wrap_field;

@@ -65,9 +65,15 @@ impl ScenePanel {
         Some(PanelAction::Root(RootAction::SceneRenameClicked(item.layer_id, item.item, name)))
     }
 
+    /// Delete or Backspace: remove every selected item, one undo step.
     pub fn remove_selection_action(&self) -> Option<PanelAction> {
-        let item = self.selected_scene_item().filter(|item| item.removable)?;
-        Some(PanelAction::Project(ProjectAction::SceneRemove(item.layer_id, item.item)))
+        let vm = self.state.as_live()?;
+        let items: Vec<ItemId> = self
+            .selected_scene_items()
+            .into_iter()
+            .filter(|id| vm.item(id).is_some_and(|item| item.removable))
+            .collect();
+        (!items.is_empty()).then(|| PanelAction::Project(ProjectAction::SceneRemove(vm.layer_id.clone(), items)))
     }
 
     /// Cmd+G: wrap the selected items in a new Group.
@@ -88,7 +94,7 @@ impl ScenePanel {
     }
 
     pub fn frame_selection_action(&self) -> Option<PanelAction> {
-        let item = self.selected_scene_item().filter(|item| !matches!(item.kind, ItemKind::Light | ItemKind::Material | ItemKind::World))?;
+        let item = self.selected_scene_item().filter(|item| super::item_header::can_frame(item.kind))?;
         Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(item.layer_id, item.item)))
     }
 }

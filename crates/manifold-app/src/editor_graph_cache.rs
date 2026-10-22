@@ -11,7 +11,7 @@ use manifold_core::GraphTarget;
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
-use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
+use manifold_nodes_scene::node_graph::scene_vm::{SceneStructure, SceneVm};
 
 /// Parts whose writes can change the watched graph or which graph resolves.
 /// Graph edits declare Overrides; Values is left out so a slider drag does not
@@ -23,6 +23,8 @@ pub(crate) struct EditorGraphCache {
     catalog_default_version: u64,
     badge: Option<(GraphKey, bool)>,
     viewport: Option<(GraphKey, ViewportDef)>,
+    /// The viewport scene's structure, keyed on the graph parts alone.
+    structure: Option<(GraphKey, Arc<SceneStructure>)>,
 }
 
 /// (watched target, catalog default version, catalog generation, parts key)
@@ -91,8 +93,9 @@ impl EditorGraphCache {
         has_mod
     }
 
-    /// The scene a gizmo host shows. It reads the owner's base values, so it
-    /// keys on Values too.
+    /// The scene a gizmo host shows. Its handles sit at the owner's base
+    /// values, so it keys on Values too; a value write rebuilds only what
+    /// the values place, over the structure cached for the graph parts.
     pub(crate) fn viewport_def(&mut self, project: &Project, target: Option<&GraphTarget>, parts: &PartStamps) -> ViewportDef {
         let key = self.key(target, parts, GRAPH_PARTS.union(ChangeSet::of(&[Part::Values])));
         if let Some((cached, def)) = &self.viewport
@@ -100,10 +103,17 @@ impl EditorGraphCache {
         {
             return def.clone();
         }
+        let structure_key = self.key(target, parts, GRAPH_PARTS);
+        let structure = self
+            .structure
+            .as_ref()
+            .filter(|(cached, _)| *cached == structure_key)
+            .map(|(_, structure)| structure);
         let def = target.map_or_else(ViewportDef::default, |target| {
-            let scene = crate::scene_gizmo::scene_vm_of(project, target).map(Arc::new);
+            let scene = crate::scene_gizmo::scene_vm_of(project, target, structure).map(Arc::new);
             ViewportDef { resolved: scene.is_some() || crate::graph_target::resolve(project, target).is_some(), scene }
         });
+        self.structure = def.scene.as_ref().map(|scene| (structure_key, Arc::clone(scene.structure())));
         self.viewport = Some((key, def.clone()));
         def
     }
@@ -177,6 +187,11 @@ mod tests {
         bump(&mut parts, Part::Values);
         let fresh = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
         assert!(!Arc::ptr_eq(&first, &fresh), "base values feed the authored projection");
+        assert!(Arc::ptr_eq(first.structure(), fresh.structure()), "a value write never lays out the scene again");
+
+        bump(&mut parts, Part::Overrides);
+        let rebuilt = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
+        assert!(!Arc::ptr_eq(fresh.structure(), rebuilt.structure()), "a graph edit does");
 
         let none = cache.viewport_def(&project, None, &parts);
         assert!(!none.resolved && none.scene.is_none());

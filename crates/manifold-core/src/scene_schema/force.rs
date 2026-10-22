@@ -9,7 +9,7 @@ use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, wrong_value};
 use super::{Exposure, PropertyRow, Reach, perform, row, setup};
-use crate::scene_doc::{ForceTargets, ForceType, Item, ItemFields, SceneDoc};
+use crate::scene_doc::{ForceTargets, ForceType, Item, ItemFields, ItemId, ItemKind, SceneDoc};
 
 const F: ControlGroup = ControlGroup::Force;
 const FORCES: CardBand = CardBand::Forces;
@@ -149,6 +149,28 @@ pub static FORCE_ROWS: [PropertyRow; 65] = [
     impulse(explosion),
 ];
 
+/// What a Force can be aimed at: Objects and Groups (the bodies at or under
+/// them), and Swarms.
+fn is_force_target(item: &Item) -> bool {
+    is_object_or_group(item) || item.kind() == ItemKind::Swarm
+}
+
+/// Whether the scene holds an item of any of `kinds`.
+fn holds(doc: &SceneDoc, kinds: &[ItemKind]) -> bool {
+    let mut any = false;
+    doc.walk(|item, _| any |= kinds.contains(&item.kind()));
+    any
+}
+
+/// Whether `id` is a Swarm or holds one.
+fn swarm_under(doc: &SceneDoc, id: &ItemId) -> bool {
+    let mut any = false;
+    doc.walk(|item, ancestors| {
+        any |= item.kind() == ItemKind::Swarm && (&item.id == id || ancestors.iter().any(|holder| &holder.id == id));
+    });
+    any
+}
+
 /// Why a Force's Impulse cannot fire right now because of what the scene
 /// holds, for the disabled control's hover text; `None` when it can. Whether
 /// the force is switched on is a live param and is the card's to check.
@@ -160,10 +182,12 @@ pub fn impulse_unavailable(doc: &SceneDoc, item: &Item) -> Option<&'static str> 
         return Some("This force has no impulse");
     }
     match &force.targets {
-        ForceTargets::Physics if !doc.any_physics() => Some("Nothing in the scene has physics for this force to push"),
+        ForceTargets::Physics if !doc.any_physics() && !holds(doc, &[ItemKind::Swarm, ItemKind::Water]) => {
+            Some("Nothing in the scene has physics, a swarm or water for this force to push")
+        }
         ForceTargets::Items(ids) if ids.is_empty() => Some("Choose the items this force pushes"),
-        ForceTargets::Items(ids) if !ids.iter().any(|id| doc.physical_under(id)) => {
-            Some("None of the chosen items has physics")
+        ForceTargets::Items(ids) if !ids.iter().any(|id| doc.physical_under(id) || swarm_under(doc, id)) => {
+            Some("None of the chosen items has physics or is a swarm")
         }
         _ => None,
     }
@@ -223,7 +247,7 @@ pub static FORCE_FIELDS: [FieldRow; 2] = [
         id: "targets",
         label: "Targets",
         section: ControlGroup::Force,
-        control: FieldControl::ItemSet { items: is_object_or_group, all: "Everything with physics", refused: |_, _| None },
+        control: FieldControl::ItemSet { items: is_force_target, all: "Everything with physics", refused: |_, _| None },
         applies: always,
         disabled: enabled,
         read: |fields| match fields {

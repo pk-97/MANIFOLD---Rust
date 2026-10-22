@@ -130,6 +130,15 @@ pub fn choice_disabled(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> O
     }
 }
 
+/// Why `item` cannot take `pick` as the item of its field `field` right now,
+/// or `None`: the item picker's sibling of [`choice_disabled`].
+pub fn item_disabled(doc: &SceneDoc, item: &Item, field: &str, pick: &Item) -> Option<&'static str> {
+    match item.kind() {
+        ItemKind::Swarm => super::swarm::pick_unavailable(doc, item, field, pick),
+        _ => None,
+    }
+}
+
 /// The field rows that exist for an item with `fields`.
 pub fn applicable_fields(fields: &ItemFields) -> impl Iterator<Item = &'static FieldRow> + '_ {
     field_rows(fields.kind()).iter().filter(move |row| (row.applies)(fields))
@@ -149,6 +158,12 @@ pub fn set_field(doc: &SceneDoc, item: &Item, row: &FieldRow, value: &FieldValue
     }
     if let FieldValue::Choice(key) = value
         && let Some(reason) = choice_disabled(doc, item, row.id, key)
+    {
+        return Err(reason.to_owned());
+    }
+    if let FieldValue::Item(Some(id)) = value
+        && let Some(pick) = doc.find(id)
+        && let Some(reason) = item_disabled(doc, item, row.id, pick)
     {
         return Err(reason.to_owned());
     }

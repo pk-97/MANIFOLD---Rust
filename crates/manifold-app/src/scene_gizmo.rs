@@ -8,11 +8,13 @@
 //! The scene VM here is what the viewport reads: the scene document at the
 //! layer's card values, so handles sit at the values the knobs show.
 
+use std::sync::Arc;
+
 use manifold_core::effects::{ParamId, invert_card_reshape};
 use manifold_core::macro_bank::MacroCurve;
 use manifold_core::scene_doc::ItemId;
 use manifold_core::{GraphTarget, LayerId, project::Project};
-use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, ShapeOwner, ShapeWrite};
+use manifold_nodes_scene::node_graph::scene_vm::{SceneStructure, SceneVm, ShapeOwner, ShapeWrite};
 use manifold_nodes_scene::node_graph::viewport_gizmo::{
     GizmoDrag, GizmoMode, GizmoSelection, GizmoTarget, HandleValues, HandleWrite, SelectionWrite, gizmo_target_for,
     gizmo_targets, pick_axis, pick_target, selection_writes,
@@ -27,15 +29,31 @@ use crate::ui_bridge::scrub::{ResolvedScrub, begin_param_group, commit_param_gro
 /// The scene VM of `layer`'s scene document at the layer's card values, so
 /// handles sit where the knobs show. `None` when the layer has no scene.
 pub(crate) fn scene_vm(project: &Project, layer: &LayerId) -> Option<SceneVm> {
-    let doc = project.scene_of(layer)?;
-    let inst = project.timeline.find_layer_by_id(layer.as_str())?.1.gen_params()?;
-    Some(SceneVm::from_doc(doc, &|id| inst.params.contains(id).then(|| inst.get_base_param(id))))
+    layer_scene_vm(project.timeline.find_layer_by_id(layer.as_str())?.1)
+}
+
+/// The one way the app builds a scene VM (SCENE_DOCUMENT_DESIGN.md section
+/// 7.1 (The scene document)): the layer's document at its card values.
+/// Gizmos, Frame and the setup check all read it.
+pub(crate) fn layer_scene_vm(layer: &manifold_core::layer::Layer) -> Option<SceneVm> {
+    layer_scene_vm_over(layer, None)
+}
+
+/// [`layer_scene_vm`] over `structure` when the caller holds the structure
+/// of this same document (only values moved since), so a value write never
+/// lays out the compile again.
+pub(crate) fn layer_scene_vm_over(layer: &manifold_core::layer::Layer, structure: Option<&Arc<SceneStructure>>) -> Option<SceneVm> {
+    let inst = layer.gen_params()?;
+    let doc = inst.scene.as_ref()?;
+    let structure = structure.map_or_else(|| SceneStructure::of(doc), Arc::clone);
+    Some(SceneVm::with_structure(structure, doc, &|id| inst.params.contains(id).then(|| inst.get_base_param(id))))
 }
 
 /// [`scene_vm`] for a graph target: only a generator layer holds a scene.
-pub(crate) fn scene_vm_of(project: &Project, target: &GraphTarget) -> Option<SceneVm> {
+/// `structure`, when given, is this target's document structure.
+pub(crate) fn scene_vm_of(project: &Project, target: &GraphTarget, structure: Option<&Arc<SceneStructure>>) -> Option<SceneVm> {
     match target {
-        GraphTarget::Generator(layer) => scene_vm(project, layer),
+        GraphTarget::Generator(layer) => layer_scene_vm_over(project.timeline.find_layer_by_id(layer.as_str())?.1, structure),
         _ => None,
     }
 }

@@ -185,6 +185,9 @@ impl Primitive for GltfMorphDeltasSource {
         let capacity = dst.size / std::mem::size_of::<MeshVertex>() as u64;
 
         if self.cached_deltas.is_empty() {
+            // Nothing parsed yet (or the path is empty or failed): the buffer
+            // is allocation, not content, so every consumer waits for it.
+            ctx.mark_outputs_pending();
             return;
         }
 

@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 403 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 404 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -166,7 +166,7 @@ _Generated from the node registry. Do not hand-edit. 403 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (103)
+### 3D Geometry (104)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -212,6 +212,7 @@ _Generated from the node registry. Do not hand-edit. 403 nodes registered, group
 | Melt | `node.melt_mesh` | Filter | Pulls every vertex downward by a noise-driven amount, making a mesh appear to melt or slump. |
 | Merge Meshes | `node.merge_meshes` | Filter | Joins several meshes into one, each where its own transform puts it. The way a whole group becomes one shape to scatter particles over. |
 | Mesh Edges | `node.mesh_edges` | Filter | Outputs the wireframe edges of a triangle mesh, so any imported model can be drawn as lines. The mesh counterpart of Grid Edges. |
+| Mesh Fragment | `node.mesh_fragment` | Filter | One piece of a shape broken into pieces: the triangles it draws and the shape its body collides with. |
 | Mesh Ramp | `node.mesh_ramp` | Source | Turns a mesh's own positions into a growth mask — a value from 0 to 1 per vertex that sweeps across the mesh along an axis. Feeds any deformer's weight input t… |
 | Mesh Spatial Mask | `node.mesh_spatial_mask` | Source | Makes soft band or sphere weights from mesh positions for driving a staged surface response. |
 | Mesh Stagger Envelope | `node.mesh_stagger_envelope` | Source | Turns elapsed beats into a directional attack/hold/release weight that arrives across a mesh in order. |

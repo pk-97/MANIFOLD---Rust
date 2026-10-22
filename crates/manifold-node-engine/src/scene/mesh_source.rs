@@ -29,6 +29,65 @@ pub enum MeshSource {
         node_path: Option<Arc<str>>,
         selection: MeshSelection,
     },
+    /// Piece `index` of `of` broken into `count` (Shatter): `of`'s
+    /// triangles, each split in four `detail` times so a shape with few
+    /// triangles still breaks into `count`, partitioned as an imported
+    /// mesh's pieces are ([`crate::scene::mesh_selection::select_fragment`]).
+    Fragment { of: Arc<MeshSource>, count: u32, index: u32, detail: u32 },
+}
+
+/// The fewest triangles a piece is cut from, so a piece of a few-triangle
+/// shape is still a chunk rather than a sliver.
+const PIECE_TRIANGLES: u64 = 4;
+
+/// How many times a shape of `triangles` triangles is split in four before
+/// it breaks into `count` pieces: none when it already has enough.
+pub fn fragment_detail(triangles: u64, count: u32) -> u32 {
+    let wanted = u64::from(count) * PIECE_TRIANGLES;
+    let mut detail = 0;
+    let mut have = triangles.max(1);
+    while have < wanted {
+        have *= 4;
+        detail += 1;
+    }
+    detail
+}
+
+/// Every triangle of `vertices` split in four at its edge midpoints,
+/// `levels` times; each new corner is the mean of its edge's two corners,
+/// normal renormalised (`node.subdivide_mesh`'s rule).
+pub fn subdivide(mut vertices: Vec<MeshVertex>, levels: u32) -> Vec<MeshVertex> {
+    for _ in 0..levels {
+        let mid = |a: &MeshVertex, b: &MeshVertex| {
+            let (a, b): (&[f32; 20], &[f32; 20]) = (bytemuck::cast_ref(a), bytemuck::cast_ref(b));
+            let mut m: MeshVertex = bytemuck::cast(std::array::from_fn::<f32, 20, _>(|k| (a[k] + b[k]) * 0.5));
+            let length = m.normal.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if length > 0.0 {
+                m.normal = m.normal.map(|v| v / length);
+            }
+            m
+        };
+        let mut out = Vec::with_capacity(vertices.len() * 4);
+        for tri in vertices.chunks_exact(3) {
+            let [a, b, c] = [&tri[0], &tri[1], &tri[2]];
+            let (ab, bc, ca) = (mid(a, b), mid(b, c), mid(c, a));
+            out.extend_from_slice(&[*a, ab, ca, ab, *b, bc, ca, bc, *c, ab, bc, ca]);
+        }
+        vertices = out;
+    }
+    vertices
+}
+
+/// `vertices` without the zero-area triangles (a sphere's poles, a sweep's
+/// doubled rim), which no piece can be cut from.
+fn with_area(vertices: Vec<MeshVertex>) -> Vec<MeshVertex> {
+    let area = |tri: &[MeshVertex]| {
+        let [a, b, c] = [tri[0].position, tri[1].position, tri[2].position];
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        n[0] * n[0] + n[1] * n[1] + n[2] * n[2]
+    };
+    vertices.chunks_exact(3).filter(|tri| area(tri) > 0.0).flatten().copied().collect()
 }
 
 impl MeshSource {
@@ -40,6 +99,10 @@ impl MeshSource {
             Self::Plane { width, height } => return plane_vertices(*width, *height),
             Self::Sphere { radius, segments, rings } => return sphere_vertices(*radius, *segments, *rings),
             Self::Swept(curve) => return curve.load_vertices(),
+            Self::Fragment { of, count, index, detail } => {
+                let whole = subdivide(with_area(of.load_vertices()?), *detail);
+                return crate::scene::mesh_selection::select_fragment(whole, *count, *index);
+            }
             Self::Cube { size } => {
                 if !size.is_finite() || *size <= 0.0 {
                     return Err("mesh source size must be finite and positive".into());
@@ -59,7 +122,7 @@ impl MeshSource {
                 if selection.translate.iter().any(|value| !value.is_finite()) {
                     return Err("mesh source offsets must be finite".into());
                 }
-                if !(1..=64).contains(&selection.fragment_count)
+                if !(1..=manifold_foundation::mesh_partition::MAX_PIECES).contains(&selection.fragment_count)
                     || selection.fragment_index >= selection.fragment_count
                     || selection.mesh < -1
                     || selection.primitive < -1
@@ -362,5 +425,45 @@ mod tests {
                 assert!(backend.mesh_source(slot).is_none());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod fragment_tests {
+    use super::*;
+
+    fn area(vertices: &[MeshVertex]) -> f32 {
+        vertices
+            .chunks_exact(3)
+            .map(|tri| {
+                let [a, b, c] = [tri[0].position, tri[1].position, tri[2].position];
+                let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+                let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt()
+            })
+            .sum()
+    }
+
+    /// A tetrahedron (four triangles) still breaks into 16 pieces: each
+    /// triangle splits twice, every piece has triangles, and together the
+    /// pieces are the whole surface. A sphere's zero-area pole triangles
+    /// do not stop it breaking.
+    #[test]
+    fn a_few_triangle_shape_breaks_into_every_piece() {
+        for whole in [MeshSource::Platonic { shape: 0, radius: 1.0 }, MeshSource::Sphere { radius: 1.0, segments: 8, rings: 4 }] {
+            let triangles = (whole.load_vertices().unwrap().len() / 3) as u64;
+            let count = 16;
+            let detail = fragment_detail(triangles, count);
+            let of = Arc::new(whole.clone());
+            let pieces: Vec<Vec<MeshVertex>> = (0..count)
+                .map(|index| MeshSource::Fragment { of: Arc::clone(&of), count, index, detail }.load_vertices().unwrap())
+                .collect();
+            assert!(pieces.iter().all(|piece| !piece.is_empty()), "{whole:?}: an empty piece");
+            let total: f32 = pieces.iter().map(|piece| area(piece)).sum();
+            let surface = area(&whole.load_vertices().unwrap());
+            assert!((total - surface).abs() < 1e-3 * surface, "{whole:?}: pieces cover {total}, surface {surface}");
+        }
+        assert_eq!(fragment_detail(4, 16), 2);
+        assert_eq!(fragment_detail(10_000, 16), 0, "a dense mesh is not split");
     }
 }

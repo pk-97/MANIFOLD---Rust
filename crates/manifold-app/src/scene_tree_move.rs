@@ -1,23 +1,14 @@
 //! A scene item dragged to a new place in the Scene tab's tree
 //! (SCENE_DOCUMENT_DESIGN.md section 8.1): one undo step that reparents or
-//! reorders it and, like Blender's Keep Transform, keeps it where it is in
-//! the world. Its Position, Rotation and Scale are rewritten in the new
-//! parent's frame; a shear a non-uniformly scaled parent gave it cannot be
-//! kept by those rows and is dropped, as Blender drops it.
+//! reorders it. The reparent command keeps it where it is in the world, like
+//! Blender's Keep Transform.
 
-use manifold_core::effects::PresetInstance;
+use manifold_core::LayerId;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{Item, ItemId, SceneDoc, param_id};
-use manifold_core::{GraphTarget, LayerId};
-use manifold_editing::command::{Command, CompositeCommand};
-use manifold_editing::commands::effects::ChangeGraphParamCommand;
+use manifold_core::scene_doc::ItemId;
 use manifold_editing::commands::scene_doc::ReparentSceneItemCommand;
-use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Mat4, rotation_to_render_scene_euler, trs_matrix};
-use manifold_nodes_scene::node_graph::scene_vm::frame_of;
 
 use crate::scene_edit::SceneEdit;
-
-const TRS: [&str; 9] = ["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z"];
 
 /// Move `item` under `parent` (the top level when `None`), before `before`
 /// (at the end when `None`). `None` when it lands where it is.
@@ -48,109 +39,36 @@ pub(crate) fn tree_move(
     if old_parent.as_ref() == parent && old_index == index {
         return Ok(None);
     }
-    let mut commands: Vec<Box<dyn Command>> =
-        vec![Box::new(ReparentSceneItemCommand::new(layer.clone(), item.clone(), parent.cloned(), index))];
-    if old_parent.as_ref() != parent {
-        commands.extend(keep_in_place(layer, doc, inst, item, parent));
-    }
-    Ok(Some(SceneEdit { command: Box::new(CompositeCommand::new(commands, "Move".to_owned())), select: None }))
-}
-
-/// The writes that keep `item` where it is in the world under `parent`.
-fn keep_in_place(layer: &LayerId, doc: &SceneDoc, inst: &PresetInstance, item: &ItemId, parent: Option<&ItemId>) -> Vec<Box<dyn Command>> {
-    let ids = TRS.map(|property| param_id(item, property));
-    if !ids.iter().all(|id| inst.params.contains(id)) {
-        return Vec::new();
-    }
-    let values = |id: &str| inst.params.contains(id).then(|| inst.get_base_param(id));
-    let old: [f32; 9] = std::array::from_fn(|k| inst.get_base_param(&ids[k]));
-    let old_frame = frame_of(&values, &ancestors(doc, item)).unwrap_or(IDENTITY_MAT4);
-    let new_chain = match parent {
-        Some(parent) => {
-            let mut chain = ancestors(doc, parent);
-            chain.extend(doc.find(parent));
-            chain
-        }
-        None => Vec::new(),
-    };
-    let new_frame = frame_of(&values, &new_chain).unwrap_or(IDENTITY_MAT4);
-    let world = mul(old_frame, trs_matrix([old[0], old[1], old[2]], [old[3], old[4], old[5]], [old[6], old[7], old[8]]));
-    let Some(new) = affine_inverse(new_frame).map(|inverse| decompose(mul(inverse, world))) else {
-        return Vec::new();
-    };
-    (0..9)
-        .filter(|&k| (new[k] - old[k]).abs() > 1e-6)
-        .map(|k| Box::new(ChangeGraphParamCommand::new(GraphTarget::Generator(layer.clone()), ids[k].clone(), old[k], new[k])) as Box<dyn Command>)
-        .collect()
-}
-
-/// The items `id` sits in, outermost first.
-fn ancestors<'d>(doc: &'d SceneDoc, id: &ItemId) -> Vec<&'d Item> {
-    let mut found = Vec::new();
-    doc.walk(|item, chain| {
-        if &item.id == id {
-            found = chain.to_vec();
-        }
-    });
-    found
-}
-
-fn mul(a: Mat4, b: Mat4) -> Mat4 {
-    std::array::from_fn(|col| std::array::from_fn(|row| (0..4).map(|k| a[k][row] * b[col][k]).sum()))
-}
-
-/// The inverse of an affine matrix (columns, last row `0 0 0 1`); `None`
-/// when it is flat.
-fn affine_inverse(m: Mat4) -> Option<Mat4> {
-    let a = |row: usize, col: usize| m[col][row];
-    let cof = |r0: usize, r1: usize, c0: usize, c1: usize| a(r0, c0) * a(r1, c1) - a(r0, c1) * a(r1, c0);
-    let det = a(0, 0) * cof(1, 2, 1, 2) - a(0, 1) * cof(1, 2, 0, 2) + a(0, 2) * cof(1, 2, 0, 1);
-    if det.abs() < 1e-12 {
-        return None;
-    }
-    // The 3x3 inverse by cofactors, row-major.
-    let inv = [
-        [cof(1, 2, 1, 2), -cof(0, 2, 1, 2), cof(0, 1, 1, 2)],
-        [-cof(1, 2, 0, 2), cof(0, 2, 0, 2), -cof(0, 1, 0, 2)],
-        [cof(1, 2, 0, 1), -cof(0, 2, 0, 1), cof(0, 1, 0, 1)],
-    ]
-    .map(|row| row.map(|v| v / det));
-    let t = [m[3][0], m[3][1], m[3][2]];
-    let mut out = IDENTITY_MAT4;
-    for col in 0..3 {
-        for row in 0..3 {
-            out[col][row] = inv[row][col];
-        }
-    }
-    for row in 0..3 {
-        out[3][row] = -(0..3).map(|k| inv[row][k] * t[k]).sum::<f32>();
-    }
-    Some(out)
-}
-
-/// Position, rotation and scale (the `TRS` order) of an affine matrix.
-fn decompose(m: Mat4) -> [f32; 9] {
-    let column = |c: usize| [m[c][0], m[c][1], m[c][2]];
-    let length = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    let (x, y, z) = (column(0), column(1), column(2));
-    let det = x[0] * (y[1] * z[2] - y[2] * z[1]) - y[0] * (x[1] * z[2] - x[2] * z[1]) + z[0] * (x[1] * y[2] - x[2] * y[1]);
-    let mut scale = [length(x), length(y), length(z)];
-    if det < 0.0 {
-        scale[0] = -scale[0];
-    }
-    let unit = |v: [f32; 3], s: f32| if s.abs() > 1e-12 { v.map(|c| c / s) } else { v };
-    let (x, y, z) = (unit(x, scale[0]), unit(y, scale[1]), unit(z, scale[2]));
-    let rot = rotation_to_render_scene_euler([[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]);
-    [m[3][0], m[3][1], m[3][2], rot[0], rot[1], rot[2], scale[0], scale[1], scale[2]]
+    let command = ReparentSceneItemCommand::new(layer.clone(), item.clone(), parent.cloned(), index);
+    Ok(Some(SceneEdit { command: Box::new(command), select: None }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use manifold_core::PresetTypeId;
-    use manifold_core::scene_doc::{BASE_CUBE, GroupFields, ItemFields};
+    use manifold_core::scene_doc::{BASE_CUBE, GroupFields, Item, ItemFields, SceneDoc, param_id};
     use manifold_core::types::LayerType;
     use manifold_editing::undo::UndoRedoManager;
+    use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Mat4, trs_matrix};
+    use manifold_nodes_scene::node_graph::scene_vm::frame_of;
+
+    const TRS: [&str; 9] = ["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z"];
+
+    /// The items `id` sits in, outermost first.
+    fn ancestors<'d>(doc: &'d SceneDoc, id: &ItemId) -> Vec<&'d Item> {
+        let mut found = Vec::new();
+        doc.walk(|item, chain| {
+            if &item.id == id {
+                found = chain.to_vec();
+            }
+        });
+        found
+    }
+
+    fn mul(a: Mat4, b: Mat4) -> Mat4 {
+        std::array::from_fn(|col| std::array::from_fn(|row| (0..4).map(|k| a[k][row] * b[col][k]).sum()))
+    }
 
     /// A scene layer with a Group moved, turned and scaled, beside the cube.
     fn scene_with_group() -> (Project, LayerId) {

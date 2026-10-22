@@ -7,7 +7,7 @@
 
 use manifold_core::LayerId;
 use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc};
-use manifold_core::scene_schema::modifier_type;
+use manifold_core::scene_schema::{modifier_refuses, modifier_type};
 
 use super::commands::{AddSceneItemCommand, ReparentSceneItemCommand};
 
@@ -16,7 +16,7 @@ use super::commands::{AddSceneItemCommand, ReparentSceneItemCommand};
 pub fn new_modifier(doc: &SceneDoc, id: ItemId, modifier: ModifierType, selection: &[ItemId]) -> Item {
     let aimed: Vec<ItemId> = selection
         .iter()
-        .filter(|id| doc.find(id).is_some_and(|item| matches!(item.kind(), ItemKind::Object | ItemKind::Group)))
+        .filter(|id| doc.find(id).is_some_and(|item| matches!(item.kind(), ItemKind::Object | ItemKind::Group) && modifier_refuses(item).is_none()))
         .cloned()
         .collect();
     let targets = if aimed.is_empty() { ModifierTargets::Scene } else { ModifierTargets::Items(aimed) };

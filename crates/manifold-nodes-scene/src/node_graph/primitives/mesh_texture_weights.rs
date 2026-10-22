@@ -5,8 +5,14 @@
 //! its own), so a texture sampled by UV pulls a displaced mesh apart there.
 //! This node samples by position instead: three planar samples blended by
 //! the normal (Blender's Box projection), with mirrored repeat so any image
-//! tiles without a seam. Wire its `weights` into a deformer's weights (or a
-//! mask's incoming weights) to displace by an image, a layer or noise.
+//! tiles without a seam. Mapping UV reads the mesh's own UVs instead, for an
+//! image painted for them (a scan's height map, a terrain laid once across
+//! a plane), as Blender's Displace does with UV coordinates. Wire its
+//! `weights` into a deformer's weights (or a mask's incoming weights) to
+//! displace by an image, a layer or noise.
+
+/// Mapping's choices: box projection, or the mesh's own UVs.
+const MAPPINGS: &[&str] = &["Box", "UV"];
 
 use std::borrow::Cow;
 
@@ -31,16 +37,16 @@ struct TextureWeightsUniforms {
     source_offset_x: f32,
     source_offset_y: f32,
     source_offset_z: f32,
+    mapping: u32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
     name: MeshTextureWeights,
     type_id: "node.mesh_texture_weights",
-    purpose: "One f32 weight per vertex of an Array<MeshVertex>: the red channel of `field` box-projected at the vertex's frame position q = (position + source_offset) / frame_radius * scale. Three samples on the yz, xz and xy planes (each shifted by offset_x/offset_y) blend by the normal's fourth power; coordinates repeat mirrored so any image tiles seamlessly. weight = blend - bias. A function of position and normal only, so split copies of a corner with one welded normal read one weight.",
+    purpose: "One f32 weight per vertex of an Array<MeshVertex>: the red channel of `field` box-projected at the vertex's frame position q = (position + source_offset) / frame_radius * scale. Three samples on the yz, xz and xy planes (each shifted by offset_x/offset_y) blend by the normal's fourth power; coordinates repeat mirrored so any image tiles seamlessly. weight = blend - bias. A function of position and normal only, so split copies of a corner with one welded normal read one weight. Mapping UV reads one sample at the vertex's own uv * scale (shifted by offset_x/offset_y) instead, for an image painted for the mesh's UVs.",
     inputs: {
         in: Array(MeshVertex) required,
         field: Texture2D required,
@@ -65,6 +71,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("source_offset_x"), label: "Source Offset X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("source_offset_y"), label: "Source Offset Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("source_offset_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("mapping"), label: "Mapping", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: MAPPINGS },
     ],
     depth_rule: Terminal,
     composition_notes: "Displace by an image: node.smooth_normals → this (in) and any Texture2D (a noise, node.layer_source, an image file) → field, then the weights into node.push_along_normals (directly or through node.mesh_spatial_mask's incoming weights), with the smoothed mesh as the push's direction. Bias 0.5 pushes dark parts in and light parts out. Scale is repeats per frame radius.",
@@ -98,10 +105,14 @@ impl Primitive for MeshTextureWeights {
             source_offset_x: ctx.scalar_or_param("source_offset_x", 0.0),
             source_offset_y: ctx.scalar_or_param("source_offset_y", 0.0),
             source_offset_z: ctx.scalar_or_param("source_offset_z", 0.0),
+            mapping: match ctx.params.get("mapping") {
+                Some(ParamValue::Enum(v)) => (*v).min(1),
+                Some(ParamValue::Float(v)) => v.round().clamp(0.0, 1.0) as u32,
+                _ => 0,
+            },
             dispatch_count: 0,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         let Some(src) = ctx.inputs.array("in") else {
             return;
@@ -154,9 +165,10 @@ mod gpu_tests {
         bias: f32,
         radius: f32,
         source_offset: [f32; 3],
+        uv: bool,
     }
 
-    const PLAIN: Settings = Settings { scale: 1.0, shift: [0.0, 0.0], bias: 0.5, radius: 1.0, source_offset: [0.0; 3] };
+    const PLAIN: Settings = Settings { scale: 1.0, shift: [0.0, 0.0], bias: 0.5, radius: 1.0, source_offset: [0.0; 3], uv: false };
 
     fn vertex(position: [f32; 3], normal: [f32; 3]) -> MeshVertex {
         MeshVertex { position, normal, color: [1.0; 4], ..bytemuck::Zeroable::zeroed() }
@@ -173,6 +185,9 @@ mod gpu_tests {
 
     /// The formula: three planar reads blended by the normal's fourth power.
     fn expected(v: &MeshVertex, s: &Settings) -> f32 {
+        if s.uv {
+            return sample(mirrored(v.uv[0] * s.scale + s.shift[0])) - s.bias;
+        }
         let q: [f32; 3] = std::array::from_fn(|k| (v.position[k] + s.source_offset[k]) / s.radius * s.scale);
         let w: [f32; 3] = std::array::from_fn(|k| v.normal[k].powi(4));
         let total: f32 = w.iter().sum();
@@ -211,10 +226,10 @@ mod gpu_tests {
             source_offset_x: s.source_offset[0],
             source_offset_y: s.source_offset[1],
             source_offset_z: s.source_offset[2],
+            mapping: u32::from(s.uv),
             dispatch_count: src.len() as u32,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         let mut enc = device.create_encoder("texture-weights-test");
         enc.dispatch_compute(
@@ -260,7 +275,19 @@ mod gpu_tests {
         check(&src, &PLAIN);
         assert!((dispatch(&src[..1], &PLAIN)[0] - (0.2 - 0.5)).abs() < 2e-3, "a dark texel pushes in by the bias");
         // Shift, scale, frame radius and source offset move where it reads.
-        let moved = Settings { scale: 2.0, shift: [0.5, 0.0], bias: 0.0, radius: 2.0, source_offset: [0.5, 0.0, 0.0] };
+        let moved = Settings { scale: 2.0, shift: [0.5, 0.0], bias: 0.0, radius: 2.0, source_offset: [0.5, 0.0, 0.0], uv: false };
         check(&src, &moved);
+    }
+
+    /// Mapping UV reads the vertex's own UV, wherever the vertex sits and
+    /// whichever way it faces.
+    #[test]
+    fn uv_mapping_reads_each_vertex_at_its_own_uv() {
+        let at = |position: [f32; 3], normal: [f32; 3], u: f32| MeshVertex { uv: [u, 0.5], ..vertex(position, normal) };
+        let src = [at([5.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.25), at([5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 0.75), at([-3.0, 2.0, 1.0], [0.0, 1.0, 0.0], 1.25)];
+        check(&src, &Settings { uv: true, ..PLAIN });
+        check(&src, &Settings { scale: 2.0, shift: [0.5, 0.0], bias: 0.0, uv: true, ..PLAIN });
+        let reads = dispatch(&src[..2], &Settings { uv: true, ..PLAIN });
+        assert!((reads[0] - (0.2 - 0.5)).abs() < 2e-3 && (reads[1] - (1.0 - 0.5)).abs() < 2e-3, "the same place reads by its UV: {reads:?}");
     }
 }

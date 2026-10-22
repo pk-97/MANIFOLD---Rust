@@ -1,6 +1,12 @@
 //! Deterministic spatial partitions of original triangles, shared by shatter fragments and collision shapes.
 use std::cmp::Ordering;
 
+/// The most pieces one body breaks into. A memory limit: every piece of an
+/// imported mesh parses the whole file twice (its drawn mesh and its body's
+/// hull), all at once while the scene loads, so the peak is about
+/// 2 x pieces x the parsed file: 64 pieces of a 50 MB scan is near 6 GB.
+pub const MAX_PIECES: u32 = 64;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fragment {
     pub vertices: Vec<[f32; 3]>,

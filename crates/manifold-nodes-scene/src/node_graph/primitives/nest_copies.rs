@@ -3,10 +3,11 @@
 //! Group with Copies on draws the whole layout at every particle).
 //!
 //! Copy `i * inner_count + j` is inner copy `j` placed by outer copy `i`.
-//! The inner count is live (a Copies Count), so the node keeps its own
-//! output storage and grows it to outer capacity × inner count when the
-//! count rises; it never shrinks or reallocates per frame, and `count`
-//! says how many copies to draw.
+//! Both counts are live (a swarm's Count, a Copies Count), so the node keeps
+//! its own output storage sized by the live counts, not the outer array's
+//! capacity, and grows it by at least doubling when they rise ([`grown`]);
+//! it never shrinks mid-show or reallocates per frame, and `count` says how
+//! many copies to draw.
 
 use std::borrow::Cow;
 
@@ -30,11 +31,12 @@ struct NestUniforms {
 manifold_node_engine::primitive! {
     name: NestCopies,
     type_id: "node.nest_copies",
-    purpose: "Place every inner copy at every outer copy: copy i*M + j (M = inner_count, port-shadowed, at most the inner array's length) is inner copy j carried by outer copy i, so position = P + s1*R1*p2, rotation = R1*R2 (Euler XYZ as the renderer composes it) and scale = s1*s2. A zero-scale copy on either side stays a hole; a mirror marker is not carried. `count` publishes outer length × M. The output is storage the node keeps, grown to the needed size when M rises, so a live count never rebuilds the graph.",
+    purpose: "Place every inner copy at every outer copy: copy i*M + j (M = inner_count, port-shadowed, at most the inner array's length) is inner copy j carried by outer copy i < N (N = outer_count, port-shadowed, at most the outer array's length; negative is all of it), so position = P + s1*R1*p2, rotation = R1*R2 (Euler XYZ as the renderer composes it) and scale = s1*s2. A zero-scale copy on either side stays a hole; a mirror marker is not carried. `count` publishes N × M. The output is storage the node keeps, sized by the live N × M and grown by at least doubling when it rises, never shrunk, so a live count never rebuilds the graph.",
     inputs: {
         outer: Array(InstanceTransform) required,
         inner: Array(InstanceTransform) required,
         inner_count: ScalarF32 optional,
+        outer_count: ScalarF32 optional,
     },
     outputs: {
         copies: Array(InstanceTransform),
@@ -49,9 +51,17 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 4_000.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("outer_count"),
+            label: "Outer Count",
+            ty: ParamType::Int,
+            default: ParamValue::Float(-1.0),
+            range: None,
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire a copies layout's instances into inner and its active_count into inner_count, and the copies that should carry it (a swarm's node.swarm_to_copies) into outer; draw copies with instance_count from count. The order is outer-major, so copy k belongs to outer copy k / inner_count.",
+    composition_notes: "Wire a copies layout's instances into inner and its active_count into inner_count, and the copies that should carry it (a swarm's node.swarm_to_copies) into outer with their live count (a swarm's Count) into outer_count; draw copies with instance_count from count. The order is outer-major, so copy k belongs to outer copy k / inner_count.",
     examples: [],
     picker: { label: "Nest Copies", category: Atom },
     summary: "Puts a whole set of copies at every copy of another set: copies of copies.",
@@ -82,6 +92,9 @@ impl Primitive for NestCopies {
         (port_name == "copies").then(|| input_capacities.iter().find(|(port, _)| *port == "outer").map_or(1, |&(_, n)| n.max(1)))
     }
 
+    // Hand WGSL, blocked not exempt: the output domain is the live outer × inner
+    // count in storage this node grows, which the codegen cannot size yet
+    // (BUG-bokbd (nest_copies live-product domain)).
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         self.pipeline.get_or_insert_with(|| device.create_compute_pipeline(include_str!("shaders/nest_copies.wgsl"), "cs_main", "node.nest_copies"));
     }
@@ -92,6 +105,8 @@ impl Primitive for NestCopies {
             return;
         };
         let outer_copies = outer.size / COPY_BYTES;
+        let live_outer = ctx.scalar_or_param("outer_count", -1.0).round();
+        let outer_copies = if live_outer < 0.0 { outer_copies } else { (live_outer as u64).min(outer_copies) };
         let inner_copies = inner.size / COPY_BYTES;
         let inner_count = (ctx.scalar_or_param("inner_count", 1.0).round().max(0.0) as u64).min(inner_copies);
         let mut wanted = outer_copies * inner_count;
@@ -101,14 +116,17 @@ impl Primitive for NestCopies {
             return;
         };
         if wanted > self.storage_copies {
-            // Grows only when the count rises. The one limit is the GPU's
-            // memory: past it the copies that fit are drawn and the rest refused.
-            let fits = gpu.device.modifier_memory_snapshot().is_none_or(|memory| {
-                memory.current_allocated_bytes.saturating_add(wanted * COPY_BYTES) <= memory.recommended_max_working_set_bytes
-            });
-            if fits {
-                self.storage = Some(gpu.device.create_buffer_shared(wanted * COPY_BYTES));
-                self.storage_copies = wanted;
+            // The one limit is the GPU's memory: past it the copies that fit
+            // are drawn and the rest refused.
+            let memory = gpu.device.modifier_memory_snapshot();
+            let fits = |copies: u64| {
+                memory.as_ref().is_none_or(|memory| {
+                    memory.current_allocated_bytes.saturating_add(copies * COPY_BYTES) <= memory.recommended_max_working_set_bytes
+                })
+            };
+            if let Some(copies) = grown(self.storage_copies, wanted, fits) {
+                self.storage = Some(gpu.device.create_buffer_shared(copies * COPY_BYTES));
+                self.storage_copies = copies;
             } else {
                 if self.refused != wanted {
                     self.refused = wanted;
@@ -148,6 +166,50 @@ impl Primitive for NestCopies {
         if let Some(error) = refusal {
             ctx.error(error);
         }
+    }
+}
+
+/// The copies the storage holds once a frame needs `wanted`, given it holds
+/// `held`: unchanged while that is enough (it never shrinks), else at least
+/// double, so sweeping a Count reallocates a handful of times rather than
+/// every frame; just `wanted` when the doubled size is past what `fits`;
+/// `None` when even `wanted` is.
+fn grown(held: u64, wanted: u64, fits: impl Fn(u64) -> bool) -> Option<u64> {
+    if wanted <= held {
+        return Some(held);
+    }
+    let doubled = wanted.max(held.saturating_mul(2));
+    if fits(doubled) {
+        Some(doubled)
+    } else {
+        fits(wanted).then_some(wanted)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grown;
+
+    #[test]
+    fn storage_grows_by_doubling_to_the_live_need_and_never_shrinks() {
+        let any = |_: u64| true;
+        // A swarm of 500 particles drawing a group of 10 copies holds 5,000,
+        // not the swarm's 100,000-particle capacity times 10.
+        assert_eq!(grown(0, 500 * 10, any), Some(5_000));
+        // A Count swept up one at a time reallocates only when it doubles.
+        let mut held = 5_000;
+        let mut allocations = 0;
+        for count in 501..=4_000 {
+            let next = grown(held, count * 10, any).unwrap();
+            allocations += usize::from(next != held);
+            held = next;
+        }
+        assert_eq!(allocations, 3, "5k to 10k, 20k, 40k");
+        assert_eq!(grown(held, 10, any), Some(held), "a falling count keeps the storage");
+        // Past memory, doubling falls back to the exact need, then to a refusal.
+        let under = |copies: u64| copies <= 50_000;
+        assert_eq!(grown(40_000, 45_000, under), Some(45_000));
+        assert_eq!(grown(40_000, 60_000, under), None);
     }
 }
 

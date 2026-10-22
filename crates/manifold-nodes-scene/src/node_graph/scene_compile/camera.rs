@@ -11,7 +11,7 @@ use manifold_core::scene_doc::{CAMERA_PICK, CameraRig, Item, ItemFields, ItemId,
 
 use super::builder::{Builder, SCENE};
 use crate::node_graph::cinematic_tail::build_cinematic_tail;
-use crate::node_graph::primitives::camera_switch::CAMERA_SWITCH_INPUTS;
+use crate::node_graph::primitives::camera_switch::camera_switch_input;
 
 /// A Loop camera's loop length in beats until a Scene Loop sets it.
 pub(crate) const LOOP_BEATS: f32 = 8.0;
@@ -25,14 +25,14 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
         return;
     }
     let lenses: Vec<u32> = cameras.iter().map(|item| emit(b, item)).collect();
-    // The cut picks among as many cameras as the switch has inputs.
-    let cut = &lenses[..lenses.len().min(CAMERA_SWITCH_INPUTS.len())];
+    // The cut picks among every camera: the switch grows an input per lens.
+    let cut = &lenses[..];
     let owner = cut_owner(b);
     let switch = b.add(&owner, "camera_switch", "node.camera_switch");
     b.set(switch, "num_inputs", SerializedParamValue::Int { value: cut.len() as i32 });
     b.set(switch, "select", SerializedParamValue::Enum { value: 0 });
-    for (&lens, port) in cut.iter().zip(CAMERA_SWITCH_INPUTS) {
-        b.wire(lens, "out", switch, port);
+    for (k, &lens) in cut.iter().enumerate() {
+        b.wire(lens, "out", switch, &camera_switch_input(k));
     }
     let render = b.scene("render");
     b.wire(switch, "out", render, "camera");
@@ -73,7 +73,6 @@ pub(crate) fn finish_cut(b: &mut Builder<'_>) {
     let names: Vec<String> = doc
         .cameras()
         .into_iter()
-        .take(CAMERA_SWITCH_INPUTS.len())
         .filter_map(|id| doc.find(id).map(|item| item.name.clone()))
         .collect();
     b.choices(&param_id(&world.id, CAMERA_PICK), names);

@@ -83,20 +83,7 @@ impl Default for Transform {
 /// `T * R * S` from a position, XYZ Euler radians (`R = Rz * Ry * Rx`) and a
 /// scale: the same matrix as `render_scene::model_matrix`.
 pub fn trs_matrix(pos: [f32; 3], rot: [f32; 3], scale: [f32; 3]) -> Mat4 {
-    let (cx, sx) = (rot[0].cos(), rot[0].sin());
-    let (cy, sy) = (rot[1].cos(), rot[1].sin());
-    let (cz, sz) = (rot[2].cos(), rot[2].sin());
-    let rx: Mat4 = [[1.0, 0.0, 0.0, 0.0], [0.0, cx, sx, 0.0], [0.0, -sx, cx, 0.0], [0.0, 0.0, 0.0, 1.0]];
-    let ry: Mat4 = [[cy, 0.0, -sy, 0.0], [0.0, 1.0, 0.0, 0.0], [sy, 0.0, cy, 0.0], [0.0, 0.0, 0.0, 1.0]];
-    let rz: Mat4 = [[cz, sz, 0.0, 0.0], [-sz, cz, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
-    let mut m = mat4_mul(mat4_mul(rz, ry), rx);
-    for (col, s) in m.iter_mut().zip(scale) {
-        for v in col.iter_mut().take(3) {
-            *v *= s;
-        }
-    }
-    m[3] = [pos[0], pos[1], pos[2], 1.0];
-    m
+    manifold_core::scene_doc::transform::trs_matrix(pos, rot, scale)
 }
 
 impl Transform {
@@ -175,27 +162,7 @@ pub fn quat_to_render_scene_euler(q: [f32; 4]) -> [f32; 3] {
 /// [`quat_to_render_scene_euler`]). Reads only `r00`, `r01`, `r10`, `r11`,
 /// `r20`, `r21`, `r22`.
 pub fn rotation_to_render_scene_euler(r: [[f32; 3]; 3]) -> [f32; 3] {
-    let [[r00, r01, _], [r10, r11, _], [r20, r21, r22]] = r;
-    let r20c = r20.clamp(-1.0, 1.0);
-    if (1.0 - r20c.abs()) < 1e-6 {
-        // Gimbal lock: x and z become degenerate around this axis (only
-        // their sum/difference is recoverable). Pin z = 0 and fold the
-        // whole rotation into x. `asin`'s derivative blows up at +/-1,
-        // so computing `ry` via `asin(-r20c)` here would amplify the
-        // f32 rounding already present in `r20c` into a much larger
-        // angular error (measured: a quaternion built from
-        // `sin/cos(PI/4)` alone put `r20c` ~6e-8 short of -1.0, which
-        // `asin` turned into a ~3.5e-4 radian error) — since we already
-        // know we're at the pole, set `ry` to the pole value directly
-        // instead of trusting `asin` near its singularity.
-        let ry = std::f32::consts::FRAC_PI_2.copysign(-r20c);
-        let rx = if r20 < 0.0 { r01.atan2(r11) } else { (-r01).atan2(r11) };
-        return [rx, ry, 0.0];
-    }
-    let rx = r21.atan2(r22);
-    let ry = (-r20c).asin();
-    let rz = r10.atan2(r00);
-    [rx, ry, rz]
+    manifold_core::scene_doc::transform::rotation_to_euler(r)
 }
 
 impl From<Transform> for manifold_core::fluid_domain::DomainBox {

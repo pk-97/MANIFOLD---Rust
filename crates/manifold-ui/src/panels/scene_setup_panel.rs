@@ -587,11 +587,17 @@ impl ScenePanel {
     /// object-pick sets the SAME UI-local `self.selection` map an outliner
     /// row click does — one selection store for the whole app. A change moves
     /// the selection version, which rebuilds the Properties section.
+    /// A picked light shows as Lighting but stays the selected item, so
+    /// Delete, Cut and Copy act on it.
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
         self.clear_item_focus();
-        let sel = self.shown(&layer_id, sel);
-        self.selection.insert(layer_id.clone(), sel);
-        self.selected.remove(&layer_id);
+        let shown = self.shown(&layer_id, sel.clone());
+        if shown == sel {
+            self.selected.remove(&layer_id);
+        } else {
+            self.selected.insert(layer_id.clone(), vec![sel]);
+        }
+        self.selection.insert(layer_id.clone(), shown);
         self.reveal_properties = true;
         self.note_selection(&layer_id);
     }

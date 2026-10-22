@@ -5,6 +5,8 @@
 //! the declared shapes the gizmo draws and the render slots the selection
 //! outline needs.
 
+use std::sync::Arc;
+
 use manifold_core::NodeId;
 use manifold_core::scene_doc::{Item, SceneDoc};
 use manifold_foundation::ItemId;
@@ -58,10 +60,28 @@ pub struct SceneVm {
     /// Each liquid's setup as the check reads it, so a value change re-checks
     /// without a rebuild ([`SceneVm::recheck_setup`]).
     pub(crate) setup_sites: Vec<SetupSite>,
+    /// What the document's structure decides, shared by every value of it.
+    structure: Arc<SceneStructure>,
+}
+
+/// What a scene's structure decides, whatever its values: the Objects the
+/// compiler draws and each item's family. Finding the drawn Objects lays out
+/// the compile, so a value write reuses this ([`SceneVm::with_structure`])
+/// instead of building it again.
+#[derive(Debug, Default, PartialEq)]
+pub struct SceneStructure {
     /// The Objects the compiler draws, in render-slot order.
     drawn: Vec<ItemId>,
     /// Each item with the items under it (itself first), for the outline.
     families: Vec<(ItemId, Vec<ItemId>)>,
+}
+
+impl SceneStructure {
+    pub fn of(doc: &SceneDoc) -> Arc<SceneStructure> {
+        let mut families = Vec::new();
+        doc.walk(|item, _| families.push((item.id.clone(), family(item))));
+        Arc::new(SceneStructure { drawn: crate::node_graph::scene_compile::drawn_items(doc), families })
+    }
 }
 
 impl SceneVm {
@@ -73,8 +93,7 @@ impl SceneVm {
             problems: Vec::new(),
             setup_anchors: Vec::new(),
             setup_sites: Vec::new(),
-            drawn: Vec::new(),
-            families: Vec::new(),
+            structure: Arc::default(),
         }
     }
 
@@ -82,8 +101,12 @@ impl SceneVm {
     /// id (`<item id>.<property>`); a param it has no value for reads as its
     /// resting transform value.
     pub fn from_doc(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> SceneVm {
-        let mut families = Vec::new();
-        doc.walk(|item, _| families.push((item.id.clone(), family(item))));
+        Self::with_structure(SceneStructure::of(doc), doc, values)
+    }
+
+    /// [`SceneVm::from_doc`] over `structure`, which must be
+    /// [`SceneStructure::of`] this same document: what a value write rebuilds.
+    pub fn with_structure(structure: Arc<SceneStructure>, doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> SceneVm {
         let mut shapes = shapes::item_shapes(doc, values);
         let setup_sites = setup_check::water_sites(doc, values, &mut shapes);
         let (mut problems, mut setup_anchors) = (Vec::new(), Vec::new());
@@ -95,9 +118,12 @@ impl SceneVm {
             problems,
             setup_anchors,
             setup_sites,
-            drawn: crate::node_graph::scene_compile::drawn_items(doc),
-            families,
+            structure,
         }
+    }
+
+    pub fn structure(&self) -> &Arc<SceneStructure> {
+        &self.structure
     }
 
     /// The render slots that draw `items` and everything inside them, for the
@@ -105,8 +131,9 @@ impl SceneVm {
     pub fn outline_slots<'a>(&self, items: impl IntoIterator<Item = &'a ItemId>, out: &mut Vec<u32>) {
         out.clear();
         for item in items {
-            let Some((_, members)) = self.families.iter().find(|(id, _)| id == item) else { continue };
-            out.extend(members.iter().filter_map(|member| self.drawn.iter().position(|id| id == member)).map(|slot| slot as u32));
+            let Some((_, members)) = self.structure.families.iter().find(|(id, _)| id == item) else { continue };
+            let drawn = &self.structure.drawn;
+            out.extend(members.iter().filter_map(|member| drawn.iter().position(|id| id == member)).map(|slot| slot as u32));
         }
         out.sort_unstable();
         out.dedup();

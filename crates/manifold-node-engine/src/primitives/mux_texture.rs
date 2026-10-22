@@ -36,25 +36,10 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarTy
 
 pub const MUX_TEXTURE_TYPE_ID: &str = "node.switch_texture";
 
-/// Hard cap on input count — bounds the static port-name table below. The
-/// node only ever exposes `num_inputs` of these; 32 is far beyond any real
-/// live-switch need (Infrared's 10 palettes is the current high-water mark).
-const MAX_INPUTS: usize = 32;
-
 /// Default input count. 8 matches the previous fixed `in_0..in_7` shape, so
 /// every preset authored before this node went dynamic loads with the same
 /// ports and zero migration.
 const DEFAULT_INPUTS: u32 = 8;
-
-/// Static port-name table. A dynamic-port node can't `format!` a
-/// `&'static str` per instance, so the names live here and the live port
-/// list (and `selected_input_branch`) slice `&IN_PORT_NAMES[..num_inputs]`.
-const IN_PORT_NAMES: [&str; MAX_INPUTS] = [
-    "in_0", "in_1", "in_2", "in_3", "in_4", "in_5", "in_6", "in_7", "in_8",
-    "in_9", "in_10", "in_11", "in_12", "in_13", "in_14", "in_15", "in_16",
-    "in_17", "in_18", "in_19", "in_20", "in_21", "in_22", "in_23", "in_24",
-    "in_25", "in_26", "in_27", "in_28", "in_29", "in_30", "in_31",
-];
 
 const MUX_TEXTURE_WGSL: &str = r"
 @group(0) @binding(0) var source_tex: texture_2d<f32>;
@@ -91,7 +76,7 @@ const MUX_PARAMS: [ParamDef; 2] = [
         label: "Selector",
         ty: ParamType::Float,
         default: ParamValue::Float(0.0),
-        range: Some((0.0, (MAX_INPUTS - 1) as f32)),
+        range: None,
         enum_values: &[],
     },
     ParamDef {
@@ -99,7 +84,7 @@ const MUX_PARAMS: [ParamDef; 2] = [
         label: "Input Count",
         ty: ParamType::Int,
         default: ParamValue::Float(DEFAULT_INPUTS as f32),
-        range: Some((2.0, MAX_INPUTS as f32)),
+        range: None,
         enum_values: &[],
     },
 ];
@@ -108,6 +93,9 @@ pub struct MuxTexture {
     /// Live input ports: `[selector, in_0, …, in_{num_inputs-1}]`. Rebuilt by
     /// `reconfigure` whenever `num_inputs` changes.
     inputs: Vec<NodeInput>,
+    /// The `in_N` names, interned when the ports are built, so the
+    /// per-frame branch pick never formats or locks.
+    names: Vec<&'static str>,
     /// Wired-selector LATCH: the selector value `evaluate` resolved last
     /// frame. `selected_input_branch` runs during liveness — before any node
     /// evaluates — so a wired selector's current-frame value is unknowable
@@ -151,6 +139,7 @@ impl MuxTexture {
     pub fn new() -> Self {
         let mut m = Self {
             inputs: Vec::new(),
+            names: Vec::new(),
             latched_selector: None,
             pipeline: None,
             sampler: None,
@@ -161,13 +150,14 @@ impl MuxTexture {
         m
     }
 
-    /// (Re)build the input port list for `n` texture inputs (clamped to
-    /// `[1, MAX_INPUTS]`). Always leads with the required `selector` port.
+    /// (Re)build the input port list for `n` texture inputs (at least one;
+    /// no upper limit). Always leads with the required `selector` port.
     fn rebuild_ports(&mut self, n: u32) {
-        let n = n.clamp(1, MAX_INPUTS as u32) as usize;
+        let n = n.max(1) as usize;
+        self.names = (0..n).map(|k| crate::exec::effect_node::intern_name(&Cow::Owned(format!("in_{k}")))).collect();
         let mut ports = Vec::with_capacity(n + 1);
         ports.push(SELECTOR_INPUT);
-        for &name in &IN_PORT_NAMES[..n] {
+        for &name in &self.names {
             ports.push(NodePort {
                 name: std::borrow::Cow::Borrowed(name),
                 ty: PortType::Texture2D,
@@ -221,21 +211,19 @@ impl EffectNode for MuxTexture {
     /// this hand-`impl EffectNode` primitive address/size a discrete
     /// resource, evidenced by this file's own defensive clamps (curated in
     /// `freeze::classify::tests::every_range_contract_names_a_real_boundary`).
-    /// `selector` — `resolve_selector_index` (this file, line 197) rounds and
-    /// clamps to `[0, num_inputs)`; the absolute reachable index space is
-    /// `[0, MAX_INPUTS - 1]`. `num_inputs` — `rebuild_ports` (this file, line
-    /// 149) clamps `n` to `[1, MAX_INPUTS]` before slicing the static
-    /// `IN_PORT_NAMES` table.
+    /// `selector` — `resolve_selector_index` rounds and clamps to
+    /// `[0, num_inputs)`. `num_inputs` — `rebuild_ports` builds at least one
+    /// input; the ports grow with the count, so neither has an upper bound.
     fn param_contract(&self, param_name: &str) -> Option<manifold_core::effects::RangeContract> {
         match param_name {
             "selector" => Some(manifold_core::effects::RangeContract {
                 min: Some(0.0),
-                max: Some((MAX_INPUTS - 1) as f32),
+                max: None,
                 reason: manifold_core::effects::RangeReason::Index,
             }),
             "num_inputs" => Some(manifold_core::effects::RangeContract {
                 min: Some(1.0),
-                max: Some(MAX_INPUTS as f32),
+                max: None,
                 reason: manifold_core::effects::RangeReason::Count,
             }),
             _ => None,
@@ -286,13 +274,13 @@ impl EffectNode for MuxTexture {
         // runs.
         if wired_inputs.contains(&"selector") {
             let latched = self.latched_selector?;
-            return Some(IN_PORT_NAMES[resolve_selector_index(latched, self.num_inputs())]);
+            return Some(self.names[resolve_selector_index(latched, self.num_inputs())]);
         }
         let selector = params
             .get("selector")
             .and_then(|v| v.as_scalar())
             .unwrap_or(0.0);
-        Some(IN_PORT_NAMES[resolve_selector_index(selector, self.num_inputs())])
+        Some(self.names[resolve_selector_index(selector, self.num_inputs())])
     }
 
     /// Passthrough alias: the selected-branch copy is a per-pixel identity, so
@@ -312,7 +300,7 @@ impl EffectNode for MuxTexture {
             return None;
         }
         let selector = params.get("selector").and_then(|v| v.as_scalar())?;
-        let port = IN_PORT_NAMES[resolve_selector_index(selector, self.num_inputs())];
+        let port = self.names[resolve_selector_index(selector, self.num_inputs())];
         // Alias only when the selected slot is actually wired — the unwired
         // fallback (in_0 / clear-to-black) must keep running evaluate.
         if !wired_inputs.contains(&port) {
@@ -356,8 +344,8 @@ impl EffectNode for MuxTexture {
         // idx==0 selection would, even though both render the same branch.
         let selected = ctx
             .inputs
-            .texture_2d(IN_PORT_NAMES[idx])
-            .map(|t| (IN_PORT_NAMES[idx], t))
+            .texture_2d(self.names[idx])
+            .map(|t| (self.names[idx], t))
             .or_else(|| ctx.inputs.texture_2d("in_0").map(|t| ("in_0", t)));
 
         let Some(out) = ctx.outputs.texture_2d("out") else {
@@ -503,10 +491,11 @@ mod tests {
     }
 
     #[test]
-    fn reconfigure_clamps_to_max_inputs() {
+    fn reconfigure_has_no_input_cap() {
         let mut m = MuxTexture::new();
-        m.reconfigure(&params_with(999.0, 0.0));
-        assert_eq!(m.num_inputs(), MAX_INPUTS);
+        m.reconfigure(&params_with(40.0, 39.0));
+        assert_eq!(m.num_inputs(), 40);
+        assert_eq!(m.selected_input_branch(&params_with(40.0, 39.0), &[]), Some("in_39"));
     }
 
     #[test]
