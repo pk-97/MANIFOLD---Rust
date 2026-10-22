@@ -122,13 +122,13 @@ impl<'a> ProjectRef<'a> {
     }
 
     /// Several undoable edits as one undo step, stamped with their union.
-    /// One row walk covers the batch; the commands inside it skip theirs.
-    pub fn execute_batch(&mut self, mut cmds: Vec<Box<dyn Command>>, label: String) {
-        let (touches, rows) = rows_written(self.project, |project| {
-            cmds.iter_mut().fold(ChangeSet::NONE, |touches, cmd| touches.union(cmd.execute(project)))
-        });
-        self.edits.stamps.bump(touches.union(rows));
-        ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(cmds, label));
+    /// They run as one composite, as the content thread runs them, so a run
+    /// of scene edits compiles once here too.
+    pub fn execute_batch(&mut self, cmds: Vec<Box<dyn Command>>, label: String) {
+        let mut batch = manifold_editing::command::CompositeCommand::new(cmds, label.clone());
+        let wrote = batch.execute(self.project);
+        self.edits.stamps.bump(wrote);
+        ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(batch.into_commands(), label));
     }
 
     /// For factories that build a command and execute it on the project they
