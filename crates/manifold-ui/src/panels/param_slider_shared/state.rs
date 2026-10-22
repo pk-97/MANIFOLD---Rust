@@ -810,9 +810,12 @@ pub(crate) fn label_index(value: f32, min: f32, count: usize) -> usize {
 }
 
 /// The label a pick list shows for `value`. `None` for a row without labels.
+/// An empty label is a value with nothing to pick (a deleted camera's cut
+/// number): it shows the first choice, which is what that value gives.
 pub(crate) fn choice_label(spec: &crate::param_surface::RowSpec, value: f32) -> Option<&str> {
     let labels = spec.value_labels.as_deref().filter(|labels| !labels.is_empty())?;
-    Some(&labels[label_index(value, spec.min, labels.len())])
+    let label = &labels[label_index(value, spec.min, labels.len())];
+    Some(if label.is_empty() { labels.iter().find(|label| !label.is_empty()).unwrap_or(label) } else { label })
 }
 
 /// A switch's button text.

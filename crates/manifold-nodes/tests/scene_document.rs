@@ -85,6 +85,10 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
     assert!(fx.set_base_param(radius, 9.0));
     let post = fx.graph.as_ref().unwrap().wires.clone();
     doc.insert(None, 0, Item::new(ItemId::new("lamp"), "Lamp", ItemFields::default_for(ItemKind::Light))).unwrap();
+    // A second camera, then the first one gone: the cut numbers and the
+    // numbers already handed out come back with the document.
+    doc.insert(None, 0, Item::new(ItemId::new("closeup"), "Closeup", ItemFields::default_for(ItemKind::Camera))).unwrap();
+    doc.remove(&ItemId::new("camera")).unwrap();
     fx.install_scene_document(doc.clone()).unwrap();
     assert_eq!(fx.graph.as_ref().unwrap().wires, post, "a recompile rewired the user's post-processing");
     assert_eq!(fx.get_base_param(radius), 9.0, "a recompile dropped the blur's card control");
@@ -105,6 +109,12 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
 
     let fx = loaded.timeline.layers[0].gen_params().unwrap();
     assert_eq!(fx.scene.as_ref(), Some(&doc), "the document comes back");
+    let cut = |doc: &SceneDoc| match doc.find(&ItemId::new("closeup")).map(|item| &item.fields) {
+        Some(ItemFields::Camera(camera)) => Some(camera.cut),
+        _ => None,
+    };
+    let loaded_doc = fx.scene.as_ref().unwrap();
+    assert_eq!((cut(loaded_doc), loaded_doc.next_cut), (Some(1), 2), "the closeup keeps cut 1 and the deleted camera's 0 stays spent");
     assert!(graph.is_some() && fx.graph == graph, "and compiles to the same graph, post-processing included");
     PresetRuntime::from_def_for_render(fx.graph.clone().unwrap(), &PrimitiveRegistry::with_builtin(), Some(&fx.params), false)
         .expect("the loaded layer graph builds, Scene node and post-processing together");
@@ -295,6 +305,20 @@ fn shown(runtime: &mut PresetRuntime, seconds: f64) -> Camera {
     SHOWN.get().expect("the camera switch hands the render a camera")
 }
 
+/// The layer's graph running with a probe on the camera switch's output.
+fn cut_runtime(fx: &PresetInstance) -> PresetRuntime {
+    let mut def = flat(fx);
+    let switch = def.nodes.iter().find(|n| n.node_id.as_str() == "world:camera_switch").expect("the cut").id;
+    let probe = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
+    def.nodes.push(serde_json::from_value(serde_json::json!({"id": probe, "nodeId": "probe", "typeId": "test.scene_camera"})).unwrap());
+    def.wires.push(EffectGraphWire { from_node: switch, from_port: "out".into(), to_node: probe, to_port: "camera".into() });
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.scene_camera", || Box::new(CameraProbe(EffectNodeType::new("test.scene_camera"))));
+    let mut runtime = PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).unwrap();
+    runtime.apply_param_values(&fx.params);
+    runtime
+}
+
 /// Promise 9 (SCENE_DOCUMENT_DESIGN.md section 10 (Testing)): a knob, MIDI or
 /// OSC change is a param write that reaches the item on the next frame, and a
 /// camera cut lands on its frame, both on the running graph with no rebuild.
@@ -305,15 +329,7 @@ fn a_param_write_reaches_the_next_frame_and_a_cut_lands_on_its_frame() {
     let mut layer = scene_layer(doc);
     let fx = layer.gen_params_mut().unwrap();
     let graph = fx.graph.clone();
-    let mut def = flat(fx);
-    let switch = def.nodes.iter().find(|n| n.node_id.as_str() == "world:camera_switch").expect("the cut").id;
-    let probe = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
-    def.nodes.push(serde_json::from_value(serde_json::json!({"id": probe, "nodeId": "probe", "typeId": "test.scene_camera"})).unwrap());
-    def.wires.push(EffectGraphWire { from_node: switch, from_port: "out".into(), to_node: probe, to_port: "camera".into() });
-    let mut registry = PrimitiveRegistry::with_builtin();
-    registry.register("test.scene_camera", || Box::new(CameraProbe(EffectNodeType::new("test.scene_camera"))));
-    let mut runtime = PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).unwrap();
-    runtime.apply_param_values(&fx.params);
+    let mut runtime = cut_runtime(fx);
     let frame = 1.0 / 30.0;
     let wide = shown(&mut runtime, 0.0);
 
@@ -354,7 +370,7 @@ mod every_param_has_a_row {
     use manifold_nodes_scene::node_graph::node_param_source::declared_params_for_node;
     use manifold_nodes_scene::node_graph::scene_compile::compile;
 
-    fn doc_with_every_kind() -> SceneDoc {
+    pub(super) fn doc_with_every_kind() -> SceneDoc {
         let mut doc = SceneDoc::base();
         let mut water = None;
         for (k, entry) in ADD_ENTRIES.iter().enumerate() {
@@ -845,4 +861,113 @@ fn shatter_breaks_a_built_in_cube() {
         assert_eq!((feeds("vertices"), feeds("source")), (1, 1), "the piece draws it and its body collides with it");
     }
     prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
+}
+
+/// A project with one scene layer holding `doc`, its layer id fixed.
+fn project_with(doc: SceneDoc) -> Project {
+    let mut layer = scene_layer(doc);
+    layer.layer_id = manifold_core::LayerId::new("scene");
+    let mut project = Project::default();
+    project.timeline.layers.push(layer);
+    project
+}
+
+fn run(project: &mut Project, mut command: impl manifold_editing::command::Command) {
+    command.execute(project);
+    assert!(command.was_applied(), "{} was refused: {:?}", command.description(), command.rejection_reason());
+}
+
+/// A name and a place among siblings are display only: renaming an item of
+/// every kind and reversing every sibling list (the modifier chain aside,
+/// whose order is its meaning) compiles to the same graph and manifest, so
+/// the structure version holds and nothing restarts (GPU water restarts on a
+/// structure version change). A camera's place is not its cut number either.
+#[test]
+fn renaming_or_reordering_items_recompiles_nothing() {
+    use manifold_editing::commands::scene_doc::{RenameSceneItemCommand, ReparentSceneItemCommand};
+    let doc = every_param_has_a_row::doc_with_every_kind();
+    let mut project = project_with(doc.clone());
+    let layer = project.timeline.layers[0].layer_id.clone();
+    let fx = project.timeline.layers[0].gen_params().unwrap();
+    let graph = serde_json::to_string(&fx.graph).unwrap();
+    let manifest = format!("{:?}", fx.params.iter().map(|p| &p.spec).collect::<Vec<_>>());
+    let version = fx.graph_structure_version;
+
+    // One item of every kind.
+    let mut kinds = Vec::new();
+    let mut picked = Vec::new();
+    doc.walk(|item, _| {
+        if !kinds.contains(&item.kind()) {
+            kinds.push(item.kind());
+            picked.push(item.id.clone());
+        }
+    });
+    assert_eq!(kinds.len(), 11, "the scene holds every kind: {kinds:?}");
+    for id in picked {
+        run(&mut project, RenameSceneItemCommand::new(layer.clone(), id.clone(), format!("renamed {id}")));
+    }
+    // Reverse every sibling list: each item in turn to the front of its parent.
+    let mut moves = Vec::new();
+    let top = doc.items.iter().map(|item| (None, item));
+    let inner = doc.ids().into_iter().filter_map(|id| doc.find(&id)).flat_map(|parent| {
+        parent.children.iter().map(move |child| (Some(parent.id.clone()), child))
+    });
+    for (parent, item) in top.chain(inner.collect::<Vec<_>>()) {
+        if item.kind() != ItemKind::Modifier {
+            moves.push((item.id.clone(), parent));
+        }
+    }
+    for (id, parent) in moves {
+        run(&mut project, ReparentSceneItemCommand::new(layer.clone(), id, parent, 0));
+    }
+
+    let fx = project.timeline.layers[0].gen_params().unwrap();
+    let edited = fx.scene.as_ref().unwrap();
+    assert!(edited.find(&doc.cameras()[0].clone()).is_some_and(|item| item.name.starts_with("renamed")), "the renames landed");
+    assert_ne!(edited.cameras(), doc.cameras(), "the cameras moved");
+    assert_ne!(edited.ids(), doc.ids(), "the items moved");
+    let chain = |doc: &SceneDoc| doc.items.iter().filter(|item| item.kind() == ItemKind::Modifier).map(|item| item.id.clone()).collect::<Vec<_>>();
+    assert_eq!(chain(edited), chain(&doc), "the modifier chain kept its order");
+    assert_eq!(serde_json::to_string(&fx.graph).unwrap(), graph, "a rename or a reorder changed the compiled graph");
+    assert_eq!(format!("{:?}", fx.params.iter().map(|p| &p.spec).collect::<Vec<_>>()), manifest, "and the manifest");
+    assert_eq!(fx.graph_structure_version, version, "and bumped the structure version, which restarts water");
+}
+
+/// A recorded cut names a camera by its cut number, not its place: after a
+/// duplicate, an add and a reorder in front of it, the base value and the
+/// automation point still cut to the same camera, on the running graph.
+#[test]
+fn a_recorded_cut_keeps_its_camera_through_duplicate_add_and_reorder() {
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+    use manifold_editing::commands::scene_doc::{AddSceneItemCommand, ReparentSceneItemCommand};
+    let mut doc = SceneDoc::base();
+    doc.insert(None, 1, Item::new(ItemId::new("closeup"), "Closeup", ItemFields::default_for(ItemKind::Camera))).unwrap();
+    let mut project = project_with(doc);
+    let layer = project.timeline.layers[0].layer_id.clone();
+    let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+    assert!(fx.set_base_param("closeup.distance", 3.0));
+    assert!(fx.set_base_param("world.camera", 1.0), "cut to the closeup");
+    let point = AutomationPoint { beat: Beats(4.0), value: 1.0, shape: SegmentShape::Hold };
+    fx.automation_lanes = Some(vec![AutomationLane { param_id: "world.camera".into(), enabled: true, points: vec![point] }]);
+
+    // Duplicate the first camera (the copy lands right after it), add one at
+    // the top, and move the closeup to the end.
+    let camera = ItemId::new("camera");
+    run(&mut project, AddSceneItemCommand::new(layer.clone(), ItemKind::Camera, None, 1, Some(camera), ItemId::new("copy")));
+    run(&mut project, AddSceneItemCommand::new(layer.clone(), ItemKind::Camera, None, 0, None, ItemId::new("added")));
+    run(&mut project, ReparentSceneItemCommand::new(layer.clone(), ItemId::new("closeup"), None, usize::MAX));
+
+    let fx = project.timeline.layers[0].gen_params().unwrap();
+    let doc = fx.scene.as_ref().unwrap();
+    let cuts: Vec<(u32, &str)> = doc.cuts().into_iter().map(|(cut, id)| (cut, id.as_str())).collect();
+    assert_eq!(cuts, [(0, "camera"), (1, "closeup"), (2, "copy"), (3, "added")], "new cameras take new numbers");
+    assert_eq!(fx.get_base_param("world.camera"), 1.0, "the base value was rewritten");
+    assert_eq!(fx.automation_lanes.as_ref().unwrap()[0].points, [point], "the recorded point was rewritten");
+    assert_eq!(doc.picked_camera(1.0).map(ItemId::as_str), Some("closeup"));
+
+    let look_y = fx.get_base_param("closeup.look_y");
+    let shown_camera = shown(&mut cut_runtime(fx), 0.0);
+    let [x, y, z] = shown_camera.pos;
+    let distance = (x * x + (y - look_y) * (y - look_y) + z * z).sqrt();
+    assert!((distance - 3.0).abs() < 1e-4, "the cut no longer shows the closeup: {shown_camera:?}");
 }

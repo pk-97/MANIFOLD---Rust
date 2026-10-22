@@ -1,9 +1,10 @@
 //! Light: a Sun, Point or Spot is one `node.light`; the Environment is the
 //! baked environment map (with its HDRI file in HDRI mode, under open sea in
 //! Sea Horizon mode) and owns the
-//! scene's Exposure on every camera lens. The first Sun lights the softbox
-//! sky's sun disc. A scene takes one Environment: a second compiles to
-//! nothing.
+//! scene's Exposure on every camera lens. The first Sun in compile order
+//! (item id order) lights the softbox sky's sun disc; the sky takes one Sun
+//! (BUG-u3gco, sky sun disc from every Sun). A scene takes one Environment:
+//! a second compiles to nothing.
 
 use std::collections::BTreeMap;
 
@@ -29,7 +30,7 @@ pub(crate) fn lamp_params(mode: u32) -> BTreeMap<String, SerializedParamValue> {
     ])
 }
 
-/// Emit every light in tree order.
+/// Emit every light in compile order.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
     let mut lights = Vec::new();
     b.doc.walk(|item, _| {

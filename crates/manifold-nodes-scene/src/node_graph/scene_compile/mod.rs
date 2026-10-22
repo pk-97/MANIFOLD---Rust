@@ -41,12 +41,14 @@ mod world;
 pub(crate) use builder::Builder;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::scene_doc::SceneDoc;
+use manifold_core::scene_doc::{Item, ItemKind, SceneDoc};
 
 /// Compile a scene document. Deterministic: the same document always gives
-/// the same graph.
+/// the same graph, and so does the same document with items moved among
+/// their siblings ([`in_compile_order`]).
 pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
-    let mut b = Builder::new(doc);
+    let doc = in_compile_order(doc);
+    let mut b = Builder::new(&doc);
     material::emit_all(&mut b);
     camera::emit_all(&mut b);
     light::emit_all(&mut b);
@@ -66,12 +68,33 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
 
 /// The Objects `compile` draws, in render-slot order: slot k is the k-th item.
 pub fn drawn_items(doc: &SceneDoc) -> Vec<manifold_foundation::ItemId> {
-    let mut b = Builder::new(doc);
+    let doc = in_compile_order(doc);
+    let mut b = Builder::new(&doc);
     material::emit_all(&mut b);
     swarm::emit_all(&mut b);
     group::emit_tree(&mut b);
     water::emit_all(&mut b);
     b.object_items
+}
+
+/// The document as the compiler reads it: siblings in id order, so where an
+/// item sits among its siblings is display only and a reorder recompiles
+/// nothing. Modifier cards keep their chain order, the order they apply in
+/// (ruling 20).
+fn in_compile_order(doc: &SceneDoc) -> SceneDoc {
+    fn sorted(items: &[Item]) -> Vec<Item> {
+        let mut items: Vec<Item> = items
+            .iter()
+            .map(|item| Item { id: item.id.clone(), name: item.name.clone(), fields: item.fields.clone(), children: sorted(&item.children) })
+            .collect();
+        // Stable: every Modifier card shares one key, so the chain keeps its order.
+        items.sort_by(|a, b| key(a).cmp(&key(b)));
+        items
+    }
+    fn key(item: &Item) -> Option<&str> {
+        (item.kind() != ItemKind::Modifier).then(|| item.id.as_str())
+    }
+    SceneDoc { items: sorted(&doc.items), models: doc.models.clone(), next_cut: doc.next_cut }
 }
 
 inventory::submit! {

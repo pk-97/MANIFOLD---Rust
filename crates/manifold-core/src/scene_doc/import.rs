@@ -152,7 +152,10 @@ impl ImportedModel {
     pub fn scene_doc(&self, file: &str, id: ItemId) -> SceneDoc {
         let mut doc = SceneDoc::base();
         doc.items.retain(|item| ![super::BASE_CUBE, super::BASE_CUBE_MATERIAL].contains(&item.id.as_str()));
-        doc.items.extend(self.into_items(file, id));
+        for mut item in self.into_items(file, id) {
+            doc.number_cameras(&mut item);
+            doc.items.push(item);
+        }
         doc
     }
 
