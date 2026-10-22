@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use manifold_physics::{TriangleMesh, closed_triangles};
+use manifold_physics::{BodyHandle, TriangleMesh, closed_triangles};
 use manifold_physics::collision_shape::{water_lattice, water_plan};
 use manifold_physics::sdf::DistanceLattice;
 
@@ -79,11 +79,16 @@ pub struct PreparedFluidGeometry {
     /// coupling builds it, never serialized.
     #[serde(skip)]
     fixed: bool,
+    /// The coupled Box3D body this solid was built for, so a reshaped body
+    /// finds its own older lattice to stand in. Set where the coupling builds
+    /// it, never serialized.
+    #[serde(skip)]
+    body: Option<BodyHandle>,
 }
 
 impl PreparedFluidGeometry {
     pub fn new(meshes: Vec<TriangleMesh>) -> Self {
-        Self { meshes, open_parts: OnceLock::new(), fixed: false }
+        Self { meshes, open_parts: OnceLock::new(), fixed: false, body: None }
     }
 
     /// A static collider's mesh, which each water crops to its domain.
@@ -91,8 +96,17 @@ impl PreparedFluidGeometry {
         Self { fixed: true, ..Self::new(meshes) }
     }
 
+    /// This solid as coupled body `body`'s.
+    pub fn of_body(self, body: BodyHandle) -> Self {
+        Self { body: Some(body), ..self }
+    }
+
     pub fn is_fixed(&self) -> bool {
         self.fixed
+    }
+
+    pub fn body(&self) -> Option<BodyHandle> {
+        self.body
     }
 
     /// Whether any mesh has an open part. Computed once; call it where the

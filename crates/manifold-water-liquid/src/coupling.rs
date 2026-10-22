@@ -48,7 +48,6 @@ struct Coupled {
     source: Source,
     /// The largest face of the body's local hull box.
     face_area: f32,
-    friction: f32,
     /// The world's shape revision of this body the geometry was built from;
     /// an in-place reshape bumps it and the geometry is built again.
     revision: u32,
@@ -272,7 +271,6 @@ impl LiquidRigidOwner {
             capacity,
             rebind: false,
         };
-        owner.update_friction(inputs);
         let world = owner.rigid.native_world().expect("prepared above");
         capture_rows(world, &owner.bodies, &mut owner.rows, &mut owner.contacts)?;
         Ok(owner)
@@ -373,7 +371,6 @@ impl LiquidRigidOwner {
         self.layout.prepare_output(&mut self.frame);
         self.layout.capture(world, &mut self.frame)?;
         self.frame.stamp = stamp;
-        set_friction(&mut self.bodies, &self.walled);
         capture_rows(world, &self.bodies, &mut self.rows, &mut self.contacts)?;
         self.rebind = false;
         Ok(())
@@ -460,7 +457,6 @@ impl LiquidRigidOwner {
         self.walled.clone_from(inputs);
         self.walls.install(&mut self.walled);
         self.rigid.advance_worker(&self.walled, self.completed_time, 0, &mut Uncoupled)?;
-        self.update_friction(inputs);
         let world = self.rigid.native_world().ok_or("Liquid coupling: reanchor lost the rigid world")?;
         self.layout.capture(world, &mut self.frame)?;
         capture_rows(world, &self.bodies, &mut self.rows, &mut self.contacts)
@@ -503,13 +499,8 @@ impl LiquidRigidOwner {
         self.step(inputs, pending)
     }
 
-    fn update_friction(&mut self, inputs: &RigidSceneInputs) {
-        set_friction(&mut self.bodies, inputs);
-    }
-
     /// Step Box3D over tick `completed` with the decoded impulses.
     fn step(&mut self, inputs: &RigidSceneInputs, pending: PendingTick) -> Result<(), String> {
-        self.update_friction(inputs);
         let expected = TickStamp { epoch: self.epoch, tick: self.completed };
         let mut coupling = LiquidCoupling {
             expected,
@@ -533,16 +524,6 @@ impl LiquidRigidOwner {
         self.completed += 1;
         self.completed_time = pending.interval.end;
         Ok(())
-    }
-}
-
-fn set_friction(bodies: &mut [Coupled], inputs: &RigidSceneInputs) {
-    for body in bodies {
-        let source = match body.source {
-            Source::Body(slot) => inputs.bodies[slot].as_ref(),
-            Source::Group(group) => inputs.groups[group].as_ref(),
-        };
-        body.friction = source.map_or(0.0, |body| body.friction.clamp(0.0, 1.0));
     }
 }
 
@@ -597,7 +578,7 @@ fn bind(
                 built
             }
         };
-        bodies.push(Coupled { handle, source, face_area, friction: 0.0, revision });
+        bodies.push(Coupled { handle, source, face_area, revision });
         geometries.push(geometry);
     }
     Ok(Bound { bodies, geometries, uncoupled })
@@ -643,7 +624,7 @@ fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle, body: Option<&RigidBo
     let face = (size[0] * size[1]).max(size[1] * size[2]).max(size[0] * size[2]);
     // A static collider never moves, so each water crops its lattice to its domain.
     let geometry = if fixed { PreparedFluidGeometry::fixed(meshes) } else { PreparedFluidGeometry::new(meshes) };
-    Ok((Arc::new(geometry), face))
+    Ok((Arc::new(geometry.of_body(handle)), face))
 }
 
 /// Each coupled body's state as a row: its centre of mass, 1/m, velocities,
@@ -683,7 +664,9 @@ fn capture_rows(
         rows.push(LiquidBody {
             position_inv_mass: [c[0], c[1], c[2], d.inverse_mass],
             rotation: pose.rotation,
-            linear_velocity: [v[0], v[1], v[2], body.friction],
+            // Water slides freely along every body, as FLIP Fluids obstacles
+            // do: a body's Friction is its rigid contacts' only.
+            linear_velocity: [v[0], v[1], v[2], 0.0],
             angular_velocity: [w[0], w[1], w[2], 0.0],
             inv_inertia_x: [i[0][0], i[0][1], i[0][2], alpha[0]],
             inv_inertia_y: [i[1][0], i[1][1], i[1][2], alpha[1]],

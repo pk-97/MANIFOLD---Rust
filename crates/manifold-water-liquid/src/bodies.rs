@@ -299,10 +299,12 @@ struct RoleLattice {
     failed: Option<(LatticePlan, String)>,
 }
 
-/// `geometry`'s lattice for this frame, cropped to `domain` (local min then
-/// max) when given: `None` while live and nothing is built yet. Live, a
-/// lattice built to an older plan stands in until the current one is ready;
-/// `wait` blocks for the current one.
+/// `geometry`'s lattice for this frame, covering at least `domain` (local
+/// min then max) when given: `None` while live and nothing is built yet. A
+/// crop that still holds the domain is kept; one that doesn't is made again
+/// with a margin ([`with_margin`]). Live, a lattice built to an older plan
+/// stands in until the current one is ready; `wait` blocks for the current
+/// one.
 fn resolve_lattice(
     lattices: &mut Vec<RoleLattice>,
     geometry: &Arc<PreparedFluidGeometry>,
@@ -311,6 +313,11 @@ fn resolve_lattice(
     domain: Option<[[f32; 3]; 2]>,
     wait: bool,
 ) -> Result<Option<(Arc<DistanceLattice>, LatticePlan)>, String> {
+    let held = lattices.iter().find(|entry| Arc::ptr_eq(&entry.geometry, geometry)).and_then(|entry| entry.asked.2);
+    let domain = domain.map(|need| match held {
+        Some(have) if (0..3).all(|axis| have[0][axis] <= need[0][axis] && need[1][axis] <= have[1][axis]) => have,
+        _ => with_margin(need),
+    });
     let asked = if geometry.has_open_parts() { (cell_size, scale_steps(scale), domain) } else { (0.0, [0; 2], domain) };
     let index = match lattices.iter().position(|entry| Arc::ptr_eq(&entry.geometry, geometry)) {
         Some(index) => index,
@@ -422,9 +429,10 @@ pub struct LiquidBodies {
     resolved: Vec<(Arc<DistanceLattice>, LatticePlan)>,
     /// The lattices the shapes and atlas were last built from.
     used: Vec<Arc<DistanceLattice>>,
-    /// Each coupled body's lattice and plan in the last build, in order: a
-    /// body whose shape was swapped in place keeps it until its new one is
-    /// ready, so the liquid never holds for a reshaped body.
+    /// Each coupled body's lattice and plan in the last build, beside
+    /// `coupled`: a body whose shape was swapped in place keeps its own
+    /// (found by its Box3D handle) until its new one is ready, so the liquid
+    /// never holds for a reshaped body.
     coupled_lattices: Vec<(Arc<DistanceLattice>, LatticePlan)>,
     /// Whether Inflow and Outflow roles are accepted as regions; a solver
     /// without sources and drains leaves this off and refuses them.
@@ -631,7 +639,10 @@ impl LiquidBodies {
             count += 1;
         }
         for (index, geometry) in coupled.iter().enumerate() {
-            let stand_in = (self.coupled.len() == coupled.len()).then(|| self.coupled_lattices.get(index)).flatten();
+            let stand_in = geometry
+                .body()
+                .and_then(|body| self.coupled.iter().position(|known| known.body() == Some(body)))
+                .and_then(|known| self.coupled_lattices.get(known));
             let crop = coupled_rows.get(index).filter(|_| geometry.is_fixed()).map(|row| local_domain(row, domain));
             match resolve_lattice(&mut self.lattices, geometry, cell_size, [1.0; 3], crop, wait) {
                 Ok(Some(found)) => self.resolved.push(found),
@@ -897,14 +908,22 @@ fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|i| v[i] + 2.0 * (q[3] * uv[i] + uuv[i]))
 }
 
-/// How many steps a domain's longest side is cut into when its box is
-/// carried into a body: the box snaps outward to them, so a pose that
-/// drifts by rounding never asks for a new lattice.
-const DOMAIN_CROP_STEPS: f32 = 32.0;
+/// The share of a crop's longest side added on every side when a fixed
+/// collider's lattice is cropped again. A collider dragged less than that
+/// while its new lattice builds is still covered by the old one, so water
+/// never drops through at the domain's edge.
+const CROP_MARGIN: f32 = 0.125;
+
+/// `crop` grown by [`CROP_MARGIN`] of its longest side on every side.
+fn with_margin(crop: [[f32; 3]; 2]) -> [[f32; 3]; 2] {
+    let longest = (0..3).map(|axis| crop[1][axis] - crop[0][axis]).fold(0.0f32, f32::max);
+    let margin = CROP_MARGIN * longest;
+    [crop[0].map(|value| value - margin), crop[1].map(|value| value + margin)]
+}
 
 /// The world box `domain` (min then max) in the frame of the body `row`
 /// places (about its centre of mass): the box round the domain's corners
-/// turned back into the body, snapped outward.
+/// turned back into the body.
 fn local_domain(row: &LiquidBody, domain: [[f32; 3]; 2]) -> [[f32; 3]; 2] {
     let q = row.rotation;
     let inverse = [-q[0], -q[1], -q[2], q[3]];
@@ -916,11 +935,6 @@ fn local_domain(row: &LiquidBody, domain: [[f32; 3]; 2]) -> [[f32; 3]; 2] {
             local[0][axis] = local[0][axis].min(point[axis]);
             local[1][axis] = local[1][axis].max(point[axis]);
         }
-    }
-    let longest = (0..3).map(|axis| domain[1][axis] - domain[0][axis]).fold(0.0f32, f32::max);
-    let step = longest / DOMAIN_CROP_STEPS;
-    if step > 0.0 {
-        local = [local[0].map(|value| (value / step).floor() * step), local[1].map(|value| (value / step).ceil() * step)];
     }
     local
 }
@@ -1330,8 +1344,9 @@ mod tests {
 
     /// A fixed collider far larger than the water (a 100 m slab under a 4 m
     /// domain) gets a lattice over only the domain where its row places it,
-    /// a 32nd of the domain apart, exact on the floor; a second water crops
-    /// the same slab to its own box. A moving hull keeps its whole lattice.
+    /// with a margin, a 32nd of the crop apart, exact on the floor; a second
+    /// water crops the same slab to its own box. A moving hull keeps its
+    /// whole lattice.
     #[test]
     fn liquid_bodies_crop_a_fixed_collider_to_the_domain() {
         let slab = [box_mesh([50.0, 0.5, 50.0])];
@@ -1345,21 +1360,51 @@ mod tests {
             assert_eq!(status, Ok(BodiesStatus::Ready));
             bodies.resolved[0].clone()
         };
+        let margin = 4.0 * CROP_MARGIN;
+        let spacing = (4.0 + 2.0 * margin) / crate::fluid_role::DISTANCE_NODES_ALONG_LONGEST;
         let (lattice, plan) = lattice_in(&fixed, [[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]);
-        assert_eq!(lattice.spacing, 4.0 / crate::fluid_role::DISTANCE_NODES_ALONG_LONGEST);
+        assert_eq!(lattice.spacing, spacing);
         assert!(plan.crop.is_some());
-        // The domain plus two spacings each side across, the floor's band in height.
-        assert_eq!(lattice.dims, [37, 5, 37]);
-        assert_eq!(lattice.origin, [-2.25, 0.25, -2.25]);
-        assert!(lattice.value([18, 2, 18]).abs() < 1e-5, "on the top face: {}", lattice.value([18, 2, 18]));
-        assert!((lattice.value([18, 4, 18]) - 0.25).abs() < 1e-5);
+        // The crop plus two spacings each side across; in height the slab's
+        // top half-metre the margin reaches down into, plus two spacings.
+        assert_eq!(lattice.dims, [37, 9, 37]);
+        let low = -2.0 - margin - 2.0 * spacing;
+        assert_eq!(lattice.origin, [low, -2.0 * spacing, low]);
+        for k in [5, 8] {
+            let above_top = lattice.origin[1] + k as f32 * spacing - 0.5;
+            assert!((lattice.value([18, k, 18]) - above_top).abs() < 1e-5, "node {k}: {}", lattice.value([18, k, 18]));
+        }
 
         let (other, _) = lattice_in(&fixed, [[10.0, 0.0, 10.0], [14.0, 4.0, 14.0]]);
-        assert_eq!(other.origin, [9.75, 0.25, 9.75]);
+        assert_eq!(other.origin[0], 10.0 - margin - 2.0 * spacing);
 
         let (whole, plan) = lattice_in(&moving, [[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]);
         assert!(plan.crop.is_none());
         assert_eq!(whole.spacing, 100.0 / crate::fluid_role::DISTANCE_NODES_ALONG_LONGEST);
+    }
+
+    /// Dragging a fixed collider less than the crop's margin keeps its
+    /// lattice; dragging it further crops again, and live the old lattice
+    /// stands in, still covering the domain, until the new one is built.
+    #[test]
+    fn a_dragged_fixed_collider_stays_covered() {
+        let fixed = Arc::new(PreparedFluidGeometry::fixed(vec![box_mesh([50.0, 0.5, 50.0])]));
+        let domain = [[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]];
+        let at = |x: f32| LiquidBody { position_inv_mass: [x, -0.5, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], ..LiquidBody::default() };
+        let mut bodies = LiquidBodies::default();
+        let geometries = std::slice::from_ref(&fixed);
+        assert_eq!(bodies.prepare(&[], geometries, &[at(0.0)], domain, 0.0625, true), Ok(BodiesStatus::Ready));
+        let (first, _) = bodies.resolved[0].clone();
+        assert_eq!(bodies.prepare(&[], geometries, &[at(0.4)], domain, 0.0625, false), Ok(BodiesStatus::Ready));
+        assert!(Arc::ptr_eq(&bodies.resolved[0].0, &first), "a drag inside the margin keeps the lattice");
+        assert_eq!(bodies.prepare(&[], geometries, &[at(0.6)], domain, 0.0625, false), Ok(BodiesStatus::Ready));
+        let crop = bodies.resolved[0].1.crop.expect("cropped");
+        assert!(Arc::ptr_eq(&bodies.resolved[0].0, &first) && crop[0][0] <= -2.6, "the old lattice stands in and covers: {crop:?}");
+        assert_eq!(bodies.prepare(&[], geometries, &[at(0.6)], domain, 0.0625, true), Ok(BodiesStatus::Ready));
+        let (moved, plan) = bodies.resolved[0].clone();
+        assert!(!Arc::ptr_eq(&moved, &first), "a drag past the margin crops again");
+        let crop = plan.crop.expect("cropped");
+        assert!(crop[0][0] <= -2.6 && crop[1][0] >= 1.4, "the new crop covers the domain: {crop:?}");
     }
 
     /// A turned body sees the domain turned back into its own frame: a
@@ -1370,12 +1415,9 @@ mod tests {
         let row = LiquidBody { rotation: [0.0, s, 0.0, c], ..LiquidBody::default() };
         let local = local_domain(&row, [[0.0, 0.0, -1.0], [4.0, 1.0, 1.0]]);
         let expected = [[-1.0, 0.0, 0.0], [1.0, 1.0, 4.0]];
-        let step = 4.0 / DOMAIN_CROP_STEPS;
         for side in 0..2 {
             for axis in 0..3 {
-                let error = local[side][axis] - expected[side][axis];
-                assert!(error.abs() <= step + 1e-5, "{local:?}");
-                assert!(if side == 0 { error <= 1e-5 } else { error >= -1e-5 }, "snapped outward: {local:?}");
+                assert!((local[side][axis] - expected[side][axis]).abs() <= 1e-5, "{local:?}");
             }
         }
     }
