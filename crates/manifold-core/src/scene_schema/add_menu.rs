@@ -67,7 +67,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 34] = [
+pub static ADD_ENTRIES: [AddEntry; 53] = [
     entry("object.cube", "Object", "Cube", ItemKind::Object, "Cube", || object(Shape::Cube)),
     entry("object.sphere", "Object", "Sphere", ItemKind::Object, "Sphere", || object(Shape::Sphere)),
     entry("object.plane", "Object", "Plane", ItemKind::Object, "Plane", || object(Shape::Plane)),
@@ -109,6 +109,33 @@ pub static ADD_ENTRIES: [AddEntry; 34] = [
         modifier(ModifierType::VortexFragments)
     }),
     entry("modifier.shatter", "Modifier", "Shatter", ItemKind::Modifier, "Shatter", || modifier(ModifierType::Shatter)),
+    entry("modifier.bend", "Modifier", "Bend", ItemKind::Modifier, "Bend", || modifier(ModifierType::Bend)),
+    entry("modifier.twist", "Modifier", "Twist", ItemKind::Modifier, "Twist", || modifier(ModifierType::Twist)),
+    entry("modifier.taper", "Modifier", "Taper", ItemKind::Modifier, "Taper", || modifier(ModifierType::Taper)),
+    entry("modifier.inflate", "Modifier", "Inflate", ItemKind::Modifier, "Inflate", || modifier(ModifierType::Inflate)),
+    entry("modifier.rotate", "Modifier", "Rotate", ItemKind::Modifier, "Rotate", || modifier(ModifierType::Rotate)),
+    entry("modifier.displace_by_texture", "Modifier", "Displace by Texture", ItemKind::Modifier, "Displace by Texture", || {
+        modifier(ModifierType::DisplaceByTexture)
+    }),
+    entry("modifier.morph", "Modifier", "Morph", ItemKind::Modifier, "Morph", || modifier(ModifierType::Morph)),
+    entry("modifier.boil", "Modifier", "Boil", ItemKind::Modifier, "Boil", || modifier(ModifierType::Boil)),
+    entry("modifier.ripple", "Modifier", "Ripple", ItemKind::Modifier, "Ripple", || modifier(ModifierType::Ripple)),
+    entry("modifier.melt", "Modifier", "Melt", ItemKind::Modifier, "Melt", || modifier(ModifierType::Melt)),
+    entry("modifier.glitch_jitter", "Modifier", "Glitch Jitter", ItemKind::Modifier, "Glitch Jitter", || {
+        modifier(ModifierType::GlitchJitter)
+    }),
+    entry("modifier.shatter_mesh", "Modifier", "Shatter Mesh", ItemKind::Modifier, "Shatter Mesh", || {
+        modifier(ModifierType::ShatterMesh)
+    }),
+    entry("modifier.slice", "Modifier", "Slice", ItemKind::Modifier, "Slice", || modifier(ModifierType::Slice)),
+    entry("modifier.voxelize", "Modifier", "Voxelize", ItemKind::Modifier, "Voxelize", || modifier(ModifierType::Voxelize)),
+    entry("modifier.fold", "Modifier", "Fold", ItemKind::Modifier, "Fold", || modifier(ModifierType::Fold)),
+    entry("modifier.facet_normals", "Modifier", "Facet Normals", ItemKind::Modifier, "Facet Normals", || {
+        modifier(ModifierType::FacetNormals)
+    }),
+    entry("modifier.wave_shear", "Modifier", "Wave Shear", ItemKind::Modifier, "Wave Shear", || modifier(ModifierType::WaveShear)),
+    entry("modifier.cut_out_box", "Modifier", "Cut Out Box", ItemKind::Modifier, "Cut Out Box", || modifier(ModifierType::CutOutBox)),
+    entry("modifier.shake", "Modifier", "Shake", ItemKind::Modifier, "Shake", || modifier(ModifierType::Shake)),
     model_file("object.mesh", "Object", "Mesh from file\u{2026}"),
 ];
 

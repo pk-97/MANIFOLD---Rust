@@ -1,0 +1,223 @@
+{
+  "version": 3,
+  "name": "Shake",
+  "presetMetadata": {
+    "id": "Shake",
+    "displayName": "Shake",
+    "category": "Geometry",
+    "oscPrefix": "shake_modifier",
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 10.0,
+        "defaultValue": 0.5
+      },
+      {
+        "id": "frequency",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 100.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "position_strength",
+        "name": "Position",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.25
+      },
+      {
+        "id": "rotation_strength",
+        "name": "Rotation",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0
+      },
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      }
+    ],
+    "bindings": [
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "enabled",
+          "param": "value"
+        }
+      },
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "shake",
+          "param": "amount"
+        }
+      },
+      {
+        "id": "frequency",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "shake",
+          "param": "frequency"
+        }
+      },
+      {
+        "id": "position_strength",
+        "label": "Position",
+        "defaultValue": 0.25,
+        "target": {
+          "kind": "node",
+          "nodeId": "shake",
+          "param": "position_strength"
+        }
+      },
+      {
+        "id": "rotation_strength",
+        "label": "Rotation",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "shake",
+          "param": "rotation_strength"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "shake_stage",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "current",
+              "source": {
+                "previous": {
+                  "endpoint": "transform"
+                }
+              }
+            },
+            {
+              "port": "time",
+              "source": {
+                "context": {
+                  "value": "time"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "transform",
+              "endpoint": "transform"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "shake_stage",
+      "typeId": "group",
+      "handle": "ShakeStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "current",
+              "portType": "Transform"
+            },
+            {
+              "name": "time",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "transform",
+              "portType": "Transform"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_current",
+            "typeId": "system.group_input",
+            "handle": "current"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_time",
+            "typeId": "system.group_input",
+            "handle": "time"
+          },
+          {
+            "id": 10,
+            "nodeId": "group_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          },
+          {
+            "id": 20,
+            "nodeId": "enabled",
+            "typeId": "node.value",
+            "handle": "enabled",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 21,
+            "nodeId": "shake",
+            "typeId": "node.transform_shake",
+            "handle": "shake"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "current",
+            "toNode": 21,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "time",
+            "toNode": 21,
+            "toPort": "time"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "transform"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

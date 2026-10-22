@@ -1,0 +1,580 @@
+{
+  "version": 3,
+  "name": "Cut Out Box",
+  "presetMetadata": {
+    "id": "CutOutBox",
+    "displayName": "Cut Out Box",
+    "category": "Geometry",
+    "oscPrefix": "cut_out_box_modifier",
+    "available": true,
+    "params": [
+      {
+        "id": "center_x",
+        "name": "Centre X",
+        "min": -2.0,
+        "max": 2.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "center_y",
+        "name": "Centre Y",
+        "min": -2.0,
+        "max": 2.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "center_z",
+        "name": "Centre Z",
+        "min": -2.0,
+        "max": 2.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "size_x",
+        "name": "Size X",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.5
+      },
+      {
+        "id": "size_y",
+        "name": "Size Y",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.5
+      },
+      {
+        "id": "size_z",
+        "name": "Size Z",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.5
+      },
+      {
+        "id": "feather",
+        "name": "Feather",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      }
+    ],
+    "bindings": [
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "enabled",
+          "param": "value"
+        }
+      },
+      {
+        "id": "center_x",
+        "label": "Centre X",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "m70_cut_out_box",
+          "param": "a"
+        }
+      },
+      {
+        "id": "size_x",
+        "label": "Size X",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "m72_cut_out_box",
+          "param": "a"
+        }
+      },
+      {
+        "id": "center_y",
+        "label": "Centre Y",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "m73_cut_out_box",
+          "param": "a"
+        }
+      },
+      {
+        "id": "size_y",
+        "label": "Size Y",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "m75_cut_out_box",
+          "param": "a"
+        }
+      },
+      {
+        "id": "center_z",
+        "label": "Centre Z",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "m76_cut_out_box",
+          "param": "a"
+        }
+      },
+      {
+        "id": "size_z",
+        "label": "Size Z",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "m78_cut_out_box",
+          "param": "a"
+        }
+      },
+      {
+        "id": "feather",
+        "label": "Feather",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "m79_cut_out_box",
+          "param": "a"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "cut_out_box_stage",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "current",
+              "source": {
+                "previous": {
+                  "endpoint": "vertices"
+                }
+              }
+            },
+            {
+              "port": "reference",
+              "source": {
+                "reference": {
+                  "endpoint": "vertices"
+                }
+              }
+            },
+            {
+              "port": "sourceRadius",
+              "source": {
+                "context": {
+                  "value": "sceneRadius"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetX",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetX"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetY",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetY"
+                }
+              }
+            },
+            {
+              "port": "sourceOffsetZ",
+              "source": {
+                "context": {
+                  "value": "sourceOffsetZ"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "vertices",
+              "endpoint": "vertices"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "cut_out_box_stage",
+      "typeId": "group",
+      "handle": "CutOutBoxStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "current",
+              "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "reference",
+              "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "sourceRadius",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetX",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetY",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sourceOffsetZ",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "vertices",
+              "portType": "Array(MeshVertex)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_current",
+            "typeId": "system.group_input",
+            "handle": "current"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_reference",
+            "typeId": "system.group_input",
+            "handle": "reference"
+          },
+          {
+            "id": 3,
+            "nodeId": "group_sourceRadius",
+            "typeId": "system.group_input",
+            "handle": "sourceRadius"
+          },
+          {
+            "id": 4,
+            "nodeId": "group_sourceOffsetX",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetX"
+          },
+          {
+            "id": 5,
+            "nodeId": "group_sourceOffsetY",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetY"
+          },
+          {
+            "id": 6,
+            "nodeId": "group_sourceOffsetZ",
+            "typeId": "system.group_input",
+            "handle": "sourceOffsetZ"
+          },
+          {
+            "id": 10,
+            "nodeId": "group_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          },
+          {
+            "id": 20,
+            "nodeId": "enabled",
+            "typeId": "node.value",
+            "handle": "enabled",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 21,
+            "nodeId": "cut",
+            "typeId": "node.cut_out_box",
+            "handle": "cut"
+          },
+          {
+            "id": 22,
+            "nodeId": "m70_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m70_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 23,
+            "nodeId": "m71_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m71_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 24,
+            "nodeId": "m72_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m72_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 25,
+            "nodeId": "m73_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m73_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 26,
+            "nodeId": "m74_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m74_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 27,
+            "nodeId": "m75_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m75_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 28,
+            "nodeId": "m76_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m76_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 29,
+            "nodeId": "m77_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m77_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 30,
+            "nodeId": "m78_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m78_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 31,
+            "nodeId": "m79_cut_out_box",
+            "typeId": "node.math",
+            "handle": "m79_cut_out_box",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "current",
+            "toNode": 21,
+            "toPort": "mesh"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "sourceRadius",
+            "toNode": 22,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "sourceOffsetX",
+            "toNode": 23,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "center_x"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "sourceRadius",
+            "toNode": 24,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "size_x"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "sourceRadius",
+            "toNode": 25,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "sourceOffsetY",
+            "toNode": 26,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 26,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "center_y"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "sourceRadius",
+            "toNode": 27,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 27,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "size_y"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "sourceRadius",
+            "toNode": 28,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 28,
+            "fromPort": "out",
+            "toNode": 29,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "sourceOffsetZ",
+            "toNode": 29,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 29,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "center_z"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "sourceRadius",
+            "toNode": 30,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "size_z"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "sourceRadius",
+            "toNode": 31,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "feather"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "vertices"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}
