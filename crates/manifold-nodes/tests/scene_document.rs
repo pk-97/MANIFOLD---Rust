@@ -347,8 +347,12 @@ mod every_param_has_a_row {
         let family = doc.find(&ItemId::new(owner)).is_some_and(|item| item.kind() == ItemKind::Material)
             && role == MATERIAL_FAMILY.node;
         // The water template's params are a family too (`scene_schema::water`).
-        let water = doc.find(&ItemId::new(owner)).is_some_and(|item| item.kind() == ItemKind::Water)
-            && scene_schema::water_family().is_some_and(|template| template.holds(role));
+        let water = doc.find(&ItemId::new(owner)).is_some_and(|item| match &item.fields {
+            manifold_core::scene_doc::ItemFields::Water(fields) => {
+                scene_schema::water_family(fields.solver, fields.draw).is_some_and(|template| template.holds(role))
+            }
+            _ => false,
+        });
         let plain_material = owner == "scene" && role == "default_material";
         let scene_level = SCENE_LEVEL_ROWS.iter().any(|row| matches!(row.reach, Reach::Scene(r) if r == role) && row.param == param);
         found || family || water || plain_material || (owner == "scene" && scene_level)

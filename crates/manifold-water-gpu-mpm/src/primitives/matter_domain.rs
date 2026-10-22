@@ -24,14 +24,14 @@ use manifold_core::liquid_setup::{ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, S
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_physics::clock::TICK;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
-use manifold_core::fluid_domain::{MAX_FLUID_ROLES, MAX_LIQUID_BODIES};
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_water_liquid::fluid_role::{FluidRole, take_initial_fill};
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::lattice::closed_faces;
 use manifold_water_liquid::clock::LiquidClock;
-use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
+use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, SharedSolids, SharesSolids, takes_reaction};
 use {manifold_water_liquid::fields, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
 use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_physics::tick_samples::TickSamples;
@@ -151,7 +151,7 @@ pub(crate) fn matter_geometry(
     initial_fill: Option<Transform>,
 ) -> Result<MatterGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
-    let layout = domain_layout(domain.map(Into::into), read("domain_size", 4.0), resolution)?;
+    let layout = domain_layout(domain.map(|domain| manifold_water_liquid::world_pose::world_domain_box(domain).into()), read("domain_size", 4.0), resolution)?;
     let lattice = LiquidLattice::from_layout(&layout);
     let budget = match params.get("grid_budget_mcells") {
         Some(ParamValue::Float(budget)) => *budget,
@@ -181,7 +181,7 @@ pub(crate) fn matter_geometry(
 manifold_node_engine::primitive! {
     name: MatterDomain,
     type_id: "node.matter_domain",
-    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and the box an Initial Fill role places, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness, and up to 64 Collider roles. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms, and the colliders as one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
+    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and the box an Initial Fill role places, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness; its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
     inputs: {
         domain: Transform optional,
         resolution: ScalarF32 optional,
@@ -196,70 +196,6 @@ manifold_node_engine::primitive! {
         cohesion: ScalarF32 optional,
         liveliness: ScalarF32 optional,
         acceleration_field: VectorField optional,
-        role_0: FluidRole optional,
-        role_1: FluidRole optional,
-        role_2: FluidRole optional,
-        role_3: FluidRole optional,
-        role_4: FluidRole optional,
-        role_5: FluidRole optional,
-        role_6: FluidRole optional,
-        role_7: FluidRole optional,
-        role_8: FluidRole optional,
-        role_9: FluidRole optional,
-        role_10: FluidRole optional,
-        role_11: FluidRole optional,
-        role_12: FluidRole optional,
-        role_13: FluidRole optional,
-        role_14: FluidRole optional,
-        role_15: FluidRole optional,
-        role_16: FluidRole optional,
-        role_17: FluidRole optional,
-        role_18: FluidRole optional,
-        role_19: FluidRole optional,
-        role_20: FluidRole optional,
-        role_21: FluidRole optional,
-        role_22: FluidRole optional,
-        role_23: FluidRole optional,
-        role_24: FluidRole optional,
-        role_25: FluidRole optional,
-        role_26: FluidRole optional,
-        role_27: FluidRole optional,
-        role_28: FluidRole optional,
-        role_29: FluidRole optional,
-        role_30: FluidRole optional,
-        role_31: FluidRole optional,
-        role_32: FluidRole optional,
-        role_33: FluidRole optional,
-        role_34: FluidRole optional,
-        role_35: FluidRole optional,
-        role_36: FluidRole optional,
-        role_37: FluidRole optional,
-        role_38: FluidRole optional,
-        role_39: FluidRole optional,
-        role_40: FluidRole optional,
-        role_41: FluidRole optional,
-        role_42: FluidRole optional,
-        role_43: FluidRole optional,
-        role_44: FluidRole optional,
-        role_45: FluidRole optional,
-        role_46: FluidRole optional,
-        role_47: FluidRole optional,
-        role_48: FluidRole optional,
-        role_49: FluidRole optional,
-        role_50: FluidRole optional,
-        role_51: FluidRole optional,
-        role_52: FluidRole optional,
-        role_53: FluidRole optional,
-        role_54: FluidRole optional,
-        role_55: FluidRole optional,
-        role_56: FluidRole optional,
-        role_57: FluidRole optional,
-        role_58: FluidRole optional,
-        role_59: FluidRole optional,
-        role_60: FluidRole optional,
-        role_61: FluidRole optional,
-        role_62: FluidRole optional,
-        role_63: FluidRole optional,
     },
     outputs: {
         lattice_min_x: ScalarF32, lattice_min_y: ScalarF32, lattice_min_z: ScalarF32,
@@ -323,9 +259,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("stiffness"), label: "Stiffness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.5, 3.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("liveliness"), label: "FLIP Ratio", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("roles"), label: "Sources", ty: ParamType::Int, default: ParamValue::Float(manifold_water_liquid::DEFAULT_ROLE_PORTS as f32), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most two ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most two ticks per display frame; live and export wait for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the resolution per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
+    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most two ticks per display frame and reports dropped time; export runs every tick. Bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every body's distance lattice is built the liquid holds. An Initial Fill seeds the water; Inflow and Outflow roles are refused. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most two ticks per display frame; live and export wait for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the resolution per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -345,6 +282,10 @@ manifold_node_engine::primitive! {
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
         bodies: LiquidBodies = LiquidBodies::default(),
+        // The role inputs, one per source: the `roles` param sizes them.
+        role_ports: manifold_water_liquid::RolePorts = manifold_water_liquid::RolePorts::default(),
+        // Another water's solids, when this one does not own the world.
+        observed: SharedSolids = SharedSolids::default(),
         role_pending: bool = false,
         body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
         body_rows: f32 = 0.0,
@@ -501,17 +442,6 @@ const OUTPUTS: [&str; 55] = [
     "interval_duration",
     "target_time",
     "step_cap_hit"];
-/// Wired role ports, in slot order (the shared liquid role names).
-const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
-    "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
-    "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16", "role_17",
-    "role_18", "role_19", "role_20", "role_21", "role_22", "role_23", "role_24", "role_25", "role_26",
-    "role_27", "role_28", "role_29", "role_30", "role_31", "role_32", "role_33", "role_34", "role_35",
-    "role_36", "role_37", "role_38", "role_39", "role_40", "role_41", "role_42", "role_43", "role_44",
-    "role_45", "role_46", "role_47", "role_48", "role_49", "role_50", "role_51", "role_52", "role_53",
-    "role_54", "role_55", "role_56", "role_57", "role_58", "role_59", "role_60", "role_61", "role_62",
-    "role_63",
-];
 const TICKS: usize = 20;
 const EPOCH: usize = 22;
 const IMPULSE_TICK: usize = 51;
@@ -520,6 +450,14 @@ const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 
 impl Primitive for MatterDomain {
+    fn reconfigure(&mut self, params: &manifold_node_engine::exec::effect_node::ParamValues) {
+        self.role_ports.configure(<Self as manifold_node_engine::primitive::PrimitiveSpec>::INPUTS, params);
+    }
+
+    fn live_inputs(&self) -> Option<&[manifold_node_engine::ports::NodeInput]> {
+        self.role_ports.inputs()
+    }
+
     /// A liquid follows the Physics World: its gravity and its clock.
     fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
         &manifold_core::scene_world_controls::WORLD_INPUTS
@@ -600,8 +538,8 @@ impl Primitive for MatterDomain {
         if let Some(owner) = self.coupled.owner.as_mut() {
             owner.set_step(ctx.sim_step);
         }
-        let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
-        let role_pending = manifold_water_liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
+        let role_pending = self.role_ports.read(&ctx.inputs);
+        let mut roles = self.role_ports.take();
         // The Initial Fill seeds the water; the bodies never see it.
         let fill = take_initial_fill(&mut roles);
         // A physics sample reads the force field and the roles at a tick's
@@ -614,6 +552,7 @@ impl Primitive for MatterDomain {
             }
             self.bodies.observe_sample(&self.clock, ctx.played(), (!role_pending).then_some(&roles[..]));
             self.coupled.scenes.observe_staged(&self.clock, ctx.played());
+            self.role_ports.put_back(roles);
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
@@ -635,6 +574,7 @@ impl Primitive for MatterDomain {
         self.coupled.exchange = None;
         self.schedule.clear();
         let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles, fill) };
+        self.role_ports.put_back(roles);
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
             held[TICKS] = 0.0;
@@ -695,6 +635,16 @@ impl Primitive for MatterDomain {
 
 }
 
+impl SharesSolids for MatterDomain {
+    fn rigid_owner(&self) -> Option<&LiquidRigidOwner> {
+        self.coupled.owner.as_ref()
+    }
+
+    fn shared_solids_mut(&mut self) -> &mut SharedSolids {
+        &mut self.observed
+    }
+}
+
 impl PhysicsNode for MatterDomain {
     fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
         let epoch = self.published.map_or(0, |values| values[EPOCH] as u64);
@@ -704,7 +654,7 @@ impl PhysicsNode for MatterDomain {
             self.role_pending,
             epoch,
             &self.setup_report,
-            self.coupled.owner.as_ref().map_or(0, LiquidRigidOwner::uncoupled),
+            self.coupled.owner.as_ref().map_or_else(|| self.observed.uncoupled(), LiquidRigidOwner::uncoupled),
         ))
     }
 
@@ -893,7 +843,7 @@ impl MatterDomain {
         if self.coupled.mode && !self.observe_rigid(ctx.played(), speed)? {
             return Ok(None);
         }
-        let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
+        let coupled_geometries = self.coupled.owner.as_ref().map_or_else(|| self.observed.geometries(), LiquidRigidOwner::geometries);
         if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size(), offline)? == BodiesStatus::Pending {
             return Ok(None);
         }
@@ -960,7 +910,7 @@ impl MatterDomain {
         // without ticks keeps the last rows as the bodies' poses.
         let row_ticks = if frame.restarted { frame.ticks.max(1) } else { frame.ticks };
         self.rows_fresh = row_ticks > 0;
-        let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::rows);
+        let coupled_rows = self.coupled.owner.as_ref().map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
         let rows = if row_ticks > 0 {
             let rows = self.bodies.rows(first_tick, frame.ticks, coupled_rows)?.len() as f32;
             self.body_rows = rows;
@@ -969,6 +919,15 @@ impl MatterDomain {
             self.body_rows
         };
         let dynamic_count = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
+        // Another water's bodies move on through each later tick of this frame.
+        if row_ticks > 0 && self.coupled.owner.is_none() && !self.observed.rows().is_empty() {
+            let mut seconds = 0.0;
+            for tick in 1..frame.ticks as usize {
+                seconds += frame.interval(tick as u64 - 1).map_or(0.0, |interval| interval.duration().0 as f32);
+                self.bodies.set_coupled_rows(tick, self.observed.rows_after(seconds))?;
+            }
+        }
+        self.observed.used();
 
         // D4: substeps from the stiffness/CFL rule, from parameters only.
         let longest = f64::from(layout.size.iter().copied().fold(0.0f32, f32::max));

@@ -14,12 +14,14 @@ use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
 use manifold_node_engine::load::expand::SceneModifierExpandError;
 use manifold_node_engine::load::expand::impulse_recipients_with_index;
 
-/// One physical fluid domain and the rigid recipients coupled to it.
+/// One physical fluid domain and the rigid recipients coupled to it, and the
+/// scene's other fluid domains, which take its solids.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoupledSceneBinding {
     pub fluid: NodeId,
     pub rigid: NodeId,
     pub colliders: RigidImpulseTargets,
+    pub observers: Vec<NodeId>,
 }
 
 /// Prepare the physical rigid/fluid pairs visible in every render scene.
@@ -38,7 +40,7 @@ pub fn prepare_coupled_scenes(
         }
     }
 
-    let mut pairs = BTreeMap::<(String, String), RigidImpulseTargets>::new();
+    let mut pairs = BTreeMap::<(String, String), (RigidImpulseTargets, Vec<String>)>::new();
     let mut fluid_owners = BTreeMap::<String, String>::new();
     let mut rigid_owners = BTreeMap::<String, String>::new();
 
@@ -87,8 +89,10 @@ pub fn prepare_coupled_scenes(
         }
 
         // The rigid world steps inside one domain, so the first water drawn
-        // owns it and any other runs without solids.
-        let fluid = fluids.into_iter().next().expect("a fluid was checked");
+        // owns it; every other water takes its solids.
+        let mut fluids = fluids.into_iter();
+        let fluid = fluids.next().expect("a fluid was checked");
+        let observers: Vec<String> = fluids.collect();
         let (rigid, colliders) = rigids
             .into_iter()
             .next()
@@ -117,18 +121,22 @@ pub fn prepare_coupled_scenes(
             ));
         }
 
-        pairs
-            .entry((fluid, rigid))
-            .and_modify(|existing| *existing = std::mem::take(existing).union(colliders.clone()))
-            .or_insert(colliders);
+        let (held, watching) = pairs.entry((fluid, rigid)).or_default();
+        *held = std::mem::take(held).union(colliders);
+        for observer in observers {
+            if !watching.contains(&observer) {
+                watching.push(observer);
+            }
+        }
     }
 
     Ok(pairs
         .into_iter()
-        .map(|((fluid, rigid), colliders)| CoupledSceneBinding {
+        .map(|((fluid, rigid), (colliders, observers))| CoupledSceneBinding {
             fluid: NodeId::new(fluid),
             rigid: NodeId::new(rigid),
             colliders,
+            observers: observers.into_iter().map(NodeId::new).collect(),
         })
         .collect())
 }

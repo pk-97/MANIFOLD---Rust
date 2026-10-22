@@ -792,6 +792,17 @@ pub trait Primitive: PrimitiveSpec {
     fn params_refusal(&self, _params: &crate::exec::effect_node::ParamValues) -> Option<String> {
         None
     }
+
+    /// Mirror of [`EffectNode::reconfigure`](crate::exec::effect_node::EffectNode::reconfigure):
+    /// a primitive whose ports follow a count param resizes them here.
+    /// Default no-op.
+    fn reconfigure(&mut self, _params: &crate::exec::effect_node::ParamValues) {}
+
+    /// The input ports when they follow the node's params (set in
+    /// [`Self::reconfigure`]); `None` keeps the fixed `INPUTS`.
+    fn live_inputs(&self) -> Option<&[NodeInput]> {
+        None
+    }
 }
 
 /// Blanket `EffectNode` impl for any `Primitive`. Reads all surface
@@ -804,7 +815,7 @@ impl<P: Primitive + 'static> EffectNode for P {
         P::cached_type_id()
     }
     fn inputs(&self) -> &[NodeInput] {
-        P::INPUTS
+        Primitive::live_inputs(self).unwrap_or(P::INPUTS)
     }
     fn outputs(&self) -> &[NodeOutput] {
         P::OUTPUTS
@@ -995,6 +1006,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn params_refusal(&self, params: &crate::exec::effect_node::ParamValues) -> Option<String> {
         Primitive::params_refusal(self, params)
+    }
+    fn reconfigure(&mut self, params: &crate::exec::effect_node::ParamValues) {
+        Primitive::reconfigure(self, params);
     }
     fn fusion_kind(&self) -> crate::freeze::classify::FusionKind {
         P::FUSION_KIND

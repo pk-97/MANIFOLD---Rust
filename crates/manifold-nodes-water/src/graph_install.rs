@@ -1,15 +1,37 @@
 //! Construction-time graph installation owned by the water family.
 
 use ahash::AHashMap;
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::graph::Graph;
+use manifold_node_engine::load::expand::SceneModifierExpandError;
 use manifold_node_engine::load::graph_loader::GraphBuildError;
 use manifold_node_engine::load::instantiation::GraphInstantiationHook;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
 pub mod coupling;
+
+/// The runtime node a prepared stable id names in this instantiation.
+fn runtime_node(
+    def: &EffectGraphDef,
+    id_map: &AHashMap<u32, NodeInstanceId>,
+    node_id: &NodeId,
+) -> Result<NodeInstanceId, GraphBuildError> {
+    let missing = |detail: &str| {
+        GraphBuildError::SceneModifier(SceneModifierExpandError::MissingTarget {
+            path: node_id.to_string(),
+            detail: detail.into(),
+        })
+    };
+    let doc = def
+        .nodes
+        .iter()
+        .find(|node| node.node_id == *node_id)
+        .ok_or_else(|| missing("prepared coupled node is missing from the instantiated def"))?;
+    id_map.get(&doc.id).copied().ok_or_else(|| missing("prepared coupled node has no runtime mapping"))
+}
 
 fn install_coupled_scenes(
     def: &EffectGraphDef,
@@ -31,56 +53,18 @@ fn install_coupled_scenes(
     if has_fluid && has_rigid {
         let bindings = coupling::prepare_coupled_scenes(def, registry)
             .map_err(GraphBuildError::SceneModifier)?;
+        let failed = |error| GraphBuildError::InvalidWire {
+            wire_index: usize::MAX,
+            reason: format!("failed to register coupled scene: {error}"),
+        };
         for binding in bindings {
-            let fluid_doc = def
-                .nodes
-                .iter()
-                .find(|node| node.node_id == binding.fluid)
-                .ok_or_else(|| {
-                    GraphBuildError::SceneModifier(
-                        manifold_node_engine::load::expand::SceneModifierExpandError::MissingTarget {
-                            path: binding.fluid.to_string(),
-                            detail:
-                                "prepared coupled fluid node is missing from the instantiated def"
-                                    .into(),
-                        },
-                    )
-                })?;
-            let rigid_doc = def
-                .nodes
-                .iter()
-                .find(|node| node.node_id == binding.rigid)
-                .ok_or_else(|| {
-                    GraphBuildError::SceneModifier(
-                        manifold_node_engine::load::expand::SceneModifierExpandError::MissingTarget {
-                            path: binding.rigid.to_string(),
-                            detail:
-                                "prepared coupled rigid node is missing from the instantiated def"
-                                    .into(),
-                        },
-                    )
-                })?;
-            let fluid = *id_map.get(&fluid_doc.id).ok_or_else(|| {
-                GraphBuildError::SceneModifier(
-                    manifold_node_engine::load::expand::SceneModifierExpandError::MissingTarget {
-                        path: binding.fluid.to_string(),
-                        detail: "prepared coupled fluid node has no runtime mapping".into(),
-                    },
-                )
-            })?;
-            let rigid = *id_map.get(&rigid_doc.id).ok_or_else(|| {
-                GraphBuildError::SceneModifier(
-                    manifold_node_engine::load::expand::SceneModifierExpandError::MissingTarget {
-                        path: binding.rigid.to_string(),
-                        detail: "prepared coupled rigid node has no runtime mapping".into(),
-                    },
-                )
-            })?;
-            crate::physics_scene::add_coupled_scene(graph, fluid, rigid, binding.colliders)
-                .map_err(|error| GraphBuildError::InvalidWire {
-                    wire_index: usize::MAX,
-                    reason: format!("failed to register coupled scene: {error}"),
-                })?;
+            let fluid = runtime_node(def, id_map, &binding.fluid)?;
+            let rigid = runtime_node(def, id_map, &binding.rigid)?;
+            crate::physics_scene::add_coupled_scene(graph, fluid, rigid, binding.colliders).map_err(failed)?;
+            for observer in &binding.observers {
+                let observer = runtime_node(def, id_map, observer)?;
+                crate::physics_scene::add_shared_solids(graph, fluid, observer).map_err(failed)?;
+            }
         }
     }
     Ok(())

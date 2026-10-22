@@ -305,7 +305,7 @@ impl ScenePanel {
                 // Material there.
                 if !slots[i].material
                     && slots[i].group == ControlGroup::Material
-                    && (item.material.is_some() || matches!(item.kind, ItemKind::Object | ItemKind::Group))
+                    && (item.material.is_some() || matches!(item.kind, ItemKind::Object | ItemKind::Group | ItemKind::Water))
                 {
                     cy = self.build_material_summary(tree, (inner_x, inner_w), cy, item, item.material.as_ref(), (label_width, slider_w));
                 }

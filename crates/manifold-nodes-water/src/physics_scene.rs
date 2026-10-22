@@ -1,4 +1,6 @@
-//! Native behavior for an ordered fluid/rigid pair.
+//! Native behavior for the ordered pairs of a water scene: a fluid and the
+//! rigid world it couples, and that fluid and each other fluid taking its
+//! solids.
 
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, NodeInstanceId};
 use manifold_node_engine::exec::node_pairs::NodePairBehavior;
@@ -6,6 +8,9 @@ use manifold_node_engine::graph::Graph;
 use manifold_node_engine::validation::GraphError;
 use manifold_water_rigid::node;
 use manifold_core::scene_impulse::RigidImpulseTargets;
+use manifold_water_gpu_flip::primitives::gpu_flip_domain::GpuFlipDomain;
+use manifold_water_gpu_mpm::primitives::matter_domain::MatterDomain;
+use manifold_water_liquid::coupling::SharesSolids;
 
 pub(crate) struct PhysicsPair {
     colliders: RigidImpulseTargets,
@@ -55,6 +60,54 @@ impl NodePairBehavior for PhysicsPair {
             );
         }
     }
+}
+
+/// One water's solids handed to another in its scene, right after the owner
+/// water runs: the other water runs after it and flows round the same
+/// Colliders and Bodies.
+pub(crate) struct SharedSolidsPair;
+
+fn shares_solids(node: &dyn EffectNode) -> Option<&dyn SharesSolids> {
+    let any = node.as_any();
+    any.downcast_ref::<GpuFlipDomain>()
+        .map(|domain| domain as &dyn SharesSolids)
+        .or_else(|| any.downcast_ref::<MatterDomain>().map(|domain| domain as &dyn SharesSolids))
+}
+
+fn shares_solids_mut(node: &mut dyn EffectNode) -> Option<&mut dyn SharesSolids> {
+    let any = node.as_any_mut();
+    if any.is::<GpuFlipDomain>() {
+        return any.downcast_mut::<GpuFlipDomain>().map(|domain| domain as &mut dyn SharesSolids);
+    }
+    any.downcast_mut::<MatterDomain>().map(|domain| domain as &mut dyn SharesSolids)
+}
+
+impl NodePairBehavior for SharedSolidsPair {
+    fn set_enabled(&self, _node: &mut dyn EffectNode, _enabled: bool) {}
+
+    fn before_first(
+        &self,
+        _owner: &mut dyn EffectNode,
+        _water: &mut dyn EffectNode,
+        _inputs: Option<&mut EffectNodeContext<'_, '_>>,
+        _step: manifold_node_engine::exec::effect_node::SimStep,
+    ) {
+    }
+
+    fn after_first(&self, owner: &dyn EffectNode, water: &mut dyn EffectNode) {
+        let owner = shares_solids(owner).and_then(SharesSolids::rigid_owner);
+        if let Some(water) = shares_solids_mut(water) {
+            water.shared_solids_mut().copy_from(owner);
+        }
+    }
+}
+
+/// Hand `owner`'s solids to `water` every frame.
+pub(crate) fn add_shared_solids(graph: &mut Graph, owner: NodeInstanceId, water: NodeInstanceId) -> Result<(), GraphError> {
+    if graph.pair_behavior_mut(owner, water).is_some() {
+        return Ok(());
+    }
+    graph.add_node_pair(owner, water, Box::new(SharedSolidsPair))
 }
 
 pub(crate) fn add_coupled_scene(

@@ -22,9 +22,11 @@ pub mod frame_ring;
 pub mod gizmos;
 pub mod grid;
 pub mod lattice;
+pub mod world_pose;
 
 use manifold_node_engine::bindings::NodeInputs;
-use manifold_core::fluid_domain::MAX_FLUID_ROLES;
+use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::ports::{NodeInput, PortKind, PortType};
 use crate::fluid_role::FluidRole;
 
 pub mod fluid_particles;
@@ -37,34 +39,84 @@ mod wire_values;
 #[doc(hidden)]
 pub mod testkit;
 
-/// Read every wired role port into its slot; true when a wired role is not
-/// ready yet.
-pub fn read_roles(inputs: &NodeInputs<'_>, ports: &[&str], roles: &mut [Option<FluidRole>]) -> bool {
-    let mut pending = false;
-    for (port, role) in ports.iter().zip(roles.iter_mut()) {
-        *role = None;
-        if inputs.slot(port).is_some() {
-            *role = inputs.cpu_value::<FluidRole>(port);
-            pending |= role.is_none();
+pub use manifold_core::fluid_domain::DEFAULT_ROLE_PORTS;
+
+/// The `roles` param: how many role inputs (`role_0`, `role_1`, ...) a
+/// liquid domain has. A scene Water has one per source.
+pub fn role_count(params: &ParamValues) -> usize {
+    params
+        .get("roles")
+        .and_then(|value| value.as_scalar())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map_or(DEFAULT_ROLE_PORTS, |value| value.round() as usize)
+}
+
+/// A liquid domain's role inputs, sized by its `roles` param: the node's
+/// fixed inputs, then `role_0..role_<n>`, and the slot each reads into. Sized
+/// when the param changes, never per frame.
+#[derive(Default)]
+pub struct RolePorts {
+    inputs: Vec<NodeInput>,
+    names: Vec<String>,
+    roles: Vec<Option<FluidRole>>,
+}
+
+impl RolePorts {
+    /// Size the role inputs to the `roles` param after `fixed`.
+    pub fn configure(&mut self, fixed: &'static [NodeInput], params: &ParamValues) {
+        let count = role_count(params);
+        if !self.inputs.is_empty() && self.names.len() == count {
+            return;
         }
+        self.names = (0..count).map(|index| format!("role_{index}")).collect();
+        self.inputs.clear();
+        self.inputs.extend(fixed.iter().cloned());
+        self.inputs.extend(self.names.iter().map(|name| NodeInput {
+            name: std::borrow::Cow::Owned(name.clone()),
+            ty: PortType::FluidRole,
+            kind: PortKind::Input,
+            required: false,
+        }));
+        self.roles.resize(count, None);
     }
-    pending
+
+    /// The node's inputs, once configured.
+    pub fn inputs(&self) -> Option<&[NodeInput]> {
+        (!self.inputs.is_empty()).then_some(self.inputs.as_slice())
+    }
+
+    /// Read every wired role input into its slot; true when a wired role is
+    /// not ready yet.
+    pub fn read(&mut self, inputs: &NodeInputs<'_>) -> bool {
+        let mut pending = false;
+        for (port, role) in self.names.iter().zip(self.roles.iter_mut()) {
+            *role = None;
+            if inputs.slot(port).is_some() {
+                *role = inputs.cpu_value::<FluidRole>(port);
+                pending |= role.is_none();
+            }
+        }
+        pending
+    }
+
+    /// The roles the last [`Self::read`] found, in slot order. Taken and put
+    /// back around a use that needs the node mutably, so it never allocates.
+    pub fn take(&mut self) -> Vec<Option<FluidRole>> {
+        std::mem::take(&mut self.roles)
+    }
+
+    pub fn put_back(&mut self, roles: Vec<Option<FluidRole>>) {
+        self.roles = roles;
+    }
+
+    /// The role input names, in slot order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.names.iter().map(String::as_str)
+    }
 }
 
 /// Rest density of water, kg/m³: every liquid solver's water weighs this.
 pub const WATER_DENSITY: f32 = 1000.0;
-
-/// A liquid domain's role inputs, in slot order (the shared liquid role names).
-pub const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
-    "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
-    "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16", "role_17",
-    "role_18", "role_19", "role_20", "role_21", "role_22", "role_23", "role_24", "role_25", "role_26",
-    "role_27", "role_28", "role_29", "role_30", "role_31", "role_32", "role_33", "role_34", "role_35",
-    "role_36", "role_37", "role_38", "role_39", "role_40", "role_41", "role_42", "role_43", "role_44",
-    "role_45", "role_46", "role_47", "role_48", "role_49", "role_50", "role_51", "role_52", "role_53",
-    "role_54", "role_55", "role_56", "role_57", "role_58", "role_59", "role_60", "role_61", "role_62",
-    "role_63",
-];
 
 pub mod substep_history;
 

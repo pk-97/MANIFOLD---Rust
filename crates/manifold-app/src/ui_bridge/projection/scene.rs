@@ -79,7 +79,7 @@ fn item_vm(
     let fields = field_rows(doc, item, layers);
     let material_item = match item.kind() {
         ItemKind::Material => Some(item.id.clone()),
-        ItemKind::Object | ItemKind::Group => materials.effective.get(&item.id).cloned(),
+        ItemKind::Object | ItemKind::Group | ItemKind::Water => materials.effective.get(&item.id).cloned(),
         _ => None,
     };
     let material = material_item

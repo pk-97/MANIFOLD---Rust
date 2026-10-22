@@ -14,7 +14,7 @@ pub struct ReactionScale {
     /// The tick's momentum unit U: a word is value·2^24/U.
     pub unit: f32,
     pub cell_size: f32,
-    /// Rows before the first coupled body's (the Collider roles').
+    /// Rows before the first coupled body's.
     pub offset: usize,
 }
 

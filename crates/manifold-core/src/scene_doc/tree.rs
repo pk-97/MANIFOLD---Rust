@@ -227,6 +227,7 @@ impl SceneDoc {
         each(&mut self.items, &mut |fields| match fields {
             ItemFields::Group(g) if g.material.as_ref().is_some_and(gone) => g.material = None,
             ItemFields::Object(o) if o.material.as_ref().is_some_and(gone) => o.material = None,
+            ItemFields::Water(w) if w.material.as_ref().is_some_and(gone) => w.material = None,
             ItemFields::Swarm(s) => {
                 if s.material.as_ref().is_some_and(gone) {
                     s.material = None;
@@ -273,6 +274,7 @@ impl SceneDoc {
             match &mut fields {
                 ItemFields::Group(g) => g.material = g.material.as_ref().map(swap),
                 ItemFields::Object(o) => o.material = o.material.as_ref().map(swap),
+                ItemFields::Water(w) => w.material = w.material.as_ref().map(swap),
                 ItemFields::Camera(c) => c.target = c.target.as_ref().map(swap),
                 ItemFields::Swarm(s) => {
                     s.material = s.material.as_ref().map(swap);
@@ -326,12 +328,12 @@ impl SceneDoc {
         effective
     }
 
-    /// How many Objects and Groups draw with each Material.
+    /// How many Objects, Groups and Waters draw with each Material.
     pub fn material_users(&self) -> HashMap<ItemId, usize> {
         let effective = self.effective_materials();
         let mut users = HashMap::new();
         self.walk(|item, _| {
-            if matches!(item.kind(), ItemKind::Object | ItemKind::Group)
+            if matches!(item.kind(), ItemKind::Object | ItemKind::Group | ItemKind::Water)
                 && let Some(material) = effective.get(&item.id)
             {
                 *users.entry(material.clone()).or_insert(0) += 1;
