@@ -205,7 +205,7 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
 /// deliberately: this test is about session lifecycle/dirty-tracking, not
 /// scene fidelity.
 fn scene_json() -> String {
-    r#"{"version":2,"name":"ViewportSessionProof","nodes":[
+    manifold_nodes::testkit::scene_objects::bundle_scene_objects(r#"{"version":2,"name":"ViewportSessionProof","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},
         {"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
             "max_capacity":{"type":"Int","value":8192},
@@ -250,8 +250,7 @@ fn scene_json() -> String {
         {"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"},
         {"fromNode":5,"fromPort":"out","toNode":20,"toPort":"light_0"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
-    ]}"#
-        .to_string()
+    ]}"#)
 }
 
 fn ctx(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetContext {

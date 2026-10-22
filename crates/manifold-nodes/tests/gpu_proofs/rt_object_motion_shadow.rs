@@ -255,7 +255,7 @@ fn run_motion_sequence(h: &manifold_node_engine::testkit::gpu_harness::ParityHar
         &format!("\"rt_enabled\":{{\"type\":\"Bool\",\"value\":{rt_on}}}"),
     );
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(&json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,

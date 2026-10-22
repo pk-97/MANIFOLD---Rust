@@ -153,7 +153,7 @@ fn render_frame_with_enabled_values(
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -252,7 +252,7 @@ fn diff(a: &[f32], b: &[f32]) -> Diff {
 
 fn fused_scene_json(shutter_angle: f32, enabled: bool) -> String {
     let def: manifold_core::effect_graph_def::EffectGraphDef =
-        serde_json::from_str(&scene_json_with_enabled(shutter_angle, enabled))
+        serde_json::from_str(&manifold_nodes::testkit::scene_objects::bundle_scene_objects(&scene_json_with_enabled(shutter_angle, enabled)))
             .expect("motion blur def parses");
     let fused = manifold_node_engine::freeze::install::fused_generator_view_for(&def)
         .expect("motion blur graph must fuse through its downstream pointwise node");

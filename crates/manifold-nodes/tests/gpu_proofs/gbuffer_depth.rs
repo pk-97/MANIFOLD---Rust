@@ -150,7 +150,7 @@ fn render_and_dump_depth(json: &str) -> (Vec<u8>, u32, u32) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -319,7 +319,7 @@ fn render_color_readback(json: &str) -> Vec<u8> {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -501,7 +501,7 @@ fn gbuffer_depth_unwired_scene_bundled_smoke_stays_finite() {
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
         ]}"#;
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
