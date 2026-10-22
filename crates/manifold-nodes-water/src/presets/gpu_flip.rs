@@ -818,8 +818,7 @@ fn dam_obstacle(b: &mut Builder, render: usize) {
         }),
     );
     let mesh = b.node("obstacle_mesh", "node.cube_mesh", json!({}));
-    // Free slip, as the engine's obstacle: a scene Collider's Friction is 0.5.
-    let body = b.node("obstacle_body", "node.rigid_body", json!({"motion": {"type": "Enum", "value": 0}, "friction": float(0.0)}));
+    let body = b.node("obstacle_body", "node.rigid_body", json!({"motion": {"type": "Enum", "value": 0}}));
     let world = b.node("obstacle_world", "node.physics_world", json!({"bodies": int(1)}));
     let material = b.node("obstacle_material", "node.pbr_material", json!({"roughness": float(0.6)}));
     let object = b.node("obstacle_object", "node.scene_object", json!({}));

@@ -560,9 +560,9 @@ int manifold_box3d_body_update(
 
 // Swap a body's collision hulls for `hull_count` new ones in place: the
 // body, its pose, its velocity and the rest of the world are untouched, and a
-// moving body takes `mass` over its new hulls. The new hulls are cooked before
-// any old shape is destroyed, so a failure leaves the body as it was. The
-// caller frees the old hulls after this returns.
+// moving body takes `mass` over its new hulls. Every new shape is built before
+// any old shape is destroyed, so a failure leaves the body as it was and frees
+// the new hulls. The caller frees the old hulls after this returns.
 int manifold_box3d_body_replace_hulls(
 	uint64_t body_value,
 	const float* points,
@@ -597,35 +597,54 @@ int manifold_box3d_body_replace_hulls(
 		point_offset += (size_t)point_counts[i];
 	}
 
+	// The new shapes go on beside the old ones and the old ones go only once
+	// every new one is in, so a failure removes the new ones and leaves the
+	// body, its mass included, as it was.
 	box3d_shape_list old;
 	int old_count = b3Body_GetShapeCount( body_id );
 	b3ShapeId* old_shapes = box3d_shapes_of( &old, body_id, old_count );
-	if ( old_shapes == NULL )
+	b3ShapeId* new_shapes = (b3ShapeId*)malloc( sizeof( b3ShapeId ) * (size_t)hull_count );
+	if ( old_shapes == NULL || new_shapes == NULL )
 	{
 		box3d_shapes_free( &old );
+		free( new_shapes );
 		for ( int i = 0; i < hull_count; ++i )
 		{
 			b3DestroyHull( (b3HullData*)hull_out[i] );
 		}
 		return BOX3D_BRIDGE_ERROR;
 	}
-	for ( int i = 0; i < old_count; ++i )
-	{
-		b3DestroyShape( old_shapes[i], false );
-	}
-	box3d_shapes_free( &old );
 
 	b3ShapeDef shape_definition = b3DefaultShapeDef();
 	shape_definition.density = 1.0f;
 	shape_definition.baseMaterial.friction = friction;
 	shape_definition.baseMaterial.restitution = restitution;
+	shape_definition.updateBodyMass = false;
 	for ( int i = 0; i < hull_count; ++i )
 	{
-		if ( b3CreateHullShape( body_id, &shape_definition, (b3HullData*)hull_out[i] ).index1 == 0 )
+		new_shapes[i] = b3CreateHullShape( body_id, &shape_definition, (b3HullData*)hull_out[i] );
+		if ( new_shapes[i].index1 == 0 )
 		{
+			for ( int j = 0; j < i; ++j )
+			{
+				b3DestroyShape( new_shapes[j], false );
+			}
+			for ( int j = 0; j < hull_count; ++j )
+			{
+				b3DestroyHull( (b3HullData*)hull_out[j] );
+			}
+			box3d_shapes_free( &old );
+			free( new_shapes );
 			return BOX3D_BRIDGE_ERROR;
 		}
 	}
+	for ( int i = 0; i < old_count; ++i )
+	{
+		b3DestroyShape( old_shapes[i], false );
+	}
+	box3d_shapes_free( &old );
+	free( new_shapes );
+	b3Body_ApplyMassFromShapes( body_id );
 	box3d_set_mass( body_id, mass );
 	return BOX3D_BRIDGE_OK;
 }
