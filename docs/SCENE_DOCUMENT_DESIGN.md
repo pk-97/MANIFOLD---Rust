@@ -256,6 +256,8 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 - A layer plane (a plane showing another layer's output) is not a kind. It is an ordinary Object with Shape Plane whose Material takes its image from a layer. Physics, Copies, picking and the card work as for any plane; the "supported static mesh source" refusal and the special Layer Plane object path are deleted.
 - The Material card appears inline on the object that uses it, with "used by N" and Make Unique. Make Unique duplicates the material for that object (Add with a source, then Set the binding, one `ExecuteBatch`).
 - Today one material belongs to each object (`scene_templates.rs:98`); after this, any number of items bind one material.
+- Material features (Glass, Coat and the rest of "+ Add feature") are structural fields on the Material, set by one `Set` with their default values in the same `ExecuteBatch`. Adding a feature is one undo step, and undo removes it completely. Today a feature is a batch of param writes plus a panel-only record of which features were added (`material_menus.rs:95`), which undo cannot see, so Cmd+Z leaves the feature behind.
+- Rule for every card: what the Scene panel shows comes only from the document and its params. No scene state lives in panel-only memory (open sections and scroll position are view state, not scene state).
 
 ### 7.7 Imports
 
@@ -402,7 +404,7 @@ The task beads for G1 (renderer instance space) and G2a (transform chains) stay 
 - Does: `scene_of(project, layer)` seam and `SceneVm` from the document, every host moved to it; the tree as the real hierarchy with nested groups and kind icons; Add menu (Object, Light, Camera, Group, Material and what other lanes add later); Cmd+G and Cmd+Shift+G; the Lighting card (environment source, always-present HDRI picker, every light); cards by kind for Group, Object, Camera, Light, Material, World; the Scale link toggle in every Transform section (section 7.17); disabled-with-reason action rows; the base Scene as the first browser entry; generator swaps always work (BUG-hkshf, BUG-vis7l); one selection store for the panel.
 - Deletes: the `SceneVm::from_def` trace, `scene_object_model.rs`, `scene_items.rs`, exposure stamping and its load migrations, template splicing, the graph scene commands, the `scene_surface.rs` per-node table, scene projections' metadata joins, `starter_scenes.rs`, standing refusal text, `Scene.json`'s `available: false`, the Layer Plane object path and its physics refusal, flows on removed behaviour. Old Swarm, Water, Ocean items and their starters stop loading here; waves 2 and 3 rebuild them.
 - Files: `manifold-app/src/ui_bridge/` (project.rs, projection/), `manifold-ui/src/panels/scene_setup_panel/`, `manifold-nodes-scene` deletions, `manifold-editing/src/commands/graph/scene*` deletions, `manifold-core/src/scene_exposure.rs` deletion, `manifold-nodes/src/starter_scenes.rs` deletion.
-- Test budget: about 6 tests, no new flows. Card rows come out right for each kind and never show standing refusal text. A layer-sourced plane accepts the physics setting. A linked Scale edit scales all three axes in one undo step; unlinked it changes one.
+- Test budget: about 7 tests, no new flows. Adding a material feature and undoing it leaves the material exactly as before. Card rows come out right for each kind and never show standing refusal text. A layer-sourced plane accepts the physics setting. A linked Scale edit scales all three axes in one undo step; unlinked it changes one.
 - Depends on: L1.
 
 **L3 (Sonnet; BUG-elwvu.3): imports as groups.**
@@ -484,6 +486,7 @@ Bead ids: BUG-elwvu.1 to BUG-elwvu.11 are L1 to L11 in order. Dependencies are s
 - A structural property exposed as a mappable param.
 - A param write that recompiles or resets anything.
 - A refusal as standing card text, or only in a log line.
+- Scene state kept in panel-only memory, out of reach of undo.
 - A physics setting beyond None, Collider, Body; an Advanced section; a Kinematic setting.
 - A second collision-shape path per solver, or any route into Box3D that skips the input gate.
 - An interim physics (hand-picked shapes) "until automatic shapes land".
