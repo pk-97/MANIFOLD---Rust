@@ -61,6 +61,7 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     forces::emit_all(&mut b)?;
     scene_loop::emit(&mut b)?;
     modifiers::emit_all(&mut b)?;
+    scene_loop::emit_copies(&mut b)?;
     b.finish()
 }
 

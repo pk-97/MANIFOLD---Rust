@@ -66,8 +66,9 @@ pub(crate) struct Builder<'d> {
     pub(crate) swarms: Vec<ItemId>,
     /// The swarm copies node that draws each Object or Group a Swarm draws as.
     pub(crate) swarm_draws: BTreeMap<ItemId, u32>,
-    /// The emitter transform each swarm copies node is placed in.
-    pub(crate) swarm_frames: BTreeMap<u32, u32>,
+    /// The emitter transform each swarm copies node is placed in, and the
+    /// node whose `out` is the swarm's live Count.
+    pub(crate) swarm_frames: BTreeMap<u32, (u32, u32)>,
     /// Each swarm's `node.nest_copies` (a drawn Group with Copies on), with
     /// the group's copies body once it is laid out.
     pub(crate) nests: BTreeMap<u32, Option<u32>>,

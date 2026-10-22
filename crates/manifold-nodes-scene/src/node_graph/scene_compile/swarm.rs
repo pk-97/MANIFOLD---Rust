@@ -124,6 +124,10 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     let mover = b.add(owner, "move", "node.move_swarm");
     b.set_number(mover, "active_count", SWARM_MAX_COUNT);
     let copies = b.add(owner, "copies", "node.swarm_to_copies");
+    // How many particles are live (Count): the draw reads only those, so a
+    // stage that nests the copies (the Scene Loop) sizes by Count, not by
+    // the seed's capacity.
+    let live = b.add(owner, "live_count", "node.value");
     b.wire(forces, "epoch", seed, "reset_trigger");
     b.wire(forces, "epoch", state, "reset_trigger");
     b.wire(seed, "particles", state, "seed");
@@ -143,6 +147,7 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             let object = b.add(owner, "object", "node.scene_object");
             b.wire(mesh, "vertices", object, "vertices");
             b.wire(copies, "copies", object, "instances");
+            b.wire(live, "out", object, "instance_count");
             b.wire(transform, "transform", object, "parent_transform");
             let (surface, maps) = surface_for(b, &item.id);
             b.wire(surface, "out", object, "material");
@@ -175,12 +180,13 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
                     copies
                 };
                 b.swarm_draws.insert(prototype.clone(), draws);
-                b.swarm_frames.insert(draws, transform);
+                b.swarm_frames.insert(draws, (transform, live));
             }
         }
     }
     b.swarms.push(item.id.clone());
     b.rows(item);
+    b.follow(seed, "active_count", live, "value");
     // Only the live particles carry the drawn layout, so the nest sizes by
     // Count, not by the seed's capacity.
     if let (Some(seed), Some(nest)) = (b.id(owner, "seed"), b.id(owner, "nest")) {

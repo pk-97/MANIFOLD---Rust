@@ -846,3 +846,60 @@ fn shatter_breaks_a_built_in_cube() {
     }
     prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
 }
+
+/// Scene Loop tiles objects that draw many copies: a cube with Copies and a
+/// swarm's particles get every live copy in every corridor cell
+/// (node.nest_copies over the cells), after Scene Mirror shaped one tile, and
+/// the draw reads the live product as its count.
+#[test]
+fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        object.copies = true;
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("swarm"), "Swarm", ItemFields::default_for(ItemKind::Swarm))).unwrap();
+    for (k, (id, modifier)) in [("loop", ModifierType::SceneLoop), ("mirror", ModifierType::SceneMirror)].into_iter().enumerate() {
+        let mut card = ItemFields::default_for(ItemKind::Modifier);
+        if let ItemFields::Modifier(fields) = &mut card {
+            *fields = ModifierFields { modifier, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+        }
+        doc.insert(None, end + 1 + k, Item::new(ItemId::new(id), id, card)).unwrap();
+    }
+    let layer = scene_layer(doc);
+    let def = layer.gen_params().unwrap().graph.clone().unwrap();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
+    let prepared = prepare_scene_modifiers(&def, &registry).unwrap();
+    let graph = manifold_core::flatten::flatten_groups(&prepared.def).unwrap();
+    let node = |id: u32| graph.nodes.iter().find(|n| n.id == id).unwrap();
+    let source = |to: u32, port: &str| {
+        let wire = graph.wires.iter().find(|w| w.to_node == to && w.to_port == port).unwrap_or_else(|| panic!("{} has no {port}", node(to).node_id));
+        (node(wire.from_node), wire.from_port.as_str())
+    };
+    let drawn: Vec<&EffectGraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.scene_object" && (n.node_id.as_str().contains("cube:") || n.node_id.as_str().contains("swarm:")))
+        .collect();
+    assert_eq!(drawn.len(), 2, "the copied cube and the swarm draw");
+    for object in drawn {
+        let (switch, _) = source(object.id, "instances");
+        let (nest, port) = source(switch.id, "in_1");
+        assert_eq!((nest.type_id.as_str(), port), ("node.nest_copies", "copies"), "{}: the tiles carry the copies", object.node_id);
+        assert_eq!(source(nest.id, "outer").0.type_id, "node.scene_array", "one copy set per corridor cell");
+        assert_eq!(source(nest.id, "inner").0.type_id, "node.reflect_array", "the mirror shaped one tile before the tiling");
+        let (count, _) = source(object.id, "instance_count");
+        assert_eq!(source(count.id, "in_1"), (nest, "count"), "{}: the draw reads the live product", object.node_id);
+        // Before the tiling, the tile's count is the live copies: Copies
+        // Count for the cube, the swarm's Count for its particles.
+        let (mirror_count, _) = source(nest.id, "inner_count");
+        let (live, port) = source(mirror_count.id, "a");
+        let want = if object.node_id.as_str().contains("swarm:") { ("node.value", "out") } else { ("node.rigid_body", "active_count") };
+        assert_eq!((live.type_id.as_str(), port), want, "{}: the live count", object.node_id);
+    }
+    prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
+}
