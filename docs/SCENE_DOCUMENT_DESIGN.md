@@ -535,7 +535,8 @@ Branch `wave/scene-document`. Land once, after L11.
 | B | L15 (after L12), L7, L8 |
 | C | L9 (after L7), L16, L18, L19, L20 (each after L15) |
 | D | L21 (after L15 and L8), L10 (after L6, L7, L9, L12, L16) |
-| E | L11 |
+| E | L22 (after every other lane) |
+| F | L11 |
 
 ### 11.4 Lanes
 
@@ -722,11 +723,20 @@ Files: `crates/manifold-nodes/tests/`, `crates/manifold-nodes/assets/generator-p
 4. The deletion proof returns zero.
 5. Superseded docs are marked, the maps updated, the node catalog and docs index regenerated.
 
+**L22 (Opus): clean-up.**
+Files: the whole branch diff against main. Runs alone, after every other lane.
+1. One simplify pass over the branch: dead code, duplicate helpers, comments that restate code, stale names, legacy verbose prose.
+2. Every lane checklist line reported "not done" or "changed" is fixed, or logged as a typed bead with its reason.
+3. Slop the per-phase reviews found and left is fixed.
+4. Godfile ceilings raised during the run get their split.
+5. No behaviour changes beyond those fixes; the crash test passes.
+
 **L11 (Opus; BUG-elwvu.11): review, fixes, one landing.**
-1. Every Expected behaviour line (section 8.1) checked in the app; each L11 line fixed where it fails.
-2. Review against the rulings: survivors of the old path, a second graph writer, a param write that recompiles, a structural property with a mappable row, standing refusal text, a second selection store, a shape path outside `CollisionShape`, anything non-finite that can reach Box3D, a modifier list on an Object or Group, a feature main had with no home.
-3. The crash test and the promise list pass.
-4. One landing gate; the lead lands on main without waiting for Peter when the review, the crash test and the promise list are green.
+1. One read-only Fable review of the whole branch against this document: complete, no slop, no bugs. It is the run's only Fable use; L11 fixes what it finds.
+2. Every Expected behaviour line (section 8.1) checked in the app; each L11 line fixed where it fails.
+3. Review against the rulings: survivors of the old path, a second graph writer, a param write that recompiles, a structural property with a mappable row, standing refusal text, a second selection store, a shape path outside `CollisionShape`, anything non-finite that can reach Box3D, a modifier list on an Object or Group, a feature main had with no home.
+4. The crash test and the promise list pass.
+5. One landing gate; the lead lands on main without waiting for Peter when the review, the crash test and the promise list are green.
 
 ## 12. Forbidden moves
 
