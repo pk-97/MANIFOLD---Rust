@@ -138,6 +138,66 @@ fn drag_begin(node_id: Option<NodeId>, pos: Vec2) -> UIEvent {
     UIEvent::DragBegin { node_id, pos, origin: pos, modifiers: Modifiers::default() }
 }
 
+/// A tree of a Group and a cube beside it.
+fn tree_panel() -> (ScenePanel, UITree) {
+    let mut rig = item("rig", ItemKind::Group, "Rig", 0, None);
+    rig.has_children = false;
+    let vm = SceneSetupVm {
+        layer_id: LayerId::new("layer-1"),
+        items: vec![item("world", ItemKind::World, "World", 0, None), rig, item("cube", ItemKind::Object, "Cube", 0, None)],
+        add_entries: Vec::new(),
+    };
+    let mut panel = ScenePanel::new();
+    panel.open();
+    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    let mut tree = UITree::new();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    (panel, tree)
+}
+
+fn tree_row(panel: &ScenePanel, id: &str) -> NodeId {
+    let item = SceneSelection::Item(ItemId::new(id));
+    panel.outliner_row_ids.iter().find(|(_, sel)| *sel == item).expect("the item has a row").0
+}
+
+/// Dragging a row onto the middle of a Group's row moves it into the
+/// Group; onto a row's top half, before that row.
+#[test]
+fn a_tree_row_drag_moves_the_item_into_a_group_or_beside_a_row() {
+    let (mut panel, mut tree) = tree_panel();
+    let (cube, rig) = (tree_row(&panel, "cube"), tree_row(&panel, "rig"));
+    let from = tree.get_bounds(cube);
+    let target = tree.get_bounds(rig);
+    for (at, parent, before) in [(0.5, Some("rig"), None), (0.1, None, Some("rig"))] {
+        let start = Vec2::new(from.x + 4.0, from.y + from.height * 0.5);
+        assert!(panel.handle_event(&drag_begin(Some(cube), start), &mut tree).0, "the row drag begins");
+        let drop = Vec2::new(target.x + 4.0, target.y + target.height * at);
+        let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: drop }, &mut tree);
+        let [PanelAction::Project(ProjectAction::SceneTreeMove { item, parent: to, before: ahead, .. })] = actions.as_slice() else {
+            panic!("expected one move, got {actions:?}");
+        };
+        assert_eq!(item.as_str(), "cube");
+        assert_eq!(to.as_ref().map(ItemId::as_str), parent);
+        assert_eq!(ahead.as_ref().map(ItemId::as_str), before);
+    }
+}
+
+/// Double-clicking a tree row renames its item, the name field over the row.
+#[test]
+fn a_tree_row_double_click_renames_in_place() {
+    let (mut panel, mut tree) = tree_panel();
+    let row = tree_row(&panel, "cube");
+    let event = UIEvent::DoubleClick { node_id: row, pos: Vec2::ZERO, modifiers: Modifiers::default() };
+    let (_, actions) = panel.handle_event(&event, &mut tree);
+    let [PanelAction::Root(RootAction::SceneRenameClicked(_, item, name))] = actions.as_slice() else {
+        panic!("expected a rename, got {actions:?}");
+    };
+    assert_eq!((item.as_str(), name.as_str()), ("cube", "Cube"));
+    let anchor = panel.item_name_rect(&tree, item).expect("an anchor");
+    let bounds = tree.get_bounds(row);
+    assert_eq!((anchor.x, anchor.y), (bounds.x, bounds.y), "the name field opens over the row");
+}
+
 /// Closing the tab mid card drag ends the drag: the release the panel never
 /// saw cannot reorder the chain when the tab is next open.
 #[test]

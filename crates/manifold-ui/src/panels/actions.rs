@@ -224,6 +224,10 @@ pub enum ProjectAction {
     /// Move the Modifier card `item` to place `to` in the chain, counted
     /// without the card itself. One undo step.
     SceneChainMove { layer_id: LayerId, item: ItemId, to: usize },
+    /// A tree row dropped in a new place: `item` goes under `parent` (the
+    /// top level when `None`), before `before` (at the end when `None`),
+    /// and stays where it is in the world. One undo step.
+    SceneTreeMove { layer_id: LayerId, item: ItemId, parent: Option<ItemId>, before: Option<ItemId> },
     /// Give an item a Material for it alone: a copy of the one it draws with
     /// (Make Unique), or a new one when it draws with none (New Material).
     SceneMakeMaterialUnique(LayerId, ItemId),

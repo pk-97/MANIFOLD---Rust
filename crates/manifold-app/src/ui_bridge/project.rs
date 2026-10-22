@@ -278,6 +278,10 @@ pub(super) fn dispatch_project(
             let built = crate::scene_edit::chain_move(project, layer_id, item, *to).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
+        ProjectAction::SceneTreeMove { layer_id, item, parent, before } => {
+            let built = crate::scene_tree_move::tree_move(project, layer_id, item, parent.as_ref(), before.as_ref());
+            send_scene_edit(content_tx, layer_id, built)
+        }
         ProjectAction::SceneMaterialLook { layer_id, material, look } => {
             let built = crate::scene_edit::material_look(project, layer_id, material, *look);
             send_scene_edit(content_tx, layer_id, built)

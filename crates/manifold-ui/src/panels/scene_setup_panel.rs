@@ -323,6 +323,11 @@ pub struct ScenePanel {
     chain_rows: Vec<(NodeId, ItemId)>,
     /// The Modifier card being dragged to a new place in the chain.
     chain_drag: Option<ItemId>,
+    /// The tree row being dragged to a new place in the tree.
+    tree_drag: Option<ItemId>,
+    /// The item a tree row double-click last renamed: its name field opens
+    /// over the row, not the header, while the row is built.
+    tree_rename: Option<ItemId>,
     panel_rect: Rect,
 }
 
@@ -367,6 +372,8 @@ impl Default for ScenePanel {
             material_block: Default::default(),
             chain_rows: Vec::new(),
             chain_drag: None,
+            tree_drag: None,
+            tree_rename: None,
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         }
     }
@@ -410,6 +417,8 @@ impl ScenePanel {
     pub fn close(&mut self) {
         self.open = false;
         self.chain_drag = None;
+        self.tree_drag = None;
+        self.tree_rename = None;
     }
 
     /// Update the data the panel renders. Called from `state_sync` on a
@@ -886,6 +895,13 @@ impl ScenePanel {
             // `ParamCardPanel` uses; target is the panel's own bound layer
             // (BUG-292).
             UIEvent::DoubleClick { node_id, .. } => {
+                if let (Some(item), SceneSetupState::Live(vm)) = (self.tree_item_row(*node_id), &self.state)
+                    && let Some(row) = vm.item(item)
+                {
+                    let action = RootAction::SceneRenameClicked(vm.layer_id.clone(), item.clone(), row.name.clone());
+                    self.tree_rename = Some(item.clone());
+                    return (true, vec![PanelAction::Root(action)]);
+                }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let card = &self.properties_card;
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
@@ -911,15 +927,24 @@ impl ScenePanel {
                 self.chain_drag = self.chain_rows.iter().find(|(row, _)| row == node_id).map(|(_, card)| card.clone());
                 (true, Vec::new())
             }
+            UIEvent::DragBegin { node_id: Some(node_id), .. } if self.tree_item_row(*node_id).is_some() => {
+                self.tree_drag = self.tree_item_row(*node_id).cloned();
+                (true, Vec::new())
+            }
             UIEvent::DragBegin { .. } => {
-                // A drag that began elsewhere means no card drag is live.
+                // A drag that began elsewhere means no card or row drag is live.
                 self.chain_drag = None;
+                self.tree_drag = None;
                 (self.properties_card.row_host.is_dragging(), Vec::new())
             }
-            UIEvent::Drag { .. } if self.chain_drag.is_some() => (true, Vec::new()),
+            UIEvent::Drag { .. } if self.chain_drag.is_some() || self.tree_drag.is_some() => (true, Vec::new()),
             UIEvent::DragEnd { pos, .. } if self.chain_drag.is_some() => {
                 let card = self.chain_drag.take().expect("a chain drag");
                 (true, self.chain_drop(tree, &card, pos.y).into_iter().collect())
+            }
+            UIEvent::DragEnd { pos, .. } if self.tree_drag.is_some() => {
+                let item = self.tree_drag.take().expect("a tree drag");
+                (true, self.tree_drop(tree, &item, pos.y).into_iter().collect())
             }
             UIEvent::Drag { pos, modifiers, .. } => {
                 if let SceneSetupState::Live(vm) = &self.state {
@@ -971,12 +996,72 @@ impl ScenePanel {
         node_id == self.bg_id
     }
 
-    /// The name label's rect for `item`, if its header was built this frame
-    /// — the app's text-input anchor lookup.
+    /// Where `item`'s name is edited, as built this frame: its tree row when
+    /// a row double-click opened the rename, else its header's name label.
+    /// The app's text-input anchor lookup.
     pub fn item_name_rect(&self, tree: &UITree, item: &ItemId) -> Option<Rect> {
+        let in_tree = self.tree_rename.as_ref() == Some(item);
+        let row = self.outliner_row_ids.iter().find(|(_, sel)| in_tree && matches!(sel, SceneSelection::Item(id) if id == item));
+        if let Some((row, _)) = row {
+            return Some(tree.get_bounds(*row));
+        }
         let (_, node_id, _) = self.header_buttons.names.iter().find(|(row, _, _)| row == item)?;
         Some(tree.get_bounds(*node_id))
     }
+
+    /// The item whose tree row is `node`, if it is one.
+    fn tree_item_row(&self, node: NodeId) -> Option<&ItemId> {
+        self.outliner_row_ids.iter().find(|(row, _)| *row == node).and_then(|(_, sel)| match sel {
+            SceneSelection::Item(id) => Some(id),
+            SceneSelection::Lighting => None,
+        })
+    }
+
+    /// Where a tree row dropped at height `y` goes: into a Group when it
+    /// lands on the middle of the Group's row, else before or after the row
+    /// it lands on, as that row's sibling; below the last row, the end of
+    /// the top level.
+    fn tree_drop(&self, tree: &UITree, item: &ItemId, y: f32) -> Option<PanelAction> {
+        let vm = self.state.as_live()?;
+        let rows: Vec<(Rect, &ItemId)> = self
+            .outliner_row_ids
+            .iter()
+            .filter_map(|(row, sel)| match sel {
+                SceneSelection::Item(id) => Some((tree.get_bounds(*row), id)),
+                SceneSelection::Lighting => None,
+            })
+            .collect();
+        let hit = rows.iter().find(|(bounds, _)| y >= bounds.y && y < bounds.y + bounds.height);
+        let (parent, before) = match hit {
+            None => {
+                let (last, _) = rows.last()?;
+                if y < last.y + last.height {
+                    return None;
+                }
+                (None, None)
+            }
+            Some((_, target)) if *target == item => return None,
+            Some((bounds, target)) => {
+                let on = vm.item(target)?;
+                let at = (y - bounds.y) / bounds.height.max(1.0);
+                if on.kind == ItemKind::Group && (0.25..0.75).contains(&at) {
+                    (Some((*target).clone()), None)
+                } else if at < 0.5 {
+                    (on.parent.clone(), Some((*target).clone()))
+                } else {
+                    (on.parent.clone(), next_sibling(vm, target))
+                }
+            }
+        };
+        Some(PanelAction::Project(ProjectAction::SceneTreeMove { layer_id: vm.layer_id.clone(), item: item.clone(), parent, before }))
+    }
+}
+
+/// The item after `item` under the same parent, in tree order.
+fn next_sibling(vm: &SceneSetupVm, item: &ItemId) -> Option<ItemId> {
+    let at = vm.items.iter().position(|row| row.id == *item)?;
+    let depth = vm.items[at].depth;
+    vm.items[at + 1..].iter().take_while(|row| row.depth >= depth).find(|row| row.depth == depth).map(|row| row.id.clone())
 }
 
 fn scrollbar_style() -> ScrollbarStyle {

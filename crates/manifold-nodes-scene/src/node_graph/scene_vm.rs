@@ -15,7 +15,7 @@ pub use setup_check::{
     body_problems, card_param, copies_anchors, copies_problems, problems_with_runtime,
 };
 mod shapes;
-pub use shapes::{FluidRole, SceneShapeVm, ShapeOwner, ShapeParamVm, ShapeWrite};
+pub use shapes::{FluidRole, SceneShapeVm, ShapeOwner, ShapeParamVm, ShapeWrite, frame_of};
 
 /// `node.render_scene`'s own type_id string.
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";

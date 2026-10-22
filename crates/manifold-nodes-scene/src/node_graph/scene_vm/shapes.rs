@@ -94,7 +94,10 @@ fn value_of(values: &dyn Fn(&str) -> Option<f32>, item: &ItemId, property: &str)
     values(&param_id(item, property)).unwrap_or_else(|| transform_default(property))
 }
 
-fn frame_of(values: &dyn Fn(&str) -> Option<f32>, chain: &[&Item]) -> Option<Mat4> {
+/// The frame the items under `chain` (outermost first) sit in: each
+/// ancestor's transform composed, as the compiler composes them. `None` is
+/// world space.
+pub fn frame_of(values: &dyn Fn(&str) -> Option<f32>, chain: &[&Item]) -> Option<Mat4> {
     chain.iter().fold(None, |frame: Option<Mat4>, group| {
         let at = |axes: [&str; 3]| axes.map(|p| value_of(values, &group.id, p));
         let transform = Transform {
