@@ -136,6 +136,8 @@ manifold_node_engine::primitive! {
     extra_fields: {
         // (path, material_index, vertex_colors, node_path) last parsed (or in flight).
         last_key: (String, i32, bool, String) = (String::new(), i32::MIN, false, String::new()),
+        // The rest shape for `last_key` once loaded, built once per load.
+        rest_source: Option<MeshSource> = None,
         cached_verts: Vec<MeshVertex> = Vec::new(),
         cached_joints: Vec<[f32; 4]> = Vec::new(),
         cached_weights: Vec<[f32; 4]> = Vec::new(),
@@ -164,8 +166,8 @@ manifold_node_engine::primitive! {
 impl Primitive for GltfSkinnedMeshSource {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let path = match ctx.params.get("path") {
-            Some(ParamValue::String(s)) => s.as_str().to_owned(),
-            _ => String::new(),
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
         };
         let material_index = match ctx.params.get("material_index") {
             Some(ParamValue::Float(n)) => n.round() as i32,
@@ -174,12 +176,17 @@ impl Primitive for GltfSkinnedMeshSource {
         let vertex_colors = matches!(ctx.params.get("vertex_colors"), Some(ParamValue::Bool(true)));
 
         let node_path = match ctx.params.get("node_path") {
-            Some(ParamValue::String(s)) => s.as_str().to_owned(),
-            _ => String::new(),
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
         };
-        let key = (path.clone(), material_index, vertex_colors, node_path.clone());
-        if key != self.last_key && self.pending_load.is_none() {
-            self.last_key = key;
+        // Compared borrowed, so a steady frame allocates nothing.
+        let same_key = self.last_key.0 == path
+            && self.last_key.1 == material_index
+            && self.last_key.2 == vertex_colors
+            && self.last_key.3 == node_path;
+        if !same_key && self.pending_load.is_none() {
+            self.last_key = (path.to_owned(), material_index, vertex_colors, node_path.to_owned());
+            self.rest_source = None;
             self.cached_verts.clear();
             self.cached_joints.clear();
             self.cached_weights.clear();
@@ -198,7 +205,8 @@ impl Primitive for GltfSkinnedMeshSource {
                 } else {
                     material_index as u32
                 };
-                let path_buf = std::path::PathBuf::from(&path);
+                let path_buf = std::path::PathBuf::from(path);
+                let node_path = node_path.to_owned();
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
                     let result = load_gltf_skinned_mesh(&path_buf, load_material_index, &node_path)
@@ -234,25 +242,24 @@ impl Primitive for GltfSkinnedMeshSource {
         }
 
         // The rest shape a body collides with: the node's mesh, loaded by
-        // the body when it asks.
+        // the body when it asks. Built once per load; each frame hands out
+        // a clone of its shared names.
         if !self.cached_verts.is_empty() {
-            ctx.outputs.set_mesh_source(
-                "source",
-                MeshSource::Gltf {
-                    path: Arc::from(self.last_key.0.as_str()),
-                    node_path: (!self.last_key.3.is_empty()).then(|| Arc::from(self.last_key.3.as_str())),
-                    selection: MeshSelection {
-                        mesh: -1,
-                        primitive: -1,
-                        material: self.last_key.1,
-                        fit: false,
-                        recenter: false,
-                        translate: [0.0; 3],
-                        fragment_count: 1,
-                        fragment_index: 0,
-                    },
+            let source = self.rest_source.get_or_insert_with(|| MeshSource::Gltf {
+                path: Arc::from(self.last_key.0.as_str()),
+                node_path: (!self.last_key.3.is_empty()).then(|| Arc::from(self.last_key.3.as_str())),
+                selection: MeshSelection {
+                    mesh: -1,
+                    primitive: -1,
+                    material: self.last_key.1,
+                    fit: false,
+                    recenter: false,
+                    translate: [0.0; 3],
+                    fragment_count: 1,
+                    fragment_index: 0,
                 },
-            );
+            });
+            ctx.outputs.set_mesh_source("source", source.clone());
         }
 
         let Some(dst_verts) = ctx.outputs.array("vertices") else {

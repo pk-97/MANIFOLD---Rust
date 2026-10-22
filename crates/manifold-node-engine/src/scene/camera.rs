@@ -106,6 +106,11 @@ pub struct Camera {
     /// correspondence. Ordinary cameras use None. Periodic-world sources
     /// declare their complete travel period.
     pub world_period: Option<[f32; 3]>,
+    /// Which shot this camera is: a camera switch folds in the input it
+    /// picked, so a cut changes it and the renderer resets temporal history
+    /// (motion vectors, TAA, RT reprojection) on that frame. 0 for a camera
+    /// no switch picked.
+    pub shot: u64,
 }
 
 impl Camera {
@@ -150,6 +155,7 @@ impl Camera {
             view,
             lens: LensParams::PINHOLE,
             world_period: None,
+            shot: 0,
         }
     }
 
@@ -219,6 +225,7 @@ impl Camera {
             view,
             lens: LensParams::PINHOLE,
             world_period: None,
+            shot: 0,
         }
     }
 
@@ -284,6 +291,7 @@ impl Camera {
             view,
             lens: LensParams::PINHOLE,
             world_period: None,
+            shot: 0,
         }
     }
 
@@ -313,6 +321,7 @@ impl Camera {
             view,
             lens: LensParams::PINHOLE,
             world_period: None,
+            shot: 0,
         }
     }
 

@@ -7,7 +7,7 @@ use manifold_physics::{BodyHandle, FieldValue, PhysicsWorld};
 use manifold_core::scene_surface::{PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_DEFAULT_COPY_GROUPS};
 
 use super::{
-    same_topology_body, AdvancementPolicy, NEEDS_NEW_WORLD, ResolvedRigidImpulse, RigidBody, RigidSimulation, SceneRef,
+    same_geometry_body, AdvancementPolicy, NEEDS_NEW_WORLD, ResolvedRigidImpulse, RigidBody, RigidSimulation, SceneRef,
 };
 
 /// The retained scene inputs of one Physics World: one entry per body port,
@@ -113,7 +113,7 @@ impl RigidSceneInputs {
                 .iter()
                 .chain(&self.groups)
                 .zip(other.bodies.iter().chain(&other.groups))
-                .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
+                .all(|(left, right)| same_geometry_body(left.as_ref(), right.as_ref()))
             && self.groups.iter().zip(&other.groups).all(|(left, right)| {
                 left.as_ref().map(|body| super::requested_count(body.spawn))
                     == right.as_ref().map(|body| super::requested_count(body.spawn))
@@ -287,12 +287,12 @@ impl RigidSimulation {
                 .descriptions
                 .iter()
                 .zip(inputs.bodies.iter())
-                .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
+                .all(|(left, right)| same_geometry_body(left.as_ref(), right.as_ref()))
             && self
                 .groups
                 .iter()
                 .zip(&inputs.groups)
-                .all(|(state, right)| same_topology_body(state.description.as_ref(), right.as_ref()))
+                .all(|(state, right)| same_geometry_body(state.description.as_ref(), right.as_ref()))
     }
 
 

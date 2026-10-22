@@ -6,7 +6,7 @@ use manifold_physics::{
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
 
-use super::{apply_by_target, RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY, STACK_TARGETS};
+use super::{apply_by_target, RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY};
 
 /// A resolved scene-space delta velocity retained by value until its fixed
 /// tick begins. The field is sampled at each recipient's current center of
@@ -250,24 +250,22 @@ impl RigidSimulation {
         }
         let events = &self.impulse_tick_events;
         let bodies = self.handles.len();
-        let targets = bodies + self.groups.len();
         let sum_field = |index: usize| {
             ImpulseSumField::new(
                 events,
                 if index < bodies { ImpulseRecipient::Body(index) } else { ImpulseRecipient::Group(index - bodies) },
             )
         };
-        let input = |field| FieldInput { field, acceleration: 0.0, delta_velocity: 1.0 };
         let world = self.world.as_mut().expect("world constructed above");
-        let result = if targets <= STACK_TARGETS {
-            let sums: [_; STACK_TARGETS] = std::array::from_fn(sum_field);
-            let inputs: [[FieldInput<'_>; 1]; STACK_TARGETS] = std::array::from_fn(|index| [input(&sums[index])]);
-            apply_by_target(world, &self.handles, &self.groups, bodies, &inputs[..targets], |index| sums[index].has_events(), FIXED_TICK)
-        } else {
-            let sums: Vec<_> = (0..targets).map(sum_field).collect();
-            let inputs: Vec<[FieldInput<'_>; 1]> = sums.iter().map(|sum| [input(sum)]).collect();
-            apply_by_target(world, &self.handles, &self.groups, bodies, &inputs, |index| sums[index].has_events(), FIXED_TICK)
-        };
+        let result = apply_by_target(
+            world,
+            &self.handles,
+            &self.groups,
+            bodies,
+            |target| sum_field(target).has_events(),
+            FIXED_TICK,
+            |target, apply| apply(&[FieldInput { field: &sum_field(target), acceleration: 0.0, delta_velocity: 1.0 }]),
+        );
         if let Err(error) = result {
             self.impulse_failure = Some(error.clone());
             return Err(error);

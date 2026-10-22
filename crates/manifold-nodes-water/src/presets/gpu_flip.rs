@@ -66,6 +66,12 @@ pub(crate) const DAM_FILL_HEIGHT: f64 = 0.16;
 manifold_core::testkit_visible! {
 pub(crate) const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
 }
+manifold_core::testkit_visible! {
+/// The Dam Break's box obstacle, `WaterDamBreak.json`'s `obstacle_transform`:
+/// a unit cube scaled to 0.6 × 1.16 × 0.85 m standing on the floor in the
+/// column's path. Position, then scale.
+pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
+}
 
 
 manifold_core::testkit_visible! {
@@ -103,6 +109,10 @@ pub(crate) struct WaterScene {
     /// The tank's closed faces, bit 2d the low face of axis d and bit 2d + 1
     /// the high one; an open face's Closed param is off on the domain.
     pub closed_faces: u32,
+    /// The Dam Break's box as a scene Collider ([`DAM_OBSTACLE`]): a Fixed
+    /// body in a Physics World the render scene couples to the water. Only
+    /// [`render_def`] draws it, since the coupling is the render scene's.
+    pub obstacle: bool,
 }
 }
 
@@ -140,6 +150,7 @@ impl WaterScene {
             ghost_fluid: true,
             volume_projection: false,
             closed_faces: 63,
+            obstacle: false,
         }
     }
 
@@ -147,6 +158,12 @@ impl WaterScene {
     #[cfg(any(test, feature = "testkit"))]
     pub fn with_closed_faces(self, mask: u32) -> Self {
         Self { closed_faces: mask, ..self }
+    }
+
+    /// The scene with the Dam Break's box obstacle as a scene Collider.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn with_obstacle(self) -> Self {
+        Self { obstacle: true, ..self }
     }
 
     /// The Dam Break the FLIP engine races, as `race_probe` and the race
@@ -781,6 +798,40 @@ fn assert_preset_root(nodes: &[EffectGraphNode]) {
     }
 }
 
+/// The render slot the obstacle draws in: the one the tank layout leaves free.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+const OBSTACLE_RENDER_SLOT: &str = "object_1";
+
+/// The Dam Break's box as the scene compiler makes a Collider
+/// (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision shapes)): a
+/// Fixed rigid body of a unit cube in a Physics World, drawn at the body's
+/// pose in the render scene, which pairs that world with the water.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+fn dam_obstacle(b: &mut Builder, render: usize) {
+    let [pos, scale] = DAM_OBSTACLE;
+    let transform = b.node(
+        "obstacle_transform",
+        "node.transform_3d",
+        json!({
+            "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
+            "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
+        }),
+    );
+    let mesh = b.node("obstacle_mesh", "node.cube_mesh", json!({}));
+    // Free slip, as the engine's obstacle: a scene Collider's Friction is 0.5.
+    let body = b.node("obstacle_body", "node.rigid_body", json!({"motion": {"type": "Enum", "value": 0}, "friction": float(0.0)}));
+    let world = b.node("obstacle_world", "node.physics_world", json!({"bodies": int(1)}));
+    let material = b.node("obstacle_material", "node.pbr_material", json!({"roughness": float(0.6)}));
+    let object = b.node("obstacle_object", "node.scene_object", json!({}));
+    b.wire((material, "out"), object, "material");
+    b.wire((transform, "transform"), body, "transform");
+    b.wire((mesh, "source"), body, "source");
+    b.wire((body, "body"), world, "body_0");
+    b.wire((world, "pose_0"), object, "transform");
+    b.wire((mesh, "vertices"), object, "vertices");
+    b.wire((object, "object"), render, OBSTACLE_RENDER_SLOT);
+}
+
 /// Only authored environment/camera/tank dressing is read from the preset.
 /// The family is always constructed by WaterScene::family_def.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
@@ -804,6 +855,9 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
         b.wire((family, output), render, slot);
     }
     b.wire((family, DOTS_OUTPUT), render, DOTS_RENDER_SLOT);
+    if scene.obstacle {
+        dam_obstacle(&mut b, render);
+    }
     let render_node = b.nodes.iter_mut().find(|n| n.id == render as u32).expect("render");
     // Physical slots span 0 through 9; slot 6 holds Physics View's dots.
     render_node.params.insert("objects".into(), serde_json::from_value(int(10)).expect("object count"));

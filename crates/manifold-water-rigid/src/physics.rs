@@ -106,7 +106,6 @@ impl HeldClock {
 /// Field and hit targets (body slots, then copy groups) a world gathers on
 /// the stack each tick. A bigger world gathers them on the heap: this is no
 /// limit, only where a tick stops being allocation-free.
-const STACK_TARGETS: usize = 64;
 pub use manifold_core::copies_body::MAX_COPIES;
 pub const AUTHORED_HISTORY_CAPACITY: usize = 256;
 /// The hits in flight a world holds before a burst grows its history.
@@ -332,12 +331,11 @@ fn same_authored_body(left: &RigidBody, right: &RigidBody) -> bool {
 
 /// Whether a body slot's edit needs a fresh native world. A body entering an
 /// empty or disabled slot is installed into the live world instead
-/// (`install_added_bodies`), so it never resets the bodies already moving;
-/// removing a body, or changing an installed body's shape or scale, still
-/// rebuilds, and so does a collider change on a body that can move. A Fixed
-/// body's new collider is swapped in place (`apply_authored_edits`), so
-/// dragging a part of an imported scan never resets the world. A fragment
-/// child is always built with its parent.
+/// (`install_added_bodies`), and a new shape or scale on an installed body is
+/// swapped in place (`apply_authored_edits`), so neither resets the bodies
+/// already moving. Removing or disabling a body, losing its shape, or
+/// switching it between a static mesh and moving hulls still rebuilds. A
+/// fragment child entering the world is always built with its parent.
 fn slot_needs_rebuild(installed: bool, old: Option<&RigidBody>, new: Option<&RigidBody>) -> bool {
     let Some(new) = new.filter(|body| body.enabled) else {
         return installed;
@@ -345,24 +343,30 @@ fn slot_needs_rebuild(installed: bool, old: Option<&RigidBody>, new: Option<&Rig
     if !installed {
         return new.fragment_parent.is_some();
     }
-    !same_topology_body(old, Some(new)) && !is_fixed_collider_swap(old, new)
+    !same_native_body(old, Some(new))
 }
 
-/// Whether `new` differs from `old` only by the collider of a Fixed body.
-fn is_fixed_collider_swap(old: Option<&RigidBody>, new: &RigidBody) -> bool {
-    old.is_some_and(|old| {
-        old.kind == 0
-            && new.kind == 0
-            && old.collider.as_deref().is_some_and(|solid| solid.hulls().is_some())
-            && new.collider.as_deref().is_some_and(|solid| solid.hulls().is_some())
-            && old.transform.scale == new.transform.scale
-            && old.enabled == new.enabled
-    })
+/// Whether two bodies can share one installed native body: the same
+/// enabled state and the same solid form. A new shape or scale within a form
+/// is swapped in place ([`reshaped`]).
+fn same_native_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.enabled == right.enabled
+                && match (left.collider.as_deref(), right.collider.as_deref()) {
+                    (None, None) => true,
+                    (Some(left), Some(right)) => left.same_form(right),
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
 }
 
-/// Whether two bodies need the same native geometry: a change in any of
-/// these rebuilds the world.
-fn same_topology_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
+/// Whether two bodies install the same geometry: shape and scale. A coupled
+/// liquid's hulls and distance lattices are built from it.
+fn same_geometry_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
     match (left, right) {
         (None, None) => true,
         (Some(left), Some(right)) => {
@@ -374,15 +378,42 @@ fn same_topology_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bo
     }
 }
 
+/// Whether `new`'s authored pose differs from `old`'s: a scale write alone
+/// reshapes the body and never teleports it.
+fn moved(old: &RigidBody, new: &RigidBody) -> bool {
+    old.transform.pos != new.transform.pos || old.transform.rot_euler != new.transform.rot_euler
+}
+
+/// Whether `new` asks for a different installed shape than `old`: a new
+/// collision shape or a new scale.
+fn reshaped(old: &RigidBody, new: &RigidBody) -> bool {
+    old.transform.scale != new.transform.scale || !same_collider(old, new)
+}
+
 /// Install `body` with its card mass through the collision-shape gate;
 /// returns the handle and the installed volume, which a fragment's density
-/// derives from. A scale or shape change rebuilds the world, so the volume
-/// holds for the install's life.
+/// derives from. An in-place reshape measures the volume again.
 fn add_body_geometry(
     world: &mut PhysicsWorld,
     body: &RigidBody,
 ) -> Result<(BodyHandle, f32), String> {
     add_copy(world, body, pose_from_transform(body.transform))
+}
+
+/// Swap installed body `handle`'s shape for `solid` at `scale` in place,
+/// keeping its pose and velocity; returns its new volume.
+fn reshape(
+    world: &mut PhysicsWorld,
+    handle: BodyHandle,
+    solid: &Solid,
+    scale: [f32; 3],
+    config: BodyConfig,
+) -> Result<f32, String> {
+    solid.replace(world, handle, scale, config).map_err(|error| error.to_string())?;
+    match solid {
+        Solid::Hulls(_) => installed_volume(world, handle),
+        Solid::Mesh(mesh) => Ok(mesh_volume(mesh, scale)),
+    }
 }
 
 /// [`add_body_geometry`] for a copy of `prototype` resting at `pose`.
@@ -436,16 +467,24 @@ pub(crate) fn copy_pool<'a>(
     made: &mut Vec<usize>,
 ) -> usize {
     made.clear();
+    copy_pool_each(groups, |take| made.push(take))
+}
+
+/// [`copy_pool`], handing each group's share to `made` in port order.
+pub(crate) fn copy_pool_each<'a>(
+    groups: impl Iterator<Item = Option<&'a RigidBody>>,
+    mut made: impl FnMut(usize),
+) -> usize {
     let mut pool = MAX_COPIES;
     let mut not_made = 0;
     for prototype in groups {
         let Some(prototype) = prototype.filter(|body| body.enabled) else {
-            made.push(0);
+            made(0);
             continue;
         };
         let requested = requested_count(prototype.spawn);
         let take = requested.min(pool);
-        made.push(take);
+        made(take);
         not_made += requested - take;
         pool -= take;
     }
@@ -483,32 +522,43 @@ fn port_map(old: &[u64], new: &[u64], held: impl Fn(usize) -> bool) -> Option<Ve
     (0..old.len()).all(|at| used[at] || !held(at)).then_some(from)
 }
 
-/// Give every installed body and every active copy its target's inputs
-/// (`inputs[target]`, a body slot then a copy group) in one batch the world
-/// validates whole before any body feels a force. Copies of a group share one
-/// input slice. A target `hit` leaves out takes nothing.
-fn apply_by_target<'f, T: AsRef<[FieldInput<'f>]>>(
+/// The sink a target's inputs go to: its body, or each active copy of its
+/// group.
+type ApplyInputs<'s> = dyn FnMut(&[FieldInput<'_>]) -> Result<(), manifold_physics::PhysicsError> + 's;
+
+/// Give every installed body and every active copy its target's inputs (a
+/// body slot, then a copy group) in one batch the world validates whole
+/// before any body feels a force. `visit(target, apply)` builds target
+/// `target`'s inputs on its own stack and hands them to `apply`, once per
+/// target: copies of a group share them. Nothing is collected, so no tick
+/// allocates at any body count. A target `hit` leaves out takes nothing.
+fn apply_by_target(
     world: &mut PhysicsWorld,
     handles: &[Option<BodyHandle>],
     groups: &[CopyGroup],
     body_count: usize,
-    inputs: &[T],
     hit: impl Fn(usize) -> bool,
     dt: Seconds,
+    visit: impl Fn(usize, &mut ApplyInputs<'_>) -> Result<(), manifold_physics::PhysicsError>,
 ) -> Result<(), String> {
-    let hit = &hit;
-    let recipients = handles
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| hit(*index))
-        .filter_map(|(index, handle)| handle.map(|handle| (handle, inputs[index].as_ref())))
-        .chain(groups.iter().enumerate().filter(move |(group, _)| hit(body_count + group)).flat_map(
-            move |(group, state)| {
-                let input = inputs[body_count + group].as_ref();
-                state.handles[..state.active].iter().flatten().map(move |&handle| (handle, input))
-            },
-        ));
-    world.apply_fields_by_target(recipients, dt).map_err(|error| error.to_string())
+    world
+        .apply_fields_each(dt, |sink| {
+            for (index, handle) in handles.iter().enumerate() {
+                let Some(handle) = *handle else { continue };
+                if hit(index) {
+                    visit(index, &mut |inputs| sink(handle, inputs))?;
+                }
+            }
+            for (group, state) in groups.iter().enumerate() {
+                if hit(body_count + group) {
+                    visit(body_count + group, &mut |inputs| {
+                        state.handles[..state.active].iter().flatten().try_for_each(|&handle| sink(handle, inputs))
+                    })?;
+                }
+            }
+            Ok(())
+        })
+        .map_err(|error| error.to_string())
 }
 
 /// The signed volume of a body's installed hulls, m³: the sum over each
@@ -914,7 +964,7 @@ impl RigidSimulation {
         let copy_topology_changed = groups.len() != self.groups.len()
             || groups.iter().zip(&self.groups).any(|(current, state)| {
                 let joins_live = self.world.is_some() && state.is_new() && current.is_some();
-                !joins_live && !same_topology_body(current.as_ref(), state.description.as_ref())
+                !joins_live && !same_native_body(current.as_ref(), state.description.as_ref())
             });
         let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset
             || (accepted_interval.is_none() && self.clock.rate_changed(self.step.interval.0));
@@ -1502,9 +1552,10 @@ impl RigidSimulation {
     /// (a body added before it in tree order shifts it), by its
     /// [`RigidBody::identity`]: its native body, history and fields move
     /// with it, so the world keeps running and a new body or group simply
-    /// joins. A world that lost a body or group, or holds a Shatter piece
-    /// (its parent is named by port), is left as it was, and the topology
-    /// check rebuilds it as any removal does.
+    /// joins. A Shatter piece names its parent by port, so its description
+    /// follows the parent's move too. A world that lost a body or group is
+    /// left as it was, and the topology check rebuilds it as any removal
+    /// does.
     fn follow_ports(&mut self, bodies: &[Option<RigidBody>], groups: &[Option<RigidBody>]) {
         let unchanged = |known: &[u64], slots: &[Option<RigidBody>]| {
             known.len() == slots.len() && known.iter().zip(slots).all(|(id, body)| *id == identity_of(body))
@@ -1517,8 +1568,7 @@ impl RigidSimulation {
         let installed = self.world.is_some()
             && self.handles.len() == self.identities.len()
             && self.groups.len() == self.group_identities.len();
-        let fragments = self.descriptions.iter().chain(bodies).flatten().any(|body| body.fragment_parent.is_some());
-        if installed && !fragments {
+        if installed {
             let held_body = |slot: usize| self.handles[slot].is_some() || self.descriptions[slot].is_some();
             let held_group = |group: usize| !self.groups[group].is_new();
             if let (Some(body_from), Some(group_from)) =
@@ -1541,6 +1591,17 @@ impl RigidSimulation {
         }
         self.handles = moved(&mut self.handles, body_from);
         self.descriptions = moved(&mut self.descriptions, body_from);
+        let mut moved_to = vec![None; old_bodies];
+        for (to, from) in body_from.iter().enumerate() {
+            if let Some(from) = *from {
+                moved_to[from] = Some(to);
+            }
+        }
+        for body in self.descriptions.iter_mut().flatten() {
+            if let Some(parent) = body.fragment_parent {
+                body.fragment_parent = moved_to.get(parent).copied().flatten();
+            }
+        }
         self.volumes = moved(&mut self.volumes, body_from);
         self.bullet_enabled = moved(&mut self.bullet_enabled, body_from);
         self.deferred_animated_edit = moved(&mut self.deferred_animated_edit, body_from);
@@ -1578,15 +1639,12 @@ impl RigidSimulation {
             };
             let old = self.descriptions[i].as_ref();
             if old.is_none_or(|old| !same_body(old, body)) {
-                if let (Some(old), Some(geometry)) = (old, body.collider.as_ref())
-                    && !same_collider(old, body)
+                if let (Some(old), Some(geometry)) = (old, body.collider.as_deref())
+                    && reshaped(old, body)
                 {
-                    geometry
-                        .replace(world, handle, body.transform.scale, body.config())
-                        .map_err(|e| e.to_string())?;
-                    self.volumes[i] = installed_volume(world, handle)?;
+                    self.volumes[i] = reshape(world, handle, geometry, body.transform.scale, body.config())?;
                 }
-                let pose_changed = old.is_none_or(|old| old.transform != body.transform);
+                let pose_changed = old.is_none_or(|old| moved(old, body));
                 let animated_edit = body.kind == 2 && stationary_edit && pose_changed;
                 if animated_edit && due_steps > 0 {
                     self.deferred_animated_edit[i] = Some(DeferredAnimatedEdit {
@@ -1614,8 +1672,21 @@ impl RigidSimulation {
             if old.is_some_and(|old| same_body(old, prototype)) {
                 continue;
             }
+            // Every copy shares the prototype's shape: each one installed,
+            // active or parked, takes the new one in place, keeping its
+            // pose and velocity. Later layouts space by the new width.
+            if let (Some(old), Some(geometry)) = (old, prototype.collider.as_deref())
+                && reshaped(old, prototype)
+            {
+                for index in 0..state.handles.len() {
+                    let Some(handle) = state.handles[index] else { continue };
+                    let config = state.config(prototype, state.rest(index));
+                    state.volume = reshape(world, handle, geometry, prototype.transform.scale, config)?;
+                }
+                state.width = copy_layout::copy_width(prototype);
+            }
             let animated = prototype.kind == 2;
-            let pose_changed = animated && old.is_some_and(|old| old.transform != prototype.transform);
+            let pose_changed = animated && old.is_some_and(|old| moved(old, prototype));
             let animated_edit = stationary_edit && pose_changed;
             if animated_edit && due_steps > 0 {
                 state.deferred_edit = Some(DeferredAnimatedEdit {
@@ -2464,23 +2535,12 @@ impl RigidSimulation {
                 .map_err(|error| error.to_string());
         };
         let span = self.targeted_fields.span(before, after, alpha)?;
-        let targets = body_count + self.groups.len();
         let global = FieldInput { field: global, acceleration: 1.0, delta_velocity: 0.0 };
         let world = self.world.as_mut().expect("world constructed above");
-        if targets <= STACK_TARGETS {
-            let fields: [_; STACK_TARGETS] = std::array::from_fn(|index| span.field(index));
-            let inputs: [[FieldInput<'_>; 2]; STACK_TARGETS] = std::array::from_fn(|index| {
-                [global, FieldInput { field: &fields[index], acceleration: 1.0, delta_velocity: 0.0 }]
-            });
-            apply_by_target(world, &self.handles, &self.groups, body_count, &inputs[..targets], |_| true, dt)
-        } else {
-            let fields: Vec<_> = (0..targets).map(|index| span.field(index)).collect();
-            let inputs: Vec<[FieldInput<'_>; 2]> = fields
-                .iter()
-                .map(|field| [global, FieldInput { field, acceleration: 1.0, delta_velocity: 0.0 }])
-                .collect();
-            apply_by_target(world, &self.handles, &self.groups, body_count, &inputs, |_| true, dt)
-        }
+        apply_by_target(world, &self.handles, &self.groups, body_count, |_| true, dt, |target, apply| {
+            let field = span.field(target);
+            apply(&[global, FieldInput { field: &field, acceleration: 1.0, delta_velocity: 0.0 }])
+        })
     }
 
     fn animated_microsteps(

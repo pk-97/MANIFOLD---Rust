@@ -99,6 +99,7 @@ fn fixture() -> EffectGraphDef {
                 "pos_x":{"type":"Float","value":5.0},"pos_y":{"type":"Float","value":10.0}}},
             {"id":4,"nodeId":"body_a","typeId":"node.rigid_body"},
             {"id":5,"nodeId":"body_b","typeId":"node.rigid_body"},
+            {"id":21,"nodeId":"shape","typeId":"node.cube_mesh"},
             {"id":6,"nodeId":"world","typeId":"node.physics_world","params":{"gravity_y":{"type":"Float","value":0.0}}},
             {"id":7,"nodeId":"part_a","typeId":"node.scene_object"},
             {"id":8,"nodeId":"part_a_2","typeId":"node.scene_object"},
@@ -110,6 +111,8 @@ fn fixture() -> EffectGraphDef {
         ],
         "wires": [
             {"fromNode":20,"fromPort":"out","toNode":10,"toPort":"camera"},
+            {"fromNode":21,"fromPort":"source","toNode":4,"toPort":"source"},
+            {"fromNode":21,"fromPort":"source","toNode":5,"toPort":"source"},
             {"fromNode":1,"fromPort":"out","toNode":6,"toPort":"acceleration_field"},
             {"fromNode":2,"fromPort":"transform","toNode":4,"toPort":"transform"},
             {"fromNode":3,"fromPort":"transform","toNode":5,"toPort":"transform"},
@@ -489,6 +492,12 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
             to_port: "transform".into(),
         },
         manifold_core::effect_graph_def::EffectGraphWire {
+            from_node: 21,
+            from_port: "source".into(),
+            to_node: 15,
+            to_port: "source".into(),
+        },
+        manifold_core::effect_graph_def::EffectGraphWire {
             from_node: 15,
             from_port: "body".into(),
             to_node: 14,
@@ -511,20 +520,21 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
     let node = &mut runtime.graph.get_node_mut(second).unwrap().node;
     let node = node::get_mut(node.as_mut()).expect("native world fixture");
     let epoch = node.physics_impulse_epoch().unwrap();
-    for sequence in 0..256 {
-        node.enqueue_physics_impulse(
-            EventStamp {
-                epoch,
-                time: Seconds(1.0),
-                sequence,
-            },
-            ResolvedNodeImpulse {
-                field: FieldValue::uniform([1.0, 0.0, 0.0]).unwrap(),
-                target: ImpulseTarget::Rigid(RigidImpulseTargets::body(0).unwrap()),
-            },
-        )
-        .unwrap();
-    }
+    // The second world has taken a later hit, so it refuses the capture's
+    // older sequence while the first world admits it: a partial admission.
+    // (Its history grows with a burst, so fullness no longer refuses.)
+    node.enqueue_physics_impulse(
+        EventStamp {
+            epoch,
+            time: Seconds(1.0),
+            sequence: 2000,
+        },
+        ResolvedNodeImpulse {
+            field: FieldValue::uniform([1.0, 0.0, 0.0]).unwrap(),
+            target: ImpulseTarget::Rigid(RigidImpulseTargets::body(0).unwrap()),
+        },
+    )
+    .unwrap();
     let mut binding = prepare(&runtime, &def, &["part_a", "part_b"]);
     let mut hit = binding.new_capture();
     capture(&mut runtime, &mut binding, &mut hit, 1000);

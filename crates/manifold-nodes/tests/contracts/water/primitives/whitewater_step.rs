@@ -114,7 +114,7 @@ fn scene(dust: bool, particle_ports: &[&str]) {
     }
 fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
         let def = if dust { crate::contracts::water::primitives::whitewater_golden_tests::all_emitters(None) }
-            else { with_tick_probe(whitewater_render_def(WaterScene::dam_break(64))) };
+            else { with_tick_probe(whitewater_render_def(WaterScene::dam_break(64).with_obstacle())) };
         let axes = with_whitewater_axes(def.clone());
         let mut fused = Show::new_with_emitter_oracle(if packed { def } else { axes.clone() }, (96, 54), false, &[], Some(false));
         let mut reference = Show::new_with_emitter_oracle(axes, (96, 54), false, &[], Some(true));

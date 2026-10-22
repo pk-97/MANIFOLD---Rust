@@ -844,7 +844,8 @@ impl MatterDomain {
             return Ok(None);
         }
         let coupled_geometries = self.coupled.owner.as_ref().map_or_else(|| self.observed.geometries(), LiquidRigidOwner::geometries);
-        if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size(), offline)? == BodiesStatus::Pending {
+        let coupled_rows = self.coupled.owner.as_ref().map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
+        if self.bodies.prepare(roles, coupled_geometries, coupled_rows, self.coupled.walls.bounds(), lattice.cell_size(), offline)? == BodiesStatus::Pending {
             return Ok(None);
         }
         let setup_changed = self.setup != Some(setup);
@@ -884,7 +885,7 @@ impl MatterDomain {
             && owner.wants_rebind()
         {
             owner.rebind()?;
-            if self.bodies.prepare(roles, owner.geometries(), lattice.cell_size(), offline)? == BodiesStatus::Pending {
+            if self.bodies.prepare(roles, owner.geometries(), owner.rows(), self.coupled.walls.bounds(), lattice.cell_size(), offline)? == BodiesStatus::Pending {
                 return Ok(None);
             }
         }

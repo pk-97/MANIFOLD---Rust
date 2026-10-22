@@ -177,6 +177,10 @@ pub struct PhysicsWorldNode {
     coupled_frame: Option<CoupledRigidFrame>,
     coupled_frame_ready: bool,
     names: PortNames,
+    /// The refusals the card shows, as world input and reason, rebuilt only
+    /// when `refusals_shown` stops matching the world's.
+    refusal_rows: Vec<(std::sync::Arc<str>, std::sync::Arc<str>)>,
+    refusals_shown: Vec<crate::physics::BodyRefusal>,
 }
 
 impl Default for PhysicsWorldNode {
@@ -205,9 +209,30 @@ impl PhysicsWorldNode {
             coupled_frame: None,
             coupled_frame_ready: false,
             names: PortNames::default(),
+            refusal_rows: Vec::new(),
+            refusals_shown: Vec::new(),
         };
         node.rebuild(PHYSICS_WORLD_DEFAULT_BODIES as usize, PHYSICS_WORLD_DEFAULT_COPY_GROUPS as usize);
         node
+    }
+
+    /// Bring the card's refusal rows in line with the world's refusals. A
+    /// standing refusal allocates nothing; only a change rebuilds the rows.
+    fn sync_refusal_rows(&mut self) {
+        let refusals = self.simulation.refusals();
+        if refusals == self.refusals_shown.as_slice() {
+            return;
+        }
+        self.refusals_shown.clear();
+        self.refusals_shown.extend_from_slice(refusals);
+        self.refusal_rows.clear();
+        self.refusal_rows.extend(refusals.iter().map(|refusal| {
+            let input = match refusal.member {
+                crate::physics::Member::Body(k) => format!("body_{k}"),
+                crate::physics::Member::Copies(k) => format!("copies_{k}"),
+            };
+            (std::sync::Arc::from(input), std::sync::Arc::from(refusal.reason.to_string()))
+        }));
     }
 
     /// Body ports this world exposes.
@@ -447,6 +472,7 @@ impl EffectNode for PhysicsWorldNode {
 
     fn clear_state(&mut self) {
         self.simulation = RigidSimulation::default();
+        self.sync_refusal_rows();
         self.observation_valid = false;
         self.coupled_frame_ready = false;
     }
@@ -477,8 +503,9 @@ impl EffectNode for PhysicsWorldNode {
             observation.speed,
             observation.reset,
         );
+        self.sync_refusal_rows();
         ctx.sim_metrics.merge(&self.simulation.take_metrics());
-        if result.is_ok() && self.simulation.impulse_stamp(observation.transport, 0).is_ok() {
+        if result.is_ok() && self.simulation.impulse_stamp(self.observation.transport, 0).is_ok() {
             self.observation_valid = true;
         }
         if ctx.sim_step.authored_sample_only {
@@ -528,14 +555,8 @@ fn latest<T: Clone + Send + 'static>(slot: &mut Option<T>, inputs: &NodeInputs<'
 }
 
 impl PhysicsNode for PhysicsWorldNode {
-    fn write_body_refusals(&self, out: &mut Vec<(String, std::sync::Arc<str>)>) {
-        for refusal in self.simulation.refusals() {
-            let input = match refusal.member {
-                crate::physics::Member::Body(k) => format!("body_{k}"),
-                crate::physics::Member::Copies(k) => format!("copies_{k}"),
-            };
-            out.push((input, std::sync::Arc::from(refusal.reason.to_string())));
-        }
+    fn body_refusals(&self) -> &[(std::sync::Arc<str>, std::sync::Arc<str>)] {
+        &self.refusal_rows
     }
 
     // A coupled world steps inside its liquid, on the liquid's samples.
@@ -551,6 +572,7 @@ impl PhysicsNode for PhysicsWorldNode {
         }
         self.coupled_mode = enabled;
         self.simulation = RigidSimulation::default();
+        self.sync_refusal_rows();
         self.observation_valid = false;
         self.coupled_frame_ready = false;
         self.coupled_frame = None;
@@ -569,7 +591,7 @@ impl PhysicsNode for PhysicsWorldNode {
         if !self.observation_valid {
             return 0;
         }
-        let not_made = crate::physics::copy_pool(self.observation.inputs.groups.iter().map(Option::as_ref), &mut Vec::new());
+        let not_made = crate::physics::copy_pool_each(self.observation.inputs.groups.iter().map(Option::as_ref), |_| {});
         u32::try_from(not_made).unwrap_or(u32::MAX)
     }
 
@@ -762,7 +784,13 @@ mod tests {
         let mut wire_slots: Vec<(&'static str, Slot)> = Vec::new();
         let mut pending = Vec::new();
         let mut next_resource = 0;
-        let mut body = RigidBody { collider: Some(crate::physics::platonic_solid(body_shape)), ..RigidBody::default() };
+        // Shape 0 is the body switched off: a structural edit that rebuilds.
+        // Any other shape swaps in place.
+        let mut body = RigidBody {
+            collider: Some(crate::physics::platonic_solid(body_shape.max(1))),
+            enabled: body_shape != 0,
+            ..RigidBody::default()
+        };
         body.transform.pos = [0.0, 8.0, 0.0];
         let body_slot = acquire_mock_wire(
             &mut backend,
@@ -1065,7 +1093,7 @@ mod tests {
         assert!(evaluate_mock_world_under(
             &mut node,
             0.0,
-            2,
+            0,
             MockFieldState::Complete,
             false,
             false,

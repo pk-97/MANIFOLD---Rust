@@ -9,14 +9,15 @@ fn column_length(column: &[f32; 4]) -> f32 {
 }
 
 /// A domain box in the world: its centre carried through the parent frame,
-/// each side scaled by the frame's scale on that axis. The box stays
-/// axis-aligned, since the solvers take no rotation, so a turned group
-/// moves the box but does not turn it.
+/// each world side the extent of the box as the frame turns and scales it.
+/// The box stays axis-aligned, since the solvers take no rotation, so a
+/// turned group moves the box and fits it around the turned sides; a quarter
+/// turn swaps them.
 pub fn world_domain_box(transform: Transform) -> Transform {
     let parent = transform.parent;
     Transform {
         pos: transform_point(&parent, transform.pos),
-        scale: std::array::from_fn(|axis| transform.scale[axis] * column_length(&parent[axis])),
+        scale: std::array::from_fn(|world| (0..3).map(|local| parent[local][world].abs() * transform.scale[local]).sum()),
         parent: Transform::default().parent,
         ..transform
     }
@@ -39,5 +40,22 @@ pub fn world_pose(transform: Transform) -> Transform {
         scale,
         parent: Transform::default().parent,
         ..transform
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Under a group turned a quarter turn about Y with scale (2, 1, 3), a
+    /// domain 4 x 1 x 1 has its local X along world Z: 8 deep and 3 wide.
+    #[test]
+    fn a_quarter_turned_group_swaps_the_domain_sides() {
+        let (s, c) = std::f32::consts::FRAC_PI_2.sin_cos();
+        // Column-major: local X maps to world -Z, local Z to world X.
+        let parent = [[2.0 * c, 0.0, -2.0 * s, 0.0], [0.0, 1.0, 0.0, 0.0], [3.0 * s, 0.0, 3.0 * c, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        let world = world_domain_box(Transform { scale: [4.0, 1.0, 1.0], parent, ..Transform::default() });
+        let expected = [3.0, 1.0, 8.0];
+        assert!((0..3).all(|axis| (world.scale[axis] - expected[axis]).abs() < 1e-5), "{:?}", world.scale);
     }
 }

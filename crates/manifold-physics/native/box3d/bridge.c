@@ -558,23 +558,25 @@ int manifold_box3d_body_update(
 	return BOX3D_BRIDGE_OK;
 }
 
-// Swap a static body's collision hulls for `hull_count` new ones in place:
-// the body, its pose and the rest of the world are untouched. The new hulls
-// are cooked before any old shape is destroyed, so a failure leaves the body
-// as it was. The caller frees the old hulls after this returns.
+// Swap a body's collision hulls for `hull_count` new ones in place: the
+// body, its pose, its velocity and the rest of the world are untouched, and a
+// moving body takes `mass` over its new hulls. The new hulls are cooked before
+// any old shape is destroyed, so a failure leaves the body as it was. The
+// caller frees the old hulls after this returns.
 int manifold_box3d_body_replace_hulls(
 	uint64_t body_value,
 	const float* points,
 	const int32_t* point_counts,
 	int hull_count,
 	int max_vertex_count,
+	float mass,
 	float friction,
 	float restitution,
 	uintptr_t* hull_out )
 {
 	b3BodyId body_id = b3LoadBodyId( body_value );
 	if ( points == NULL || point_counts == NULL || hull_out == NULL || hull_count < 1 ||
-		 max_vertex_count < 4 || b3Body_GetType( body_id ) != b3_staticBody )
+		 max_vertex_count < 4 )
 	{
 		return BOX3D_BRIDGE_ERROR;
 	}
@@ -624,6 +626,75 @@ int manifold_box3d_body_replace_hulls(
 			return BOX3D_BRIDGE_ERROR;
 		}
 	}
+	box3d_set_mass( body_id, mass );
+	return BOX3D_BRIDGE_OK;
+}
+
+// Swap a static body's triangle mesh for a new one in place: the body, its
+// pose and the rest of the world are untouched. The new mesh is built before
+// the old shapes go, so a failure leaves the body as it was. Returns
+// BOX3D_BRIDGE_NO_HIT when Box3D discards degenerate triangles. The caller
+// frees the old mesh after this returns.
+int manifold_box3d_body_replace_mesh(
+	uint64_t body_value,
+	const float* vertices,
+	int vertex_count,
+	const int32_t* indices,
+	int triangle_count,
+	float friction,
+	float restitution,
+	uintptr_t* mesh_out )
+{
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( vertices == NULL || indices == NULL || mesh_out == NULL || vertex_count < 3 || triangle_count < 1 ||
+		 b3Body_GetType( body_id ) != b3_staticBody )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	b3MeshDef mesh_definition = { 0 };
+	mesh_definition.vertices = (b3Vec3*)vertices;
+	mesh_definition.indices = (int32_t*)indices;
+	mesh_definition.vertexCount = vertex_count;
+	mesh_definition.triangleCount = triangle_count;
+	mesh_definition.useMedianSplit = true;
+	mesh_definition.identifyEdges = true;
+	b3MeshData* mesh = b3CreateMesh( &mesh_definition, NULL, 0 );
+	if ( mesh == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	if ( mesh->triangleCount != triangle_count )
+	{
+		b3DestroyMesh( mesh );
+		return BOX3D_BRIDGE_NO_HIT;
+	}
+
+	box3d_shape_list old;
+	int old_count = b3Body_GetShapeCount( body_id );
+	b3ShapeId* old_shapes = box3d_shapes_of( &old, body_id, old_count );
+	if ( old_shapes == NULL )
+	{
+		box3d_shapes_free( &old );
+		b3DestroyMesh( mesh );
+		return BOX3D_BRIDGE_ERROR;
+	}
+	for ( int i = 0; i < old_count; ++i )
+	{
+		b3DestroyShape( old_shapes[i], false );
+	}
+	box3d_shapes_free( &old );
+
+	b3ShapeDef shape_definition = b3DefaultShapeDef();
+	shape_definition.density = 0.0f;
+	shape_definition.baseMaterial.friction = friction;
+	shape_definition.baseMaterial.restitution = restitution;
+	if ( b3CreateMeshShape( body_id, &shape_definition, mesh, b3Vec3_one ).index1 == 0 )
+	{
+		b3DestroyMesh( mesh );
+		return BOX3D_BRIDGE_ERROR;
+	}
+	*mesh_out = (uintptr_t)mesh;
 	return BOX3D_BRIDGE_OK;
 }
 

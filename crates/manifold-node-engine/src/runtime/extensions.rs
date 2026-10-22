@@ -92,7 +92,7 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
     fn write_copies_not_made(&self, _graph: &Graph, _slot: RuntimeSlot<'_>, _output: &mut Vec<(NodeId, u32)>) {}
     /// Append each body or copy group a world left out on its last frame:
     /// (world, the world input it is wired to, why), for the setup check.
-    fn write_body_refusals(&self, _graph: &Graph, _slot: RuntimeSlot<'_>, _output: &mut Vec<(NodeId, String, std::sync::Arc<str>)>) {}
+    fn write_body_refusals(&self, _graph: &Graph, _slot: RuntimeSlot<'_>, _output: &mut Vec<(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)>) {}
     fn is_scene_impulse_param(&self, _param: &str) -> bool {
         false
     }
