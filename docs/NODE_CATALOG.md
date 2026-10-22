@@ -111,7 +111,7 @@ _Generated from the node registry. Do not hand-edit. 403 nodes registered, group
 | Checkerboard | `node.checkerboard` | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
 | Draw Lines | `node.draw_lines` | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
 | Draw Rectangles | `node.draw_rectangles` | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
-| glTF Texture | `node.gltf_texture_source` | Source | Loads an embedded image from a glTF/.glb file as a texture, so an imported model's baked-in albedo/alpha map flows into the render pipeline like any other text… |
+| Texture File | `node.gltf_texture_source` | Source | Loads a picture file, or an image embedded in a glTF/.glb model, as a texture, so a Material's picture or an imported model's baked-in map flows into the rende… |
 | Glyph Atlas | `node.glyph_atlas` | Source | Provides the fixed ASCII coverage atlas used by terminal glyph rendering. |
 | Gradient | `node.gradient` | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | HDRI Source | `node.hdri_source` | Source | Loads a linear-HDR .exr environment map from disk as a texture, so a real-world HDRI capture flows into node.render_scene's envmap input like any other texture… |

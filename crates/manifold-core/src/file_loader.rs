@@ -38,6 +38,17 @@ pub enum NodeFileLoad {
     Folder(AssetFamily),
 }
 
+/// The picture files a texture field takes and a texture source reads whole.
+pub const PICTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "exr", "hdr"];
+
+/// Whether `path` names a picture by its extension.
+pub fn is_picture(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| PICTURE_EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(ext)))
+}
+
 /// The table: `type_id` → what that node reads from disk. Names only nodes
 /// whose path comes via an outer-card string binding (`stringParams` +
 /// `stringBindings`), per PROJECT_FOLDERS_DESIGN P5.

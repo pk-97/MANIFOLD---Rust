@@ -7,7 +7,9 @@
 //! first outline point as the last column — a closed loop): `pos(i,j) =
 //! (x_j, y_j, depth × i/steps)`, centred on the plane when `symmetric`.
 //! `caps` adds a cap at each end (Blender's Fill Caps). The grid carries
-//! exact normals; wire `node.make_triangles` with Keep Normals downstream.
+//! exact normals facing out of a closed outline (its columns run backwards
+//! when read forwards would face in); wire `node.make_triangles` with Keep
+//! Normals downstream.
 //! The CPU mirror (`curve_sweep::extrude_grid`) is what a collision shape
 //! reads.
 
@@ -42,7 +44,7 @@ struct ExtrudeCurveUniforms {
 manifold_node_engine::primitive! {
     name: ExtrudeCurve,
     type_id: "node.extrude_curve",
-    purpose: "Extrude a 2D outline curve (Array<CurvePoint>) along +Z into a (steps+1) x cols positions+uv grid, cols = the outline's point count (or +1 when `close` duplicates the first point as the last column for a closed loop). pos(i,j) = (x_j, y_j, depth * i/steps). `symmetric` centres it on the curve plane (z from -depth/2 to depth/2, Blender's Extrude). `caps` adds a start cap (centre, rim) and an end cap (rim, centre) row pair, each fanned from the curve's origin with a hard rim edge, for an outline drawn round its origin. Normals are exact (across the outline on the side, along Z on a cap) — wire node.make_triangles with keep_normals on downstream (src_cols=cols, src_rows=steps+1, +4 with caps).",
+    purpose: "Extrude a 2D outline curve (Array<CurvePoint>) along +Z into a (steps+1) x cols positions+uv grid, cols = the outline's point count (or +1 when `close` duplicates the first point as the last column for a closed loop). pos(i,j) = (x_j, y_j, depth * i/steps), with the columns read backwards when a closed outline would otherwise face in (counter-clockwise along +Z, clockwise along -Z), so winding and normals face out of the solid. `symmetric` centres it on the curve plane (z from -depth/2 to depth/2, Blender's Extrude). `caps` adds a start cap (centre, rim) and an end cap (rim, centre) row pair, each fanned from the curve's origin with a hard rim edge, for an outline drawn round its origin. Normals are exact (across the outline on the side, along Z on a cap) — wire node.make_triangles with keep_normals on downstream (src_cols=cols, src_rows=steps+1, +4 with caps).",
     inputs: {
         outline: Array(CurvePoint) required,
         depth: ScalarF32 optional,
@@ -245,6 +247,7 @@ mod gpu_tests {
         depth: f32,
         steps: i32,
         close: bool,
+        caps: bool,
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
@@ -264,7 +267,7 @@ mod gpu_tests {
             steps,
             close: u32::from(close),
             symmetric: 0,
-            caps: 0,
+            caps: u32::from(caps),
             outline_len: outline.len() as u32,
             dispatch_count: dst_cap,
             _pad0: 0,
@@ -292,13 +295,42 @@ mod gpu_tests {
         const STEPS: i32 = 2;
         const DST_CAP: u32 = 9; // rows=3, cols=3, exact
 
-        let out = dispatch_extrude(&device, &gen_wgsl, &outline, DST_CAP, 5.0, STEPS, false);
+        let out = dispatch_extrude(&device, &gen_wgsl, &outline, DST_CAP, 5.0, STEPS, false, false);
         // Deferred #3: no end caps — row 0 is exactly the outline at z=0.
         for (j, pt) in outline.iter().enumerate() {
             let v = out[j];
             assert!((v.position[0] - pt.xy[0]).abs() < 1e-5);
             assert!((v.position[1] - pt.xy[1]).abs() < 1e-5);
             assert!(v.position[2].abs() < 1e-5, "row 0 must sit at z=0 (open extrusion)");
+        }
+    }
+
+    /// The kernel reads a counter-clockwise loop backwards exactly as the
+    /// CPU mirror does, so the drawn solid faces out (the mirror's
+    /// `swept_solids_face_out` proves the winding and volume).
+    #[test]
+    fn a_counter_clockwise_loop_matches_the_outward_cpu_mirror() {
+        let device = manifold_gpu::testkit::test_device();
+        let gen_wgsl = generated_wgsl();
+        let points: Vec<[f32; 2]> = (0..=12)
+            .map(|i| (std::f32::consts::TAU * i as f32 / 12.0).sin_cos())
+            .map(|(s, c)| [c, s])
+            .collect();
+        let outline: Vec<CurvePoint> = points.iter().map(|p| mk_curve(p[0], p[1])).collect();
+        const STEPS: i32 = 2;
+        for depth in [1.5f32, -1.5] {
+            let grid = manifold_node_engine::scene::curve_sweep::extrude_grid(&points, depth, STEPS as u32, false, false, true);
+            let cap = (grid.cols * grid.rows) as u32;
+            let out = dispatch_extrude(&device, &gen_wgsl, &outline, cap, depth, STEPS, false, true);
+            for (k, v) in out.iter().enumerate() {
+                for axis in 0..3 {
+                    assert!((v.position[axis] - grid.positions[k][axis]).abs() < 1e-5, "depth {depth} vertex {k} position");
+                    assert!((v.normal[axis] - grid.normals[k][axis]).abs() < 1e-5, "depth {depth} vertex {k} normal");
+                }
+            }
+            // A side vertex's normal points away from the axis.
+            let side = &out[3 * grid.cols];
+            assert!(side.position[0] * side.normal[0] + side.position[1] * side.normal[1] > 0.0, "depth {depth}: the side faces in");
         }
     }
 }

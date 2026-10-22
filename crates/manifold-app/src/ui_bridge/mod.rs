@@ -279,7 +279,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             RootAction::SceneItemRightClicked => DispatchResult::handled(),
             // The blocking native picker, as every other file field uses; the
             // picked path is one `SceneFieldSet`.
-            RootAction::SceneFieldFileClicked { layer_id, item, field, .. } => {
+            RootAction::SceneFieldFileClicked { layer_id, item, field, extensions } => {
                 // A new Model File is a swap: the parts whose file node is
                 // still there keep their edits.
                 if field == "model_file" {
@@ -288,7 +288,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                     ));
                     return DispatchResult::handled();
                 }
-                let picked = crate::file_dialogs::pick_file(crate::file_dialogs::DialogAction::NodeFile, ctx.dialogs, ctx.user_prefs);
+                let picked = crate::file_dialogs::pick_file_of(crate::file_dialogs::DialogAction::NodeFile, ctx.dialogs, ctx.user_prefs, extensions);
                 match picked {
                     Some(path) => {
                         let pick = manifold_core::scene_surface::FieldPick::File(path.to_string_lossy().into_owned());

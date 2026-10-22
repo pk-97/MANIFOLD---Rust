@@ -110,8 +110,9 @@ fn body(
 
     let sides_f = max(f32(sides), 1.0);
     // The ring turns clockwise seen down the path, so the grid's winding
-    // faces out of the tube as its normals do.
-    let theta = -6.2831855 * f32(col) / sides_f;
+    // faces out of the tube as its normals do. The last column wraps to
+    // angle 0, so the seam shares exact positions and welds.
+    let theta = -6.2831855 * f32(col % sides) / sides_f;
     let r_eff = radius * rscale;
     let ring = cos(theta) * right + sin(theta) * ring_up;
     var pos = center + ring * r_eff;

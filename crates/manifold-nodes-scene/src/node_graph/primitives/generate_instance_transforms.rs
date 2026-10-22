@@ -24,8 +24,8 @@ pub const INSTANCE_LAYOUTS: &[&str] = &["Grid", "Ring", "Spiral", "Random"];
 /// (`max_capacity` Int → i32 [allocation-only, the shader ignores it but it
 /// occupies a uniform word], `active_count` Int → i32 [the inactive threshold],
 /// `layout` Enum → u32, `seed` Int → i32, then the f32 extents / base_scale /
-/// rotations), then the codegen-injected `dispatch_count` (= output capacity,
-/// the guard). 12 words = 48 bytes.
+/// rotations and the origin), then the codegen-injected `dispatch_count` (=
+/// output capacity, the guard). 15 words, padded to 64 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct InstanceUniforms {
@@ -40,14 +40,22 @@ struct InstanceUniforms {
     rot_x: f32,
     rot_y: f32,
     rot_z: f32,
+    origin_x: f32,
+    origin_y: f32,
+    origin_z: f32,
     dispatch_count: u32,
+    _pad: u32,
 }
 
 manifold_node_engine::primitive! {
     name: GenerateInstanceTransforms,
     type_id: "node.arrange_copies",
-    purpose: "Emit an Array<InstanceTransform> filled with one of four procedural layouts (slots beyond active_count zero out): Grid — side = ceil(active_count^(1/3)), 3D index (cx,cy,cz) = (i mod side, (i/side) mod side, i/side^2), position = ((cx/(side-1) - 0.5)*extent_x, (cy/(side-1) - 0.5)*extent_y, (cz/(side-1) - 0.5)*extent_z). Ring — t = i/active_count, theta = t*2π, position = (cos(theta)*extent_x/2, 0, sin(theta)*extent_z/2). Spiral — t = i/active_count, theta = t*2π*4 (4 turns), r = t, position = (cos(theta)*r*extent_x/2, (t-0.5)*extent_y, sin(theta)*r*extent_z/2). Random — wang-hash of (index, seed) per axis, position = (hash-0.5)*extent per axis, uniform within the extent box. Scale is uniform `base_scale`; rotation is uniform (rot_x, rot_y, rot_z) applied identically to every instance. Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
-    inputs: {},
+    purpose: "Emit an Array<InstanceTransform> filled with one of four procedural layouts (slots beyond active_count zero out): Grid — side = ceil(active_count^(1/3)), 3D index (cx,cy,cz) = (i mod side, (i/side) mod side, i/side^2), position = ((cx/(side-1) - 0.5)*extent_x, (cy/(side-1) - 0.5)*extent_y, (cz/(side-1) - 0.5)*extent_z). Ring — t = i/active_count, theta = t*2π, position = (cos(theta)*extent_x/2, 0, sin(theta)*extent_z/2). Spiral — t = i/active_count, theta = t*2π*4 (4 turns), r = t, position = (cos(theta)*r*extent_x/2, (t-0.5)*extent_y, sin(theta)*r*extent_z/2). Random — wang-hash of (index, seed) per axis, position = (hash-0.5)*extent per axis, uniform within the extent box. Every position is then offset by (origin_x, origin_y, origin_z), the centre the layout sits around. Scale is uniform `base_scale`; rotation is uniform (rot_x, rot_y, rot_z) applied identically to every instance. Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
+    inputs: {
+        origin_x: ScalarF32 optional,
+        origin_y: ScalarF32 optional,
+        origin_z: ScalarF32 optional,
+    },
     outputs: {
         instances: Array(InstanceTransform),
     },
@@ -140,9 +148,12 @@ manifold_node_engine::primitive! {
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
+        ParamDef { name: Cow::Borrowed("origin_x"), label: "Origin X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-100000.0, 100000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("origin_y"), label: "Origin Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-100000.0, 100000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("origin_z"), label: "Origin Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-100000.0, 100000.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "max_capacity is chain-build allocation ceiling — pre-allocates max_capacity × 32 bytes. active_count is a free slider. Rotation params apply to every instance uniformly — for per-instance varying rotation, write a downstream transform primitive that perturbs `rot_pad`.",
+    composition_notes: "origin_x/y/z are port-shadows-param: wire a live centre (Copy Blend wires its target's copies origin) so the layout follows what it belongs to. max_capacity is chain-build allocation ceiling — pre-allocates max_capacity × 32 bytes. active_count is a free slider. Rotation params apply to every instance uniformly — for per-instance varying rotation, write a downstream transform primitive that perturbs `rot_pad`.",
     examples: [],
     picker: { label: "Arrange Copies", category: Atom },
     summary: "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
@@ -186,6 +197,9 @@ impl Primitive for GenerateInstanceTransforms {
         let rot_y = ctx.param_f32("rot_y", 0.0);
 
         let rot_z = ctx.param_f32("rot_z", 0.0);
+        let origin_x = ctx.scalar_or_param("origin_x", 0.0);
+        let origin_y = ctx.scalar_or_param("origin_y", 0.0);
+        let origin_z = ctx.scalar_or_param("origin_z", 0.0);
 
         let Some(out_buf) = ctx.outputs.array("instances") else {
             return;
@@ -209,7 +223,11 @@ impl Primitive for GenerateInstanceTransforms {
             rot_x,
             rot_y,
             rot_z,
+            origin_x,
+            origin_y,
+            origin_z,
             dispatch_count: capacity,
+            _pad: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -270,6 +288,9 @@ mod gpu_tests {
         let (ex, ey, ez) = (4.0f32, 3.0f32, 5.0f32);
         let base_scale = 1.25f32;
         let (rx, ry, rz) = (0.1f32, 0.2f32, 0.3f32);
+        // The generated kernel centres the layout on its origin; the hand
+        // kernel predates it, so a live slot sits `origin` further along.
+        let origin = [2.5f32, -1.0, 7.0];
 
         for layout in 0u32..4u32 {
             // Hand layout: active_count(u32), capacity(u32), layout(u32), seed(u32),
@@ -291,10 +312,11 @@ mod gpu_tests {
             gen_bytes.extend_from_slice(&(active as i32).to_le_bytes());
             gen_bytes.extend_from_slice(&layout.to_le_bytes());
             gen_bytes.extend_from_slice(&(seed as i32).to_le_bytes());
-            for v in [ex, ey, ez, base_scale, rx, ry, rz] {
+            for v in [ex, ey, ez, base_scale, rx, ry, rz, origin[0], origin[1], origin[2]] {
                 gen_bytes.extend_from_slice(&v.to_le_bytes());
             }
             gen_bytes.extend_from_slice(&CAPACITY.to_le_bytes());
+            gen_bytes.extend_from_slice(&[0u8; 4]);
 
             let hand_wgsl = include_str!("shaders/generate_instance_transforms.wgsl");
             let gen_wgsl =
@@ -306,8 +328,9 @@ mod gpu_tests {
 
             for i in 0..CAPACITY as usize {
                 for c in 0..4 {
+                    let shift = if (i as u32) < active { origin.get(c).copied().unwrap_or(0.0) } else { 0.0 };
                     assert!(
-                        (from_hand[i].pos_scale[c] - from_gen[i].pos_scale[c]).abs() < 1e-6,
+                        (from_hand[i].pos_scale[c] + shift - from_gen[i].pos_scale[c]).abs() < 1e-5,
                         "layout {layout} slot {i} pos_scale[{c}]: hand={} gen={}",
                         from_hand[i].pos_scale[c],
                         from_gen[i].pos_scale[c]

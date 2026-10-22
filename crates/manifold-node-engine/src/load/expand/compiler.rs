@@ -58,6 +58,7 @@ fn endpoint_port(endpoint: SceneEndpoint) -> &'static str {
         SceneEndpoint::Atmosphere => "atmosphere",
         SceneEndpoint::Transform => "transform",
         SceneEndpoint::Instances => "instances",
+        SceneEndpoint::InstanceCount => "instance_count",
         SceneEndpoint::Vertices => "vertices",
         SceneEndpoint::Acceleration => "acceleration",
     }
@@ -1034,6 +1035,13 @@ impl Builder<'_> {
                 );
                 self.constant_node(identity_key, "node.arrange_copies", params, "instances")?
             }
+            // An object with no count draws its whole instance buffer: every
+            // slot is live, so the stages read the largest count and the
+            // object keeps drawing without one (see the stage outputs).
+            SceneEndpoint::InstanceCount => {
+                params.insert("value".into(), SerializedParamValue::Float { value: f32::MAX });
+                self.constant_node(identity_key, "node.value", params, "out")?
+            }
             SceneEndpoint::Acceleration => {
                 for component in ["x", "y", "z"] {
                     params.insert(component.into(), SerializedParamValue::Float { value: 0.0 });
@@ -1675,6 +1683,13 @@ manifold_core::testkit_visible! {
                 }
                 for output in &stage.outputs {
                     let key = self.attachment_key(instance, target, output.endpoint)?;
+                    // An object that draws its whole buffer keeps drawing it: a
+                    // count only travels where the host gave the object one.
+                    if output.endpoint == SceneEndpoint::InstanceCount
+                        && self.index.input(&key.0, key.1.as_str())?.is_none()
+                    {
+                        continue;
+                    }
                     let consumes_previous = stage.inputs.iter().any(|input| matches!(input.source, SceneStageSource::Previous { endpoint } if endpoint == output.endpoint));
                     if !consumes_previous
                         && matches!(

@@ -210,6 +210,11 @@ pub static COPY_BLEND_ROWS: [PropertyRow; 9] = [
     held("enabled", ON_IS_THE_TOGGLE),
 ];
 
+/// Whether a Modifier type acts on an item's copies rather than its mesh.
+pub fn acts_on_copies(modifier: ModifierType) -> bool {
+    COPY_FIELD_TYPES.iter().any(|entry| entry.modifier == modifier)
+}
+
 /// The copy field Modifier types, in menu order.
 pub(super) const COPY_FIELD_TYPES: [ModifierTypeEntry; 4] = [
     entry(ModifierType::CopyWave, "copy_wave", "Copy Wave", "CopyWave", false, &COPY_WAVE_ROWS),

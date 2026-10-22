@@ -682,3 +682,41 @@ pub(crate) fn chain_move(project: &Project, layer: &LayerId, card: &ItemId, to: 
     let command = move_modifier(layer, doc(project, layer)?, card, to)?;
     Ok(SceneEdit { command: Box::new(command), select: None })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::PresetTypeId;
+    use manifold_core::types::LayerType;
+
+    /// Setting a Shape to Ocean writes the water look onto the Ocean's own
+    /// Material in the same undo step, and undo takes both back.
+    #[test]
+    fn a_shape_set_to_ocean_takes_the_water_look_in_one_step() {
+        let mut project = Project::default();
+        let index = project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
+        let layer = project.timeline.layers[index].layer_id.clone();
+        let mut added = add(&project, &layer, "object.cube", None, &[]).expect("a cube adds to the base scene");
+        added.command.execute(&mut project);
+        let cube = added.select.expect("the add selects the new cube");
+        let material = doc(&project, &layer).unwrap().effective_material(&cube).expect("a new cube has its own Material");
+        let before: Vec<Option<f32>> = scene_schema::OCEAN_LOOK.iter().map(|(property, _)| base(instance(&project, &layer).unwrap(), &material, property)).collect();
+
+        let mut edit = set_field(&project, &layer, &cube, "shape", &FieldPick::Choice("ocean".to_owned())).unwrap().expect("the Shape changes");
+        edit.command.execute(&mut project);
+        let doc_now = doc(&project, &layer).unwrap();
+        assert!(matches!(&doc_now.find(&cube).unwrap().fields, ItemFields::Object(object) if object.shape == Shape::Ocean));
+        assert_eq!(doc_now.effective_material(&cube), Some(material.clone()), "the Ocean keeps its own Material");
+        for (property, value) in scene_schema::OCEAN_LOOK {
+            assert_eq!(base(instance(&project, &layer).unwrap(), &material, property), Some(value), "{property}");
+        }
+
+        edit.command.undo(&mut project);
+        assert!(matches!(&doc(&project, &layer).unwrap().find(&cube).unwrap().fields, ItemFields::Object(object) if object.shape != Shape::Ocean));
+        for ((property, _), old) in scene_schema::OCEAN_LOOK.iter().zip(before) {
+            if let Some(old) = old {
+                assert_eq!(base(instance(&project, &layer).unwrap(), &material, property), Some(old), "{property} after undo");
+            }
+        }
+    }
+}

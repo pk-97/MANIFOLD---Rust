@@ -184,7 +184,7 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                     continue;
                 }
                 out.push(AssetRef {
-                    kind: kind_of(*load),
+                    kind: kind_of(*load, value),
                     path: PathBuf::from(value),
                     target: AssetTarget::StringParam {
                         layer_id: layer.layer_id.clone(),
@@ -221,7 +221,7 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                         continue;
                     }
                     out.push(AssetRef {
-                        kind: kind_of(load),
+                        kind: kind_of(load, &default),
                         path: PathBuf::from(default),
                         target: AssetTarget::SceneModifierStringParam {
                             layer_id: layer.layer_id.clone(),
@@ -380,7 +380,12 @@ fn inst_graph(inst: &PresetInstance) -> Option<&EffectGraphDef> {
 /// the same family as their File sibling so a future `Folder(Mesh)` entry
 /// (e.g. a model-drop folder) collects without a red-match refactor — the
 /// family, not the file-vs-folder split, decides the `Media/` subfolder.
-fn kind_of(load: NodeFileLoad) -> AssetKind {
+fn kind_of(load: NodeFileLoad, path: &str) -> AssetKind {
+    // A picture read by a model's texture loader (a Material's File
+    // texture through node.gltf_texture_source) collects with the images.
+    if load == NodeFileLoad::File(AssetFamily::Mesh) && manifold_core::file_loader::is_picture(path) {
+        return AssetKind::Images;
+    }
     match load {
         NodeFileLoad::File(AssetFamily::Mesh) | NodeFileLoad::Folder(AssetFamily::Mesh) => {
             AssetKind::Mesh

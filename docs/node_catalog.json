@@ -1195,7 +1195,23 @@
       "category": "3D Geometry",
       "examples": [],
       "fusion": "source",
-      "inputs": [],
+      "inputs": [
+        {
+          "name": "origin_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "origin_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "origin_z",
+          "required": false,
+          "type": "f32"
+        }
+      ],
       "label": "Arrange Copies",
       "outputs": [
         {
@@ -1327,9 +1343,39 @@
           ],
           "tooltip": "Rolls every copy around the Z axis by the same amount, in degrees.",
           "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Origin X",
+          "name": "origin_x",
+          "range": [
+            "-100000",
+            "100000"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Origin Y",
+          "name": "origin_y",
+          "range": [
+            "-100000",
+            "100000"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Origin Z",
+          "name": "origin_z",
+          "range": [
+            "-100000",
+            "100000"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Emit an Array<InstanceTransform> filled with one of four procedural layouts (slots beyond active_count zero out): Grid — side = ceil(active_count^(1/3)), 3D index (cx,cy,cz) = (i mod side, (i/side) mod side, i/side^2), position = ((cx/(side-1) - 0.5)*extent_x, (cy/(side-1) - 0.5)*extent_y, (cz/(side-1) - 0.5)*extent_z). Ring — t = i/active_count, theta = t*2π, position = (cos(theta)*extent_x/2, 0, sin(theta)*extent_z/2). Spiral — t = i/active_count, theta = t*2π*4 (4 turns), r = t, position = (cos(theta)*r*extent_x/2, (t-0.5)*extent_y, sin(theta)*r*extent_z/2). Random — wang-hash of (index, seed) per axis, position = (hash-0.5)*extent per axis, uniform within the extent box. Scale is uniform `base_scale`; rotation is uniform (rot_x, rot_y, rot_z) applied identically to every instance. Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
+      "purpose": "Emit an Array<InstanceTransform> filled with one of four procedural layouts (slots beyond active_count zero out): Grid — side = ceil(active_count^(1/3)), 3D index (cx,cy,cz) = (i mod side, (i/side) mod side, i/side^2), position = ((cx/(side-1) - 0.5)*extent_x, (cy/(side-1) - 0.5)*extent_y, (cz/(side-1) - 0.5)*extent_z). Ring — t = i/active_count, theta = t*2π, position = (cos(theta)*extent_x/2, 0, sin(theta)*extent_z/2). Spiral — t = i/active_count, theta = t*2π*4 (4 turns), r = t, position = (cos(theta)*r*extent_x/2, (t-0.5)*extent_y, sin(theta)*r*extent_z/2). Random — wang-hash of (index, seed) per axis, position = (hash-0.5)*extent per axis, uniform within the extent box. Every position is then offset by (origin_x, origin_y, origin_z), the centre the layout sits around. Scale is uniform `base_scale`; rotation is uniform (rot_x, rot_y, rot_z) applied identically to every instance. Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
@@ -10034,7 +10080,7 @@
           "type": "bool"
         }
       ],
-      "purpose": "Extrude a 2D outline curve (Array<CurvePoint>) along +Z into a (steps+1) x cols positions+uv grid, cols = the outline's point count (or +1 when `close` duplicates the first point as the last column for a closed loop). pos(i,j) = (x_j, y_j, depth * i/steps). `symmetric` centres it on the curve plane (z from -depth/2 to depth/2, Blender's Extrude). `caps` adds a start cap (centre, rim) and an end cap (rim, centre) row pair, each fanned from the curve's origin with a hard rim edge, for an outline drawn round its origin. Normals are exact (across the outline on the side, along Z on a cap) — wire node.make_triangles with keep_normals on downstream (src_cols=cols, src_rows=steps+1, +4 with caps).",
+      "purpose": "Extrude a 2D outline curve (Array<CurvePoint>) along +Z into a (steps+1) x cols positions+uv grid, cols = the outline's point count (or +1 when `close` duplicates the first point as the last column for a closed loop). pos(i,j) = (x_j, y_j, depth * i/steps), with the columns read backwards when a closed outline would otherwise face in (counter-clockwise along +Z, clockwise along -Z), so winding and normals face out of the solid. `symmetric` centres it on the curve plane (z from -depth/2 to depth/2, Blender's Extrude). `caps` adds a start cap (centre, rim) and an end cap (rim, centre) row pair, each fanned from the curve's origin with a hard rim edge, for an outline drawn round its origin. Normals are exact (across the outline on the side, along Z on a cap) — wire node.make_triangles with keep_normals on downstream (src_cols=cols, src_rows=steps+1, +4 with caps).",
       "role": "Source",
       "stratum": "atom",
       "summary": "Pushes a flat 2D shape straight through space to build a 3D extrusion — like a cookie cutter dragged through dough. Turns outlines into solid ribbons or beveled panels.",
@@ -13444,6 +13490,9 @@
     },
     {
       "aliases": [
+        "texture file",
+        "picture",
+        "image texture",
         "gltf texture",
         "glb texture",
         "embedded texture",
@@ -13454,7 +13503,7 @@
       "examples": [],
       "fusion": "boundary:io_bridge",
       "inputs": [],
-      "label": "glTF Texture",
+      "label": "Texture File",
       "outputs": [
         {
           "name": "out",
@@ -13537,10 +13586,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Read one embedded image out of a glTF/.glb file and emit it as a Texture2D wire, so an imported mesh's baked-in albedo/alpha map can feed node.render_scene's base_color_map_N. texture_index selects among document.textures(); color_space picks sRGB (albedo/base-color — the default) vs Linear (normal/metallic/roughness maps) so the hardware linearizes correctly on sample. width/height set the output resolution: the glTF importer sets these to the source image's exact dimensions (a 1:1 stretch), while manual drops resample to the default 1024² until resized.",
+      "purpose": "Read one image as a Texture2D wire: a picture file (PNG, JPG, TGA, BMP, EXR, HDR) whole, or one embedded image out of a glTF/.glb file, so a scene Material's File texture or an imported mesh's baked-in albedo/alpha map can feed node.render_scene's base_color_map_N. The file's own bytes decide which it is. texture_index selects among a glTF document.textures() (a picture is its one image); color_space picks sRGB (albedo/base-color — the default) vs Linear (normal/metallic/roughness maps) so the hardware linearizes correctly on sample. width/height set the output resolution: the glTF importer sets these to the source image's exact dimensions (a 1:1 stretch), while manual drops resample to the default 1024² until resized.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Loads an embedded image from a glTF/.glb file as a texture, so an imported model's baked-in albedo/alpha map flows into the render pipeline like any other texture source.",
+      "summary": "Loads a picture file, or an image embedded in a glTF/.glb model, as a texture, so a Material's picture or an imported model's baked-in map flows into the render pipeline like any other texture source.",
       "type_id": "node.gltf_texture_source"
     },
     {
@@ -34882,6 +34931,11 @@
           "name": "in",
           "required": false,
           "type": "Array"
+        },
+        {
+          "name": "live_count",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Reflect Array",
@@ -34926,9 +34980,19 @@
             "1"
           ],
           "type": "float"
+        },
+        {
+          "default": "340282350000000000000000000000000000000",
+          "label": "Live Count",
+          "name": "live_count",
+          "range": [
+            "0",
+            "340282350000000000000000000000000000000"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Reflect an Array<InstanceTransform> across an axis-aligned plane: slots [0, cap) pass the input through (live slots only), slots [cap, 2cap) are the planar reflections (live sources only, gate on). pos' = M(pos - d a) + d a with M = I - 2 a a^T; rotation stored as the proper conjugation R' = M R M (sign map on the Euler triple); scale kept positive (the mirror flip rides on the vertex in render_scene.wgsl, not on the scale); rot_pad.w carries the mirror marker — 0 = original, k > 0 = mirrored across the plane perpendicular to component k-1. Output capacity is fixed at 2x the input capacity so axis/plane_offset/enabled are live writes, never a rebuild. The scene-mirror atom (SCENE_MIRROR D3/D4/D5) — pair upstream with node.scene_array; unwired in = one identity instance.",
+      "purpose": "Reflect an Array<InstanceTransform> across an axis-aligned plane: with n = live_count clamped to the input capacity, slots [0, n) pass the input through (live slots only), slots [n, 2n) are the planar reflections (live sources only, gate on) and the rest are zero, so an object drawing 2n instances draws every mirror. pos' = M(pos - d a) + d a with M = I - 2 a a^T; rotation stored as the proper conjugation R' = M R M (sign map on the Euler triple); scale kept positive (the mirror flip rides on the vertex in render_scene.wgsl, not on the scale); rot_pad.w carries the mirror marker — 0 = original, k > 0 = mirrored across the plane perpendicular to component k-1. Output capacity is fixed at 2x the input capacity so axis/plane_offset/enabled are live writes, never a rebuild. The scene-mirror atom (SCENE_MIRROR D3/D4/D5) — pair upstream with node.scene_array; unwired in = one identity instance.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Makes a mirrored copy of every instance across a plane — drop a reflected scene under the floor and ride the offset.",
@@ -39545,7 +39609,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Camera-windowed Array<InstanceTransform> for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md). Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), ahead = clamp(ceil(camera.far / cell_size) + 2, 4, 22) — every cell that can render exists in the buffer, so the far-edge hole is gone by construction. Unwired, the corridor runs from the origin (base_cell 0, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
+      "purpose": "Camera-windowed Array<InstanceTransform> for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md). Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), and the window spans every cell the camera's view reaches up to its far plane, ahead, behind and across (whichever way it looks), plus a margin, keeping a few cells on the side it faces away from for the shadow maps; past the buffer the side seen further is cut first. Every cell that can render exists in the buffer, so no edge hole opens. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Generates the corridor of instances around the camera — cells repeat by pattern, forever.",

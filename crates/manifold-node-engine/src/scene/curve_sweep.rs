@@ -150,6 +150,26 @@ fn unit_or(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
     if len < 1e-8 { fallback } else { scale(v, 1.0 / len) }
 }
 
+/// Twice the signed area a closed outline encloses (shoelace): positive when
+/// it turns counter-clockwise about +Z.
+pub fn outline_area2(points: &[[f32; 2]]) -> f32 {
+    let len = points.len();
+    (0..len)
+        .map(|i| {
+            let ([ax, ay], [bx, by]) = (points[i], points[(i + 1) % len]);
+            ax * by - bx * ay
+        })
+        .sum()
+}
+
+/// Whether an extrusion reads its outline backwards so the solid faces out.
+/// Read forwards, a counter-clockwise outline pushed along +Z (or a clockwise
+/// one along -Z) has its winding and normals facing in. An open outline has
+/// no inside and keeps its order; a self-crossing one follows its net area.
+pub fn extrude_reversed(points: &[[f32; 2]], close: bool, depth: f32) -> bool {
+    (close || is_loop(points)) && outline_area2(points) * signum(depth) > 0.0
+}
+
 /// `node.extrude_curve`'s grid. A cap fans from the curve's origin, so it
 /// fills an outline drawn around its origin (a circle, a polygon, a star).
 pub fn extrude_grid(points: &[[f32; 2]], depth: f32, steps: u32, close: bool, symmetric: bool, caps: bool) -> Grid {
@@ -158,15 +178,20 @@ pub fn extrude_grid(points: &[[f32; 2]], depth: f32, steps: u32, close: bool, sy
     let steps = steps.max(1) as usize;
     let rows = capped_rows(steps + 1, caps);
     let shift = if symmetric { depth * 0.5 } else { 0.0 };
-    let looped = close || is_loop(points);
+    let ends_meet = is_loop(points);
+    let looped = close || ends_meet;
+    let reversed = extrude_reversed(points, close, depth);
     let mut grid = Grid { positions: Vec::with_capacity(cols * rows), normals: Vec::with_capacity(cols * rows), cols, rows };
     for row in 0..rows {
         let (step, role) = capped_row(row, steps, caps);
         let z = depth * step as f32 / steps as f32 - shift;
         for col in 0..cols {
-            let at = col % p_len;
+            let at = if reversed { cols - 1 - col } else { col } % p_len;
+            // An end that only nearly meets the start reads the start, so the
+            // seam welds (the WGSL does the same).
+            let at = if ends_meet && !close && at == p_len - 1 { 0 } else { at };
             let [x, y] = points.get(at).copied().unwrap_or_default();
-            let [tx, ty] = curve_tangent(points, at, looped);
+            let [tx, ty] = curve_tangent(points, at, looped).map(|t| if reversed { -t } else { t });
             // A cap faces along Z, the way the outline runs round its
             // origin; the far cap faces the other way.
             let around = signum(x * ty - y * tx);
@@ -226,7 +251,7 @@ pub fn tube_grid(points: &[[f32; 2]], lift: &[f32], radius: f32, sides: u32, cap
         for col in 0..cols {
             // The ring turns clockwise seen down the path, so the grid's
             // winding faces out of the tube as its normals do.
-            let theta = -std::f32::consts::TAU * col as f32 / sides as f32;
+            let theta = -std::f32::consts::TAU * (col % sides) as f32 / sides as f32;
             let ring = add(scale(right, theta.cos()), scale(ring_up, theta.sin()));
             let rim = |centre: bool| if centre { center } else { add(center, scale(ring, radius)) };
             let (position, normal) = match role {
@@ -329,5 +354,82 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 
 fn length(a: [f32; 3]) -> f32 {
     (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn circle(clockwise: bool) -> Vec<[f32; 2]> {
+        let turn = if clockwise { -1.0 } else { 1.0 };
+        (0..=24).map(|i| (turn * std::f32::consts::TAU * i as f32 / 24.0).sin_cos()).map(|(s, c)| [c, s]).collect()
+    }
+
+    /// The volume a triangle list encloses, by the divergence theorem:
+    /// positive when every face winds outward.
+    fn signed_volume(vertices: &[MeshVertex]) -> f32 {
+        vertices
+            .chunks(3)
+            .map(|tri| {
+                let [a, b, c] = [0, 1, 2].map(|k| tri[k].position);
+                a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])
+            })
+            .sum::<f32>()
+            / 6.0
+    }
+
+    /// A push along the normals swells a sweep, as in Blender: its winding
+    /// encloses positive volume and every face normal agrees with it,
+    /// whichever way the outline turns and the depth points.
+    #[test]
+    fn swept_solids_face_out() {
+        let mut sweeps = Vec::new();
+        for clockwise in [false, true] {
+            for depth in [2.0, -2.0] {
+                for (close, symmetric) in [(false, false), (true, true)] {
+                    let mut points = circle(clockwise);
+                    if close {
+                        points.pop();
+                    }
+                    sweeps.push(SweptCurve { points, lift: Vec::new(), sweep: Sweep::Extrude { depth, steps: 2, close, symmetric, caps: true } });
+                }
+            }
+        }
+        let path = (0..8).map(|i| [i as f32 * 0.5, (i as f32 * 0.7).sin()]).collect();
+        sweeps.push(SweptCurve { points: path, lift: Vec::new(), sweep: Sweep::Tube { radius: 0.3, sides: 12, caps: true } });
+        for swept in &sweeps {
+            let vertices = swept.load_vertices().expect("the sweep has area");
+            assert!(signed_volume(&vertices) > 0.0, "{:?} encloses negative volume", swept.sweep);
+            for tri in vertices.chunks(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| tri[k].position);
+                let face = cross(sub(b, a), sub(c, a));
+                let normal = add(add(tri[0].normal, tri[1].normal), tri[2].normal);
+                let along = face[0] * normal[0] + face[1] * normal[1] + face[2] * normal[2];
+                assert!(along > 0.0, "{:?}: a face's normals point against its winding", swept.sweep);
+            }
+        }
+    }
+
+    /// A round sweep's seam columns hold bit-identical positions, so
+    /// node.smooth_normals (welded by exact position) joins them and a push
+    /// along the normals does not crack the seam open. A circle sampled to
+    /// TAU ends near, not on, its start.
+    #[test]
+    fn round_sweeps_close_their_seam_exactly() {
+        let ring = circle(false);
+        assert_ne!(ring[0], ring[ring.len() - 1], "the sampled circle's end should only nearly meet its start");
+        let path: Vec<[f32; 2]> = (0..8).map(|i| [i as f32 * 0.5, (i as f32 * 0.7).sin()]).collect();
+        let grids = [
+            extrude_grid(&ring, 2.0, 2, false, false, true),
+            extrude_grid(&ring, -2.0, 2, false, false, true),
+            tube_grid(&path, &[], 0.3, 12, true),
+        ];
+        for grid in &grids {
+            for row in 0..grid.rows {
+                let (first, last) = (grid.positions[row * grid.cols], grid.positions[row * grid.cols + grid.cols - 1]);
+                assert_eq!(first.map(f32::to_bits), last.map(f32::to_bits), "row {row}: the seam is open");
+            }
+        }
+    }
 }
 

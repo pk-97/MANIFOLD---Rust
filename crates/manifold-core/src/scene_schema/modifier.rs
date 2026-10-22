@@ -482,7 +482,7 @@ pub static MODIFIER_FIELDS: [FieldRow; 6] = [
         id: "texture_file",
         label: "Texture File",
         section: M,
-        control: FieldControl::File { extensions: &["png", "jpg", "jpeg", "tga", "bmp", "exr", "hdr"] },
+        control: FieldControl::File { extensions: crate::file_loader::PICTURE_EXTENSIONS },
         applies: reads_file,
         disabled: enabled,
         read: |fields| match card(fields).map(|m| &m.texture) {

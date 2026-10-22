@@ -15,7 +15,10 @@
 //! part's offset is also measured live (`place`), from the part's transform
 //! to the frame's rest centre, so the group bends as one piece wherever its
 //! parts sit and as they move (Blender's deform about an origin object). A
-//! skinned, animated or morphing part bends its posed result. One instance
+//! skinned, animated or morphing part bends its posed result. A Copy card
+//! (Copy Wave, Jitter, Noise, Blend) takes the frame its target's copies
+//! live in instead: the world its copies body lays them out in, with the
+//! body's origin as the target's offset ([`copies_plan`]). One instance
 //! per frame, all driven by the card's one set of manifest params,
 //! `<card id>.<param>`.
 //!
@@ -30,7 +33,7 @@ use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::physics_members::BODY_TYPE_ID;
 use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
-use manifold_core::scene_schema::modifier_type;
+use manifold_core::scene_schema::{acts_on_copies, modifier_type};
 use manifold_node_engine::load::expand::TargetPlacement;
 
 use super::builder::{Builder, Drawn, FramePlan, SCENE};
@@ -133,7 +136,11 @@ fn emit(
             continue;
         }
         let role = &frame.role;
-        let plan = plan(b, item, &frame, lineage, card.modifier == ModifierType::Shatter);
+        let plan = if acts_on_copies(card.modifier) {
+            copies_plan(b, item, &frame)
+        } else {
+            plan(b, item, &frame, lineage, card.modifier == ModifierType::Shatter)
+        };
         for (chunk, part) in frame.members.chunks(TARGETS_PER_INSTANCE).enumerate() {
             let suffix = if chunk == 0 { role.clone() } else { format!("{role}:{chunk}") };
             let id = node(item.id.as_str(), &format!("mod:{suffix}"));
@@ -332,6 +339,45 @@ fn plan(
         placements.push(TargetPlacement { target, offset, live });
     }
     FramePlan { placements, radius }
+}
+
+/// A Copy card's frame is where its target's copies live. A copies body lays
+/// them out in the world about its own transform, so a target's offset is
+/// that origin, read live as the target moves: Copy Blend's second layout
+/// sits around it. Copies that live in their surface's frame (On Surface),
+/// and a target with no copies, sit at their own origin.
+fn copies_plan(b: &mut Builder<'_>, card: &Item, frame: &CardFrame) -> FramePlan {
+    let mut placements = Vec::with_capacity(frame.members.len());
+    for drawn in &frame.members {
+        let Some(target) = b.node_id_of(drawn.object) else {
+            continue;
+        };
+        let (offset, live) = copies_origin(b, card, &frame.role, drawn).map_or(([0.0; 3], None), |(rest, live)| (rest, Some(live)));
+        placements.push(TargetPlacement { target, offset, live });
+    }
+    FramePlan { placements, radius: MIN_RADIUS }
+}
+
+/// The origin `drawn`'s copies body lays its copies out about: the body's
+/// transform at rest (translation only, as the compiler starts it), and the
+/// node that reads it live.
+fn copies_origin(b: &mut Builder<'_>, card: &Item, role: &str, drawn: &Drawn) -> Option<([f64; 3], NodeId)> {
+    let (body, port) = b.input(drawn.object, "instances")?;
+    if port != "instances" || b.node_type(body) != Some(BODY_TYPE_ID) {
+        return None;
+    }
+    let (transform, from_port) = b.input(body, "transform")?;
+    let mut rest = [0.0; 3];
+    let mut at = Some(transform);
+    while let Some(node) = at {
+        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
+            rest[axis] += b.started(node, param).map_or(0.0, f64::from);
+        }
+        at = b.input(node, "parent").map(|(above, _)| above);
+    }
+    let origin = b.add_named(node(card.id.as_str(), &format!("origin:{role}:{}", drawn.item)), "node.transform_components");
+    b.wire(transform, &from_port, origin, "transform");
+    Some((rest, b.node_id_of(origin)?))
 }
 
 /// The transform a Group's parts are placed in: its frame, or `None` at a

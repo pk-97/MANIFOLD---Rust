@@ -204,6 +204,9 @@ pub enum SceneEndpoint {
     Atmosphere,
     Transform,
     Instances,
+    /// How many leading instances an object draws (its `instance_count`). A
+    /// stage that changes how many copies are live carries it on.
+    InstanceCount,
     Vertices,
     Acceleration,
 }
