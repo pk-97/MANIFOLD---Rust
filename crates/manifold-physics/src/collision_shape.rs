@@ -2,9 +2,8 @@
 //! section 7.8 (Physics and collision shapes)). An item's mesh becomes a
 //! [`CollisionShape`]; each solver asks it for the form it reads:
 //!
-//! - A static collider in Box3D: its contact mesh ([`Solid::Mesh`],
-//!   [`ColliderMesh`]), the exact surface simplified within
-//!   [`CONTACT_TOLERANCE`] at its scale, installed through `b3CreateMesh`.
+//! - A static collider in Box3D: the exact triangle mesh ([`Solid::Mesh`],
+//!   installed through `b3CreateMesh`).
 //! - A body in Box3D: a spatial split into convex hulls with automatic detail
 //!   ([`CollisionShape::body_hulls`]), open surfaces and flat pieces given a
 //!   0.1% shell.
@@ -12,8 +11,8 @@
 //!   what the caller asks for, with an automatic shell.
 //!
 //! Its [`ShapeKey`] is the cache key: the mesh content that was actually
-//! loaded (so a mesh arriving late changes it), the item's scale (hull detail
-//! and a contact mesh both follow the size) and the water cell size.
+//! loaded (so a mesh arriving late changes it), the item's scale and the
+//! water cell size.
 //!
 //! The gate into Box3D lives here too. [`Solid::install`] and the checks it
 //! runs ([`validate_scale`], [`validate_position`], [`validate_hull`]) are
@@ -27,8 +26,6 @@ use std::sync::{Arc, OnceLock};
 
 use manifold_foundation::mesh_partition::partition;
 
-pub use crate::contact_mesh::CONTACT_TOLERANCE;
-use crate::contact_mesh::simplify_within;
 use crate::sdf::{DistanceLattice, MAX_LATTICE_NODES, signed_distance_union_within, union_lattice_nodes};
 use crate::{BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, TriangleMesh, closed_triangles, cook_hull, cook_hull_mesh};
 
@@ -195,7 +192,7 @@ impl CollisionShape {
         *self.open.get_or_init(|| any_open(&self.parts))
     }
 
-    /// Every part in one indexed mesh: the exact surface a static collider draws.
+    /// Every part in one indexed mesh: the exact surface a static collider is.
     pub fn exact_mesh(&self) -> TriangleMesh {
         let mut vertices = Vec::with_capacity(self.parts.iter().map(|part| part.vertices.len()).sum());
         let mut triangles = Vec::with_capacity(self.parts.iter().map(|part| part.triangles.len()).sum());
@@ -205,19 +202,6 @@ impl CollisionShape {
             triangles.extend(part.triangles.iter().map(|triangle| triangle.map(|index| index + base)));
         }
         TriangleMesh { vertices, triangles }
-    }
-
-    /// A static collider's surfaces at `scale`: the exact one, and the
-    /// contact mesh Box3D collides with, simplified so that at the item's
-    /// real scale (within half a scale step of `scale`) it stays within
-    /// [`CONTACT_TOLERANCE`] of the exact one. Costs a simplification and its
-    /// measurement; never on the content thread.
-    pub fn collider_mesh(&self, scale: [f32; 3]) -> Result<ColliderMesh, PhysicsError> {
-        validate_scale(scale)?;
-        let exact = self.exact_mesh();
-        let half_step = (0.5 / SCALE_STEPS_PER_OCTAVE).exp2();
-        let simplified = simplify_within(&exact, scale, CONTACT_TOLERANCE / half_step);
-        Ok(ColliderMesh { exact, contact: simplified.mesh, error: simplified.error })
     }
 
     /// Convex hulls for a moving body at `scale`, in the local frame: each
@@ -445,29 +429,8 @@ pub fn water_lattice(meshes: &[TriangleMesh], plan: &LatticePlan) -> Result<Dist
 pub enum Solid {
     /// Convex hulls on one moving body, local and unscaled.
     Hulls(Vec<Vec<[f32; 3]>>),
-    /// A static collider's surfaces.
-    Mesh(ColliderMesh),
-}
-
-/// A static collider's two surfaces, local and unscaled.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ColliderMesh {
-    /// The drawn surface. Water builds its distance lattice from this one.
-    pub exact: TriangleMesh,
-    /// What Box3D collides with: `exact` simplified within
-    /// [`CONTACT_TOLERANCE`] at the scale it was built for.
-    pub contact: TriangleMesh,
-    /// The measured largest distance between the two surfaces at that scale,
-    /// metres.
-    pub error: f32,
-}
-
-impl ColliderMesh {
-    /// A collider that collides with its exact surface, unsimplified.
-    pub fn unsimplified(exact: TriangleMesh) -> Self {
-        Self { contact: exact.clone(), exact, error: 0.0 }
-    }
+    /// The exact surface of a static collider, local and unscaled.
+    Mesh(TriangleMesh),
 }
 
 impl Solid {
@@ -479,11 +442,11 @@ impl Solid {
         }
     }
 
-    /// Every local point: the hulls' points or the drawn surface's vertices.
+    /// Every local point: the hulls' points or the mesh's vertices.
     pub fn for_each_point(&self, mut visit: impl FnMut(&[f32; 3])) {
         match self {
             Self::Hulls(hulls) => hulls.iter().flatten().for_each(&mut visit),
-            Self::Mesh(mesh) => mesh.exact.vertices.iter().for_each(&mut visit),
+            Self::Mesh(mesh) => mesh.vertices.iter().for_each(&mut visit),
         }
     }
 
@@ -498,7 +461,7 @@ impl Solid {
                 let refs: Vec<&[[f32; 3]]> = scaled.iter().map(Vec::as_slice).collect();
                 CookedSolid::hulls(&refs, 128)
             }
-            Self::Mesh(mesh) => CookedSolid::mesh(&scaled(&mesh.contact.vertices, scale), &mesh.contact.triangles),
+            Self::Mesh(mesh) => CookedSolid::mesh(&scaled(&mesh.vertices, scale), &mesh.triangles),
         }
     }
 

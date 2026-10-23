@@ -338,6 +338,39 @@ uint64_t manifold_box3d_body_create_cooked_hulls(
 	return b3StoreBodyId( body_id );
 }
 
+/* Compact `indices` in place to the triangles b3CreateMesh keeps, and return
+ * how many that is. The area test is b3CreateMesh's own (src/mesh.c), on the
+ * same vertices, so the mesh built from the result loses nothing more. */
+int manifold_box3d_keep_mesh_triangles( const float* vertices, int32_t* indices, int triangle_count )
+{
+	const b3Vec3* points = (const b3Vec3*)vertices;
+	float minArea = 0.01f * B3_LINEAR_SLOP * B3_LINEAR_SLOP;
+	int kept = 0;
+	for ( int index = 0; index < triangle_count; ++index )
+	{
+		int index1 = indices[3 * index + 0];
+		int index2 = indices[3 * index + 1];
+		int index3 = indices[3 * index + 2];
+
+		b3Vec3 vertex1 = points[index1];
+		b3Vec3 vertex2 = points[index2];
+		b3Vec3 vertex3 = points[index3];
+
+		b3Vec3 normal = b3Cross( b3Sub( vertex2, vertex1 ), b3Sub( vertex3, vertex1 ) );
+		float area = 0.5f * b3Length( normal );
+
+		if ( area < minArea )
+		{
+			continue;
+		}
+		indices[3 * kept + 0] = index1;
+		indices[3 * kept + 1] = index2;
+		indices[3 * kept + 2] = index3;
+		kept += 1;
+	}
+	return kept;
+}
+
 /* Build a triangle mesh once: 0 on failure, UINTPTR_MAX when Box3D
  * discarded degenerate triangles (nothing stays built). Shapes read the mesh
  * in place, so it must outlive every body made from it. */

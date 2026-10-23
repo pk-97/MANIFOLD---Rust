@@ -8,7 +8,6 @@ publish = false
 manifold-foundation = { path = "../manifold-foundation" }
 serde = { workspace = true }
 smallvec = "1"
-meshopt = "0.7"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

@@ -159,7 +159,7 @@ impl CopyGroup {
         };
         self.volume = match &*cook.collider {
             Solid::Hulls(_) => installed_volume(world, handle)?,
-            Solid::Mesh(mesh) => mesh_volume(&mesh.contact, prototype.transform.scale),
+            Solid::Mesh(mesh) => mesh_volume(mesh, prototype.transform.scale),
         };
         cook.measured = true;
         Ok(())

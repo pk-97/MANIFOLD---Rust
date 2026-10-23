@@ -262,7 +262,7 @@ fn mesh_slab(scale_x: f32) -> RigidBody {
         [2, 6, 3], [3, 6, 7], [0, 4, 2], [2, 4, 6], [1, 3, 5], [3, 7, 5],
     ];
     RigidBody {
-        collider: Some(Arc::new(Solid::Mesh(manifold_physics::collision_shape::ColliderMesh::unsimplified(manifold_physics::TriangleMesh { vertices, triangles })))),
+        collider: Some(Arc::new(Solid::Mesh(manifold_physics::TriangleMesh { vertices, triangles }))),
         transform: Transform { scale: [scale_x, 1.0, 4.0], ..Transform::default() },
         ..slab(0.0)
     }

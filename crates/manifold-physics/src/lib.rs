@@ -32,7 +32,6 @@ mod mesh;
 pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
 pub mod sdf;
 pub mod collision_shape;
-pub mod contact_mesh;
 use collision_shape::validate_position;
 mod cooked;
 pub use cooked::CookedSolid;
@@ -88,6 +87,7 @@ mod ffi {
             friction: f32,
             restitution: f32,
         ) -> u64;
+        pub fn manifold_box3d_keep_mesh_triangles(vertices: *const f32, indices: *mut i32, triangle_count: i32) -> i32;
         pub fn manifold_box3d_cook_mesh(
             vertices: *const f32,
             vertex_count: i32,

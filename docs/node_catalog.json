@@ -37858,7 +37858,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Describe a rigid body's starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Its collision shape comes from its mesh automatically (manifold_physics::collision_shape): a Fixed body is its mesh simplified to within 5 mm of the drawn surface, a moving body convex hulls with detail chosen from its size and triangles. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only.",
+      "purpose": "Describe a rigid body's starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Its collision shape comes from its mesh automatically (manifold_physics::collision_shape): a Fixed body is the exact mesh, a moving body convex hulls with detail chosen from its size and triangles. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",

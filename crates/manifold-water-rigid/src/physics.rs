@@ -404,7 +404,7 @@ fn add_body_geometry(
     let handle = solid.install(world, scale, body.config()).map_err(|error| error.to_string())?;
     let volume = match solid {
         Solid::Hulls(_) => installed_volume(world, handle)?,
-        Solid::Mesh(mesh) => mesh_volume(&mesh.contact, scale),
+        Solid::Mesh(mesh) => mesh_volume(mesh, scale),
     };
     Ok((handle, volume))
 }
@@ -421,7 +421,7 @@ fn reshape(
     solid.replace(world, handle, scale, config).map_err(|error| error.to_string())?;
     match solid {
         Solid::Hulls(_) => installed_volume(world, handle),
-        Solid::Mesh(mesh) => Ok(mesh_volume(&mesh.contact, scale)),
+        Solid::Mesh(mesh) => Ok(mesh_volume(mesh, scale)),
     }
 }
 

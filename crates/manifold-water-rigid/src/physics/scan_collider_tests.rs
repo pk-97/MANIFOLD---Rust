@@ -1,11 +1,11 @@
 //! A small Body dropped on the cliff scan rests on the surface the scan
-//! draws (SCENE_REFINEMENT_DESIGN.md section 3, P2d (Scan colliders)): on the
-//! exact mesh, which needs every triangle under the body (the Box3D patch in
-//! `native/box3d/README.md`), and on the contact mesh the Collider installs.
+//! draws (SCENE_REFINEMENT_DESIGN.md section 3, P2d (Scan colliders)). The
+//! Collider is the exact mesh, which needs every triangle under the body (the
+//! Box3D patch in `native/box3d/README.md`), and at the import fit scale it
+//! leaves out the slivers Box3D drops instead of being refused (BUG-za99y
+//! (fit-scale scan Collider refused)).
 
-use std::time::Instant;
-
-use manifold_physics::collision_shape::{CONTACT_TOLERANCE, ColliderMesh, CollisionShape, Solid};
+use manifold_physics::collision_shape::{CollisionShape, Solid};
 use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds, TriangleMesh};
 
 const CLIFF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf");
@@ -115,9 +115,10 @@ struct Rest {
     speed: f32,
 }
 
-fn rest(drawn: &TriangleMesh, position: [f32; 3], rotation: [f32; 4], speed: f32) -> Rest {
+/// How a cube of half side `half` at `position` rests on `drawn`.
+fn rest(drawn: &TriangleMesh, half: f32, position: [f32; 3], rotation: [f32; 4], speed: f32) -> Rest {
     let local = |v: [f32; 3]| unrotate(rotation, std::array::from_fn(|axis| v[axis] - position[axis]));
-    let reach = 2.0 * HALF;
+    let reach = 2.0 * half;
     let near: Vec<[[f32; 3]; 3]> = drawn
         .triangles
         .iter()
@@ -126,8 +127,8 @@ fn rest(drawn: &TriangleMesh, position: [f32; 3], rotation: [f32; 4], speed: f32
         .collect();
     let mut sink = 0.0f32;
     for v in near.iter().flatten() {
-        if v.iter().all(|c| c.abs() < HALF) {
-            sink = sink.max(HALF - v.iter().fold(0.0f32, |m, c| m.max(c.abs())));
+        if v.iter().all(|c| c.abs() < half) {
+            sink = sink.max(half - v.iter().fold(0.0f32, |m, c| m.max(c.abs())));
         }
     }
     // The cube's surface, sampled, against the nearby drawn triangles.
@@ -137,10 +138,10 @@ fn rest(drawn: &TriangleMesh, position: [f32; 3], rotation: [f32; 4], speed: f32
         let (axis, sign) = (face / 2, if face % 2 == 0 { -1.0 } else { 1.0 });
         for i in 0..=n {
             for j in 0..=n {
-                let s = -HALF + 2.0 * HALF * i as f32 / n as f32;
-                let t = -HALF + 2.0 * HALF * j as f32 / n as f32;
+                let s = -half + 2.0 * half * i as f32 / n as f32;
+                let t = -half + 2.0 * half * j as f32 / n as f32;
                 let mut p = [0.0f32; 3];
-                p[axis] = sign * HALF;
+                p[axis] = sign * half;
                 p[(axis + 1) % 3] = s;
                 p[(axis + 2) % 3] = t;
                 for triangle in &near {
@@ -153,75 +154,72 @@ fn rest(drawn: &TriangleMesh, position: [f32; 3], rotation: [f32; 4], speed: f32
     Rest { sink, gap: if sink > 0.0 { 0.0 } else { gap as f32 }, speed }
 }
 
-/// Drop a cube on each site onto `collider`, simulate three seconds, and
-/// report how each rests against the drawn surface and the mean step time.
-fn drop_cubes(collider: &ColliderMesh, sites: &[[f32; 3]]) -> (Vec<Rest>, f64) {
+/// Install `shape` as a Fixed Collider at `scale`, drop a cube scaled with it
+/// on each site (unscaled), simulate three seconds, and report how each rests
+/// against the drawn surface at that scale.
+fn drop_cubes(shape: &CollisionShape, scale: f32, sites: &[[f32; 3]]) -> Vec<Rest> {
+    let exact = shape.exact_mesh();
+    let drawn = TriangleMesh { vertices: exact.vertices.iter().map(|v| v.map(|c| c * scale)).collect(), triangles: exact.triangles.clone() };
     let mut world = PhysicsWorld::new([0.0, -9.81, 0.0]).unwrap();
-    let ground = Solid::Mesh(collider.clone());
-    ground.install(&mut world, [1.0; 3], BodyConfig { kind: BodyKind::Fixed, friction: 1.0, ..BodyConfig::default() }).unwrap();
+    Solid::Mesh(exact)
+        .install(&mut world, [scale; 3], BodyConfig { kind: BodyKind::Fixed, friction: 1.0, ..BodyConfig::default() })
+        .expect("the scan installs as a Collider at this scale");
+    let half = HALF * scale;
     let cube = Solid::Hulls(vec![
-        (0..8).map(|i| [if i & 1 == 0 { -HALF } else { HALF }, if i & 2 == 0 { -HALF } else { HALF }, if i & 4 == 0 { -HALF } else { HALF }]).collect(),
+        (0..8).map(|i| [if i & 1 == 0 { -half } else { half }, if i & 2 == 0 { -half } else { half }, if i & 4 == 0 { -half } else { half }]).collect(),
     ])
     .cook([1.0; 3])
     .unwrap();
     let handles: Vec<_> = sites
         .iter()
         .map(|site| {
-            let config = BodyConfig { position: [site[0], site[1] + HALF + 0.2, site[2]], mass: 600.0, friction: 1.0, ..BodyConfig::default() };
+            let config = BodyConfig {
+                position: [site[0] * scale, (site[1] + HALF + 0.2) * scale, site[2] * scale],
+                mass: 600.0 * scale.powi(3),
+                friction: 1.0,
+                ..BodyConfig::default()
+            };
             world.add_cooked(&cube, config).unwrap()
         })
         .collect();
-    let started = Instant::now();
-    let ticks = 180;
-    for _ in 0..ticks {
+    for _ in 0..180 {
         world.step(Seconds(TICK), 4).unwrap();
     }
-    let mean_ms = started.elapsed().as_secs_f64() * 1000.0 / ticks as f64;
-    let rests = handles
+    handles
         .iter()
         .map(|&handle| {
             let pose = world.pose(handle).unwrap();
             let v = world.linear_velocity(handle).unwrap();
             let speed = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-            rest(&collider.exact, pose.position, pose.rotation, speed)
+            rest(&drawn, half, pose.position, pose.rotation, speed)
         })
-        .collect();
-    (rests, mean_ms)
+        .collect()
 }
 
-/// The cube rests on the scan's drawn surface: it sinks no deeper than the
-/// contact tolerance plus Box3D's slop, and floats no higher than the
-/// tolerance plus its rest offset, on the exact mesh and on the contact mesh.
+/// The cliff's scale when the import fits it to the stage (about 2 m wide),
+/// where many of its triangles are slivers under Box3D's 0.25 mm² minimum.
+const FIT_SCALE: f32 = 0.049;
+
+/// The cube rests on the scan's exact surface at its file size and at its
+/// import fit size: settled, sunk no deeper than Box3D's slop, floating no
+/// higher than its rest offset plus 1 mm.
 #[test]
 fn a_small_body_rests_on_the_cliff_scan_it_sees() {
     let shape = cliff();
-    let started = Instant::now();
-    let collider = shape.collider_mesh([1.0; 3]).unwrap();
-    let simplify_s = started.elapsed().as_secs_f64();
-    let exact = ColliderMesh::unsimplified(collider.exact.clone());
-    let sites = drop_sites(&collider.exact, 6);
+    let sites = drop_sites(&shape.exact_mesh(), 6);
     assert!(sites.len() >= 4, "the scan has gentle slopes to drop on: {sites:?}");
-    let (on_exact, exact_ms) = drop_cubes(&exact, &sites);
-    let (on_contact, contact_ms) = drop_cubes(&collider, &sites);
-    println!(
-        "cliff scan: {} triangles exact, {} contact, measured {:.2} mm from the drawn surface (simplified in {simplify_s:.2} s); \
-         step {exact_ms:.3} ms exact, {contact_ms:.3} ms contact",
-        collider.exact.triangles.len(),
-        collider.contact.triangles.len(),
-        collider.error * 1000.0,
-    );
-    assert!(collider.error <= CONTACT_TOLERANCE, "contact mesh is {} m from the drawn surface", collider.error);
-    assert!(collider.contact.triangles.len() < collider.exact.triangles.len());
-    for (name, rests) in [("exact", &on_exact), ("contact", &on_contact)] {
-        for (site, rest) in sites.iter().zip(rests.iter()) {
-            println!("{name} at {site:?}: {rest:?}");
+    let mut failures = Vec::new();
+    for scale in [1.0, FIT_SCALE] {
+        let rests = drop_cubes(&shape, scale, &sites);
+        for (site, rest) in sites.iter().zip(&rests) {
+            println!("scale {scale} at {site:?}: {rest:?}");
+            let settled = rest.speed < 0.05 * scale;
+            let sunk = rest.sink > SLOP;
+            let floats = rest.gap > SLOP + 0.001;
+            if !settled || sunk || floats {
+                failures.push(format!("scale {scale} at {site:?}: {rest:?}"));
+            }
         }
     }
-    for (name, rests) in [("exact", &on_exact), ("contact", &on_contact)] {
-        for (site, rest) in sites.iter().zip(rests.iter()) {
-            assert!(rest.speed < 0.05, "{name}: the cube at {site:?} has not settled: {rest:?}");
-            assert!(rest.sink <= CONTACT_TOLERANCE + SLOP, "{name}: the cube at {site:?} sank into the drawn surface: {rest:?}");
-            assert!(rest.gap <= CONTACT_TOLERANCE + SLOP + 0.001, "{name}: the cube at {site:?} floats above the drawn surface: {rest:?}");
-        }
-    }
+    assert!(failures.is_empty(), "cubes not resting on the drawn surface:\n{}", failures.join("\n"));
 }
