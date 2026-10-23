@@ -154,7 +154,10 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
         commands.extend(
             scene_schema::water_look()
                 .into_iter()
-                .filter(|(property, _)| !scene_schema::MATERIAL_FAMILY.automatic.contains(&property.as_str()))
+                .filter(|(property, _)| {
+                    let family = scene_schema::MATERIAL_FAMILY;
+                    !family.automatic.contains(&property.as_str()) && !family.internal.iter().any(|(param, _)| param == property)
+                })
                 .map(|(property, value)| write(layer, &material_id, &property, 0.0, value)),
         );
     }

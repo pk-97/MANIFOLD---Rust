@@ -249,9 +249,9 @@ pub(super) fn pick_unavailable(doc: &SceneDoc, swarm: &Item, field: &str, pick: 
     }
 }
 
-/// One copy source draws an item: another Swarm drawing it, or a Group
-/// above it whose Copies (or whose Swarm) draw it already, leaves nothing
-/// for this swarm to place.
+/// Any number of swarms draw one item, each with its own particles. An item
+/// inside a Group whose Copies (or a Swarm) draw it is placed by that group,
+/// which leaves nothing for this swarm to place.
 fn draw_as_refused(doc: &SceneDoc, swarm: &Item, pick: &Item) -> Option<&'static str> {
     let drawn_by_other = |id: &ItemId| {
         let mut drawn = false;
@@ -265,9 +265,6 @@ fn draw_as_refused(doc: &SceneDoc, swarm: &Item, pick: &Item) -> Option<&'static
         });
         drawn
     };
-    if drawn_by_other(&pick.id) {
-        return Some("Another Swarm draws this already");
-    }
     let mut copied_above = false;
     doc.walk(|other, ancestors| {
         if other.id == pick.id {
@@ -314,7 +311,7 @@ mod tests {
             let row = field_for(&second.fields, field).unwrap();
             set_field(&doc, &second, row, &FieldValue::Item(Some(ItemId::new(id)))).err()
         };
-        assert_eq!(pick("draw_as", "rack").as_deref(), Some("Another Swarm draws this already"));
+        assert_eq!(pick("draw_as", "rack"), None, "two swarms draw one item");
         assert_eq!(pick("draw_as", "ball").as_deref(), Some("Inside a group whose copies draw it already"));
         assert!(pick("draw_as", "sea").is_some_and(|reason| reason.starts_with("An Ocean")));
         assert!(pick("emit_from", "sea").is_some_and(|reason| reason.starts_with("An Ocean")));

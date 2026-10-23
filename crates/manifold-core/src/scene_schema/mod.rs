@@ -36,7 +36,7 @@ mod water_source;
 mod world;
 
 pub use add_menu::{ADD_ENTRIES, AddEntry, FORCE_STARTS, add_entry, entry_starts, unique_name};
-pub use camera::{CAMERA_ROWS, FAR_CLIP, NEAR_CLIP};
+pub use camera::{CAMERA_ROWS, CLIP_PLANE, ORBIT_CLOSEST};
 pub use fields::{
     Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, item_disabled, field_rows, is_material,
     is_object_or_group, is_on, on_off_key, set_field,

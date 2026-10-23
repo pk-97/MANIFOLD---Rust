@@ -64,8 +64,15 @@ pub(crate) struct Builder<'d> {
     pub(crate) group_visible: BTreeMap<ItemId, u32>,
     /// The Swarms, in tree order.
     pub(crate) swarms: Vec<ItemId>,
-    /// The swarm copies node that draws each Object or Group a Swarm draws as.
+    /// The swarm copies node that draws each Object or Group a Swarm draws as:
+    /// the first swarm's in tree order.
     pub(crate) swarm_draws: BTreeMap<ItemId, u32>,
+    /// Every later swarm drawing an item the first already draws: (item,
+    /// swarm, its copies node).
+    pub(crate) swarm_extra: Vec<(ItemId, ItemId, u32)>,
+    /// Each scene object a later swarm draws: (the first swarm's object it
+    /// copies, the copy, the swarm).
+    pub(crate) alike: Vec<(u32, u32, ItemId)>,
     /// The emitter transform each swarm copies node is placed in, and the
     /// node whose `out` is the swarm's live Count.
     pub(crate) swarm_frames: BTreeMap<u32, (u32, u32)>,
@@ -140,6 +147,8 @@ impl<'d> Builder<'d> {
             group_visible: BTreeMap::new(),
             swarms: Vec::new(),
             swarm_draws: BTreeMap::new(),
+            swarm_extra: Vec::new(),
+            alike: Vec::new(),
             swarm_frames: BTreeMap::new(),
             nests: BTreeMap::new(),
             modifiers: Vec::new(),
@@ -175,6 +184,52 @@ impl<'d> Builder<'d> {
         let id = self.fresh();
         self.nodes.push(plain_node(id, node_id.as_str(), type_id, node_id.as_str()));
         id
+    }
+
+    /// A copy of node `original` under `node_id`: its params, every wire into
+    /// it but `except`'s port with each source `remap` names swapped, and
+    /// every binding that drives it, so the copy follows the same rows.
+    pub(crate) fn copy_node(&mut self, original: u32, node_id: NodeId, remap: &[(u32, u32)], except: Option<&str>) -> Option<u32> {
+        let mut node = self.node_mut(original)?.clone();
+        let original_id = std::mem::replace(&mut node.node_id, node_id.clone());
+        let id = self.fresh();
+        node.id = id;
+        node.handle = Some(node_id.as_str().to_owned());
+        self.nodes.push(node);
+        self.copy_inputs(original, id, remap, except);
+        let driven: Vec<BindingDef> = self
+            .bindings
+            .iter()
+            .filter(|binding| matches!(&binding.target, BindingTarget::Node { node_id, .. } if *node_id == original_id))
+            .cloned()
+            .collect();
+        for mut binding in driven {
+            if let BindingTarget::Node { node_id: target, .. } = &mut binding.target {
+                target.clone_from(&node_id);
+            }
+            self.bindings.push(binding);
+        }
+        Some(id)
+    }
+
+    /// Wire into `to` what feeds `from`, but `except`'s port, with each
+    /// source `remap` names swapped.
+    pub(crate) fn copy_inputs(&mut self, from: u32, to: u32, remap: &[(u32, u32)], except: Option<&str>) {
+        let inputs: Vec<EffectGraphWire> = self
+            .wires
+            .iter()
+            .filter(|wire| wire.to_node == from && Some(wire.to_port.as_str()) != except)
+            .cloned()
+            .collect();
+        for wire in inputs {
+            let source = remap.iter().find(|(old, _)| *old == wire.from_node).map_or(wire.from_node, |(_, new)| *new);
+            self.wire(source, &wire.from_port, to, &wire.to_port);
+        }
+    }
+
+    /// The copies later swarms draw of scene object `original`.
+    pub(crate) fn alike_of(&self, original: u32) -> impl Iterator<Item = u32> + '_ {
+        self.alike.iter().filter(move |(of, _, _)| *of == original).map(|(_, copy, _)| *copy)
     }
 
     /// Add a node built elsewhere (a group with its body). Its node ids are

@@ -147,18 +147,32 @@ fn emit(
             continue;
         }
         let role = &frame.role;
-        let plan = if acts_on_copies(card.modifier) {
+        let mut plan = if acts_on_copies(card.modifier) {
             copies_plan(b, item, &frame)
         } else {
             plan(b, item, &frame, lineage, card.modifier == ModifierType::Shatter)
         };
-        for (chunk, part) in frame.members.chunks(TARGETS_PER_INSTANCE).enumerate() {
+        // A later swarm's copy of a drawn object bends with it, placed as it is.
+        let mut targets = Vec::with_capacity(frame.members.len());
+        for drawn in &frame.members {
+            let original = b.node_id_of(drawn.object).ok_or("a modifier target has no node id")?;
+            targets.push(original.clone());
+            for copy in b.alike_of(drawn.object).collect::<Vec<_>>() {
+                let copy = b.node_id_of(copy).ok_or("a modifier target has no node id")?;
+                let placed: Vec<TargetPlacement> = plan
+                    .placements
+                    .iter()
+                    .filter(|placement| placement.target == original)
+                    .map(|placement| TargetPlacement { target: copy.clone(), ..placement.clone() })
+                    .collect();
+                plan.placements.extend(placed);
+                targets.push(copy);
+            }
+        }
+        for (chunk, part) in targets.chunks(TARGETS_PER_INSTANCE).enumerate() {
             let suffix = if chunk == 0 { role.clone() } else { format!("{role}:{chunk}") };
             let id = node(item.id.as_str(), &format!("mod:{suffix}"));
-            let mut objects = Vec::with_capacity(part.len());
-            for drawn in part {
-                objects.push(b.node_id_of(drawn.object).ok_or("a modifier target has no node id")?);
-            }
+            let objects = part.to_vec();
             let placements = plan.placements.iter().filter(|placement| objects.contains(&placement.target)).cloned().collect();
             let instance = SceneModifierInstanceDef {
                 id: id.clone(),

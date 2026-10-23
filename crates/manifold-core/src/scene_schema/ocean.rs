@@ -148,11 +148,10 @@ static SURFACE: [PropertyRow; 27] = [
 /// The material an Ocean takes when its Shape is set:
 /// white, so the grid's deep water colour shows untinted, with water's
 /// index of refraction and a calm sea's gloss.
-pub const OCEAN_LOOK: [(&str, f32); 7] = [
+pub const OCEAN_LOOK: [(&str, f32); 6] = [
     ("color_r", 1.0),
     ("color_g", 1.0),
     ("color_b", 1.0),
-    ("ambient", 0.0),
     ("metallic", 0.0),
     ("roughness", 0.22),
     ("ior", 1.333),
