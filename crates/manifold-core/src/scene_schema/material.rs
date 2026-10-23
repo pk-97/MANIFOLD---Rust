@@ -8,7 +8,9 @@
 //! The surface params are a family, not one row each: every param the
 //! material node declares is a card row in the Material section with the
 //! param's own name as its property, placed by its material inspector role,
-//! except the feature-mode params, which the Material's features field sets.
+//! except the feature-mode params, which the Material's features field sets,
+//! and a texture map's placement and sampling params while that map has no
+//! texture.
 
 use manifold_foundation::scene_surface::ControlGroup;
 

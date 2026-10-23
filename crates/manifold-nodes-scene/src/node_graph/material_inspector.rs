@@ -103,58 +103,53 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
     if let Some((family, component)) = sampler_component(param_name) {
         return Some(MaterialParamRole::Sampler(family, component));
     }
-    if advanced_map_metadata(param_name) {
+    // The other map coordinates and sampling sit on the shared Advanced
+    // surface. Only the implemented catalog matches, so unknown future
+    // controls still fail the schema-coverage test.
+    if map_port(param_name).is_some() {
         return Some(MaterialParamRole::Scalar(MaterialGroup::Advanced));
     }
     None
 }
 
-/// Extended map coordinates and sampling stay editable on the shared
-/// Advanced surface. Match only the implemented catalog so unknown future
-/// controls still fail the schema-coverage test.
-fn advanced_map_metadata(name: &str) -> bool {
-    if ["", "nrm_", "mr_", "occ_", "em_"].iter().any(|prefix| {
-        name.strip_prefix(prefix)
-            .is_some_and(|suffix| matches!(suffix, "uv_set" | "mip_filter"))
-    }) {
-        return true;
-    }
-    [
-        "sheen_color_",
-        "sheen_roughness_",
-        "iridescence_",
-        "iridescence_thickness_",
-        "anisotropy_",
-        "clearcoat_",
-        "clearcoat_roughness_",
-        "clearcoat_normal_",
-        "specular_",
-        "specular_color_",
-        "transmission_",
-        "volume_thickness_",
-        "diffuse_transmission_",
-        "diffuse_transmission_color_",
-    ]
-    .iter()
-    .any(|prefix| {
-        name.strip_prefix(prefix).is_some_and(|suffix| {
-            matches!(
-                suffix,
-                "uv_m00"
-                    | "uv_m01"
-                    | "uv_m10"
-                    | "uv_m11"
-                    | "uv_tx"
-                    | "uv_ty"
-                    | "tex_coord"
-                    | "wrap_u"
-                    | "wrap_v"
-                    | "mag_filter"
-                    | "min_filter"
-                    | "mip_filter"
-            )
-        })
-    })
+/// Each texture map's param prefix and the `node.scene_object` port its
+/// texture feeds.
+const MAP_PREFIXES: [(&str, &str); 19] = [
+    ("", "base_color_map"),
+    ("nrm_", "normal_map"),
+    ("mr_", "mr_map"),
+    ("occ_", "occlusion_map"),
+    ("em_", "emissive_map"),
+    ("sheen_color_", "sheen_color_map"),
+    ("sheen_roughness_", "sheen_roughness_map"),
+    ("iridescence_", "iridescence_map"),
+    ("iridescence_thickness_", "iridescence_thickness_map"),
+    ("anisotropy_", "anisotropy_map"),
+    ("clearcoat_", "clearcoat_map"),
+    ("clearcoat_roughness_", "clearcoat_roughness_map"),
+    ("clearcoat_normal_", "clearcoat_normal_map"),
+    ("specular_", "specular_map"),
+    ("specular_color_", "specular_color_map"),
+    ("transmission_", "transmission_map"),
+    ("volume_thickness_", "volume_thickness_map"),
+    ("diffuse_transmission_", "diffuse_transmission_map"),
+    ("diffuse_transmission_color_", "diffuse_transmission_color_map"),
+];
+
+/// The placement, UV-set and sampler params every map carries, after its prefix.
+const MAP_SUFFIXES: [&str; 13] = [
+    "uv_m00", "uv_m01", "uv_m10", "uv_m11", "uv_tx", "uv_ty", "uv_set", "tex_coord", "wrap_u", "wrap_v", "mag_filter", "min_filter",
+    "mip_filter",
+];
+
+/// The `node.scene_object` port of the texture map whose placement or
+/// sampling `param_name` sets, if it is one of those params. Those rows
+/// apply only while that map has a texture.
+pub fn map_port(param_name: &str) -> Option<&'static str> {
+    MAP_PREFIXES
+        .iter()
+        .find(|(prefix, _)| param_name.strip_prefix(prefix).is_some_and(|suffix| MAP_SUFFIXES.contains(&suffix)))
+        .map(|(_, port)| *port)
 }
 
 fn feature_for_scalar(name: &str) -> MaterialFeature {

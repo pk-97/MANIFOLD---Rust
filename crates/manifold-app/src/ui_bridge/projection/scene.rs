@@ -101,6 +101,7 @@ fn item_vm(
         },
         _ => (false, None),
     };
+    let row_reasons = row_reasons(doc, inst, item, material.as_ref());
     SceneItemVm {
         id: item.id.clone(),
         kind: item.kind(),
@@ -116,14 +117,32 @@ fn item_vm(
         copy_view: matches!(&item.fields, ItemFields::Camera(_)),
         environment,
         aim_sun_file,
-        row_reasons: row_reasons(doc, item),
+        row_reasons,
     }
 }
 
 /// Why rows of `item` cannot be used: a Force whose Impulse has nothing to
-/// push, a Shatter card with no Body to break.
-fn row_reasons(doc: &SceneDoc, item: &Item) -> Vec<(String, String)> {
+/// push, a Shatter card with no Body to break, a metal Material's features
+/// that light passes through.
+fn row_reasons(doc: &SceneDoc, inst: &PresetInstance, item: &Item, material: Option<&MaterialBlockVm>) -> Vec<(String, String)> {
     let mut reasons = Vec::new();
+    if let Some(material) = material.filter(|material| material.pbr)
+        && let Some(metallic) = inst.params.get(&param_id(&material.item, "metallic"))
+        && crate::scene_edit::full_metal(metallic.base)
+    {
+        use manifold_core::material_inspector::{MaterialGroup, MaterialParamRole};
+        for id in &material.parameter_ids {
+            let passes_light = inst.params.get(id).and_then(|param| param.spec.material_role).is_some_and(|role| match role {
+                MaterialParamRole::Scalar(MaterialGroup::Feature(feature)) | MaterialParamRole::Colour(MaterialGroup::Feature(feature), ..) => {
+                    crate::scene_edit::PASSES_LIGHT.contains(&feature)
+                }
+                _ => false,
+            });
+            if passes_light {
+                reasons.push((id.clone(), "Metal lets no light through".to_owned()));
+            }
+        }
+    }
     if let Some(reason) = impulse_unavailable(doc, item) {
         reasons.push((param_id(&item.id, "fire"), reason.to_owned()));
     }
@@ -152,7 +171,9 @@ fn material_block(
     let pbr = matches!(&material.fields, ItemFields::Material(fields)
         if manifold_core::scene_schema::material_node_type(fields) == MaterialType::Pbr.node_type());
     let features = match &material.fields {
-        ItemFields::Material(fields) if pbr => fields.features.iter().map(|setting| super::material::feature(setting.feature)).collect(),
+        ItemFields::Material(fields) if pbr => {
+            fields.features.iter().filter(|setting| !setting.removed()).map(|setting| super::material::feature(setting.feature)).collect()
+        }
         _ => Vec::new(),
     };
     let parameter_ids = owned.get(material.id.as_str()).cloned().unwrap_or_default();

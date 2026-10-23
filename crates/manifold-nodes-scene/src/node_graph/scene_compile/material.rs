@@ -83,9 +83,15 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             None => Vec::new(),
         },
     };
+    let fed: Vec<&'static str> = maps.iter().map(|(_, port)| *port).collect();
     b.material_maps.insert(owner.to_owned(), maps);
     for meta in b.type_params(node_type) {
         if MATERIAL_FAMILY.automatic.contains(&meta.name.as_str()) {
+            continue;
+        }
+        // A map's placement and sampling rows are rows only while it has a
+        // texture; the node keeps their values either way.
+        if crate::node_graph::material_inspector::map_port(&meta.name).is_some_and(|port| !fed.contains(&port)) {
             continue;
         }
         let mut facts = SURFACE_FACTS;
@@ -145,6 +151,11 @@ mod tests {
             other => panic!("{name} is {other:?}"),
         };
         assert_eq!((size("width"), size("height")), (64, 32));
+        // Only the textured map's placement and sampling are rows.
+        let rows = &def.preset_metadata.as_ref().unwrap().params;
+        let row = |property: &str| rows.iter().any(|p| p.id == manifold_core::scene_doc::param_id(&ItemId::new(BASE_CUBE_MATERIAL), property));
+        assert!(row("uv_m00") && row("wrap_u") && row("uv_set"), "the base colour map has a texture");
+        assert!(!row("nrm_uv_set") && !row("sheen_color_wrap_u") && !row("clearcoat_uv_tx"), "maps with no texture have no rows");
         std::fs::remove_file(path).unwrap();
     }
 }
