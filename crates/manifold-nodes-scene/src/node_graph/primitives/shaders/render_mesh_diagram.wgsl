@@ -148,8 +148,7 @@ fn apply_copy(p: vec3<f32>, inst: I) -> vec3<f32> {
     return euler_xyz(inst.rot_pad.xyz) * (p * u.copy_inner.xyz * inst.pos_scale.w) + inst.pos_scale.xyz;
 }
 
-// Producers collapse inactive slots to an all-zero transform (see
-// generate_instance_transforms_body.wgsl and analytic_echo_instances'
+// Producers collapse inactive slots to an all-zero transform (node.arrange_copies' zeroed tail and analytic_echo_instances'
 // "zero scale is the inactive-hole marker"), so the diagram skips them just
 // like the scene's zero-scale no-op draw.
 fn inactive_copy(inst: I) -> bool {

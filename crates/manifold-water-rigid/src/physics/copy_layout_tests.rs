@@ -20,7 +20,7 @@ fn group(layout: CopyLayout, count: usize, spacing: f32, columns: usize) -> Arra
     Arrangement { layout, count, columns, spacing, turn: [0.0; 3], origin: [1.0, 2.0, 3.0], rotation: [0.0; 3] }
 }
 
-fn rests(arrangement: &Arrangement, width: [f32; 3]) -> Vec<manifold_physics::BodyPose> {
+fn rests(arrangement: &Arrangement, width: [f32; 3]) -> Vec<manifold_core::copy_layout::CopyPose> {
     (0..arrangement.count).map(|index| arrangement.rest(width, index)).collect()
 }
 
@@ -28,7 +28,7 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
     (0..3).map(|axis| (a[axis] - b[axis]).powi(2)).sum::<f32>().sqrt()
 }
 
-fn centroid(poses: &[manifold_physics::BodyPose]) -> [f32; 3] {
+fn centroid(poses: &[manifold_core::copy_layout::CopyPose]) -> [f32; 3] {
     let mut sum = [0.0f64; 3];
     for pose in poses {
         for (total, value) in sum.iter_mut().zip(pose.position) {
@@ -120,7 +120,7 @@ fn a_copy_rests_in_the_same_place_whatever_the_count() {
 #[test]
 fn a_ring_spreads_its_copies_evenly_round_the_whole_circle() {
     let width = platonic_width(1, 0.6);
-    let around = |pose: &manifold_physics::BodyPose| (pose.position[2] - 3.0).atan2(pose.position[0] - 1.0);
+    let around = |pose: &manifold_core::copy_layout::CopyPose| (pose.position[2] - 3.0).atan2(pose.position[0] - 1.0);
     let full = rests(&group(CopyLayout::Ring, 8, 1.2, 8), width);
     let radius = distance(full[0].position, [1.0, 2.0, 3.0]);
     for count in [1usize, 2, 3, 5, 8] {
@@ -318,7 +318,7 @@ fn a_count_edit_keeps_the_copies_moving_and_adds_new_ones_at_rest() {
     // On the edit's frame the old ten are where their fall had taken them,
     // and the new copies stand at rest in their places.
     let scene = copies_scene(&[None, None], Some(cube([0.0, 3.0, 0.0], 0.5)), 1_000.0, 1.1, 16.0, 0.0, GRAVITY, None, &[]);
-    let arrangement = Arrangement::of(&scene.groups[0].clone().unwrap(), 1_000);
+    let arrangement = arrangement_of(&scene.groups[0].clone().unwrap(), 1_000);
     let width = platonic_width(1, 0.5);
     assert_eq!(at_edit.len(), 1_000);
     for (index, pose) in at_edit.iter().enumerate().skip(10) {
@@ -357,7 +357,7 @@ fn row_edit_run(edit: impl Fn(&mut CopySpawn)) -> (Vec<Transform>, Vec<[f32; 3]>
     }
     let world = simulation.native_world().unwrap();
     let velocities = simulation.native_copy_handles(0)[..12].iter().map(|handle| world.linear_velocity(handle.unwrap()).unwrap()).collect();
-    (simulation.group_poses(0).to_vec(), velocities, Arrangement::of(&last.unwrap(), 12))
+    (simulation.group_poses(0).to_vec(), velocities, arrangement_of(&last.unwrap(), 12))
 }
 
 /// A layout row's name and its edit.
@@ -441,7 +441,7 @@ fn a_group_with_physics_off_is_drawn_at_rest_with_no_bodies() {
     assert!(simulation.native_copy_handles(0).is_empty());
     assert_eq!(simulation.copies_not_made(), 0);
     let width = platonic_width(1, 0.5);
-    let line = Arrangement::of(&scene(1.1).groups[0].clone().unwrap(), 9);
+    let line = arrangement_of(&scene(1.1).groups[0].clone().unwrap(), 9);
     assert_eq!(simulation.group_poses(0).len(), 9);
     for (index, pose) in simulation.group_poses(0).iter().enumerate() {
         assert_eq!(pose.pos, line.rest(width, index).position, "still at rest after half a second");
@@ -478,9 +478,9 @@ fn a_held_edit_between_ticks_shows_its_formation_and_lands_on_the_next_tick() {
     simulation.advance_scene(&scene(1.1), PlayedTime::from_played(1.5 / 60.0), 1.0, 0.0).unwrap();
     simulation.advance_scene(&scene(3.0), PlayedTime::from_played(1.5 / 60.0), 0.0, 0.0).unwrap();
     let width = platonic_width(1, 0.5);
-    let wide = Arrangement::of(&scene(3.0).groups[0].clone().unwrap(), 6);
+    let wide = arrangement_of(&scene(3.0).groups[0].clone().unwrap(), 6);
     assert_eq!(simulation.group_poses(0)[5].pos, wide.rest(width, 5).position, "shown at once");
-    let tight = Arrangement::of(&scene(1.1).groups[0].clone().unwrap(), 6);
+    let tight = arrangement_of(&scene(1.1).groups[0].clone().unwrap(), 6);
     assert_eq!(simulation.groups[0].arrangement, Some(tight), "the bodies wait for the next tick start");
     simulation.advance_scene(&scene(3.0), PlayedTime::from_played(2.5 / 60.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.groups[0].arrangement, Some(wide));

@@ -9,7 +9,7 @@ use manifold_core::copies_body::SPACING_MIN;
 use manifold_node_engine::scene::transform::{quat_to_render_scene_euler, Transform};
 use manifold_physics::{BodyConfig, BodyHandle, BodyPose, CookedSolid, PhysicsWorld};
 
-use super::copy_layout::{copy_width, requested_count, Arrangement};
+use super::copy_layout::{arrangement_of, copy_width, requested_count, rest_pose, Arrangement};
 use super::{CopySpawn, DeferredAnimatedEdit, RigidBody, Solid, installed_volume, mesh_volume, same_authored_body};
 
 /// One group's installed copies. `handles` holds every body installed since
@@ -63,7 +63,7 @@ impl CopyGroup {
     /// Copy `index`'s rest pose under the installed arrangement.
     pub fn rest(&self, index: usize) -> BodyPose {
         self.arrangement.map_or(BodyPose { position: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0] }, |arrangement| {
-            arrangement.rest(self.width, index)
+            rest_pose(&arrangement, self.width, index)
         })
     }
 
@@ -106,7 +106,7 @@ impl CopyGroup {
             return;
         }
         self.width = copy_width(prototype);
-        self.show_rest(&Arrangement::of(prototype, count), prototype.transform.scale);
+        self.show_rest(&arrangement_of(prototype, count), prototype.transform.scale);
         self.refused = Some(prototype.clone());
     }
 }

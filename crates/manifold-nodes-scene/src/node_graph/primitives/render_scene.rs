@@ -1756,7 +1756,7 @@ fn recycle_rt_objects<'old, 'new>(
 
 fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderFailure {
     use manifold_gpu::raytrace::RtAccelError;
-    if !matches!(error, RtAccelError::NeedsPreparation) { log::error!("node.render_scene: current RT frame rejected: {error:?}"); }
+    log::error!("node.render_scene: current RT frame rejected: {error:?}");
     match error {
         RtAccelError::InvalidGeometry { .. } => FrameRenderFailure::InvalidGeometry,
         RtAccelError::NeedsPreparation => FrameRenderFailure::RtNeedsPreparation,
@@ -2719,15 +2719,10 @@ impl RenderScene {
                     pre.reset_decision |= changed;
                     Some((textures, topo, content))
                 }
-                // Ray tracing waiting on its next preparation is routine: the
-                // frame draws raster with no word to the stage, incomplete so
-                // warmup prepares and export refuses it. A refused or failed
-                // update (memory admission refusing a huge Count mid-drag)
-                // draws raster too, and the stage hears once (NodeErrors).
-                Err(FrameRenderFailure::RtNeedsPreparation) => {
-                    ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::PendingGeometry);
-                    None
-                }
+                // Maintenance prepares whatever needs it in this frame, so an
+                // error here is a real failure (memory admission refusing a
+                // huge Count mid-drag): the frame draws raster, the stage
+                // hears once (NodeErrors), and the next frame tries again.
                 Err(failure) => {
                     ctx.error(rt_paused_reason(failure));
                     None

@@ -171,7 +171,7 @@ _Generated from the node registry. Do not hand-edit. 405 nodes registered, group
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Analytic Echoes | `node.analytic_echo_instances` | Filter | Fans each source object into a small, formula-driven trail of shared mesh copies. |
-| Arrange Copies | `node.arrange_copies` | Source | Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies. |
+| Arrange Copies | `node.arrange_copies` | Source | Lays copies out the way a copies body does, in a grid, line, ring, spiral, pile or random spread, giving each one a position to render at. |
 | Atmosphere | `node.atmosphere` | Source | Scene fog + sky tint for render_scene. Wire it into a scene's atmosphere input; put fog density on a fader for an instant depth-mood knob. |
 | Bend Mesh | `node.bend_mesh` | Filter | Curves a mesh into an arc around a hinge line, like bending a rod. Position and lighting normals both rotate exactly, so it reads correctly at any angle, inclu… |
 | Camera Lens | `node.camera_lens` | Filter | The physical camera: focus distance, aperture, shutter angle, and exposure — one lens any camera source can feed, and every 3D consumer reads. |

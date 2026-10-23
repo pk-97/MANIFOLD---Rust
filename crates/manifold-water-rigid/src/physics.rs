@@ -42,8 +42,8 @@ pub use admission::{BodyRefusal, Member, RefusalReason};
 use body_history::PackedRows;
 use manifold_core::scene_schema::SPEED_RANGE;
 use copy_group::CopyGroup;
-use copy_layout::{requested_count, Arrangement};
-pub(crate) use copy_layout::RestBox;
+use copy_layout::{rest_pose, Arrangement};
+pub(crate) use copy_layout::{arrangement_of, requested_count, RestBox};
 pub use impulses::ResolvedRigidImpulse;
 use targeted_fields::{TargetedFieldHistory, TargetedFields};
 pub use worker::{RigidSceneInputs, RigidSceneObservation};
@@ -291,18 +291,9 @@ impl RigidBody {
 /// Shared scene Rz * Ry * Rx convention, with quaternion stored xyzw.
 #[inline]
 pub fn pose_from_transform(transform: Transform) -> manifold_physics::BodyPose {
-    let [x, y, z] = transform.rot_euler;
-    let (sx, cx) = (x * 0.5).sin_cos();
-    let (sy, cy) = (y * 0.5).sin_cos();
-    let (sz, cz) = (z * 0.5).sin_cos();
     manifold_physics::BodyPose {
         position: transform.pos,
-        rotation: [
-            sx * cy * cz - cx * sy * sz,
-            cx * sy * cz + sx * cy * sz,
-            cx * cy * sz - sx * sy * cz,
-            cx * cy * cz + sx * sy * sz,
-        ],
+        rotation: manifold_core::copy_layout::euler_quat(transform.rot_euler),
     }
 }
 
@@ -1411,7 +1402,7 @@ impl RigidSimulation {
         for (index, (prototype, state)) in groups.iter().zip(self.groups.iter_mut()).enumerate() {
             state.reset_for(prototype.as_ref());
             if let Some(prototype) = prototype.as_ref().filter(|body| body.enabled) {
-                let arrangement = Arrangement::of(prototype, made[index]);
+                let arrangement = arrangement_of(prototype, made[index]);
                 state.arrangement = Some(arrangement);
                 state.handles.resize(arrangement.count, None);
                 state.bullet_enabled.resize(arrangement.count, false);
@@ -1425,7 +1416,7 @@ impl RigidSimulation {
                     state.poses.resize(arrangement.count, Transform::default());
                 }
             } else if let Some(prototype) = prototype.as_ref() {
-                state.show_rest(&Arrangement::of(prototype, requested_count(prototype.spawn)), prototype.transform.scale);
+                state.show_rest(&arrangement_of(prototype, requested_count(prototype.spawn)), prototype.transform.scale);
             }
             state.description.clone_from(prototype);
         }
@@ -1545,12 +1536,12 @@ impl RigidSimulation {
             let prototype = prototype.clone();
             self.groups[group].reset_for(Some(&prototype));
             if prototype.enabled {
-                result = self.lay_out(group, &prototype, Arrangement::of(&prototype, made[group]));
+                result = self.lay_out(group, &prototype, arrangement_of(&prototype, made[group]));
                 if result.is_err() {
                     break;
                 }
             } else {
-                let rest = Arrangement::of(&prototype, requested_count(prototype.spawn));
+                let rest = arrangement_of(&prototype, requested_count(prototype.spawn));
                 self.groups[group].show_rest(&rest, prototype.transform.scale);
             }
             self.groups[group].description = Some(prototype);
@@ -1778,7 +1769,7 @@ impl RigidSimulation {
             let Some(prototype) = self.authored_cell(sample, body_count + group).filter(|body| body.enabled) else {
                 continue;
             };
-            let target = Arrangement::of(prototype, made);
+            let target = arrangement_of(prototype, made);
             let placed = placed_as(&installed, target, prototype);
             if installed == placed {
                 continue;
@@ -1937,12 +1928,12 @@ impl RigidSimulation {
                 // Physics off: the copies are drawn at rest and have no bodies.
                 if state.description.as_ref().is_none_or(|old| !same_authored_body(old, prototype)) {
                     let count = requested_count(prototype.spawn);
-                    state.show_rest(&Arrangement::of(prototype, count), scale);
+                    state.show_rest(&arrangement_of(prototype, count), scale);
                 }
                 state.description.clone_from(authored_body);
                 continue;
             };
-            let authored = Arrangement::of(prototype, made[group]);
+            let authored = arrangement_of(prototype, made[group]);
             let placed = placed_as(&installed, authored, prototype);
             // A Count edit alone moves no copy: until the next tick start
             // adds or parks the tail, the new tail shows at rest.
@@ -2257,7 +2248,7 @@ impl RigidSimulation {
                     continue;
                 };
                 world
-                    .update_body(handle, prototype.config_at(placed.rest(state.width, index)), true)
+                    .update_body(handle, prototype.config_at(rest_pose(&placed, state.width, index)), true)
                     .map_err(|e| e.to_string())?;
             }
             state.arrangement = Some(placed);
@@ -2545,7 +2536,7 @@ impl RigidSimulation {
                     continue;
                 };
                 world
-                    .set_animated_target(handle, prototype.config_at(placed.rest(state.width, index)), dt)
+                    .set_animated_target(handle, prototype.config_at(rest_pose(&placed, state.width, index)), dt)
                     .map_err(|e| e.to_string())?;
             }
         }

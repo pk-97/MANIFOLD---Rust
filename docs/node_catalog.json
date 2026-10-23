@@ -1194,20 +1194,30 @@
       ],
       "category": "3D Geometry",
       "examples": [],
-      "fusion": "source",
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
-          "name": "origin_x",
+          "name": "copy_frame",
           "required": false,
-          "type": "f32"
+          "type": "Transform"
         },
         {
-          "name": "origin_y",
+          "name": "copy_box",
           "required": false,
-          "type": "f32"
+          "type": "vec3"
         },
         {
-          "name": "origin_z",
+          "name": "copy_turn",
+          "required": false,
+          "type": "vec3"
+        },
+        {
+          "name": "copy_grid",
+          "required": false,
+          "type": "vec2"
+        },
+        {
+          "name": "active_count",
           "required": false,
           "type": "f32"
         }
@@ -1240,145 +1250,128 @@
             "0",
             "1000000"
           ],
-          "tooltip": "How many copies to actually place this frame, default 64. Slide it freely up to the max capacity to thin out or fill the field.",
+          "tooltip": "How many copies to place, default 64. A copies body's count replaces it when wired.",
           "type": "int"
         },
         {
           "default": "0",
           "enum_values": [
             "Grid",
+            "Scatter",
+            "Line",
             "Ring",
             "Spiral",
             "Random"
           ],
           "label": "Layout",
           "name": "layout",
-          "tooltip": "The pattern the copies fall into, Grid, Ring, Spiral, or Random.",
+          "tooltip": "The pattern the copies fall into: Grid, Scatter, Line, Ring, Spiral or Random, laid out as a copies body lays out its own.",
           "type": "enum"
         },
         {
-          "default": "0",
-          "label": "Seed",
-          "name": "seed",
+          "default": "16",
+          "label": "Columns",
+          "name": "columns",
           "range": [
-            "0",
-            "1000000"
+            "1",
+            "64"
           ],
-          "tooltip": "Changes the random layout. Move it to get a different spread. Only matters when the layout is set to Random.",
+          "tooltip": "Copies a row, or a ring for Ring. A copies body's Columns replaces it when wired.",
           "type": "int"
         },
         {
-          "default": "4",
-          "label": "Extent X",
-          "name": "extent_x",
+          "default": "1.1",
+          "label": "Spacing",
+          "name": "spacing",
           "range": [
-            "0",
-            "100"
+            "1",
+            "20"
           ],
-          "tooltip": "How far the layout reaches along X, default 4. Larger values spread the copies wider apart.",
-          "type": "float"
-        },
-        {
-          "default": "4",
-          "label": "Extent Y",
-          "name": "extent_y",
-          "range": [
-            "0",
-            "100"
-          ],
-          "tooltip": "How far the layout reaches along Y, default 4. Larger values spread the copies wider apart.",
-          "type": "float"
-        },
-        {
-          "default": "4",
-          "label": "Extent Z",
-          "name": "extent_z",
-          "range": [
-            "0",
-            "100"
-          ],
-          "tooltip": "How far the layout reaches along Z, default 4. Larger values spread the copies wider apart.",
+          "tooltip": "How far apart neighbours sit, in copy widths. A copies body's Spacing replaces it when wired.",
           "type": "float"
         },
         {
           "default": "1",
-          "label": "Base Scale",
+          "label": "Copy Width",
+          "name": "box_x",
+          "range": [
+            "0",
+            "1000"
+          ],
+          "tooltip": "One copy's width in metres, the unit Spacing counts along X. A copies body's box replaces it when wired.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Copy Height",
+          "name": "box_y",
+          "range": [
+            "0",
+            "1000"
+          ],
+          "tooltip": "One copy's height in metres, the unit Spacing counts along Y.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Copy Depth",
+          "name": "box_z",
+          "range": [
+            "0",
+            "1000"
+          ],
+          "tooltip": "One copy's depth in metres, the unit Spacing counts along Z.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Copy Turn X",
+          "name": "turn_x",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Turns each copy about X inside the layout. A copies body's Turn replaces it when wired.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Copy Turn Y",
+          "name": "turn_y",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Turns each copy about Y inside the layout.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Copy Turn Z",
+          "name": "turn_z",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Turns each copy about Z inside the layout.",
+          "type": "angle"
+        },
+        {
+          "default": "1",
+          "label": "Copy Size",
           "name": "base_scale",
           "range": [
             "0",
             "10"
           ],
-          "tooltip": "The size every copy starts at. 1 leaves the base mesh at its native size, higher grows them all together.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Rotation X",
-          "name": "rot_x",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Tilts every copy around the X axis by the same amount, in degrees.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "label": "Rotation Y",
-          "name": "rot_y",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Spins every copy around the Y axis by the same amount, in degrees.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "label": "Rotation Z",
-          "name": "rot_z",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Rolls every copy around the Z axis by the same amount, in degrees.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "label": "Origin X",
-          "name": "origin_x",
-          "range": [
-            "-100000",
-            "100000"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Origin Y",
-          "name": "origin_y",
-          "range": [
-            "-100000",
-            "100000"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Origin Z",
-          "name": "origin_z",
-          "range": [
-            "-100000",
-            "100000"
-          ],
+          "tooltip": "Copy Size: scales every copy at this layout. 1 leaves each copy its own size.",
           "type": "float"
         }
       ],
-      "purpose": "Emit an Array<InstanceTransform> filled with one of four procedural layouts (slots beyond active_count zero out): Grid — side = ceil(active_count^(1/3)), 3D index (cx,cy,cz) = (i mod side, (i/side) mod side, i/side^2), position = ((cx/(side-1) - 0.5)*extent_x, (cy/(side-1) - 0.5)*extent_y, (cz/(side-1) - 0.5)*extent_z). Ring — t = i/active_count, theta = t*2π, position = (cos(theta)*extent_x/2, 0, sin(theta)*extent_z/2). Spiral — t = i/active_count, theta = t*2π*4 (4 turns), r = t, position = (cos(theta)*r*extent_x/2, (t-0.5)*extent_y, sin(theta)*r*extent_z/2). Random — wang-hash of (index, seed) per axis, position = (hash-0.5)*extent per axis, uniform within the extent box. Every position is then offset by (origin_x, origin_y, origin_z), the centre the layout sits around. Scale is uniform `base_scale`; rotation is uniform (rot_x, rot_y, rot_z) applied identically to every instance. Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
+      "purpose": "Emit an Array<InstanceTransform> of active_count copies laid out exactly as a copies body lays out its own (manifold_core::copy_layout): Grid, Scatter, Line, Ring, Spiral or Random, spaced in multiples of one copy's box width (copy_box) by copy_grid's Spacing, Columns a row or ring, each copy turned by copy_turn, the whole layout placed and turned by copy_frame. Line and Grid grow one way from the first copy on the origin; Ring spreads its copies evenly round the full circle, up to Columns a ring. Each copy's scale is copy_frame's X scale times base_scale (Copy Size). Slots past active_count are zero.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
+      "summary": "Lays copies out the way a copies body does, in a grid, line, ring, spiral, pile or random spread, giving each one a position to render at.",
       "type_id": "node.arrange_copies"
     },
     {
@@ -37711,6 +37704,22 @@
         {
           "name": "rest_box",
           "type": "Transform"
+        },
+        {
+          "name": "copy_frame",
+          "type": "Transform"
+        },
+        {
+          "name": "copy_box",
+          "type": "vec3"
+        },
+        {
+          "name": "copy_turn",
+          "type": "vec3"
+        },
+        {
+          "name": "copy_grid",
+          "type": "vec2"
         }
       ],
       "params": [

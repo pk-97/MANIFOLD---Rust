@@ -259,6 +259,11 @@ pub enum SceneContextValue {
     /// output. With none in the owner, the stage port stays unwired and the
     /// node it feeds reads its own param.
     LoopCell,
+    /// The target's copies body: each stage port takes the body's output of
+    /// the same name (`copy_frame`, `copy_box`, `copy_turn`, `copy_grid`,
+    /// `active_count`). A target whose copies no body lays out leaves the
+    /// port unwired.
+    Copies,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

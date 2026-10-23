@@ -1040,11 +1040,9 @@ impl Builder<'_> {
                 self.constant_node(identity_key, "node.transform_3d", params, "transform")?
             }
             SceneEndpoint::Instances => {
+                // One unwired copy sits on the origin, unturned.
                 for (key, value) in [("max_capacity", 1), ("active_count", 1)] {
                     params.insert(key.into(), SerializedParamValue::Int { value });
-                }
-                for key in ["extent_x", "extent_y", "extent_z"] {
-                    params.insert(key.into(), SerializedParamValue::Float { value: 0.0 });
                 }
                 params.insert(
                     "base_scale".into(),
@@ -1311,6 +1309,25 @@ impl Builder<'_> {
             return Err(invalid(instance.id.to_string(), "a scene measures one Scene Loop cell"));
         }
         Ok(Some((cell.id, "cell_size".into())))
+    }
+
+    /// Output `port` of the copies body that lays out `target`'s copies:
+    /// the node whose `instances` the target draws before any modifier.
+    /// `None` when no copies body does (copies on a surface, or none).
+    fn copies_body(
+        &self,
+        instance: &SceneModifierInstanceDef,
+        target: Option<&NodeId>,
+        port: &str,
+    ) -> Result<Option<PortAddress>, SceneModifierExpandError> {
+        let target = target.ok_or_else(|| invalid(instance.id.to_string(), "copies context is per object"))?;
+        let Some(wire) = self.index.input(target, endpoint_port(SceneEndpoint::Instances))? else {
+            return Ok(None);
+        };
+        let body = self.index.flat.nodes.iter().find(|node| node.id == wire.from_node);
+        Ok(body
+            .filter(|node| node.type_id == manifold_core::copies_body::RIGID_BODY_TYPE_ID)
+            .map(|node| (node.id, port.into())))
     }
 
 manifold_core::testkit_visible! {
@@ -1654,6 +1671,12 @@ manifold_core::testkit_visible! {
                             match self.loop_cell(instance)? {
                                 Some(cell) => cell,
                                 // Nothing measures the cell: the node reads its param.
+                                None => continue,
+                            }
+                        }
+                        SceneStageSource::Context { value: SceneContextValue::Copies } => {
+                            match self.copies_body(instance, target, &input.port)? {
+                                Some(output) => output,
                                 None => continue,
                             }
                         }

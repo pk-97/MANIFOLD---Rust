@@ -867,9 +867,7 @@ fn scaled_authored_glass_scene(instance_scale: f32, object_scale: f32, thickness
     nodes.push(json!({"id":400,"nodeId":"scaled_glass_instance","typeId":"node.arrange_copies",
         "params":{
             "max_capacity":{"type":"Int","value":1},"active_count":{"type":"Int","value":1},
-            "layout":{"type":"Enum","value":1},
-            "extent_x":{"type":"Float","value":0.0},"extent_y":{"type":"Float","value":0.0},
-            "extent_z":{"type":"Float","value":0.0},"base_scale":{"type":"Float","value":instance_scale}
+            "base_scale":{"type":"Float","value":instance_scale}
         }}));
     graph["wires"].as_array_mut().unwrap().push(json!({
         "fromNode":400,"fromPort":"instances","toNode":20,"toPort":"instances_1"

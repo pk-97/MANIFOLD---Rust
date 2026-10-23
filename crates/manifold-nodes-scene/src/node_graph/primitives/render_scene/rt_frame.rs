@@ -179,122 +179,143 @@ impl RenderScene {
             let appearance_changed = !opaque_draws.clone().all(|draw| draw.appearance_content_known)
                 || self.rt_appearance_key != Some(appearance_key);
 
-            let structural_changed = self.rt_accel_topo_key != Some(topo_key)
+            let mut structural_changed = self.rt_accel_topo_key != Some(topo_key)
                 || self.rt_accel.as_ref().is_none_or(|a| a.check_topology(objects).is_err());
-            self.rt_changes.clear();
-            for (index, draw) in opaque_draws.clone().enumerate() {
-                self.rt_changes.push(rt_changes::classify_mesh_change(
-                    self.rt_mesh_revisions[index], draw.mesh_revision,
-                    draw.topology_hint, structural_changed || !draw.geometry_content_known,
-                ));
-            }
-            #[cfg(feature = "gpu-proofs")]
-            if ctx.gpu.as_ref().is_some_and(|gpu| gpu.force_rt_rebuild) {
-                self.rt_changes.fill(RtGeometryChange::Rebuild);
-            }
-            let geometry_changed = self.rt_changes.iter().any(|c| *c != RtGeometryChange::Reuse);
-            let changes = rt_changes::SceneChanges {
-                geometry: geometry_changed,
-                appearance: appearance_changed,
-                instances: structural_changed || !opaque_draws.clone().all(|draw| draw.geometry_content_known)
-                    || self.rt_accel_key != Some(accel_key),
+            // An update the resident set cannot express prepares and runs
+            // again in this frame, as a structural change does; ray tracing
+            // never waits on warmup to come back.
+            let (alpha_textures, update, history_changed) = loop {
+                self.rt_changes.clear();
+                for (index, draw) in opaque_draws.clone().enumerate() {
+                    self.rt_changes.push(rt_changes::classify_mesh_change(
+                        self.rt_mesh_revisions[index], draw.mesh_revision,
+                        draw.topology_hint, structural_changed || !draw.geometry_content_known,
+                    ));
+                }
+                #[cfg(feature = "gpu-proofs")]
+                if ctx.gpu.as_ref().is_some_and(|gpu| gpu.force_rt_rebuild) {
+                    self.rt_changes.fill(RtGeometryChange::Rebuild);
+                }
+                let geometry_changed = self.rt_changes.iter().any(|c| *c != RtGeometryChange::Reuse);
+                let changes = rt_changes::SceneChanges {
+                    geometry: geometry_changed,
+                    appearance: appearance_changed,
+                    instances: structural_changed || !opaque_draws.clone().all(|draw| draw.geometry_content_known)
+                        || self.rt_accel_key != Some(accel_key),
+                };
+                let history_changed = changes.reset_history();
+                let instance_changed = changes.update_instances();
+                if rt_source_trace_enabled() {
+                    log::info!("[RT-SOURCE] changes geometry={} appearance={} instances={} reset={}",
+                        changes.geometry, changes.appearance, changes.instances, history_changed);
+                }
+                let gpu = ctx.gpu_encoder();
+                // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
+                // count, same NLL-borrow reason the tracer/masks/params
+                // buffers above are ensured before `opaque_draws`'
+                // long-lived immutable borrow starts.
+                // RT_INSTANCING_DESIGN.md D11: the GPU table is canonical
+                // per-object rows [0, N) + per-slot rows [N, N+Σ), matching
+                // `ensure_normal_sources` — object-indexed readers (n4.w
+                // roughness, RS-C sampler) use the canonical rows,
+                // instance_id-indexed readers add N via params.slot_row_base.
+                // A wired draw contributes its live `instance_count` slot rows;
+                // unwired draws contribute their one identity slot.
+                let rt_gi_slot_count: usize = objects
+                    .iter()
+                    .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
+                    .sum::<usize>()
+                    + objects.len();
+                let tracer = self.rt_tracer.as_ref().expect("ensured before maintenance");
+                if structural_changed {
+                    let plan = tracer.plan_accel(gpu.device, self.rt_accel.as_ref(), objects)
+                        .map_err(rt_frame_failure)?;
+                    let mut additional_bytes = plan.additional_peak_bytes();
+                    for (capacity, needed, stride) in [
+                        (self.rt_gi_materials_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>()),
+                        (self.rt_obj_motion_capacity, objects.len(), std::mem::size_of::<[[f32; 4]; 4]>()),
+                        (self.rt_normal_sources_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>()),
+                        (self.rt_normal_sources_scratch_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>()),
+                    ] {
+                        if capacity < needed {
+                            additional_bytes = additional_bytes.checked_add((needed * stride) as u64)
+                                .ok_or(FrameRenderFailure::RtAllocation)?;
+                        }
+                    }
+                    manifold_node_engine::load::expand::admit_candidate_bytes(
+                        gpu.device.modifier_memory_snapshot(), additional_bytes,
+                    ).map_err(|error| {
+                        log::error!("node.render_scene: RT candidate admission failed: {error}");
+                        FrameRenderFailure::RtAllocation
+                    })?;
+                    let materials = prepare_rt_table::<manifold_gpu::raytrace::GiMaterial>(
+                        gpu.device, self.rt_gi_materials_capacity, rt_gi_slot_count, false)?;
+                    let motion = prepare_rt_table::<[[f32; 4]; 4]>(
+                        gpu.device, self.rt_obj_motion_capacity, objects.len(), false)?;
+                    let normals = prepare_rt_table::<manifold_gpu::raytrace::RtNormalSource>(
+                        gpu.device, self.rt_normal_sources_capacity, rt_gi_slot_count, false)?;
+                    let normal_scratch = prepare_rt_table::<manifold_gpu::raytrace::RtNormalSource>(
+                        gpu.device, self.rt_normal_sources_scratch_capacity, rt_gi_slot_count, true)?;
+                    self.rt_gi_upload.try_reserve(rt_gi_slot_count.saturating_sub(self.rt_gi_upload.len()))
+                        .map_err(|_| FrameRenderFailure::RtAllocation)?;
+                    self.rt_motion_upload.try_reserve(objects.len().saturating_sub(self.rt_motion_upload.len()))
+                        .map_err(|_| FrameRenderFailure::RtAllocation)?;
+                    tracer.prepare_accel(gpu.device, &mut self.rt_accel, plan)
+                        .map_err(rt_frame_failure)?;
+                    for (replacement, destination, capacity, needed) in [
+                        (materials, &mut self.rt_gi_materials, &mut self.rt_gi_materials_capacity, rt_gi_slot_count),
+                        (motion, &mut self.rt_obj_motion, &mut self.rt_obj_motion_capacity, objects.len()),
+                        (normals, &mut self.rt_normal_sources, &mut self.rt_normal_sources_capacity, rt_gi_slot_count),
+                        (normal_scratch, &mut self.rt_normal_sources_scratch, &mut self.rt_normal_sources_scratch_capacity, rt_gi_slot_count),
+                    ] {
+                        if let Some(buffer) = replacement {
+                            *destination = Some(buffer);
+                            *capacity = needed;
+                        }
+                    }
+                }
+                // RT-T1-B: same cadence as `gi_materials` above — rebuilt from
+                // the SAME `objects` slice every RT-ready frame (below), not
+                // gated on the accel-rebuild key (an object's `transform` alone
+                // changing, e.g. animation, must refresh its normal_matrix too).
+                // RT-T2-A: also returns the ordered alpha-masked-object base-
+                // color-texture list, threaded straight to `dispatch_shadow_
+                // rays` below (same per-frame cadence — this list can change
+                // even when topology/transform don't, e.g. a material swap).
+                // BUG-wytp: the same returned list now also carries normal-map
+                // textures (and MR maps, since R3), indexed by
+                // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
+                let alpha_textures = manifold_gpu::raytrace::ensure_normal_sources_snapshot(
+                    &mut self.rt_normal_sources_scratch,
+                    &mut self.rt_normal_sources_scratch_capacity,
+                    &mut self.rt_normal_sources,
+                    &mut self.rt_normal_sources_capacity,
+                    gpu.device,
+                    gpu.native_enc,
+                    objects,
+                );
+                let accel = self.rt_accel.as_mut().ok_or(FrameRenderFailure::RtNeedsPreparation)?;
+                #[cfg(feature = "gpu-proofs")]
+                let fault = gpu.fail_rt_update.take();
+                #[cfg(not(feature = "gpu-proofs"))]
+                let fault: Option<manifold_gpu::raytrace::RtAccelError> = None;
+                let update = match fault {
+                    Some(fault) => Err(fault),
+                    None => tracer.encode_accel_update(
+                        gpu.device, gpu.native_enc, accel, objects, &self.rt_changes,
+                        gi_materials_data, instance_changed, changes.refresh_emissive(),
+                    ),
+                };
+                match update {
+                    // A rejected update encodes nothing, so preparing and
+                    // encoding again is safe.
+                    Err(manifold_gpu::raytrace::RtAccelError::NeedsPreparation) if !structural_changed => {
+                        structural_changed = true;
+                    }
+                    update => break (alpha_textures, update.map_err(rt_frame_failure)?, history_changed),
+                }
             };
-            let history_changed = changes.reset_history();
-            let instance_changed = changes.update_instances();
-            if rt_source_trace_enabled() {
-                log::info!("[RT-SOURCE] changes geometry={} appearance={} instances={} reset={}",
-                    changes.geometry, changes.appearance, changes.instances, history_changed);
-            }
             let gpu = ctx.gpu_encoder();
-            // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
-            // count, same NLL-borrow reason the tracer/masks/params
-            // buffers above are ensured before `opaque_draws`'
-            // long-lived immutable borrow starts.
-            // RT_INSTANCING_DESIGN.md D11: the GPU table is canonical
-            // per-object rows [0, N) + per-slot rows [N, N+Σ), matching
-            // `ensure_normal_sources` — object-indexed readers (n4.w
-            // roughness, RS-C sampler) use the canonical rows,
-            // instance_id-indexed readers add N via params.slot_row_base.
-            // A wired draw contributes its live `instance_count` slot rows;
-            // unwired draws contribute their one identity slot.
-            let rt_gi_slot_count: usize = objects
-                .iter()
-                .map(|o| if o.instances_addr != 0 { o.instance_slots.max(1) as usize } else { 1 })
-                .sum::<usize>()
-                + objects.len();
-            let tracer = self.rt_tracer.as_ref().expect("ensured before maintenance");
-            if structural_changed {
-                let plan = tracer.plan_accel(gpu.device, self.rt_accel.as_ref(), objects)
-                    .map_err(rt_frame_failure)?;
-                let mut additional_bytes = plan.additional_peak_bytes();
-                for (capacity, needed, stride) in [
-                    (self.rt_gi_materials_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>()),
-                    (self.rt_obj_motion_capacity, objects.len(), std::mem::size_of::<[[f32; 4]; 4]>()),
-                    (self.rt_normal_sources_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>()),
-                    (self.rt_normal_sources_scratch_capacity, rt_gi_slot_count, std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>()),
-                ] {
-                    if capacity < needed {
-                        additional_bytes = additional_bytes.checked_add((needed * stride) as u64)
-                            .ok_or(FrameRenderFailure::RtAllocation)?;
-                    }
-                }
-                manifold_node_engine::load::expand::admit_candidate_bytes(
-                    gpu.device.modifier_memory_snapshot(), additional_bytes,
-                ).map_err(|error| {
-                    log::error!("node.render_scene: RT candidate admission failed: {error}");
-                    FrameRenderFailure::RtAllocation
-                })?;
-                let materials = prepare_rt_table::<manifold_gpu::raytrace::GiMaterial>(
-                    gpu.device, self.rt_gi_materials_capacity, rt_gi_slot_count, false)?;
-                let motion = prepare_rt_table::<[[f32; 4]; 4]>(
-                    gpu.device, self.rt_obj_motion_capacity, objects.len(), false)?;
-                let normals = prepare_rt_table::<manifold_gpu::raytrace::RtNormalSource>(
-                    gpu.device, self.rt_normal_sources_capacity, rt_gi_slot_count, false)?;
-                let normal_scratch = prepare_rt_table::<manifold_gpu::raytrace::RtNormalSource>(
-                    gpu.device, self.rt_normal_sources_scratch_capacity, rt_gi_slot_count, true)?;
-                self.rt_gi_upload.try_reserve(rt_gi_slot_count.saturating_sub(self.rt_gi_upload.len()))
-                    .map_err(|_| FrameRenderFailure::RtAllocation)?;
-                self.rt_motion_upload.try_reserve(objects.len().saturating_sub(self.rt_motion_upload.len()))
-                    .map_err(|_| FrameRenderFailure::RtAllocation)?;
-                tracer.prepare_accel(gpu.device, &mut self.rt_accel, plan)
-                    .map_err(rt_frame_failure)?;
-                for (replacement, destination, capacity, needed) in [
-                    (materials, &mut self.rt_gi_materials, &mut self.rt_gi_materials_capacity, rt_gi_slot_count),
-                    (motion, &mut self.rt_obj_motion, &mut self.rt_obj_motion_capacity, objects.len()),
-                    (normals, &mut self.rt_normal_sources, &mut self.rt_normal_sources_capacity, rt_gi_slot_count),
-                    (normal_scratch, &mut self.rt_normal_sources_scratch, &mut self.rt_normal_sources_scratch_capacity, rt_gi_slot_count),
-                ] {
-                    if let Some(buffer) = replacement {
-                        *destination = Some(buffer);
-                        *capacity = needed;
-                    }
-                }
-            }
-            // RT-T1-B: same cadence as `gi_materials` above — rebuilt from
-            // the SAME `objects` slice every RT-ready frame (below), not
-            // gated on the accel-rebuild key (an object's `transform` alone
-            // changing, e.g. animation, must refresh its normal_matrix too).
-            // RT-T2-A: also returns the ordered alpha-masked-object base-
-            // color-texture list, threaded straight to `dispatch_shadow_
-            // rays` below (same per-frame cadence — this list can change
-            // even when topology/transform don't, e.g. a material swap).
-            // BUG-wytp: the same returned list now also carries normal-map
-            // textures (and MR maps, since R3), indexed by
-            // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
-            let alpha_textures = manifold_gpu::raytrace::ensure_normal_sources_snapshot(
-                &mut self.rt_normal_sources_scratch,
-                &mut self.rt_normal_sources_scratch_capacity,
-                &mut self.rt_normal_sources,
-                &mut self.rt_normal_sources_capacity,
-                gpu.device,
-                gpu.native_enc,
-                objects,
-            );
-            let accel = self.rt_accel.as_mut().ok_or(FrameRenderFailure::RtNeedsPreparation)?;
-            let update = tracer.encode_accel_update(
-                gpu.device, gpu.native_enc, accel, objects, &self.rt_changes,
-                gi_materials_data, instance_changed, changes.refresh_emissive(),
-            ).map_err(rt_frame_failure)?;
             gpu.rt_updates.blas_builds += update.blas_builds;
             gpu.rt_updates.blas_refits += update.blas_refits;
             gpu.rt_updates.tlas_builds += update.tlas_builds;

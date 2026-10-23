@@ -29,6 +29,9 @@ pub struct GpuEncoder<'a> {
     pub capture_rt_geometry: bool,
     #[cfg(feature = "gpu-proofs")]
     pub force_rt_rebuild: bool,
+    /// The next ray-tracing update on this encoder fails with this, once.
+    #[cfg(feature = "gpu-proofs")]
+    pub fail_rt_update: Option<manifold_gpu::raytrace::RtAccelError>,
     /// Live per-send audio histories used by audio-reactive graph sources.
     /// The registry is content-thread owned and only borrowed for this frame.
     pub audio_visuals: Option<&'a manifold_core::audio_visual::AudioVisualRegistry>,
@@ -62,6 +65,8 @@ impl<'a> GpuEncoder<'a> {
             capture_rt_geometry: false,
             #[cfg(feature = "gpu-proofs")]
             force_rt_rebuild: false,
+            #[cfg(feature = "gpu-proofs")]
+            fail_rt_update: None,
             audio_visuals: None,
             frame_status: crate::runtime::frame_status::FrameRenderStatus::Complete,
         }
@@ -87,6 +92,8 @@ impl<'a> GpuEncoder<'a> {
             capture_rt_geometry: false,
             #[cfg(feature = "gpu-proofs")]
             force_rt_rebuild: false,
+            #[cfg(feature = "gpu-proofs")]
+            fail_rt_update: None,
             audio_visuals: None,
             frame_status: crate::runtime::frame_status::FrameRenderStatus::Complete,
         }
