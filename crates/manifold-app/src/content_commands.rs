@@ -772,6 +772,13 @@ impl ContentThread {
             ContentCommand::SetPhysicsOverlay(layer) => {
                 self.content_pipeline.set_physics_overlay(layer);
             }
+            ContentCommand::DrawLayerAgain(layer) => {
+                for renderer in self.engine.renderers_mut() {
+                    if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                        gen_renderer.draw_layer_again(&layer);
+                    }
+                }
+            }
             ContentCommand::PickSceneItem(pick) => {
                 self.content_pipeline.push_scene_pick(pick);
             }

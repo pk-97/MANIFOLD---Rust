@@ -20,8 +20,9 @@ use manifold_ui::panels::scene_setup_panel::{
     AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, SceneItemVm, SceneSetupState, SceneSetupVm,
 };
 
-/// The panel's state for the selected layer.
-pub(crate) fn scene_state(project: &Project, layer: Option<&Layer>) -> SceneSetupState {
+/// The panel's state for the selected layer. A layer `notices` lists as
+/// stopped offers Draw Again on its World.
+pub(crate) fn scene_state(project: &Project, layer: Option<&Layer>, notices: &crate::layer_notices::LayerNotices) -> SceneSetupState {
     let Some(layer) = layer else {
         return SceneSetupState::NoSelection("Select a layer to set up its scene.".to_owned());
     };
@@ -32,7 +33,12 @@ pub(crate) fn scene_state(project: &Project, layer: Option<&Layer>) -> SceneSetu
     let (Some(inst), Some(doc)) = (layer.gen_params(), project.scene_of(&layer_id)) else {
         return SceneSetupState::NoScene { layer_id };
     };
-    SceneSetupState::Live(Box::new(scene_vm(project, layer_id, doc, inst)))
+    let stopped = notices.is_stopped(&layer_id);
+    let mut vm = scene_vm(project, layer_id, doc, inst);
+    for item in vm.items.iter_mut().filter(|item| item.kind == ItemKind::World) {
+        item.draw_again = stopped;
+    }
+    SceneSetupState::Live(Box::new(vm))
 }
 
 fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetInstance) -> SceneSetupVm {
@@ -116,6 +122,7 @@ fn item_vm(
         copy_view: matches!(&item.fields, ItemFields::Camera(_)),
         environment,
         aim_sun_file,
+        draw_again: false,
         row_reasons: row_reasons(doc, item),
     }
 }
@@ -343,7 +350,7 @@ mod tests {
         let inst = project.timeline.layers[index].gen_params_mut().expect("scene params");
         inst.install_scene_document(doc).expect("the scene compiles");
 
-        let SceneSetupState::Live(vm) = scene_state(&project, Some(&project.timeline.layers[index])) else {
+        let SceneSetupState::Live(vm) = scene_state(&project, Some(&project.timeline.layers[index]), &Default::default()) else {
             panic!("the scene tab is live");
         };
         let block = vm.items.iter().find(|item| item.id.as_str() == "swarm").and_then(|item| item.material.as_ref());

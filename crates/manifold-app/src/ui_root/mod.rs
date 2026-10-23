@@ -137,6 +137,10 @@ pub struct UIRoot {
     pub setup_fits: crate::setup_check::SetupFitReport,
     /// Failed effect-chain builds from the content thread, for the inspector.
     pub chain_failures: crate::content_state::ChainFailures,
+    /// Scene layers' node errors and runaway stops, for the Scene panel's Draw Again.
+    pub layer_notices: std::sync::Arc<crate::layer_notices::LayerNotices>,
+    /// The newest layer notice already toasted.
+    pub(crate) layer_notice_shown: u64,
     pub input: UIInputSystem,
     pub layout: ScreenLayout,
     /// Node-intent dispatch: maps a gesture on a node to a `PanelAction`,
@@ -512,6 +516,8 @@ impl UIRoot {
             driver_bpm: None,
             setup_fits: std::sync::Arc::from([]),
             chain_failures: std::sync::Arc::from([]),
+            layer_notices: Default::default(),
+            layer_notice_shown: 0,
             input: UIInputSystem::new(),
             layout: ScreenLayout::new(1280.0, 720.0),
             intents: manifold_ui::intent::IntentRegistry::new(),

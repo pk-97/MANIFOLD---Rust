@@ -6,6 +6,7 @@ wait on) the real machine-wide lock.
 """
 
 import contextlib
+import io
 import os
 import signal
 import subprocess
@@ -27,7 +28,8 @@ class GpuQueueTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name)
-        self.env = {**os.environ, "MANIFOLD_GPU_QUEUE_DIR": str(self.dir / "q")}
+        # The queue's own runs never wait for a MANIFOLD app open on this machine.
+        self.env = {**os.environ, "MANIFOLD_GPU_QUEUE_DIR": str(self.dir / "q"), "MANIFOLD_GPU_APP_WAIT": "off"}
         directory = patch.object(gpu_queue, "queue_dir", return_value=self.dir / "q")
         directory.start()
         self.addCleanup(directory.stop)
@@ -65,6 +67,21 @@ class GpuQueueTests(unittest.TestCase):
         self.assertIn("waiting for the GPU: held by pid", second_err)
         self.assertIn("holding for", second_err)
         self.assertIn("acquired after", second_err)
+
+    def test_open_app_holds_a_run_then_reports_it_not_run(self):
+        out = io.StringIO()
+        self.assertFalse(gpu_queue.wait_for_app_to_quit(0.2, out=out, poll=0.05, pids=lambda: [4242]))
+        self.assertIn("waiting for MANIFOLD to quit (pid 4242)", out.getvalue())
+        quits = iter([[4242], [4242], []])
+        self.assertTrue(gpu_queue.wait_for_app_to_quit(5, out=io.StringIO(), poll=0.01,
+                                                       pids=lambda: next(quits)))
+        with patch.object(gpu_queue, "app_pids", return_value=[4242]), \
+                patch.object(gpu_queue, "hold") as hold, \
+                contextlib.redirect_stderr(io.StringIO()), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(gpu_queue.run_queued(["true"], app_wait=0.1), gpu_queue.NOT_RUN_EXIT)
+        hold.assert_not_called()
+        self.assertIn("NOT RUN", printed.getvalue())
 
     def test_exit_code_is_the_commands(self):
         proc = self.spawn("--", "sh", "-c", "exit 7")

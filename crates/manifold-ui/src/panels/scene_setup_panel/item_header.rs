@@ -1,7 +1,8 @@
 //! The selected item's header (SCENE_SURFACES D8): its name once (click to
 //! rename), its kind, and Frame, copy and delete where they apply. Each
 //! light's header heads its sub-section inside Lighting. The Camera header
-//! also carries "Use this view" (D14).
+//! also carries "Use this view" (D14); the World of a layer that stopped
+//! drawing carries Draw Again.
 
 use super::*;
 
@@ -17,6 +18,7 @@ pub(super) struct HeaderButtons {
     frame: Vec<(NodeId, ItemId)>,
     use_view: Option<(NodeId, ItemId)>,
     aim_sun: Option<(NodeId, String)>,
+    draw_again: Option<NodeId>,
 }
 
 impl HeaderButtons {
@@ -27,6 +29,7 @@ impl HeaderButtons {
         self.frame.clear();
         self.use_view = None;
         self.aim_sun = None;
+        self.draw_again = None;
     }
 }
 
@@ -91,6 +94,13 @@ impl ScenePanel {
             tree.set_name(remove, "scene_setup.properties.remove");
             self.header_buttons.remove.push((remove, item.id.clone()));
         }
+        let cy = cy + ROW_H + ROW_GAP;
+        if !item.draw_again {
+            return cy;
+        }
+        let id = tree.add_button_keyed(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, btn_style(), "Draw Again", item_key(&item.id, "draw_again"));
+        tree.set_name(id, "scene_setup.properties.draw_again");
+        self.header_buttons.draw_again = Some(id);
         cy + ROW_H + ROW_GAP
     }
 
@@ -173,6 +183,9 @@ impl ScenePanel {
         }
         if let Some((_, item)) = self.header_buttons.use_view.as_ref().filter(|(button, _)| *button == node_id) {
             return Some(PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(layer(), item.clone())));
+        }
+        if self.header_buttons.draw_again == Some(node_id) {
+            return Some(PanelAction::Root(RootAction::SceneDrawAgain(layer())));
         }
         if let Some((_, file)) = self.header_buttons.aim_sun.as_ref().filter(|(button, _)| *button == node_id) {
             return Some(PanelAction::Project(ProjectAction::SceneSetupAimSunAtHdri(layer(), file.clone())));

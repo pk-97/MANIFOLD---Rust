@@ -19,6 +19,16 @@ pub const DEFAULT_TRACE_WORK_LIMITS: TraceWorkLimits = TraceWorkLimits {
 /// budget from small tiles.
 pub const TRACE_BUFFER_CEILING_SECONDS: f64 = 0.1;
 
+/// GPU time one scene layer's frame may take before it counts as a runaway
+/// frame. The window server shares the GPU, so a frame this long already
+/// stalls the whole Mac; it is far above any frame a show plays at speed and
+/// under the watchdog.
+pub const RUNAWAY_LAYER_FRAME_SECONDS: f64 = 0.25;
+
+/// Runaway frames in a row before the layer stops drawing, so one slow frame
+/// (a first upload, a pipeline build) never stops it.
+pub const RUNAWAY_LAYER_FRAMES: u32 = 3;
+
 /// GPU time each trace tile is sized to. Half a 60 fps frame keeps one buffer
 /// from starving presentation, and leaves room for the cost per pixel to jump
 /// between measurements without reaching the ceiling.

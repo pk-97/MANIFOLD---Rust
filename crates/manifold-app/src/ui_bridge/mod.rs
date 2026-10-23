@@ -251,6 +251,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::OpenCardMapping { .. }
             | RootAction::OpenGeneratorGraphEditor
             | RootAction::SceneSetupCopyViewportCamera(..)
+            | RootAction::SceneDrawAgain(..)
             | RootAction::EffectMappingRangeSnapshot { .. }
             | RootAction::EffectMappingRangeChanged { .. }
             | RootAction::EffectMappingRangeCommit { .. }

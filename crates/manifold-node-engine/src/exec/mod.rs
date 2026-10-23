@@ -10,6 +10,7 @@ pub mod execution;
 pub mod execution_plan;
 pub mod instance_upload;
 pub mod metal_backend;
+pub mod node_errors;
 pub mod resource_allocation;
 pub mod sim_metrics;
 pub mod substeps;

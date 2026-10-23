@@ -123,6 +123,8 @@ pub struct GpuEncoder {
     /// (0 = none), set only in debug builds so every pipeline bind can
     /// debug-assert the pipeline was built for this pass.
     pub(crate) pass_samples: (u32, u32),
+    /// Buffers committed while a [`super::GpuSpanTimer`] span is open.
+    pub(crate) span_buffers: Option<Vec<Retained<ProtocolObject<dyn MTLCommandBuffer>>>>,
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -2881,9 +2883,6 @@ impl GpuEncoder {
     /// encoding into a fresh command buffer from the same queue. Submission
     /// order is preserved; Metal's automatic hazard tracking covers cross-chunk
     /// resource dependencies. Never blocks (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
-    ///
-    /// Profiled frames retain completed command buffers so their timings and
-    /// completion status are included in the final profile.
     pub fn commit_and_continue(&mut self, device: &GpuDevice) {
         self.end_current();
         self.register_fault_handler();
@@ -2893,6 +2892,7 @@ impl GpuEncoder {
         if let Some(profile) = &mut self.profile {
             profile.committed_buffers.push(self.cmd_buf.clone());
         }
+        if let Some(span) = &mut self.span_buffers { span.push(self.cmd_buf.clone()); }
 
         let label = unsafe { self.cmd_buf.label() }
             .map(|s| s.to_string())

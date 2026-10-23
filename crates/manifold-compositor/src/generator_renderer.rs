@@ -20,6 +20,8 @@ use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneView
 use manifold_node_engine::runtime::ModifierPreviewContext;
 
 mod physics_events;
+mod runaway;
+pub use runaway::LayerNews;
 manifold_core::testkit_visible! { mod state; }
 use state::{ActiveClip, LayerGeneratorState, ThumbGen};
 #[cfg(any(test, feature = "testkit"))]
@@ -147,6 +149,8 @@ pub struct GeneratorRenderer {
     scene_viewport_request: Option<(LayerId, NodeId, SceneViewportConfig)>,
     scene_viewport_modifier: Option<Arc<ModifierPreviewContext>>,
     scene_viewport_error: Option<SceneViewportHostError>,
+    /// Each layer's GPU frame time, the runaway cut and the stage's news.
+    watch: runaway::LayerWatch,
 }
 
 /// This generator's profiled-tag scope: `gen:{layer_id}`.
@@ -212,6 +216,7 @@ impl GeneratorRenderer {
             scene_viewport_request: None,
             scene_viewport_modifier: None,
             scene_viewport_error: None,
+            watch: runaway::LayerWatch::new(),
         }
     }
 
@@ -887,8 +892,17 @@ impl GeneratorRenderer {
             // frame.
             let alive: ahash::AHashSet<&manifold_core::LayerId> =
                 layers.iter().map(|l| &l.layer_id).collect();
-            self.layer_generators.retain(|id, _| alive.contains(id));
+            let news = &mut self.watch;
+            self.layer_generators.retain(|id, state| {
+                let alive = alive.contains(id);
+                if !alive && state.runaway.stopped() {
+                    news.push(LayerNews::Restored(id.clone()));
+                }
+                alive
+            });
         }
+        self.watch.live = !self.sim_step.export;
+        self.poll_layer_frames(layers);
 
         // Per-frame override-version sweep. `acquire_clip` only
         // rebuilds the generator on clip start, so without this pass
@@ -951,6 +965,10 @@ impl GeneratorRenderer {
                             .apply_manifest_reshape(&gp.params, layer.generator_graph());
                     }
                     ls.applied_param_version = current_param_version;
+                    // An edit or undo on a stopped layer draws it again.
+                    if ls.runaway.restore() {
+                        self.watch.push(LayerNews::Restored(layer_id.clone()));
+                    }
                 }
                 continue;
             }
@@ -1031,6 +1049,8 @@ impl GeneratorRenderer {
                 continue;
             }
 
+            // The previous layer's span ends in the buffer this commits.
+            self.watch.end(gpu);
             gpu.checkpoint();
 
             let ctx = PresetContext {
@@ -1070,6 +1090,10 @@ impl GeneratorRenderer {
                     gpu.clear_texture(&active.render_target.texture, 0.0, 0.0, 0.0, 0.0);
                     active.needs_clear = false;
                 }
+                if Self::skip_stopped(&mut self.watch, layer, &mut layer_state.runaway, gpu, &active.render_target.texture) {
+                    continue;
+                }
+                self.watch.begin(gpu, layer_state.span_key);
                 // Pass per-clip string params (e.g. text content) to the generator.
                 // If the clip's map is missing keys that other clips on the layer
                 // have set (e.g. fontFamily), fill them from the layer-level cache.
@@ -1142,6 +1166,7 @@ impl GeneratorRenderer {
                 layer_state.generator.drain_scene_impulse_diagnostics(
                     &mut self.scene_impulse_diagnostics,
                 );
+                Self::note_node_errors(&mut self.watch, &layer.layer_id, &mut layer_state.seen_errors, layer_state.generator.node_errors());
             }
             if !self.waiting_fires.is_empty()
                 && let Some(layer) = layers.get(layer_index as usize)
@@ -1149,6 +1174,11 @@ impl GeneratorRenderer {
                 let frame = self.sim_step.played_at(manifold_core::Seconds(time));
                 self.land_waiting_fires(layer, project_tempo, frame);
             }
+        }
+        // Commit the last layer's span on its own, so chrome encoded after
+        // the generators never counts as its frame time.
+        if self.watch.end(gpu) {
+            gpu.checkpoint();
         }
         if !self.waiting_fires.is_empty() {
             self.settle_waiting_fires(render_skip);
@@ -1374,6 +1404,11 @@ impl GeneratorRenderer {
         {
             generator.carry_generator_state_from(&mut prior.generator);
         }
+        // A rebuild is an edit on the layer: a stopped layer draws again.
+        if self.layer_generators.get(&layer_id).is_some_and(|prior| prior.runaway.stopped()) {
+            self.watch.push(LayerNews::Restored(layer_id.clone()));
+        }
+        let span_key = self.watch.next_key();
         self.layer_generators.insert(
             layer_id.clone(),
             LayerGeneratorState {
@@ -1389,6 +1424,9 @@ impl GeneratorRenderer {
                 string_params_dirty: true,
                 built_watched: is_watched,
                 rendered_pass: None,
+                runaway: Default::default(),
+                span_key,
+                seen_errors: 0,
             },
         );
         // Mark every active clip on this layer for a clear before the

@@ -137,7 +137,7 @@ pub fn sync_inspector_data(
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .or(active_layer);
         let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
-        let state = super::scene::scene_state(project, layer);
+        let state = super::scene::scene_state(project, layer, &ui.layer_notices);
         // The layer's FULL generator `ParamSurface`, built by the same
         // `gen_params_to_surface` the main inspector's generator card uses,
         // for THIS panel's bound layer (never `active_layer`). `All`: the

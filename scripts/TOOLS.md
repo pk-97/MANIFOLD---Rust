@@ -25,7 +25,7 @@ Landing and gates:
   gate-runner             machine-written verdict trail for lane gates  [scripts/gate_runner.py]  (cost: focused)
 
 Machine: GPU, worktrees, disk:
-  gpu-queue               GPU lock: `-- <cmd>`, `status`; campaign `reserve --owner NAME --reason TEXT --seconds N`, `clear`  [scripts/gpu_queue.py]  (cost: unit)
+  gpu-queue               GPU lock: `-- <cmd>` (waits for the MANIFOLD app to quit, else NOT RUN), `status`; campaign `reserve --owner NAME --reason TEXT --seconds N`, `clear`  [scripts/gpu_queue.py]  (cost: unit)
   worktree                the slot ring: acquire <task> <branch>, release, retire, list, reclaim  [scripts/agent-worktree.py]  (cost: unit)
   storage                 Cargo target inventory and admission; what reclaim would free  [scripts/storage_budget.py]  (cost: unit)
   claude-pane             launch a Claude Code session in a new tmux pane without stealing focus  [scripts/claude-pane.sh]  (cost: unit)
