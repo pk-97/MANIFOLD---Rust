@@ -51,7 +51,7 @@ pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily, node_type as material_node_type};
 pub use modifier::{
-    HEADER_FIELDS as MODIFIER_HEADER_FIELDS, MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_refuses, modifier_rows, modifier_type, shatter_parts,
+    HEADER_FIELDS as MODIFIER_HEADER_FIELDS, MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_refuses, modifier_rows, new_card_targets, modifier_type, shatter_parts,
     shatter_refuses,
 };
 pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
@@ -60,7 +60,7 @@ pub use ocean::OCEAN_LOOK;
 pub use physics::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
 pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, MAX_COUNT_REASON as SWARM_MAX_COUNT_REASON, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
-pub use scene_wide::{LOOP_CAMERA_ONLY, LOOP_CAMERA_ROWS, NO_SCENE_LOOP, add_refused, has_loop_camera, scene_loop, waits_for_loop_camera};
+pub use scene_wide::{LOOP_CAMERA_ONLY, LOOP_CAMERA_ROWS, NO_LOOP_CAMERA, NO_SCENE_LOOP, add_refused, has_loop_camera, scene_loop, waits_for_loop_camera};
 pub use water::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET, WATER_FAMILY_REASON, WATER_MATERIAL_ROLE,
     WATER_OBJECT_ROLE, WATER_ROWS, WHITEWATER_PER_CELL, WORLD_FOLLOWS, water_look,

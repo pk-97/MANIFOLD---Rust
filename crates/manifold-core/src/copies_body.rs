@@ -44,7 +44,7 @@ pub const COPY_LAYOUT_SCATTER: u32 = 1;
 pub const MAX_COPIES: usize = 65_536;
 
 /// [`MAX_COPIES`]'s reason, on the Count row.
-pub const MAX_COPIES_REASON: &str = "Up to 65,536: each copy group reserves memory for that many copies when the scene is built, so Count moves live";
+pub const MAX_COPIES_REASON: &str = "Up to 65,536 copies, and Count changes live";
 
 /// Scatter jitters each copy by up to this fraction of its spacing per axis.
 pub const SCATTER_JITTER: f32 = 0.04;

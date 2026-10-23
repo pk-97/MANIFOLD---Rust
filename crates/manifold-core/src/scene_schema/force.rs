@@ -39,7 +39,7 @@ const fn r(property: &'static str, exposure: Exposure, when: fn(&ItemFields) -> 
 }
 
 const fn on_off(when: fn(&ItemFields) -> bool) -> PropertyRow {
-    r("enabled", perform(FORCES, 0), when)
+    r("enabled", perform(FORCES, 0), when).name("On")
 }
 
 const fn centre(property: &'static str, when: fn(&ItemFields) -> bool) -> PropertyRow {

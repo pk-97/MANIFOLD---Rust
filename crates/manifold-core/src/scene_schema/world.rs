@@ -51,6 +51,10 @@ const fn ray_tracing(property: &'static str) -> PropertyRow {
     row(property, RENDER, RayTracing, setup())
 }
 
+const fn ray_traced(property: &'static str) -> PropertyRow {
+    ray_tracing(property).gate(Gate::Dim(Feature::RayTracing))
+}
+
 const fn look(property: &'static str, reach: Reach, section: ControlGroup, order: u8) -> PropertyRow {
     row(property, reach, section, perform(CardBand::Look, order))
 }
@@ -116,13 +120,14 @@ pub static WORLD_ROWS: [PropertyRow; 57] = [
     row("ao_multiply_amount", AO_MULTIPLY, AmbientOcclusion, Exposure::Automatic("the whole occlusion")).param("amount"),
     row("ao_multiply_mode", AO_MULTIPLY, AmbientOcclusion, Exposure::Automatic("multiplied onto the picture")).param("mode"),
     row("ao_mask_amount", AO_MASK, AmbientOcclusion, Exposure::Internal("the render's ao mask decides where it lands")).param("amount"),
-    // Render.
-    ray_tracing("rt_enabled"),
+    // Render. Each ray-traced term does nothing while Ray Tracing is off.
+    ray_tracing("rt_enabled").switch(Feature::RayTracing),
     ray_tracing("temporal_upscale"),
-    ray_tracing("rt_reflections"),
-    ray_tracing("rt_shadows"),
-    ray_tracing("rt_ao"),
-    ray_tracing("rt_gi"),
+    ray_traced("rt_reflections"),
+    ray_traced("rt_shadows"),
+    // Its own name: the Ambient Occlusion section below is the screen-space kind.
+    ray_traced("rt_ao").name("Ray-Traced Occlusion"),
+    ray_traced("rt_gi"),
     row("rt_firefly_clamp", RENDER, RayTracing, Exposure::Internal("always on; it only guards against fireflies")),
     row("rt_denoise_feed", RENDER, RayTracing, Exposure::Internal("a debug view of the denoiser input")),
 ];

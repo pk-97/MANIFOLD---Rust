@@ -767,11 +767,12 @@ impl ScenePanel {
     /// sections, a separator between sections.
     fn add_menu_items(&self, section: outliner::TreeSection) -> Vec<super::dropdown::DropdownItem> {
         let Some(vm) = self.state.as_live() else { return Vec::new() };
-        // An entry goes inside the selected item when that item can hold it
-        // (a Group holds anything, a Water its sources), else at the top;
-        // one that can only sit inside something it is not offered.
+        // Under Objects an entry goes inside the selected item when that item
+        // can hold it (a Group holds anything, a Water its sources), else at
+        // the top; one that can only sit inside something it is not offered.
+        // Every other section adds at the top, where its row lists it.
         let selected = match self.selection.get(&vm.layer_id) {
-            Some(SceneSelection::Item(id)) => vm.item(id),
+            Some(SceneSelection::Item(id)) if section == outliner::TreeSection::Objects => vm.item(id),
             _ => None,
         };
         let groups = section.groups();
@@ -786,7 +787,6 @@ impl ScenePanel {
             .collect();
         entries.sort_by_key(|(entry, _)| groups.iter().position(|group| *group == entry.group));
         let selected_items = self.selected_scene_items();
-        let no_copies = self.copies_missing(vm, &selected_items);
         let mut items: Vec<super::dropdown::DropdownItem> = Vec::with_capacity(entries.len());
         for (index, &(entry, ref parent)) in entries.iter().enumerate() {
             // The section names the first group; others say theirs when the
@@ -797,10 +797,10 @@ impl ScenePanel {
             } else {
                 format!("{} \u{2014} {}", entry.group, entry.label)
             });
-            // The menu has no hover, so a refused entry says why in its label.
-            let reason = entry.disabled.as_ref().or(entry.needs_copies.as_ref().filter(|_| no_copies));
-            if let Some(reason) = reason {
-                item.label = format!("{} ({reason})", item.label);
+            // The menu has no hover, so a refused entry says why in its
+            // label, as every other menu does.
+            if let Some(reason) = &entry.disabled {
+                item.label = format!("{} \u{2014} {reason}", item.label);
                 item.enabled = false;
             }
             item.action = Some(PanelAction::Project(ProjectAction::SceneAdd {
@@ -813,19 +813,6 @@ impl ScenePanel {
             items.push(item);
         }
         items
-    }
-
-    /// Whether a new copy Modifier would have no copies to move: a selected
-    /// Object or Group without Copies, or nothing selected and nothing in the
-    /// scene with Copies. A new card aims at the selected Objects and Groups,
-    /// else the whole scene (`new_modifier`).
-    fn copies_missing(&self, vm: &SceneSetupVm, selected: &[ItemId]) -> bool {
-        let targets: Vec<&SceneItemVm> =
-            selected.iter().filter_map(|id| vm.item(id)).filter(|item| matches!(item.kind, ItemKind::Object | ItemKind::Group)).collect();
-        if targets.is_empty() {
-            return !vm.items.iter().any(|item| item.depth == 0 && item.holds_copies);
-        }
-        !targets.iter().all(|item| item.holds_copies)
     }
 
     /// Handle one input event. Returns `(consumed, actions)`.
@@ -919,10 +906,12 @@ impl ScenePanel {
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
                         actions.push(PanelAction::Params(ParamsAction::ParamToggle(target, manifold_foundation::ParamId::from(param))));
                     } else if let Some(&(_, section)) = self.add_buttons.iter().find(|(id, _)| id == node_id) {
-                        actions.push(PanelAction::Root(RootAction::SceneSetupActionMenuClicked {
-                            button_node_id: *node_id,
-                            items: self.add_menu_items(section),
-                        }));
+                        let mut items = self.add_menu_items(section);
+                        // A menu of one thing is no choice: the + adds it.
+                        match items.as_mut_slice() {
+                            [only] if only.enabled => actions.extend(only.action.take()),
+                            _ => actions.push(PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id: *node_id, items })),
+                        }
                     } else if let Some(act) = self.item_header_click(*node_id, vm).or_else(|| self.material_click(*node_id, vm)) {
                         actions.push(act);
                     } else if let Some(row_role) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id)) {

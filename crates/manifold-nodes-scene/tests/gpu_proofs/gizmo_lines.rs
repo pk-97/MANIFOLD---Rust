@@ -19,7 +19,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_nodes_scene::node_graph::gizmo_pass::GizmoPass;
-use manifold_nodes_scene::node_graph::viewport_overlay::WorldLine;
+use manifold_nodes_scene::node_graph::viewport_overlay::{WorldLine, box_lines};
 
 use super::render_scene_object_visibility::scene_json;
 
@@ -102,11 +102,12 @@ fn save(name: &str, pixels: &[[f32; 4]]) {
     image::save_buffer(&path, &rgba, W, H, image::ColorType::Rgba8).expect("write proof png");
 }
 
-/// Green lines over the ground: a grid under the occluder and a post that
-/// pierces it, so part of each line sits behind the red plane.
+/// Green lines over the ground: a grid under the occluder, a post that
+/// pierces it, so part of each line sits behind the red plane, and a box
+/// whose corners show the edges meeting with no notch.
 fn lines() -> Vec<WorldLine> {
-    let mut lines = Vec::new();
-    let mut add = |a: [f32; 3], b: [f32; 3]| lines.push(WorldLine { a, b, color: GREEN });
+    let mut lines = box_lines([1.4, 0.02, 1.4], [2.6, 1.2, 2.6], GREEN).to_vec();
+    let mut add = |a: [f32; 3], b: [f32; 3]| lines.push(WorldLine { a, b, color: GREEN, caps: false });
     for i in -2..=2 {
         let t = i as f32;
         add([t, 0.02, -3.0], [t, 0.02, 3.0]);

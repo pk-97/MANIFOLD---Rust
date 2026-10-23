@@ -76,7 +76,10 @@ pub static SCENE_MIRROR_ROWS: [PropertyRow; 3] = [
 ];
 
 /// Why the Loop rig cannot be picked: it rides the scene's Scene Loop.
-pub const NO_SCENE_LOOP: &str = "Loop rides the scene's Scene Loop: add one from Add, Modifier";
+pub const NO_SCENE_LOOP: &str = "Loop rides the scene's Scene Loop: add one with the Modifiers +";
+
+/// Why a pinned Scene Loop row that only a Loop camera reads does nothing yet.
+pub const NO_LOOP_CAMERA: &str = "Add Loop Camera to use it";
 
 /// The scene's Scene Loop card, on or off.
 pub fn scene_loop(doc: &SceneDoc) -> Option<&Item> {

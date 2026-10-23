@@ -21,7 +21,6 @@ fn item(id: &str, kind: ItemKind, name: &str, depth: usize, parent: Option<&str>
         draw_again: false,
         add_loop_camera: false,
         row_reasons: Vec::new(),
-        holds_copies: false,
         body: false,
         look: None,
     }
@@ -53,7 +52,7 @@ fn live_panel(fields: Vec<FieldRowVm>) -> (ScenePanel, UITree) {
 fn live_panel_with(cube: SceneItemVm) -> (ScenePanel, UITree) {
     let vm = SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
-        items: vec![item("world", ItemKind::World, "World", 0, None), cube],
+        items: vec![item("world", ItemKind::World, "World", 0, None), cube.clone()],
         add_entries: vec![AddEntryVm {
             key: "object.cube".into(),
             group: "Object".into(),
@@ -61,7 +60,6 @@ fn live_panel_with(cube: SceneItemVm) -> (ScenePanel, UITree) {
             top_level: true,
             holders: vec![ItemKind::Group],
             disabled: None,
-            needs_copies: None,
         }],
     };
     let surface = ParamSurface {
@@ -347,15 +345,14 @@ fn a_modifier_header_carries_its_type_and_switch() {
     assert!(named(&tree, "scene_setup.properties.header_field.modifier_type").is_some());
 }
 
-fn add_entry(key: &str, group: &str, label: &str, needs_copies: bool) -> AddEntryVm {
+fn add_entry(key: &str, group: &str, label: &str, refused: bool) -> AddEntryVm {
     AddEntryVm {
         key: key.into(),
         group: group.into(),
         label: label.into(),
         top_level: true,
         holders: vec![ItemKind::Group],
-        disabled: None,
-        needs_copies: needs_copies.then(|| "Turn on Copies to move them".into()),
+        disabled: refused.then(|| "Turn on Copies to move them".into()),
     }
 }
 
@@ -368,36 +365,40 @@ fn add_menu(panel: &mut ScenePanel, tree: &mut UITree, section: &str) -> Vec<cra
     items.clone()
 }
 
-/// Each section's + offers only what belongs there, and a copy Modifier is
-/// offered only for a target with Copies on (SCENE_REFINEMENT_DESIGN rulings
-/// 2 and 4).
+/// Each section's + offers only what belongs there, and a refused entry
+/// says why (SCENE_REFINEMENT_DESIGN rulings 2 and 4).
 #[test]
-fn each_section_adds_its_own_and_copy_modifiers_need_copies() {
-    let mut cube = item("cube", ItemKind::Object, "Cube", 0, None);
-    let vm = |cube: SceneItemVm| SceneSetupVm {
+fn each_section_adds_its_own_and_says_why_one_is_refused() {
+    let cube = item("cube", ItemKind::Object, "Cube", 0, None);
+    let vm = |refused: bool| SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
-        items: vec![item("world", ItemKind::World, "World", 0, None), cube],
+        items: vec![item("world", ItemKind::World, "World", 0, None), cube.clone()],
         add_entries: vec![
             add_entry("object.cube", "Object", "Cube", false),
             add_entry("group", "Group", "Group", false),
             add_entry("light.sun", "Light", "Sun", false),
             add_entry("modifier.bend", "Modifier", "Bend", false),
-            add_entry("modifier.copy_wave", "Modifier", "Copy Wave", true),
+            add_entry("modifier.copy_wave", "Modifier", "Copy Wave", refused),
         ],
     };
     let (mut panel, mut tree) = live_panel_with(cube.clone());
-    panel.configure(SceneSetupState::Live(Box::new(vm(cube.clone()))));
+    panel.configure(SceneSetupState::Live(Box::new(vm(true))));
     tree.clear();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
     assert!(named(&tree, "scene_tree.add").is_none(), "the top Add is gone");
     let labels = |items: &[crate::panels::dropdown::DropdownItem]| items.iter().map(|item| item.label.clone()).collect::<Vec<_>>();
     assert_eq!(labels(&add_menu(&mut panel, &mut tree, "Objects")), ["Cube", "Group"]);
-    assert_eq!(labels(&add_menu(&mut panel, &mut tree, "Lighting")), ["Sun"]);
+    // A menu of one thing is no choice: the + adds it at the top.
+    let lighting = named(&tree, "scene_tree.add.Lighting").expect("Lighting has a +");
+    let actions = click(&mut panel, &mut tree, lighting);
+    assert!(
+        matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneAdd { entry, parent: None, .. })] if entry == "light.sun"),
+        "{actions:?}"
+    );
     let modifiers = add_menu(&mut panel, &mut tree, "Modifiers");
-    assert_eq!(labels(&modifiers), ["Bend", "Copy Wave (Turn on Copies to move them)"]);
+    assert_eq!(labels(&modifiers), ["Bend", "Copy Wave \u{2014} Turn on Copies to move them"]);
     assert!(!modifiers[1].enabled);
-    cube.holds_copies = true;
-    panel.configure(SceneSetupState::Live(Box::new(vm(cube))));
+    panel.configure(SceneSetupState::Live(Box::new(vm(false))));
     tree.clear();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
     let modifiers = add_menu(&mut panel, &mut tree, "Modifiers");

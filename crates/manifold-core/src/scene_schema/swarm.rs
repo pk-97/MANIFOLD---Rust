@@ -17,7 +17,7 @@ use crate::scene_doc::{DrawAs, EmitFrom, Item, ItemFields, ItemId, SceneDoc, Sha
 pub const MAX_COUNT: f32 = 100_000.0;
 
 /// [`MAX_COUNT`]'s reason, on the Count row.
-pub const MAX_COUNT_REASON: &str = "Up to 100,000: the swarm reserves memory for that many particles when it is built, so Count moves live";
+pub const MAX_COUNT_REASON: &str = "Up to 100,000 particles, and Count changes live";
 
 const T: Reach = Reach::Own("transform");
 const BOUNDS: Reach = Reach::Own("bounds");
@@ -90,7 +90,7 @@ pub static SWARM_ROWS: [PropertyRow; 77] = [
         .tip(MAX_COUNT_REASON),
     row("size", COPIES, Simulation, perform(CardBand::Scene, 1)).limit(AT_LEAST_ZERO),
     row("air_drag", FORCES, Simulation, perform(CardBand::Scene, 2)).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
-    row("visible", DRAW, Look, setup()).when(draws_solid),
+    row("visible", DRAW, Look, setup()).toggle().when(draws_solid),
     row("cast_shadows", DRAW, Look, setup()).when(draws_solid),
     row("emission_strength", DRAW, Look, setup()).limit(AT_LEAST_ZERO).when(draws_solid),
     row("gain", DRAW, Look, setup()).limit(AT_LEAST_ZERO).when(draws_solid),

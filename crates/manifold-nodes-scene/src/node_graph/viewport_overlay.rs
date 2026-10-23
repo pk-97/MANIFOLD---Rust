@@ -29,6 +29,10 @@ pub struct WorldLine {
     pub a: [f32; 3],
     pub b: [f32; 3],
     pub color: [u8; 4],
+    /// Square ends half a line width past each end, so a box's edges meet
+    /// with no notch at the corner. A curve's pieces have none, so where
+    /// they join nothing draws twice.
+    pub caps: bool,
 }
 
 /// Which overlay layers to draw. All on by default — D7: "light billboards,
@@ -112,7 +116,7 @@ pub fn box_lines(min: [f32; 3], max: [f32; 3], color: [u8; 4]) -> [WorldLine; 12
         [max[0], max[1], max[2]],
         [min[0], max[1], max[2]],
     ];
-    let edge = |a: usize, b: usize| WorldLine { a: corners[a], b: corners[b], color };
+    let edge = |a: usize, b: usize| WorldLine { a: corners[a], b: corners[b], color, caps: true };
     [
         edge(0, 1), edge(1, 2), edge(2, 3), edge(3, 0),
         edge(4, 5), edge(5, 6), edge(6, 7), edge(7, 4),
@@ -198,7 +202,7 @@ pub fn fluid_lattice_lines(
                 a[along] = layout.min[along];
                 let mut b = a;
                 b[along] = layout.min[along] + layout.size[along];
-                out.push(WorldLine { a, b, color: LATTICE_COLOR });
+                out.push(WorldLine { a, b, color: LATTICE_COLOR, caps: false });
                 step += stride;
             }
         }
@@ -217,9 +221,9 @@ pub fn grid_lines(extent: f32, step: f32) -> Vec<WorldLine> {
     for i in -steps..=steps {
         let p = i as f32 * step;
         let color = if i == 0 { GRID_AXIS_Z_COLOR } else { GRID_COLOR };
-        lines.push(WorldLine { a: [p, 0.0, -extent], b: [p, 0.0, extent], color });
+        lines.push(WorldLine { a: [p, 0.0, -extent], b: [p, 0.0, extent], color, caps: false });
         let color = if i == 0 { GRID_AXIS_X_COLOR } else { GRID_COLOR };
-        lines.push(WorldLine { a: [-extent, 0.0, p], b: [extent, 0.0, p], color });
+        lines.push(WorldLine { a: [-extent, 0.0, p], b: [extent, 0.0, p], color, caps: false });
     }
     lines
 }
@@ -231,9 +235,9 @@ pub fn grid_lines(extent: f32, step: f32) -> Vec<WorldLine> {
 pub fn light_billboard_lines(pos: [f32; 3], size: f32) -> [WorldLine; 3] {
     let [x, y, z] = pos;
     [
-        WorldLine { a: [x - size, y, z], b: [x + size, y, z], color: LIGHT_COLOR },
-        WorldLine { a: [x, y - size, z], b: [x, y + size, z], color: LIGHT_COLOR },
-        WorldLine { a: [x, y, z - size], b: [x, y, z + size], color: LIGHT_COLOR },
+        WorldLine { a: [x - size, y, z], b: [x + size, y, z], color: LIGHT_COLOR, caps: false },
+        WorldLine { a: [x, y - size, z], b: [x, y + size, z], color: LIGHT_COLOR, caps: false },
+        WorldLine { a: [x, y, z - size], b: [x, y, z + size], color: LIGHT_COLOR, caps: false },
     ]
 }
 
@@ -261,7 +265,8 @@ pub fn physics_gizmo_color(family: PhysicsGizmoFamily) -> [u8; 4] {
 /// cross, an arrow its shaft and a four-line head.
 pub fn physics_gizmo_lines(gizmo: &PhysicsGizmo, out: &mut [WorldLine; PHYSICS_GIZMO_LINES]) -> usize {
     let color = physics_gizmo_color(gizmo.family);
-    let line = |a, b| WorldLine { a, b, color };
+    let line = |a, b| WorldLine { a, b, color, caps: false };
+    let edge = |a, b| WorldLine { a, b, color, caps: true };
     let add = |p: [f32; 3], d: [f32; 3], s: f32| -> [f32; 3] { std::array::from_fn(|i| p[i] + d[i] * s) };
     match gizmo.shape {
         PhysicsGizmoShape::Box { center, half, rotation } => {
@@ -274,7 +279,7 @@ pub fn physics_gizmo_lines(gizmo: &PhysicsGizmo, out: &mut [WorldLine; PHYSICS_G
             for k in 0..8 {
                 for axis in 0..3 {
                     if k >> axis & 1 == 0 {
-                        out[n] = line(corner(k), corner(k | 1 << axis));
+                        out[n] = edge(corner(k), corner(k | 1 << axis));
                         n += 1;
                     }
                 }
@@ -372,14 +377,14 @@ pub fn camera_frustum_lines(cam: &Camera, aspect: f32, far_visual: f32) -> Vec<W
     let bl = corner(-1.0, -1.0);
     let br = corner(1.0, -1.0);
     vec![
-        WorldLine { a: cam.pos, b: tl, color: FRUSTUM_COLOR },
-        WorldLine { a: cam.pos, b: tr, color: FRUSTUM_COLOR },
-        WorldLine { a: cam.pos, b: bl, color: FRUSTUM_COLOR },
-        WorldLine { a: cam.pos, b: br, color: FRUSTUM_COLOR },
-        WorldLine { a: tl, b: tr, color: FRUSTUM_COLOR },
-        WorldLine { a: tr, b: br, color: FRUSTUM_COLOR },
-        WorldLine { a: br, b: bl, color: FRUSTUM_COLOR },
-        WorldLine { a: bl, b: tl, color: FRUSTUM_COLOR },
+        WorldLine { a: cam.pos, b: tl, color: FRUSTUM_COLOR, caps: true },
+        WorldLine { a: cam.pos, b: tr, color: FRUSTUM_COLOR, caps: true },
+        WorldLine { a: cam.pos, b: bl, color: FRUSTUM_COLOR, caps: true },
+        WorldLine { a: cam.pos, b: br, color: FRUSTUM_COLOR, caps: true },
+        WorldLine { a: tl, b: tr, color: FRUSTUM_COLOR, caps: true },
+        WorldLine { a: tr, b: br, color: FRUSTUM_COLOR, caps: true },
+        WorldLine { a: br, b: bl, color: FRUSTUM_COLOR, caps: true },
+        WorldLine { a: bl, b: tl, color: FRUSTUM_COLOR, caps: true },
     ]
 }
 
@@ -537,7 +542,7 @@ mod tests {
 
     #[test]
     fn physics_gizmos_draw_their_shapes_in_their_family_color() {
-        let blank = WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] };
+        let blank = WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4], caps: false };
         let mut lines = [blank; PHYSICS_GIZMO_LINES];
         let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
 
@@ -605,8 +610,8 @@ mod tests {
     fn project_lines_drops_behind_camera_segments() {
         let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
         // A line entirely behind the camera (positive Z, looking down -Z).
-        let behind = WorldLine { a: [0.0, 0.0, 5.0], b: [1.0, 0.0, 5.0], color: [255, 0, 0, 255] };
-        let visible = WorldLine { a: [0.0, 0.0, -5.0], b: [1.0, 0.0, -5.0], color: [255, 0, 0, 255] };
+        let behind = WorldLine { a: [0.0, 0.0, 5.0], b: [1.0, 0.0, 5.0], color: [255, 0, 0, 255], caps: false };
+        let visible = WorldLine { a: [0.0, 0.0, -5.0], b: [1.0, 0.0, -5.0], color: [255, 0, 0, 255], caps: false };
         let projected = project_lines(&cam, 100, 100, &[behind, visible]);
         assert_eq!(projected.len(), 1, "only the in-front line should survive projection");
     }

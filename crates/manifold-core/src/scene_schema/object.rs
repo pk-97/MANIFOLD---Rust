@@ -65,7 +65,7 @@ pub static OBJECT_ROWS: [PropertyRow; 76] = [
     row("scale_y", T, Transform, setup()),
     row("scale_z", T, Transform, setup()),
     row("billboard", T, Transform, setup()),
-    row("visible", DRAW, Look, setup()),
+    row("visible", DRAW, Look, setup()).toggle(),
     row("cast_shadows", DRAW, Look, setup()),
     row("emission_strength", DRAW, Look, setup()).limit(AT_LEAST_ZERO),
     row("gain", DRAW, Look, setup()).limit(AT_LEAST_ZERO),

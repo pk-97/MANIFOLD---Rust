@@ -1182,7 +1182,7 @@ impl RowHost {
         match ids.kind {
             RowKind::Switch => {
                 let on = value > 0.5;
-                tree.set_style(ids.button_id, toggle_btn_style(on));
+                tree.set_style(ids.button_id, switch_style(on, spec.inactive_reason.is_some()));
                 tree.set_text(ids.button_id, switch_text(on));
             }
             RowKind::Choice => {
