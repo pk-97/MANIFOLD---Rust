@@ -416,7 +416,12 @@ def shader_index(repo, workspace):
         if source.suffix not in {'.rs', '.wgsl'} or not source.is_file():
             continue
         relative = source.relative_to(repo).as_posix()
-        for name in set(re.findall(r'[\w.-]+\.wgsl', source.read_text())):
+        text = source.read_text()
+        if source.suffix == '.rs':
+            # A Rust comment naming a shader does not compile it; WGSL keeps
+            # its comment lines because includes are written as comments.
+            text = re.sub(r'(?m)^\s*//.*$', '', text)
+        for name in set(re.findall(r'[\w.-]+\.wgsl', text)):
             users.setdefault(name, set()).add(relative)
 
     def resolve(path):
