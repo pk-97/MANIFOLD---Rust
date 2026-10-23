@@ -1,5 +1,8 @@
 //! The far terms a swarm reads past its force lattice, one set per laid
 //! lattice, packed for `node.move_swarm` (`move_swarm_body.wgsl`, `move_swarm_far`).
+//! A hit's kick is carried the same way: `node.swarm_forces` lays one set
+//! per tick of the frame's impulse lattices and packs them after those
+//! lattices, so a particle past the lattice takes the kick its distance gives.
 //!
 //! Layout, in `[f32; 4]`: a header of [`FAR_HEADER`], then each lattice's
 //! terms back to back, [`FAR_TERM`] each, every lattice padded with zero
@@ -36,19 +39,45 @@ impl FarForces {
         self.per_lattice = 0;
     }
 
+    /// Words packed for `slots` sets of `terms` terms each.
+    pub const fn words(slots: usize, terms: usize) -> usize {
+        FAR_HEADER + slots * terms * FAR_TERM
+    }
+
+    /// Room for `slots` sets of `terms` terms each, so laying them never
+    /// allocates.
+    pub fn reserve(&mut self, slots: usize, terms: usize) {
+        self.scratch.reserve(terms + 1);
+        self.terms.reserve(slots * terms);
+        self.counts.reserve(slots);
+        self.packed.reserve(Self::words(slots, terms));
+    }
+
     /// One set of terms per field, in lattice order. A field with no far
     /// form clears the whole set, so the swarm reads the lattice's edge
     /// there as before.
     pub fn lay<'a>(&mut self, lattice: &ForceLattice, fields: impl Iterator<Item = &'a FieldValue>) {
+        self.lay_sums(lattice, fields.map(std::iter::once));
+    }
+
+    /// One set of terms per slot, each the terms of every field in it, so a
+    /// slot reads their sum (a tick several hits land on). A slot with no
+    /// field reads nothing past the lattice; a field with no far form
+    /// clears the whole set, as in [`Self::lay`].
+    pub fn lay_sums<'a, S: Iterator<Item = &'a FieldValue>>(&mut self, lattice: &ForceLattice, slots: impl Iterator<Item = S>) {
         self.terms.clear();
         self.counts.clear();
-        for field in fields {
-            if !field.far_terms(&mut self.scratch) {
-                self.clear();
-                return;
+        for slot in slots {
+            let mut count = 0;
+            for field in slot {
+                if !field.far_terms(&mut self.scratch) {
+                    self.clear();
+                    return;
+                }
+                count += self.scratch.len();
+                self.terms.extend_from_slice(&self.scratch);
             }
-            self.counts.push(self.scratch.len());
-            self.terms.extend_from_slice(&self.scratch);
+            self.counts.push(count);
         }
         // At least one term, so a field whose far value is nothing still
         // reads nothing past the lattice rather than the edge.
@@ -88,19 +117,26 @@ impl FarForces {
     /// Lattice `slot`'s far force at `local`, a point in the lattice's frame,
     /// read from the packed words: the CPU twin of `move_swarm_far`.
     pub fn sample(&self, slot: usize, local: [f32; 3]) -> ForceSample {
-        let words = self.packed();
-        if words.is_empty() {
-            return ForceSample::default();
-        }
-        let world: [f32; 3] = std::array::from_fn(|d| words[4][d] + (0..3).map(|i| words[1 + i][d] * local[i]).sum::<f32>());
-        let start = FAR_HEADER + slot * self.per_lattice * FAR_TERM;
-        let terms: Vec<FarTerm> = words[start..start + self.per_lattice * FAR_TERM].chunks_exact(FAR_TERM).map(unpack).collect();
-        let mut s = sample_far(&terms, world);
-        let to_local = |v: [f32; 3]| -> [f32; 3] { std::array::from_fn(|i| (0..3).map(|d| words[5 + i][d] * v[d]).sum::<f32>()) };
-        s.push = to_local(s.push);
-        s.drag_wind = to_local(s.drag_wind);
-        s
+        sample_packed(self.packed(), slot, local)
     }
+}
+
+/// Slot `slot`'s far force at `local` from packed `words` (a header whose
+/// first word counts the terms per slot, then the sets), as the GPU reads
+/// them wherever they sit. Nothing for no words or no terms.
+pub fn sample_packed(words: &[[f32; 4]], slot: usize, local: [f32; 3]) -> ForceSample {
+    let per_lattice = words.first().map_or(0, |head| head[0] as usize);
+    if per_lattice == 0 {
+        return ForceSample::default();
+    }
+    let world: [f32; 3] = std::array::from_fn(|d| words[4][d] + (0..3).map(|i| words[1 + i][d] * local[i]).sum::<f32>());
+    let start = FAR_HEADER + slot * per_lattice * FAR_TERM;
+    let terms: Vec<FarTerm> = words[start..start + per_lattice * FAR_TERM].chunks_exact(FAR_TERM).map(unpack).collect();
+    let mut s = sample_far(&terms, world);
+    let to_local = |v: [f32; 3]| -> [f32; 3] { std::array::from_fn(|i| (0..3).map(|d| words[5 + i][d] * v[d]).sum::<f32>()) };
+    s.push = to_local(s.push);
+    s.drag_wind = to_local(s.drag_wind);
+    s
 }
 
 fn pack(term: &FarTerm) -> [[f32; 4]; FAR_TERM] {

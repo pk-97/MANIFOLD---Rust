@@ -17,9 +17,18 @@ pub const FORCE_LATTICE_STRIDE: u32 = 4;
 /// or quality cap.
 pub const FORCE_LATTICE_RESERVE: u32 = 3;
 
+/// Impulse records, four floats each, a swarm keeps room for up front:
+/// [`FORCE_LATTICE_RESERVE`] impulse lattices of `nodes` nodes, then their
+/// kicks' far terms at one term a tick (a Burst is one radial term). More
+/// hits on one tick grow it; not a cap.
+pub const fn impulse_reserve(nodes: usize) -> usize {
+    let ticks = FORCE_LATTICE_RESERVE as usize;
+    ticks * nodes + FarForces::words(ticks, 1)
+}
+
 mod far;
 mod fill_workers;
-pub use far::{FAR_HEADER, FAR_TERM, FarForces};
+pub use far::{FAR_HEADER, FAR_TERM, FarForces, sample_packed};
 pub use fill_workers::FillWorkers;
 
 /// Lattices below this many nodes fill on the calling thread: handing out

@@ -2793,6 +2793,7 @@ fn body_min_extent(body: &RigidBody) -> f32 {
             .transform
             .scale
             .into_iter()
+            .map(f32::abs)
             .fold(f32::INFINITY, f32::min);
     };
     let mut minimum = [f32::INFINITY; 3];
@@ -2815,13 +2816,14 @@ fn body_min_extent(body: &RigidBody) -> f32 {
         body.transform
             .scale
             .into_iter()
+            .map(f32::abs)
             .fold(f32::INFINITY, f32::min)
     }
 }
 
 fn body_collision_radius(body: &RigidBody) -> f32 {
     let Some(geometry) = body.collider.as_ref() else {
-        return body.transform.scale.into_iter().fold(0.0, f32::max);
+        return body.transform.scale.into_iter().map(f32::abs).fold(0.0, f32::max);
     };
     let mut radius = 0.0f32;
     geometry.for_each_point(|point| {
@@ -2831,7 +2833,7 @@ fn body_collision_radius(body: &RigidBody) -> f32 {
     if radius > 0.0 && radius.is_finite() {
         radius
     } else {
-        body.transform.scale.into_iter().fold(0.0, f32::max)
+        body.transform.scale.into_iter().map(f32::abs).fold(0.0, f32::max)
     }
 }
 

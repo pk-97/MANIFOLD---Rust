@@ -11,7 +11,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::exec::effect_node::SimStep;
 use manifold_physics::clock::{LiveLoad, SimulationClock};
-use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, ForceLattice, LatticeFrame, TickForces};
+use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, FarForces, ForceLattice, LatticeFrame, TickForces, impulse_reserve};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::tick_hits::TickHits;
 use manifold_physics::{FieldValue, PlayedTime, Seconds, TickStamp, VectorField};
@@ -37,7 +37,7 @@ const fn param(name: &'static str, label: &'static str, ty: ParamType, default: 
 manifold_node_engine::primitive! {
     name: SwarmForces,
     type_id: "node.swarm_forces",
-    purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Scene hits (a force's Impulse) land once, on the tick whose simulated interval holds the fire: a frame with hits lays one impulse lattice per tick (zero where none landed) and impulse_tick names the frame's first tick (−1 none). Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
+    purpose: "Run a swarm's fixed simulation clock (the same ticks water runs, so live and export match) and lay the scene's acceleration field onto a lattice over the swarm's box at each tick's start: one lattice while the frame's ticks agree, one per tick otherwise. Publishes the frame's ticks, each tick's own simulated seconds as a buffer (Speed scales them, so a Speed ramp moves the swarm the same at any frame rate), the clock's epoch, the field scalars and the forces buffer node.move_swarm reads. Scene hits (a force's Impulse) land once, on the tick whose simulated interval holds the fire: a frame with hits lays one impulse lattice per tick (zero where none landed), then each tick's kick as far terms for a particle past the lattice, and impulse_tick names the frame's first tick (−1 none). Paused or at Speed 0 the clock holds and runs no ticks. A backward seek, a loop, a reset edge or a Sim Rate edit restarts the clock in a new epoch.",
     inputs: {
         bounds: Transform optional,
         frame: Transform optional,
@@ -87,7 +87,9 @@ manifold_node_engine::primitive! {
         published: [f32; OUTPUTS.len()] = [0.0; OUTPUTS.len()],
         tick_seconds: Vec<f32> = Vec::with_capacity(FORCE_LATTICE_RESERVE as usize),
         hits: TickHits<FieldValue> = TickHits::new("Swarm impulses"),
+        // The frame's impulse lattices, then their kicks' far terms.
         impulses: Vec<[f32; 4]> = Vec::new(),
+        kick_far: FarForces = FarForces::default(),
         impulses_dirty: bool = false,
     },
 }
@@ -221,14 +223,18 @@ impl SwarmForces {
 
     /// Lay this frame's hits, one impulse lattice per tick of the frame from
     /// `first`, each the sum of the hits landing on that tick (zero where
-    /// none did), as the liquids do offline. Returns the first tick.
+    /// none did), as the liquids do offline. After the lattices come the
+    /// kicks' far terms, one set per tick, read past the lattice
+    /// (`move_swarm_far`); a lone header of no terms reads the lattice's
+    /// edge there. Returns the first tick.
     fn lay_impulses(&mut self, lattice: ForceLattice, first: u64, ticks: u32) -> Result<Option<u64>, String> {
-        // Room for a live frame's hit lattices, made when the lattice
-        // changes, so a hit never allocates on stage; only offline catch-up
-        // grows it.
-        let reserve = FORCE_LATTICE_RESERVE as usize * lattice.node_count();
+        // Room for a live frame's hit lattices and far terms, made when the
+        // lattice changes, so a hit never allocates on stage; only offline
+        // catch-up grows it.
+        let reserve = impulse_reserve(lattice.node_count());
         if self.impulses.capacity() < reserve {
             self.impulses.reserve_exact(reserve - self.impulses.len());
+            self.kick_far.reserve(FORCE_LATTICE_RESERVE as usize, 1);
         }
         if self.hits.impulse_tick().is_none() {
             return Ok(None);
@@ -252,6 +258,12 @@ impl SwarmForces {
                     })
                 })
                 .map_err(|_| "Swarm impulses: the impulse field is not finite inside the swarm's box".to_string())?;
+        }
+        let on_tick = |tick: u64| events.iter().filter(move |event| event.applied.tick == tick).map(|event| &event.value);
+        self.kick_far.lay_sums(&lattice, (first..first + u64::from(ticks)).map(on_tick));
+        match self.kick_far.packed() {
+            [] => self.impulses.push([0.0; 4]),
+            block => self.impulses.extend_from_slice(block),
         }
         self.impulses_dirty = true;
         Ok(Some(first))
@@ -356,7 +368,8 @@ mod tests {
     use manifold_node_engine::exec::effect_node::{EffectNode, FrameTime, SimStep};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
-    use manifold_physics::{FieldValue, VectorField};
+    use manifold_physics::{FalloffCurve, FieldValue, VectorField};
+    use manifold_physics::force_lattice::sample_packed;
     use manifold_physics::clock::TICK;
 
     // manifold-water-rigid registers the field wire type in the app; this
@@ -447,7 +460,8 @@ mod tests {
                 return Vec::new();
             }
             assert_eq!(first, frame.get("first_tick"), "a frame's impulse lattices start at its first tick");
-            self.node.impulses.chunks_exact(self.node.impulses.len() / ticks).enumerate()
+            let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"].map(|name| frame.get(name) as usize).iter().product::<usize>();
+            self.node.impulses[..ticks * nodes].chunks_exact(nodes).enumerate()
                 .filter(|(_, lattice)| lattice.iter().any(|node| *node != [0.0; 4]))
                 .map(|(slot, lattice)| (first as u64 + slot as u64, lattice.to_vec()))
                 .collect()
@@ -689,6 +703,38 @@ mod tests {
         let two = rig.kicks_until(30.0, 0.5 + 2.0 * TICK, 0.5 + 4.0 * TICK);
         assert_eq!((one.len(), two.len()), (1, 2));
         assert_eq!((rig.node.impulses.as_ptr(), rig.node.impulses.capacity()), room);
+    }
+
+    /// BUG-cw4l4 (Radial impulses read the lattice edge past a swarm force
+    /// lattice): past the swarm's box a Burst kicks a particle by the field
+    /// at its own distance, read from the far terms packed after the frame's
+    /// impulse lattices, never the box edge's value. A tick no hit landed on
+    /// kicks nothing there. The swarm here feels no other force, so only the
+    /// kick carries far terms.
+    #[test]
+    fn a_burst_past_the_lattice_kicks_by_its_distance() {
+        let burst = FieldValue::radial_curve([0.0, 2.0, 0.0], 2.5, 1.0, FalloffCurve::Inverse).unwrap().scaled(6.0).unwrap();
+        let mut rig = Rig::new(None, SimStep::live(Seconds(TICK)));
+        rig.play(30.0, 0.5, 0.0, &[]);
+        rig.fire(0.5 + 0.3 * TICK, 1, burst.clone());
+        let frame = rig.frame(0.5, 0.5 + 2.0 * TICK, &[]);
+        let ticks = frame.get("ticks") as usize;
+        assert!(frame.get("impulse_tick") >= 0.0 && ticks == 2, "the hit lands in a frame of two ticks");
+        let lattice = ForceLattice::over_box([-2.0, 0.0, -2.0], [4.0; 3], 17);
+        let nodes = lattice.node_count();
+        let (lattices, far) = rig.node.impulses.split_at(ticks * nodes);
+        let hit = lattices.chunks_exact(nodes).position(|kicks| kicks.iter().any(|node| *node != [0.0; 4])).expect("one tick took the hit");
+        for x in [[6.0, 2.0, 0.0], [0.0, 9.0, 0.5], [-5.0, -3.0, 4.0]] {
+            for slot in 0..ticks {
+                let kick = sample_packed(far, slot, x).push;
+                let expected = if slot == hit { burst.sample(x) } else { [0.0; 3] };
+                for axis in 0..3 {
+                    assert!((kick[axis] - expected[axis]).abs() <= 1e-5 * (1.0 + expected[axis].abs()), "{x:?} tick {slot}: {kick:?} vs {expected:?}");
+                }
+            }
+            let edge = lattice.sample(&lattices[hit * nodes..(hit + 1) * nodes], x);
+            assert!((0..3).any(|axis| (edge[axis] - burst.sample(x)[axis]).abs() > 1e-2), "{x:?}: the box edge reads {edge:?}, a different kick");
+        }
     }
 
     /// A fire while the swarm is paused (Speed 0) is discarded with a

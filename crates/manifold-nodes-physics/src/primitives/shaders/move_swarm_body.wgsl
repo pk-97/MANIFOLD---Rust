@@ -16,8 +16,10 @@
 // lands once on its own tick; impulse_tick is −1 on every frame without one.
 // A particle past the lattice reads the tick's far terms instead (far_terms
 // per lattice; 0 reads the lattice's edge): radial and vortex forces from
-// their formulas, uniform pushes and air at their constant value. Layout and
-// CPU twin: `manifold_physics::force_lattice::FarForces`.
+// their formulas, uniform pushes and air at their constant value. A hit's
+// kick past the lattice reads, the same way, the far terms packed after the
+// frame's impulse lattices (their header counts the terms; 0 reads the
+// edge). Layout and CPU twin: `manifold_physics::force_lattice::FarForces`.
 
 // The tick's force at x: push and drag rate, then drag rate × wind.
 struct MoveSwarmForce {
@@ -55,7 +57,12 @@ fn move_swarm_impulse(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<
 const MOVE_SWARM_FAR_HEADER: u32 = 32u;
 const MOVE_SWARM_FAR_TERM: u32 = 16u;
 
-fn move_swarm_far_word(w: u32) -> vec4<f32> {
+// Word w of the far terms: of far_forces, or (kick) of impulses, where the
+// kicks' far terms follow the frame's impulse lattices.
+fn move_swarm_far_word(w: u32, kick: bool) -> vec4<f32> {
+    if kick {
+        return vec4<f32>(buf_impulses[w], buf_impulses[w + 1u], buf_impulses[w + 2u], buf_impulses[w + 3u]);
+    }
     return vec4<f32>(buf_far_forces[w], buf_far_forces[w + 1u], buf_far_forces[w + 2u], buf_far_forces[w + 3u]);
 }
 
@@ -91,19 +98,20 @@ fn move_swarm_far_leaf(x: vec3<f32>, head: vec4<f32>, center: vec3<f32>, axis: v
     return arm * m;
 }
 
-// The force past the lattice at x (in the swarm's frame) from lattice slot
-// `slot`'s `terms` far terms: summed in the world, turned back into the frame.
-fn move_swarm_far(x: vec3<f32>, slot: u32, terms: u32) -> MoveSwarmForce {
-    let world = move_swarm_far_word(16u).xyz + move_swarm_far_word(4u).xyz * x.x + move_swarm_far_word(8u).xyz * x.y
-        + move_swarm_far_word(12u).xyz * x.z;
+// The force past the lattice at x (in the swarm's frame) from slot `slot`'s
+// `terms` far terms packed from float `base` (move_swarm_far_word): summed in
+// the world, turned back into the frame.
+fn move_swarm_far(x: vec3<f32>, base: u32, slot: u32, terms: u32, kick: bool) -> MoveSwarmForce {
+    let world = move_swarm_far_word(base + 16u, kick).xyz + move_swarm_far_word(base + 4u, kick).xyz * x.x
+        + move_swarm_far_word(base + 8u, kick).xyz * x.y + move_swarm_far_word(base + 12u, kick).xyz * x.z;
     var push = vec3<f32>(0.0);
     var drag = 0.0;
     var drag_wind = vec3<f32>(0.0);
     for (var i = 0u; i < terms; i = i + 1u) {
-        let w = MOVE_SWARM_FAR_HEADER + (slot * terms + i) * MOVE_SWARM_FAR_TERM;
-        let head = move_swarm_far_word(w);
-        let a = move_swarm_far_word(w + 4u);
-        let b = move_swarm_far_word(w + 8u);
+        let w = base + MOVE_SWARM_FAR_HEADER + (slot * terms + i) * MOVE_SWARM_FAR_TERM;
+        let head = move_swarm_far_word(w, kick);
+        let a = move_swarm_far_word(w + 4u, kick);
+        let b = move_swarm_far_word(w + 8u, kick);
         drag = drag + b.w;
         if head.x < 0.5 {
             push = push + a.xyz;
@@ -111,12 +119,12 @@ fn move_swarm_far(x: vec3<f32>, slot: u32, terms: u32) -> MoveSwarmForce {
         } else {
             let f = move_swarm_far_leaf(world, head, a.xyz, b.xyz);
             push = push + f * a.w;
-            drag_wind = drag_wind + f * buf_far_forces[w + 12u];
+            drag_wind = drag_wind + f * move_swarm_far_word(w + 12u, kick).x;
         }
     }
-    let r0 = move_swarm_far_word(20u).xyz;
-    let r1 = move_swarm_far_word(24u).xyz;
-    let r2 = move_swarm_far_word(28u).xyz;
+    let r0 = move_swarm_far_word(base + 20u, kick).xyz;
+    let r1 = move_swarm_far_word(base + 24u, kick).xyz;
+    let r2 = move_swarm_far_word(base + 28u, kick).xyz;
     var f: MoveSwarmForce;
     f.push_drag = vec4<f32>(dot(r0, push), dot(r1, push), dot(r2, push), drag);
     f.drag_wind = vec3<f32>(dot(r0, drag_wind), dot(r1, drag_wind), dot(r2, drag_wind));
@@ -159,7 +167,7 @@ fn body(
             let base = force_lattice_base(first_tick + t, first_tick, force_lattices, dims);
             var f: MoveSwarmForce;
             if far_terms > 0 && move_swarm_past_lattice(p.position, origin, field_spacing, dims) {
-                f = move_swarm_far(p.position, u32(clamp(t, 0, force_lattices - 1)), u32(far_terms));
+                f = move_swarm_far(p.position, 0u, u32(clamp(t, 0, force_lattices - 1)), u32(far_terms), false);
             } else {
                 f = move_swarm_force(p.position, origin, field_spacing, dims, base);
             }
@@ -169,8 +177,14 @@ fn body(
         }
         let slot = first_tick + t - impulse_tick;
         if impulse_tick >= 0 && slot >= 0 && slot < ticks {
-            let base = u32(slot) * dims.x * dims.y * dims.z;
-            p.velocity = p.velocity + move_swarm_impulse(p.position, origin, field_spacing, dims, base);
+            let nodes = dims.x * dims.y * dims.z;
+            let far = u32(ticks) * nodes * 4u;
+            let kick_terms = u32(buf_impulses[far]);
+            if kick_terms > 0u && move_swarm_past_lattice(p.position, origin, field_spacing, dims) {
+                p.velocity = p.velocity + move_swarm_far(p.position, far, u32(slot), kick_terms, true).push_drag.xyz;
+            } else {
+                p.velocity = p.velocity + move_swarm_impulse(p.position, origin, field_spacing, dims, u32(slot) * nodes);
+            }
         }
         p.position = p.position + p.velocity * dt;
         p.age = p.age + dt;

@@ -182,7 +182,7 @@ pub(crate) fn copy_width(prototype: &RigidBody) -> [f32; 3] {
     }
     std::array::from_fn(|axis| {
         let width = maximum[axis] - minimum[axis];
-        if width.is_finite() && width > 0.0 { width } else { scale[axis] }
+        if width.is_finite() && width > 0.0 { width } else { scale[axis].abs() }
     })
 }
 
