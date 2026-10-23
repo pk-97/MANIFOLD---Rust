@@ -1,15 +1,22 @@
 //! Where each copy of a copy group rests. A layout (Grid, Scatter, Line, Ring,
 //! Spiral, Random) grows out from the group's origin, spaced in multiples of
-//! the copy's own box width, and is placed as one by the group's rotation. A
-//! copy's place depends on its index and the layout rows, never on Count, so
-//! a Count change adds or removes copies at the tail. Rest poses are computed
-//! only here; the card and the gizmo show the group, never a copy.
+//! the copy's own box width, and is placed as one by the group's rotation.
+//! Line and Grid grow one way from the first copy, which sits on the origin,
+//! as Blender's Array does. Ring spreads its copies evenly round the whole
+//! circle, as Cinema 4D's radial Cloner does, so its copies slide round as
+//! Count changes. Every other layout places a copy by its index and the
+//! layout rows alone, so a Count change adds or removes copies at the tail.
+//! Body copies keep their motion through a Count change either way; only
+//! their rest places move. Rest poses are computed only here; the card and
+//! the gizmo show the group, never a copy.
 
 use manifold_core::copies_body::{spacing_unit, SCATTER_JITTER};
 use manifold_node_engine::scene::transform::Transform;
 use manifold_physics::BodyPose;
 
-use super::{pose_from_transform, CopySpawn, RigidBody, MAX_COPIES};
+use std::sync::Arc;
+
+use super::{pose_from_transform, CopySpawn, RigidBody, Solid, MAX_COPIES};
 
 /// Stored values: Grid 0, Scatter 1 (once Pile), Line 2, Ring 3, Spiral 4,
 /// Random 5.
@@ -72,15 +79,14 @@ impl Arrangement {
         }
     }
 
-    /// Whether the two differ in Count alone: the copies that stay keep
-    /// their places.
+    /// Whether the two differ in Count alone: the bodies that stay keep
+    /// their motion, and only the copies that arrive take a rest place.
     pub fn same_places(&self, other: &Self) -> bool {
         Self { count: other.count, ..*self } == *other
     }
 
-    /// Copy `index`'s rest pose for a copy whose box is `width` metres. It
-    /// depends on the index and the layout rows, never on Count, so a Count
-    /// change adds or removes copies at the tail and the rest stay put.
+    /// Copy `index`'s rest pose for a copy whose box is `width` metres. Only
+    /// a Ring's depends on Count (the module doc says why).
     pub fn rest(&self, width: [f32; 3], index: usize) -> BodyPose {
         let unit = spacing_unit(self.layout == CopyLayout::Scatter, width);
         let step = unit.map(|unit| self.spacing * unit);
@@ -93,16 +99,11 @@ impl Arrangement {
         match self.layout {
             CopyLayout::Grid => {
                 let (column, row, layer) = (index % columns, (index / columns) % columns, index / (columns * columns));
-                let offset = [
-                    centred(column, columns) * step[0],
-                    layer as f32 * step[1],
-                    centred(row, 1) * step[2],
-                ];
-                laid(offset, self.turn)
+                laid([column as f32 * step[0], layer as f32 * step[1], row as f32 * step[2]], self.turn)
             }
             CopyLayout::Scatter => {
                 let [column, layer, row] = pile_cell(index, columns);
-                let offset = [centred(column, 1) * step[0], layer as f32 * step[1], centred(row, 1) * step[2]];
+                let offset = [centred(column) * step[0], layer as f32 * step[1], centred(row) * step[2]];
                 let jitter = [0, 1, 2].map(|axis| bounded_jitter(index, axis, step[axis as usize]));
                 let mut turn = self.turn;
                 for (axis, value) in turn.iter_mut().enumerate() {
@@ -113,11 +114,15 @@ impl Arrangement {
                     rotation: compose(group, euler_quat(turn)),
                 }
             }
-            CopyLayout::Line => laid([centred(index, 1) * step[0], 0.0, 0.0], self.turn),
+            CopyLayout::Line => laid([index as f32 * step[0], 0.0, 0.0], self.turn),
             CopyLayout::Ring => {
-                // Columns copies round each ring; further rings stack up.
+                // Up to Columns copies round each ring, spread evenly round
+                // the whole circle; further rings stack up. The radius is the
+                // full ring's, so a part-filled ring is the same size with
+                // its copies further apart.
                 let (slot, ring) = (index % columns, index / columns);
-                let angle = std::f32::consts::TAU * slot as f32 / columns as f32;
+                let on_ring = self.count.saturating_sub(ring * columns).clamp(1, columns);
+                let angle = std::f32::consts::TAU * slot as f32 / on_ring as f32;
                 let radius = ring_radius(columns, step[0], width[2]);
                 let offset = [radius * angle.cos(), ring as f32 * step[1], radius * angle.sin()];
                 // Each copy's X runs along the ring, so neighbours meet side to side.
@@ -142,9 +147,9 @@ impl Arrangement {
                 // Anywhere in the cell Scatter's pile gives the copy.
                 let [column, layer, row] = pile_cell(index, columns);
                 let offset = [
-                    (centred(column, 1) + index_hash_unit(index, 6) - 0.5) * step[0],
+                    (centred(column) + index_hash_unit(index, 6) - 0.5) * step[0],
                     (layer as f32 + index_hash_unit(index, 7)) * step[1],
-                    (centred(row, 1) + index_hash_unit(index, 8) - 0.5) * step[2],
+                    (centred(row) + index_hash_unit(index, 8) - 0.5) * step[2],
                 ];
                 laid(offset, self.turn)
             }
@@ -152,19 +157,36 @@ impl Arrangement {
     }
 }
 
-/// Slot `k`'s offset, in steps, in a row of `n` slots centred on zero and
-/// filled from the centre out: 0, +1, -1, +2, ... in an odd row, +0.5, -0.5,
-/// +1.5, ... in an even one. A part-filled row stays centred and a full row
-/// is the whole centred row. An unbounded line is odd, so its first slot
-/// sits on the centre: a Grid's rows grow that way from the group's origin.
-fn centred(k: usize, n: usize) -> f32 {
-    if !n.is_multiple_of(2) {
-        let reach = k.div_ceil(2) as f32;
-        if k.is_multiple_of(2) { -reach } else { reach }
-    } else {
-        let reach = (k / 2) as f32 + 0.5;
-        if k.is_multiple_of(2) { reach } else { -reach }
+impl Arrangement {
+    /// The world-aligned box holding every copy whose own box is `bounds`
+    /// (about its origin), each at its rest pose; `None` with no copies.
+    pub fn rest_box(&self, bounds: ([f32; 3], [f32; 3])) -> Option<([f32; 3], [f32; 3])> {
+        let (lo, hi) = bounds;
+        let width: [f32; 3] = std::array::from_fn(|axis| hi[axis] - lo[axis]);
+        let centre: [f32; 3] = std::array::from_fn(|axis| 0.5 * (lo[axis] + hi[axis]));
+        let half: [f32; 3] = width.map(|w| 0.5 * w.abs());
+        let mut found: Option<([f32; 3], [f32; 3])> = None;
+        for index in 0..self.count {
+            let pose = self.rest(width, index);
+            let at = place(pose.position, pose.rotation, centre);
+            let axes = [[half[0], 0.0, 0.0], [0.0, half[1], 0.0], [0.0, 0.0, half[2]]]
+                .map(|axis| if is_identity(pose.rotation) { axis } else { rotate(pose.rotation, axis) });
+            let reach: [f32; 3] = std::array::from_fn(|k| axes.iter().map(|axis| axis[k].abs()).sum());
+            let (min, max) = found.get_or_insert((at, at));
+            for k in 0..3 {
+                min[k] = min[k].min(at[k] - reach[k]);
+                max[k] = max[k].max(at[k] + reach[k]);
+            }
+        }
+        found
     }
+}
+
+/// Slot `k`'s offset, in steps, on a line filled from the centre out: 0, +1,
+/// -1, +2, ... A pile's footprint grows that way round the group's origin.
+fn centred(k: usize) -> f32 {
+    let reach = k.div_ceil(2) as f32;
+    if k.is_multiple_of(2) { -reach } else { reach }
 }
 
 /// Copy `index`'s cell, [column, layer, row], in a pile that grows as a cube:
@@ -216,6 +238,14 @@ fn ring_radius(slots: usize, step: f32, depth: f32) -> f32 {
 /// points the world installs as its hull (a hull's extreme points are among
 /// its inputs, so the box is the installed hull's).
 pub(crate) fn copy_width(prototype: &RigidBody) -> [f32; 3] {
+    let (lo, hi) = copy_bounds(prototype);
+    std::array::from_fn(|axis| hi[axis] - lo[axis])
+}
+
+/// A copy's box about its own origin at its scale, metres: the lowest and
+/// highest corner of the installed hull's points. An axis with no extent
+/// yet (no shape, or a flat one) is the scale's width centred on the origin.
+fn copy_bounds(prototype: &RigidBody) -> ([f32; 3], [f32; 3]) {
     let scale = prototype.transform.scale;
     let mut minimum = [f32::INFINITY; 3];
     let mut maximum = [f32::NEG_INFINITY; 3];
@@ -229,10 +259,43 @@ pub(crate) fn copy_width(prototype: &RigidBody) -> [f32; 3] {
     if let Some(solid) = prototype.collider.as_deref() {
         solid.for_each_point(&mut grow);
     }
-    std::array::from_fn(|axis| {
+    for axis in 0..3 {
         let width = maximum[axis] - minimum[axis];
-        if width.is_finite() && width > 0.0 { width } else { scale[axis] }
-    })
+        if !(width.is_finite() && width > 0.0) {
+            (minimum[axis], maximum[axis]) = (-0.5 * scale[axis], 0.5 * scale[axis]);
+        }
+    }
+    (minimum, maximum)
+}
+
+/// The world-aligned box a copy group rests in: every copy's box turned and
+/// placed at its rest pose, never where physics has moved it. The Scene
+/// Loop sizes its cell by it. Measured again only when the layout or the
+/// shape changes, so a still group costs one compare a frame.
+#[derive(Default)]
+pub(crate) struct RestBox {
+    measured: Option<(Arrangement, [u32; 3])>,
+    shape: Option<Arc<Solid>>,
+    value: Option<([f32; 3], [f32; 3])>,
+}
+
+impl RestBox {
+    /// The rest box of `prototype`'s copies, `None` with none.
+    pub fn of(&mut self, prototype: &RigidBody) -> Option<([f32; 3], [f32; 3])> {
+        let arrangement = Arrangement::of(prototype, requested_count(prototype.spawn));
+        let key = (arrangement, prototype.transform.scale.map(f32::to_bits));
+        let same_shape = match (&self.shape, &prototype.collider) {
+            (None, None) => true,
+            (Some(held), Some(now)) => Arc::ptr_eq(held, now),
+            _ => false,
+        };
+        if !same_shape || self.measured != Some(key) {
+            self.value = arrangement.rest_box(copy_bounds(prototype));
+            self.measured = Some(key);
+            self.shape.clone_from(&prototype.collider);
+        }
+        self.value
+    }
 }
 
 /// `origin + R * offset`, exactly `origin + offset` when the group is unturned.

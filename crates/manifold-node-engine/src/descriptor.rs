@@ -328,6 +328,16 @@ hand_descriptor!(
     aliases: ["merge meshes", "combine meshes", "join meshes", "mesh union"],
 );
 
+// Scene Loop cell (loop_cell.rs)
+hand_descriptor!(
+    "node.loop_cell",
+    "The length of one Scene Loop cell: the union of the boxes wired into box_k, each a Transform mapping the unit cube onto one box (position its centre, scale its size) inside the frame within_k (the world when unwired), measured along `axis` (+X/-X/+Y/-Y/+Z/-Z, as node.scene_array), plus `gap` (port-shadowed, metres), at least 0.01. `boxes` sets how many box_k/within_k pairs exist, with no cap. A box of no size measures nothing. Wire cell_size into node.scene_array's and every node.loop_camera's cell_size so the tiles and the flight share one length that follows the live rows: feed rest boxes (an object's transform, a copy group's rest_box, a swarm's lattice box), never moving poses, so the wrap stays pure. CPU-only.",
+    summary: "Measures how long one Scene Loop tile is from everything it tiles, so the tiles follow the scene as you change it, with a gap on top.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["loop cell", "cell size", "corridor cell", "tile length"],
+);
+
 // 3D scene rendering (render_scene.rs)
 hand_descriptor!(
     "node.render_scene",

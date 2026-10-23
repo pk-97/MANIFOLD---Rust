@@ -255,6 +255,10 @@ pub enum SceneContextValue {
     SourceOffsetX,
     SourceOffsetY,
     SourceOffsetZ,
+    /// The Scene Loop cell's live length: the owner's `node.loop_cell`
+    /// output. With none in the owner, the stage port stays unwired and the
+    /// node it feeds reads its own param.
+    LoopCell,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

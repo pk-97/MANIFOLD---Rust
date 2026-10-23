@@ -75,38 +75,33 @@ fn the_platonic_widths_are_the_installed_hulls_bit_for_bit() {
     }
 }
 
+/// Line and Grid grow one way from the first copy, which sits on the group's
+/// origin, as Blender's Array does: no fill from the centre, and a Count
+/// change never moves the copies already there.
 #[test]
-fn line_and_grid_grow_from_the_centre_spaced_by_the_copy_size() {
+fn line_and_grid_grow_one_way_from_the_first_copy_spaced_by_the_copy_size() {
     let width = platonic_width(1, 0.5);
+    let origin = [1.0, 2.0, 3.0];
+    let step = 1.5 * width[0];
     let line = rests(&group(CopyLayout::Line, 5, 1.5, 16), width);
-    let c = centroid(&line);
-    assert!(distance(c, [1.0, 2.0, 3.0]) < 1.0e-5, "line centre {c:?}");
-    let mut along: Vec<f32> = line.iter().map(|pose| pose.position[0]).collect();
-    along.sort_by(f32::total_cmp);
-    for pair in along.windows(2) {
-        assert!((pair[1] - pair[0] - 1.5 * width[0]).abs() < 1.0e-5);
+    for (index, pose) in line.iter().enumerate() {
+        let want = [origin[0] + index as f32 * step, origin[1], origin[2]];
+        assert!(distance(pose.position, want) < 1.0e-5, "line copy {index} at {:?}, want {want:?}", pose.position);
     }
-    // Rows grow from the group's origin and stay centred to within half a
-    // step at any count. Extra layers stack up from the group's plane.
-    let step = 1.1 * width[0];
-    for count in [4, 12, 16, 48] {
-        let grid = rests(&group(CopyLayout::Grid, count, 1.1, 4), width);
-        let c = centroid(&grid);
-        let reach = 0.5 * step + 1.0e-5;
-        assert!((c[0] - 1.0).abs() <= reach && (c[2] - 3.0).abs() <= reach, "grid of {count} centred: {c:?}");
-        assert_eq!(grid[0].position[1], 2.0);
-        let mut row: Vec<f32> = grid.iter().filter(|pose| pose.position[2] == grid[0].position[2] && pose.position[1] == 2.0).map(|pose| pose.position[0]).collect();
-        row.sort_by(f32::total_cmp);
-        assert!(row.windows(2).all(|pair| (pair[1] - pair[0] - step).abs() < 1.0e-5), "grid of {count} spaced: {row:?}");
+    // Columns copies along X, then the next row along Z, then the next layer up.
+    let step = [1.1 * width[0], 1.1 * width[1], 1.1 * width[2]];
+    let grid = rests(&group(CopyLayout::Grid, 48, 1.1, 4), width);
+    for (index, pose) in grid.iter().enumerate() {
+        let cell = [index % 4, index / 16, (index / 4) % 4];
+        let want: [f32; 3] = std::array::from_fn(|axis| origin[axis] + cell[axis] as f32 * step[axis]);
+        assert!(distance(pose.position, want) < 1.0e-5, "grid copy {index} at {:?}, want {want:?}", pose.position);
     }
-    let wide = rests(&group(CopyLayout::Grid, 4, 1.1, 16), width);
-    assert!((centroid(&wide)[0] - 1.0).abs() < 1.0e-5, "fewer copies than columns stay centred");
 }
 
 #[test]
 fn a_copy_rests_in_the_same_place_whatever_the_count() {
     let width = platonic_width(1, 0.6);
-    for layout in [CopyLayout::Grid, CopyLayout::Scatter, CopyLayout::Line, CopyLayout::Ring, CopyLayout::Spiral, CopyLayout::Random] {
+    for layout in [CopyLayout::Grid, CopyLayout::Scatter, CopyLayout::Line, CopyLayout::Spiral, CopyLayout::Random] {
         let few = rests(&group(layout, 10, 1.2, 4), width);
         let many = rests(&group(layout, 1_000, 1.2, 4), width);
         assert_eq!(few[..], many[..10], "{layout:?}");
@@ -117,6 +112,31 @@ fn a_copy_rests_in_the_same_place_whatever_the_count() {
             }
         }
     }
+}
+
+/// A Ring spreads its copies evenly round the whole circle, up to Columns a
+/// ring, as Cinema 4D's radial Cloner does: Count changes slide them round a
+/// ring of the same size, and full rings stay put.
+#[test]
+fn a_ring_spreads_its_copies_evenly_round_the_whole_circle() {
+    let width = platonic_width(1, 0.6);
+    let around = |pose: &manifold_physics::BodyPose| (pose.position[2] - 3.0).atan2(pose.position[0] - 1.0);
+    let full = rests(&group(CopyLayout::Ring, 8, 1.2, 8), width);
+    let radius = distance(full[0].position, [1.0, 2.0, 3.0]);
+    for count in [1usize, 2, 3, 5, 8] {
+        let ring = rests(&group(CopyLayout::Ring, count, 1.2, 8), width);
+        for (index, pose) in ring.iter().enumerate() {
+            assert!((distance(pose.position, [1.0, 2.0, 3.0]) - radius).abs() < 1.0e-4, "{count}: the ring keeps its size");
+            let want = std::f32::consts::TAU * index as f32 / count as f32;
+            let off = (around(pose) - want).rem_euclid(std::f32::consts::TAU);
+            assert!(off.min(std::f32::consts::TAU - off) < 1.0e-4, "{count}: copy {index} a 1/{count} turn on");
+        }
+    }
+    // Twelve at eight a ring: the first ring full, four spread round the next.
+    let tower = rests(&group(CopyLayout::Ring, 12, 1.2, 8), width);
+    assert_eq!(tower[..8], full[..], "a full ring stays put");
+    let quarter = (around(&tower[9]) - around(&tower[8])).rem_euclid(std::f32::consts::TAU);
+    assert!((quarter - std::f32::consts::FRAC_PI_2).abs() < 1.0e-4, "four round the second ring: {quarter}");
 }
 
 #[test]

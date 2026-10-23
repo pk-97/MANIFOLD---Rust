@@ -1300,6 +1300,19 @@ impl Builder<'_> {
         self.constant_node(key, "node.value", params, "out")
     }
 
+    /// The owner's `node.loop_cell` output: the Scene Loop cell's live
+    /// length. `None` when the owner measures none.
+    fn loop_cell(&self, instance: &SceneModifierInstanceDef) -> Result<Option<PortAddress>, SceneModifierExpandError> {
+        let mut cells = self.index.flat.nodes.iter().filter(|node| node.type_id == "node.loop_cell");
+        let Some(cell) = cells.next() else {
+            return Ok(None);
+        };
+        if cells.next().is_some() {
+            return Err(invalid(instance.id.to_string(), "a scene measures one Scene Loop cell"));
+        }
+        Ok(Some((cell.id, "cell_size".into())))
+    }
+
 manifold_core::testkit_visible! {
     #[doc(hidden)]
     pub(crate) fn attachment_key(
@@ -1636,6 +1649,13 @@ manifold_core::testkit_visible! {
                             let reference =
                                 matches!(input.source, SceneStageSource::Reference { .. });
                             self.endpoint_input(instance, &key, *endpoint, reference)?
+                        }
+                        SceneStageSource::Context { value: SceneContextValue::LoopCell } => {
+                            match self.loop_cell(instance)? {
+                                Some(cell) => cell,
+                                // Nothing measures the cell: the node reads its param.
+                                None => continue,
+                            }
                         }
                         SceneStageSource::Context { value } => {
                             self.context(owner, instance, target, targets, *value)?

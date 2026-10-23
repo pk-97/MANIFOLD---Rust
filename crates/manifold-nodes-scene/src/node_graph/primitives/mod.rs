@@ -94,6 +94,7 @@ mod ripple_mesh;
 manifold_core::testkit_visible! { mod rotate_3d; }
 mod rotate_4d;
 mod loop_camera;
+pub mod loop_cell;
 mod scene_array;
 mod scene_fx_default_passthrough;
 mod shatter_mesh;

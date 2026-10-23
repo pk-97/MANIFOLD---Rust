@@ -57,7 +57,7 @@ pub use ocean::OCEAN_LOOK;
 pub use physics::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
 pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
-pub use scene_wide::{LOOP_CAMERA_ROWS, NO_SCENE_LOOP, add_refused, scene_loop};
+pub use scene_wide::{LOOP_CAMERA_ROWS, LOOP_GAP_ROW, NO_SCENE_LOOP, add_refused, scene_loop};
 pub use water::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET, WATER_FAMILY_REASON, WATER_MATERIAL_ROLE,
     WATER_OBJECT_ROLE, WATER_ROWS, WHITEWATER_PER_CELL, WORLD_FOLLOWS, water_look,

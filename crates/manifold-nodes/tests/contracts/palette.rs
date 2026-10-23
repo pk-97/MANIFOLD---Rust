@@ -128,6 +128,7 @@ use manifold_core::PresetTypeId;
                 "Light",
                 "Look-At Camera",
                 "Loop Camera",
+                "Loop Cell",
                 "Luminance",
                 "Math",
                 "One Euro Filter",

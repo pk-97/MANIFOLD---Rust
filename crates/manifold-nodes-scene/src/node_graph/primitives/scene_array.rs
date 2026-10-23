@@ -185,6 +185,8 @@ manifold_node_engine::primitive! {
         // component from its own axis param, so axis and position can never
         // desync. Unwired: standalone corridor from the origin.
         camera: Camera optional,
+        // Port-shadowed: node.loop_cell's live length, shared with every Loop camera.
+        cell_size: ScalarF32 optional,
     },
     outputs: {
         out: Array(InstanceTransform),
@@ -236,7 +238,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Optional camera: Camera port drives the window (D2) — wire node.loop_camera.out here for the corridor; the atom resolves the axis component itself so axis and position cannot desync. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32, never a param: the buffer is fixed at plan pre-allocation (BUG-757c), and the live window span derives from what the wired camera sees, every way it looks — the body masks slots at or beyond behind+ahead+1 to zero-scale. The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction. pattern_length is both the pattern period and the jitter period (D4); the loop camera's travel (patterns_per_loop * pattern_length cells) is an integer multiple of it, so the wrap is pure for any integers. jitter_seed stays an internal re-roll knob the plan stamps at 0.",
+    composition_notes: "Optional camera: Camera port drives the window (D2) — wire node.loop_camera.out here for the corridor; the atom resolves the axis component itself so axis and position cannot desync. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32, never a param: the buffer is fixed at plan pre-allocation (BUG-757c), and the live window span derives from what the wired camera sees, every way it looks — the body masks slots at or beyond behind+ahead+1 to zero-scale. cell_size is port-shadowed: wire node.loop_cell.cell_size here and into every node.loop_camera, so camera travel per loop equals the tile spacing by construction and both follow the live scene. pattern_length is both the pattern period and the jitter period (D4); the loop camera's travel (patterns_per_loop * pattern_length cells) is an integer multiple of it, so the wrap is pure for any integers. jitter_seed stays an internal re-roll knob the plan stamps at 0.",
     examples: [],
     picker: { label: "Scene Array", category: Atom },
     summary: "Generates the corridor of instances around the camera — cells repeat by pattern, forever.",
@@ -286,7 +288,7 @@ impl Primitive for SceneArray {
             Some(ParamValue::Enum(n)) => *n,
             _ => 4, // +Z
         };
-        let cell_size = ctx.param_f32("cell_size", 10.0);
+        let cell_size = ctx.scalar_or_param("cell_size", 10.0);
 
         let jitter_seed = ctx.params.get("jitter_seed").and_then(|v| v.as_u32_clamped(0)).unwrap_or(0);
         let jitter_amount = ctx.scalar_or_param("jitter_amount", 0.0).clamp(0.0, 1.0);

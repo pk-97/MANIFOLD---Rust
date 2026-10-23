@@ -65,7 +65,7 @@ Each lane: its own slot and `lane/refine-<name>` branch, one commit, then stop a
 
 **P2a Live dragging** (Opus, high).
 - The cut map's scan becomes a multi-block scan, so dragging Ordered Recon's Bands and Direction stays smooth.
-- Copies Count is live: a copy's place depends on its index and the layout rows, never on Count, so layouts grow from the first copy. New tail copies install on the tick they land, live and in export; existing copies keep their motion; physics carry adopts the live-added copies.
+- Copies Count is live. Line and Grid grow one way from the first copy, which sits on the origin, as Blender's Array does: no fill from the centre, no re-centring on Count. Ring spreads its copies evenly round the whole circle, up to Columns a ring, then starts the next ring, as Cinema 4D's radial Cloner does, so its copies slide round as Count changes. New tail copies install on the tick they land, live and in export; existing Body copies keep their motion (only the rest layout changes); physics carry adopts the live-added copies.
 - Swarm Count is live: new particles spawn where a reseed would put those slots, seeded by index and epoch; the mover steps only active particles.
 
 **P2b Panel** (Sonnet, high; strict checklist).

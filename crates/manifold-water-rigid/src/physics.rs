@@ -43,6 +43,7 @@ use body_history::PackedRows;
 use manifold_core::scene_schema::SPEED_RANGE;
 use copy_group::CopyGroup;
 use copy_layout::{requested_count, Arrangement};
+pub(crate) use copy_layout::RestBox;
 pub use impulses::ResolvedRigidImpulse;
 use targeted_fields::{TargetedFieldHistory, TargetedFields};
 pub use worker::{RigidSceneInputs, RigidSceneObservation};

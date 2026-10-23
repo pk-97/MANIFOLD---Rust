@@ -1756,7 +1756,7 @@ fn recycle_rt_objects<'old, 'new>(
 
 fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderFailure {
     use manifold_gpu::raytrace::RtAccelError;
-    log::error!("node.render_scene: current RT frame rejected: {error:?}");
+    if !matches!(error, RtAccelError::NeedsPreparation) { log::error!("node.render_scene: current RT frame rejected: {error:?}"); }
     match error {
         RtAccelError::InvalidGeometry { .. } => FrameRenderFailure::InvalidGeometry,
         RtAccelError::NeedsPreparation => FrameRenderFailure::RtNeedsPreparation,
@@ -1768,12 +1768,8 @@ fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderF
 /// What the card says while ray tracing sits out a frame.
 fn rt_paused_reason(failure: FrameRenderFailure) -> &'static str {
     match failure {
-        FrameRenderFailure::RtAllocation | FrameRenderFailure::SurfaceAllocation => {
-            "Ray tracing paused: not enough GPU memory for this scene. Drawing without it."
-        }
-        FrameRenderFailure::InvalidGeometry => {
-            "Ray tracing paused: an object's shape is invalid. Drawing without it."
-        }
+        FrameRenderFailure::RtAllocation | FrameRenderFailure::SurfaceAllocation => "Ray tracing paused: not enough GPU memory for this scene. Drawing without it.",
+        FrameRenderFailure::InvalidGeometry => "Ray tracing paused: an object's shape is invalid. Drawing without it.",
         _ => "Ray tracing paused for this frame. Drawing without it.",
     }
 }
@@ -2723,11 +2719,15 @@ impl RenderScene {
                     pre.reset_decision |= changed;
                     Some((textures, topo, content))
                 }
-                // A refused or failed ray-tracing update (memory admission
-                // refusing a huge Count mid-drag) draws this frame through
-                // the raster path that runs while ray tracing is not ready.
-                // The node error keeps that frame presentable live and
-                // rejected by export.
+                // Ray tracing waiting on its next preparation is routine: the
+                // frame draws raster with no word to the stage, incomplete so
+                // warmup prepares and export refuses it. A refused or failed
+                // update (memory admission refusing a huge Count mid-drag)
+                // draws raster too, and the stage hears once (NodeErrors).
+                Err(FrameRenderFailure::RtNeedsPreparation) => {
+                    ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::PendingGeometry);
+                    None
+                }
                 Err(failure) => {
                     ctx.error(rt_paused_reason(failure));
                     None

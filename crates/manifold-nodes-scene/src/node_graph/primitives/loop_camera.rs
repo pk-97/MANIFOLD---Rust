@@ -32,6 +32,7 @@ manifold_node_engine::primitive! {
     purpose: "Beat-locked flythrough camera for scene looping. Emits one Camera on `out` from phase (0..1, wired from beat_ramp at attack=1 rate=1/bars), cell_size, axis (+X/-X/+Y/-Y/+Z/-Z), lateral/height offsets, and fov. Travel = home + d(phase)·patterns_per_loop·pattern_length·cell_size along axis, where d(p) = p − flow·sin(2πp)/(2π) eases the flight (equal seam slope, INV-3 wrap purity); travel per loop is a whole number of pattern_length cells, so the wrap is pure by construction for any integers (corridor D3). Sway drifts the lateral/height offsets, the look sweep weaves the target laterally, and the zoom pulse breathes the fov — all phase-periodic. The frame at phase 0 equals the frame at phase 1 by construction. CPU-only, no GPU dispatch.",
     inputs: {
         phase: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
     },
     outputs: {
         out: Camera,
@@ -240,7 +241,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "phase is port-shadowed: wire from beat_ramp (attack=1, rate=1/bars) for beat-locked looping. Unwired, reads FrameTime.beats mod 1. The SAME cell_size feeds both this node and node.scene_array — the plan builder computes it once from scene_bounds (D4). lateral/height offset the camera within the cross-section perpendicular to travel. axis enum matches scene_array's axis enum. Camera looks down the travel axis (fwd = axis direction); lateral offsets the camera perpendicular to travel. Per-loop travel = patterns_per_loop * pattern_length cells — an integer multiple of scene_array's pattern_length for any integers, which is what makes the wrap pure without any coupling (corridor D3); wire loop_camera.out to scene_array.camera so the instance window rides this same camera (corridor D2). pos_x/pos_y/pos_z outputs for PBR material atoms.",
+    composition_notes: "phase is port-shadowed: wire from beat_ramp (attack=1, rate=1/bars) for beat-locked looping. Unwired, reads FrameTime.beats mod 1. cell_size is port-shadowed: wire the same node.loop_cell.cell_size here and into node.scene_array, so the flight and the tiles share one live length (D4). lateral/height offset the camera within the cross-section perpendicular to travel. axis enum matches scene_array's axis enum. Camera looks down the travel axis (fwd = axis direction); lateral offsets the camera perpendicular to travel. Per-loop travel = patterns_per_loop * pattern_length cells — an integer multiple of scene_array's pattern_length for any integers, which is what makes the wrap pure without any coupling (corridor D3); wire loop_camera.out to scene_array.camera so the instance window rides this same camera (corridor D2). pos_x/pos_y/pos_z outputs for PBR material atoms.",
     examples: [],
     picker: { label: "Loop Camera", category: Driver },
     summary: "A camera that flies through a scene in a perfect loop, locked to the beat.",
@@ -252,7 +253,7 @@ manifold_node_engine::primitive! {
 
 impl Primitive for LoopCamera {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let cell_size = ctx.param_f32("cell_size", 10.0);
+        let cell_size = ctx.scalar_or_param("cell_size", 10.0);
 
         let axis = match ctx.params.get("axis") {
             Some(ParamValue::Enum(n)) => *n,

@@ -5,11 +5,13 @@
 //! (`ModifierType::once_per_scene`).
 //!
 //! Every row is a performance row reaching the type's stock recipe, the
-//! row's property being the recipe's own param id, with one exception:
+//! row's property being the recipe's own param id, with two exceptions:
 //! Scene Loop also drives every camera on the Loop rig, so its Beats, Stride,
-//! Home, Near and Far reach those cameras' nodes, and Pattern and Spacing
-//! reach both the corridor and the cameras (camera travel per loop is a whole
-//! number of patterns, SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D3).
+//! Home, Near and Far reach those cameras' nodes and Pattern reaches both
+//! the corridor and the cameras (camera travel per loop is a whole number of
+//! patterns, SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D3); and Spacing is the
+//! gap the scene's `node.loop_cell` adds to the measured length of what it
+//! tiles, the one cell both the corridor and the cameras read.
 
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
@@ -26,21 +28,24 @@ const ON_IS_THE_TOGGLE: &str = "The card's On toggle turns the modifier on and o
 
 /// The Scene Loop rows that reach the cameras on the Loop rig, by the node
 /// role on the camera and the node param.
-pub const LOOP_CAMERA_ROWS: [(&str, &str); 7] = [
+pub const LOOP_CAMERA_ROWS: [(&str, &str); 6] = [
     ("bars", "phase"),
     ("patterns_per_loop", "rig"),
     ("home", "rig"),
     ("near", "rig"),
     ("far", "rig"),
     ("pattern_length", "rig"),
-    ("cell_size", "rig"),
 ];
+
+/// The Scene Loop row that sets the gap the scene's `node.loop_cell` adds
+/// on top of what it measures: (row property, node param).
+pub const LOOP_GAP_ROW: (&str, &str) = ("spacing", "gap");
 
 pub static SCENE_LOOP_ROWS: [PropertyRow; 9] = [
     live("bars", 0).name("Beats"),
     live("pattern_length", 1),
     live("patterns_per_loop", 2).name("Stride"),
-    live("cell_size", 3).unit(Unit::Metres),
+    live("spacing", 3).name("Spacing").unit(Unit::Metres),
     live("jitter_amount", 4),
     live("home", 5).name("Home").unit(Unit::Metres),
     live("near", 6).name("Near").unit(Unit::Metres),
