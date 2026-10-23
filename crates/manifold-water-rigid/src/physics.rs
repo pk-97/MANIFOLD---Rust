@@ -397,7 +397,14 @@ fn add_body_geometry(
     world: &mut PhysicsWorld,
     body: &RigidBody,
 ) -> Result<(BodyHandle, f32), String> {
-    add_copy(world, body, pose_from_transform(body.transform))
+    let solid = body.collider.as_deref().ok_or("the body has no collision shape")?;
+    let scale = body.transform.scale;
+    let handle = solid.install(world, scale, body.config()).map_err(|error| error.to_string())?;
+    let volume = match solid {
+        Solid::Hulls(_) => installed_volume(world, handle)?,
+        Solid::Mesh(mesh) => mesh_volume(mesh, scale),
+    };
+    Ok((handle, volume))
 }
 
 /// Swap installed body `handle`'s shape for `solid` at `scale` in place,
@@ -414,22 +421,6 @@ fn reshape(
         Solid::Hulls(_) => installed_volume(world, handle),
         Solid::Mesh(mesh) => Ok(mesh_volume(mesh, scale)),
     }
-}
-
-/// [`add_body_geometry`] for a copy of `prototype` resting at `pose`.
-fn add_copy(
-    world: &mut PhysicsWorld,
-    prototype: &RigidBody,
-    pose: manifold_physics::BodyPose,
-) -> Result<(BodyHandle, f32), String> {
-    let solid = prototype.collider.as_deref().ok_or("the body has no collision shape")?;
-    let scale = prototype.transform.scale;
-    let handle = solid.install(world, scale, prototype.config_at(pose)).map_err(|error| error.to_string())?;
-    let volume = match solid {
-        Solid::Hulls(_) => installed_volume(world, handle)?,
-        Solid::Mesh(mesh) => mesh_volume(mesh, scale),
-    };
-    Ok((handle, volume))
 }
 
 /// A static mesh's enclosed volume at `scale`, m³, or its bounding box's
@@ -884,8 +875,26 @@ impl RigidSimulation {
             accepted_interval,
             coupling,
         );
+        if result.is_ok() {
+            self.show_refused(scene, &bodies, &groups);
+        }
         self.admission.restore_admitted(bodies, groups);
         result
+    }
+
+    /// What the gate never let in still draws: a body where it stands, a
+    /// copy group at rest in its layout, as with physics off.
+    fn show_refused(&mut self, scene: SceneRef<'_>, bodies: &[Option<RigidBody>], groups: &[Option<RigidBody>]) {
+        for ((authored, admitted), pose) in scene.bodies.iter().zip(bodies).zip(self.poses.iter_mut()) {
+            if let (Some(authored), None) = (authored, admitted) {
+                *pose = authored.transform;
+            }
+        }
+        for ((authored, admitted), state) in scene.groups.iter().zip(groups).zip(self.groups.iter_mut()) {
+            if let (Some(authored), None) = (authored, admitted) {
+                state.show_refused(authored);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1392,9 +1401,8 @@ impl RigidSimulation {
                 state.handles.resize(arrangement.count, None);
                 state.bullet_enabled.resize(arrangement.count, false);
                 for copy_index in 0..arrangement.count {
-                    let (installed, volume) = add_copy(&mut world, prototype, state.rest(copy_index))?;
-                    state.handles[copy_index] = Some(installed);
-                    state.volume = volume;
+                    let pose = state.rest(copy_index);
+                    state.handles[copy_index] = Some(state.install(&mut world, prototype, pose)?);
                 }
                 state.active = arrangement.count;
                 state.shown = arrangement.count;
@@ -1672,21 +1680,20 @@ impl RigidSimulation {
             if old.is_some_and(|old| same_body(old, prototype)) {
                 continue;
             }
-            // Every copy shares the prototype's shape: each one installed,
-            // active or parked, takes the new one in place, keeping its
-            // pose and velocity. Later layouts space by the new width.
-            if let (Some(old), Some(geometry)) = (old, prototype.collider.as_deref())
-                && reshaped(old, prototype)
-            {
+            let animated = prototype.kind == 2;
+            let pose_changed = animated && old.is_some_and(|old| moved(old, prototype));
+            let kind_became_dynamic = prototype.kind == 1 && old.is_some_and(|old| old.kind != 1);
+            // Every copy shares the prototype's shape, cooked once: each one
+            // installed, active or parked, takes the new one in place, keeping
+            // its pose and velocity. Later layouts space by the new width.
+            if old.is_some_and(|old| reshaped(old, prototype)) && prototype.collider.is_some() {
                 for index in 0..state.handles.len() {
                     let Some(handle) = state.handles[index] else { continue };
                     let config = state.config(prototype, state.rest(index));
-                    state.volume = reshape(world, handle, geometry, prototype.transform.scale, config)?;
+                    state.reshape(world, handle, prototype, config)?;
                 }
                 state.width = copy_layout::copy_width(prototype);
             }
-            let animated = prototype.kind == 2;
-            let pose_changed = animated && old.is_some_and(|old| moved(old, prototype));
             let animated_edit = stationary_edit && pose_changed;
             if animated_edit && due_steps > 0 {
                 state.deferred_edit = Some(DeferredAnimatedEdit {
@@ -1702,7 +1709,6 @@ impl RigidSimulation {
                     ..arrangement
                 });
             }
-            let kind_became_dynamic = prototype.kind == 1 && old.is_some_and(|old| old.kind != 1);
             for index in 0..state.active {
                 let Some(handle) = state.handles[index] else {
                     continue;
@@ -1811,9 +1817,7 @@ impl RigidSimulation {
                     }
                 }
                 None => {
-                    let (handle, volume) = add_copy(world, prototype, pose)?;
-                    state.handles[index] = Some(handle);
-                    state.volume = volume;
+                    state.handles[index] = Some(state.install(world, prototype, pose)?);
                 }
             }
         }

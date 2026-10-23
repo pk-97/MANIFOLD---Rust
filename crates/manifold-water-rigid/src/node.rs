@@ -25,11 +25,9 @@ pub trait PhysicsNode: Send {
         0
     }
 
-    /// Each body or copy group the world left out on its last frame: the
-    /// world input it is wired to (`body_k`, `copies_k`) and why, so a
-    /// refusal reaches the card, never only a log line. Shared strings, so
-    /// reading a standing refusal every frame allocates nothing.
-    fn body_refusals(&self) -> &[(std::sync::Arc<str>, std::sync::Arc<str>)] {
+    /// Each body or copy group the world left out on its last frame, so a
+    /// refusal reaches the card, never only a log line.
+    fn body_refusals(&self) -> &[manifold_core::physics_members::BodyRefusalRow] {
         &[]
     }
 

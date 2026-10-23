@@ -14,7 +14,8 @@ use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{FieldControl, FieldRow, FieldValue, enabled, is_object_or_group, wrong_value};
 use super::modifier::{ModifierTypeEntry, ON_IS_THE_TOGGLE, entry, held, live};
-use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
+use super::{Exposure, PropertyRow, Reach, perform, row, setup};
+use crate::copies_body::SPACING_MIN;
 use crate::scene_doc::{Item, ItemFields, ModifierType, Shape};
 
 /// The role of the copies body inside its item.
@@ -64,7 +65,7 @@ const fn internal(property: &'static str, param: &'static str, why: &'static str
 pub static COPIES_ROWS: [PropertyRow; 32] = [
     card("count", "copy_count", perform(CardBand::Scene, 0)).default(START_COUNT),
     card("layout", "copy_layout", perform(CardBand::Scene, 1)).when(laid_out),
-    card("spacing", "copy_size_spacing", perform(CardBand::Scene, 2)).unit(Unit::SizeMultiple).limit(AT_LEAST_ZERO).when(laid_out),
+    card("spacing", "copy_size_spacing", perform(CardBand::Scene, 2)).unit(Unit::SizeMultiple).limit(HardLimit::AtLeast(SPACING_MIN)).when(laid_out),
     card("columns", "copy_columns", setup()).when(laid_out),
     card("turn_x", "copy_turn_x", setup()).limit(HardLimit::Unlimited).when(laid_out),
     card("turn_y", "copy_turn_y", setup()).limit(HardLimit::Unlimited).when(laid_out),

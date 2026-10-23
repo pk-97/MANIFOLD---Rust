@@ -30,6 +30,10 @@ pub const COPY_PARAMS: [&str; 7] = [
 /// size.
 pub const SIZE_SPACING_DEFAULT: f32 = 1.1;
 pub const SIZE_SPACING_RANGE: (f32, f32) = (1.0, 20.0);
+/// The closest Body and Collider copies may start, in copy sizes: the Spacing
+/// row's floor and the physics gate's. Below 1.0 they overlap and blast
+/// apart on the first step; at zero every copy would share one point.
+pub const SPACING_MIN: f32 = 0.01;
 /// The Layout labels, by stored value. Spiral and Random are
 /// `node.arrange_copies`' arrangements, spaced in copy widths.
 pub const COPY_LAYOUT_LABELS: [&str; 6] = ["Grid", "Scatter", "Line", "Ring", "Spiral", "Random"];

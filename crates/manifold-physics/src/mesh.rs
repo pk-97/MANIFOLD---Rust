@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::{
-    BodyHandle, COOKED_HULL_MAX_VERTICES, OwnedGeometry, PhysicsError, PhysicsWorld, ffi,
+    BodyHandle, COOKED_HULL_MAX_VERTICES, CookedForm, PhysicsError, PhysicsWorld, ffi,
     native_lock,
 };
 
@@ -54,7 +54,7 @@ impl PhysicsWorld {
     /// rejected explicitly.
     pub fn hull_meshes(&self, body: BodyHandle) -> Result<Vec<TriangleMesh>, PhysicsError> {
         let record = self.body_record(body)?;
-        let OwnedGeometry::Hulls(hulls) = &record.owned_geometry else {
+        let CookedForm::Hulls(hulls) = record.geometry.form() else {
             return Err(PhysicsError::InvalidInput("body does not use convex hulls"));
         };
         let _lock = native_lock();

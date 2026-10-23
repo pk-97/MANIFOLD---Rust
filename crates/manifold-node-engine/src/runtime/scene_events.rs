@@ -67,7 +67,7 @@ impl PresetRuntime {
 
     /// Append the same slot's worlds' refused bodies. The caller reuses the
     /// buffer.
-    pub fn write_body_refusals_watched(&self, output: &mut Vec<(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)>) {
+    pub fn write_body_refusals_watched(&self, output: &mut Vec<(NodeId, manifold_core::physics_members::BodyRefusalRow)>) {
         let Some(slot) = self.extension_slots().first() else { return };
         for extension in &self.extensions {
             extension.write_body_refusals(&self.graph, slot, output);

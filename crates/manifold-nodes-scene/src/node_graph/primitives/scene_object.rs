@@ -68,6 +68,7 @@ manifold_node_engine::primitive! {
         volume_thickness_map: Texture2D optional,
         instances: Array(InstanceTransform) optional,
         instance_count: ScalarF32 optional,
+        copy_scale: Transform optional,
         visible: ScalarF32 optional,
         cast_shadows: ScalarF32 optional,
         gain: ScalarF32 optional,
@@ -148,7 +149,15 @@ impl Primitive for SceneObjectNode {
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
         let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
         let gain = ctx.scalar_or_param("gain", 1.0);
-        let transform = ctx.inputs.transform("transform").unwrap_or_default();
+        let mut transform = ctx.inputs.transform("transform").unwrap_or_default();
+        // A copy group's instances carry one uniform scale; `copy_scale` is the
+        // rest of the prototype's per-axis scale, applied inside each copy
+        // under the object's own chain (Group space).
+        if let Some(copy) = ctx.inputs.transform("copy_scale") {
+            let [x, y, z] = copy.scale;
+            let scale = [[x, 0.0, 0.0, 0.0], [0.0, y, 0.0, 0.0], [0.0, 0.0, z, 0.0], [0.0, 0.0, 0.0, 1.0]];
+            transform.parent = manifold_node_engine::mesh::pipeline::mat4_mul(scale, transform.parent);
+        }
         let parent_transform = ctx.inputs.transform("parent_transform");
         let parent_visible = ctx.scalar_or_param("parent_visible", 1.0) > 0.5;
         let material = ctx.inputs.material("material");
