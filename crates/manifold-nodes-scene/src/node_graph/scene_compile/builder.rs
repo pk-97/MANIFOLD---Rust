@@ -95,6 +95,10 @@ pub(crate) struct Rest {
     /// it (an imported part: where the file puts it); else `lo` and `hi`
     /// about the scene's origin.
     pub placed: Option<([f32; 3], [f32; 3])>,
+    /// Whether the mesh draws in its file node's own space, its Transform
+    /// carrying the rotation and scale the file gave it: a frame it shares
+    /// with other parts carries it whole, so it bends as one body with them.
+    pub own_space: bool,
     pub vertices: u32,
 }
 

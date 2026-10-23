@@ -72,6 +72,7 @@ fn builtin_rest(b: &mut Builder<'_>, mesh_type: &str, solid: Option<u32>) -> Opt
         lo,
         hi,
         placed: None,
+        own_space: false,
         vertices: u32::try_from(vertices.len()).unwrap_or(u32::MAX),
     })
 }

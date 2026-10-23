@@ -181,7 +181,7 @@ fn rest_of(part: &FilePart, own_space: bool, vertex_count: u32) -> Rest {
     };
     let placed = span(part.center, part.half_extent);
     let (lo, hi) = if own_space { span(part.own_center, part.own_half_extent) } else { placed };
-    Rest { lo, hi, placed: Some(placed), vertices: part.vertex_count.max(vertex_count) }
+    Rest { lo, hi, placed: Some(placed), own_space, vertices: part.vertex_count.max(vertex_count) }
 }
 
 /// Blend `base` with the part's morph targets; returns the blend's output.

@@ -181,17 +181,24 @@ fn material_name(material: Option<u32>, names: &[String]) -> String {
 /// the file's values. For the render and soak tools, which draw a file
 /// without a project around it.
 pub fn compile_model_scene(path: &Path) -> Result<(EffectGraphDef, ImportedModel), String> {
-    compile_import(path, false)
+    compile_model_scene_with(path, false, |_, _| {})
 }
 
 /// [`compile_model_scene`] with the import's Combine Meshes on (a
 /// photoscan's setting): every part drawn where the file puts it, in the
 /// import Group's unturned frame.
 pub fn compile_combined_model_scene(path: &Path) -> Result<(EffectGraphDef, ImportedModel), String> {
-    compile_import(path, true)
+    compile_model_scene_with(path, true, |_, _| {})
 }
 
-fn compile_import(path: &Path, combine: bool) -> Result<(EffectGraphDef, ImportedModel), String> {
+/// [`compile_model_scene`] with Combine Meshes `combine`, the scene first
+/// changed by `edit`, which gets the import Group's id: a test adds the
+/// modifiers it bends the model with.
+pub fn compile_model_scene_with(
+    path: &Path,
+    combine: bool,
+    edit: impl FnOnce(&mut manifold_core::scene_doc::SceneDoc, &ItemId),
+) -> Result<(EffectGraphDef, ImportedModel), String> {
     let ReadModel { model, facts, .. } = read_model(path)?;
     let id = ItemId::new("model");
     let file = path.to_string_lossy();
@@ -201,6 +208,7 @@ fn compile_import(path: &Path, combine: bool) -> Result<(EffectGraphDef, Importe
     {
         group.combine_meshes = combine;
     }
+    edit(&mut doc, &id);
     doc.models.insert(file.into_owned(), facts);
     let mut def = manifold_core::scene_doc::compile(&doc)?;
     for (item, property, value) in model.starting_values(&id) {

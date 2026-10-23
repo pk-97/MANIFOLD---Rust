@@ -176,6 +176,7 @@ pub fn resolve_modifier_mesh_frames(
                 scene_radius: radius,
                 live_offset: None,
                 item_radius: None,
+                frame_transform: None,
             });
         }
     }
@@ -194,6 +195,10 @@ pub struct TargetPlacement {
     pub live: Option<NodeId>,
     /// Its own rest radius ([`SceneMeshReferenceFrame::item_radius`]).
     pub radius: f64,
+    /// The frame as a transform node, when the target is carried whole into
+    /// it ([`SceneMeshReferenceFrame::frame_transform`]); `offset` is then
+    /// zero and `live` unset.
+    pub frame_transform: Option<NodeId>,
 }
 
 /// The frames of `instance` where its owner already knows each target's
@@ -219,8 +224,8 @@ pub fn capture_mesh_frames(
             .iter()
             .find(|placement| placement.target == target)
             .ok_or_else(|| frame_error(&target, "the target has no rest-pose placement"))?;
-        if let Some(live) = &placement.live {
-            index.node(live)?;
+        for node in placement.live.iter().chain(&placement.frame_transform) {
+            index.node(node)?;
         }
         let frame = SceneMeshReferenceFrame {
             source,
@@ -229,6 +234,7 @@ pub fn capture_mesh_frames(
             scene_radius: radius,
             live_offset: placement.live.clone(),
             item_radius: Some(placement.radius),
+            frame_transform: placement.frame_transform.clone(),
             target,
         };
         validate_numbers(&frame)?;

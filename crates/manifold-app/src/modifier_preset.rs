@@ -242,6 +242,7 @@ mod tests {
             scene_radius: 4.0,
             live_offset: None,
             item_radius: None,
+            frame_transform: None,
         };
         EffectGraphDef {
             version: 3,

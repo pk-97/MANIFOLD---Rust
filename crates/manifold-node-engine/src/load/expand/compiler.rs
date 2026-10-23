@@ -974,7 +974,7 @@ impl Builder<'_> {
         {
             return Err(SceneModifierExpandError::DuplicateIdentity {
                 path: node_id.to_string(),
-                detail: "generated Math View node collides with an existing node".into(),
+                detail: "generated node collides with an existing node".into(),
             });
         }
         let id = self.next_id;
@@ -1623,6 +1623,17 @@ manifold_core::testkit_visible! {
                 });
             }
         }
+        // Targets the frame carries whole, by the frame's transform node; each
+        // mesh carried in, by the target and where it came from (a first
+        // card's current and rest mesh are one); the targets a stage has bent
+        // in the frame.
+        let carried: BTreeMap<&NodeId, &NodeId> = instance
+            .mesh_frames
+            .iter()
+            .filter_map(|frame| frame.frame_transform.as_ref().map(|transform| (&frame.target, transform)))
+            .collect();
+        let mut entered: BTreeMap<(NodeId, PortAddress), PortAddress> = BTreeMap::new();
+        let mut moved: BTreeSet<NodeId> = BTreeSet::new();
         for (position, stage) in recipe.stages.iter().enumerate() {
             let root = local
                 .nodes
@@ -1650,7 +1661,27 @@ manifold_core::testkit_visible! {
                             let key = self.attachment_key(instance, target, *endpoint)?;
                             let reference =
                                 matches!(input.source, SceneStageSource::Reference { .. });
-                            self.endpoint_input(instance, &key, *endpoint, reference)?
+                            let address = self.endpoint_input(instance, &key, *endpoint, reference)?;
+                            // A carried target's stages read its mesh in the
+                            // frame, until one of them writes it there.
+                            match target.filter(|_| *endpoint == SceneEndpoint::Vertices) {
+                                Some(target)
+                                    if carried.contains_key(target)
+                                        && (reference || !moved.contains(target)) =>
+                                {
+                                    let at = (target.clone(), address.clone());
+                                    match entered.get(&at) {
+                                        Some(inside) => inside.clone(),
+                                        None => {
+                                            let way = if reference { Carry::InReference } else { Carry::In };
+                                            let inside = self.carry(instance, target, carried[target], address, way)?;
+                                            entered.insert(at, inside.clone());
+                                            inside
+                                        }
+                                    }
+                                }
+                                _ => address,
+                            }
                         }
                         SceneStageSource::Context { value } => {
                             self.context(owner, instance, target, targets, *value)?
@@ -1740,12 +1771,68 @@ manifold_core::testkit_visible! {
                             ),
                         });
                     }
+                    if let Some(target) = target.filter(|target| output.endpoint == SceneEndpoint::Vertices && carried.contains_key(target)) {
+                        moved.insert(target.clone());
+                    }
                     self.current
                         .insert(key.clone(), Some((copy, output.port.clone())));
                     self.written.insert(key);
                 }
             }
         }
+        // What the stages bent in the frame goes back to the target's space,
+        // where it draws.
+        for target in moved {
+            let key = self.attachment_key(instance, Some(&target), SceneEndpoint::Vertices)?;
+            let bent = self.current.get(&key).and_then(Clone::clone).ok_or_else(|| invalid(instance.id.to_string(), "a carried mesh has no producer"))?;
+            let out = self.carry(instance, &target, carried[&target], bent, Carry::Out)?;
+            self.current.insert(key, Some(out));
+        }
         Ok(leaves)
     }
+
+    /// A single-part `node.merge_meshes` that carries `target`'s mesh at
+    /// `mesh` into `frame` or back out, through the transform and parent
+    /// transform the target draws with
+    /// ([`SceneMeshReferenceFrame::frame_transform`](manifold_core::scene_modifier_preset::SceneMeshReferenceFrame::frame_transform)).
+    fn carry(
+        &mut self,
+        instance: &SceneModifierInstanceDef,
+        target: &NodeId,
+        frame: &NodeId,
+        mesh: PortAddress,
+        way: Carry,
+    ) -> Result<PortAddress, SceneModifierExpandError> {
+        let placed = |port: &str| -> Result<Option<PortAddress>, SceneModifierExpandError> {
+            Ok(self.index.input(target, port)?.map(|wire| (wire.from_node, wire.from_port.clone())))
+        };
+        let (transform, parent) = (placed("transform")?, placed("parent_transform")?);
+        let frame = (self.index.node(frame)?.id, "transform".to_owned());
+        let role = match way {
+            Carry::In => "carry_in",
+            Carry::InReference => "carry_in_reference",
+            Carry::Out => "carry_out",
+        };
+        let params = BTreeMap::from([("parts".to_owned(), SerializedParamValue::Int { value: 1 })]);
+        let id = self.add_math_node(&[instance.id.as_str(), role, target.as_str()], "node.merge_meshes", "Carry", params)?;
+        let wires = match way {
+            Carry::In | Carry::InReference => [(Some(mesh), "mesh_0"), (transform, "place_0"), (parent, "within_0"), (Some(frame), "frame")],
+            Carry::Out => [(Some(mesh), "mesh_0"), (Some(frame), "place_0"), (transform, "frame"), (parent, "frame_within")],
+        };
+        for (from, port) in wires {
+            if let Some(from) = from {
+                self.push_wire(from, id, port);
+            }
+        }
+        Ok((id, "vertices".to_owned()))
+    }
+}
+
+/// Which way [`Builder::carry`] moves a mesh: the current mesh or the rest
+/// mesh into its modifier's frame, or the bent mesh back to its own space.
+#[derive(Clone, Copy)]
+enum Carry {
+    In,
+    InReference,
+    Out,
 }
