@@ -16,7 +16,8 @@
 //! `--frames`, `--fps`, `--offline-only`, `--max-seconds`, `--stills-every`,
 //! `--stills-at`, `--linear`, `--cinematic`, `--supersample`, `--dump-mesh`,
 //! `--dump-field` and `--gpu-surface` flags. `--dump-field` writes, on each
-//! still, the level set the mesher reads and the drawn mesh to `field/`. `--gpu-surface`
+//! still, the level set the mesher reads, the drawn mesh, and the particles and
+//! kernels the surface is built from to `field/`. `--gpu-surface`
 //! is for presets meshed by the Liquid Surface group (e.g. WaterDamBreakGpu): each
 //! offline frame reads back the GPU mesh, fails on a non-finite vertex or an empty
 //! surface, and reports its live vertices as `vertex_count`. A preset with its own
@@ -945,6 +946,21 @@ fn dump_field(runtime: &PresetRuntime, device: &GpuDevice, frame: u32, view: &Fi
     });
     let values: Vec<f32> = read_back(device, field.buffer, floats);
     fs::write(dir.join(format!("frame_{frame:06}.f32")), bytemuck::cast_slice(&values))?;
+
+    // The particles the surface is built from and their kernels, in sorted
+    // order (one kernel per particle): x y z radius, then the 12 FluidBlob floats.
+    let sorted_array = find("node.sort_particles_into_cells", "sorted")?;
+    let blob_array = find("node.shape_particle_blobs", "blobs")?;
+    let sorted: Vec<[f32; 8]> = read_back(device, sorted_array.buffer, sorted_array.buffer.size() / 32);
+    let blobs: Vec<[f32; 12]> = read_back(device, blob_array.buffer, blob_array.buffer.size() / 48);
+    let mut surface_particles = Vec::new();
+    for (particle, blob) in sorted.iter().zip(&blobs) {
+        if particle[3] > 0.0 {
+            surface_particles.extend_from_slice(&particle[..4]);
+            surface_particles.extend_from_slice(blob);
+        }
+    }
+    fs::write(dir.join(format!("frame_{frame:06}_surface_particles.f32")), bytemuck::cast_slice(&surface_particles))?;
 
     let normals = find("node.surface_mesh_normals", "out")?;
     let index_array = find("node.volume_surface_mesh", "indices")?;
