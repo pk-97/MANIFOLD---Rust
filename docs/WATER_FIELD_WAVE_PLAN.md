@@ -86,7 +86,7 @@ Opus lanes run at high effort unless marked medium. S0 is mechanical but splits 
 | SP | Opus | Pressure group: fused smoother, warm start, visible tolerance, coarse level jitter | S3 |
 | S5 | Opus | Narrow Band rebuilt on tiles | S4b, SA |
 
-**Order and slots.** At most three lanes hold a built slot at once: disk has about 180 GB free, and a built slot takes 45 to 60 GB. Before round 1 the lead detaches and scrubs the stale slots (slot-7's prototype branch is pushed). The next lane starts as soon as one reports. The render chain (R0, R2, R1b, RD) and the simulation chain (S0, S1, S2, S3, S4, S4b) each keep a slot busy; the third slot serves SB, SA, then R3, R4, R5, R7, SP and S5 as their needs merge. The simulation chain is the long pole.
+**Order and slots.** The number of lanes holding a built slot is set by disk, re-checked before each launch: free space minus the 30 GB reserve, divided by 60 GB per built slot. That is three until the refinement campaign lands and frees its slots, then about five. Read-only work (prep, reviews, audits) needs no slot and runs alongside. The next lane starts as soon as one reports, from a brief written while the others ran. Look items split along their seam: the simulation half (foam splat, spray-to-mist density, wetness writer) starts as soon as a slot is free, proven on CPU references; the shading half joins once R2 merges. The render chain (R0, R2, R1b, RD) and the simulation chain (S0, S1, S2, S3, S4, S4b) each keep a slot busy; the third slot serves SB, SA, then R3, R4, R5, R7, SP and S5 as their needs merge. The simulation chain is the long pole.
 
 The whole set must finish before the landing. Nothing is stretch, because the wave runs until it is done.
 
@@ -332,3 +332,4 @@ Lanes read this section from the main checkout before pausing on any fork.
 - **W3. At most three lanes hold a built slot at once.** Disk has about 180 GB free, and a built slot takes 45 to 60 GB.
 - **W4. No magic numbers, and contradictions stop the lane** (section 1, rules 4 and 5).
 - **W5. Blockers are decided by the lead, logged here and in the report, and work continues.**
+- **W6. W3 is replaced by the disk rule in section 3** (free space minus the reserve, 60 GB per built slot, re-checked at each launch). Read-only work runs alongside without a slot, and look items start their simulation half before the march merges.
