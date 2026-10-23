@@ -149,7 +149,7 @@ pub struct GeneratorRenderer {
     scene_viewport_request: Option<(LayerId, NodeId, SceneViewportConfig)>,
     scene_viewport_modifier: Option<Arc<ModifierPreviewContext>>,
     scene_viewport_error: Option<SceneViewportHostError>,
-    /// Each layer's GPU frame time, the runaway cut and the stage's news.
+    /// Each layer's longest GPU buffer, the runaway cut and the stage's news.
     watch: runaway::LayerWatch,
 }
 
@@ -1176,7 +1176,7 @@ impl GeneratorRenderer {
             }
         }
         // Commit the last layer's span on its own, so chrome encoded after
-        // the generators never counts as its frame time.
+        // the generators never lands in its last buffer.
         if self.watch.end(gpu) {
             gpu.checkpoint();
         }

@@ -19,10 +19,11 @@ pub const DEFAULT_TRACE_WORK_LIMITS: TraceWorkLimits = TraceWorkLimits {
 /// budget from small tiles.
 pub const TRACE_BUFFER_CEILING_SECONDS: f64 = 0.1;
 
-/// GPU time one scene layer's frame may take before it counts as a runaway
-/// frame. The window server shares the GPU, so a frame this long already
-/// stalls the whole Mac; it is far above any frame a show plays at speed and
-/// under the watchdog.
+/// GPU time one command buffer of a scene layer's frame may take before the
+/// frame counts as runaway. The window server shares the GPU and gets it only
+/// between buffers, so one buffer this long stalls the whole Mac; a slow frame
+/// of many short buffers does not. Far above any buffer a show plays at speed
+/// and under the watchdog.
 pub const RUNAWAY_LAYER_FRAME_SECONDS: f64 = 0.25;
 
 /// Runaway frames in a row before the layer stops drawing, so one slow frame

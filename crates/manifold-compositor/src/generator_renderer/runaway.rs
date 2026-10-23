@@ -1,7 +1,9 @@
 //! The last-resort layer cut and the layer notices the stage shows. A layer
-//! whose GPU frame runs past `RUNAWAY_LAYER_FRAME_SECONDS` for
-//! `RUNAWAY_LAYER_FRAMES` frames in a row stops drawing, so the window
-//! server, which shares the GPU, keeps the Mac responsive. Draw Again, or any
+//! whose frame holds one command buffer past `RUNAWAY_LAYER_FRAME_SECONDS`
+//! for `RUNAWAY_LAYER_FRAMES` frames in a row stops drawing, so the window
+//! server, which shares the GPU and gets it between buffers, keeps the Mac
+//! responsive. A slow frame spread over many short buffers is allowed: it
+//! renders slowly and never freezes the Mac. Draw Again, or any
 //! edit or undo on that layer, brings it back. Nothing else stops: other
 //! layers and the transport carry on. Export renders every layer.
 
@@ -36,7 +38,8 @@ pub struct RunawayWatch {
 }
 
 impl RunawayWatch {
-    /// Fold one measured frame of the layer, whose card values are `card`.
+    /// Fold one measured frame of the layer: `seconds` is its longest
+    /// command buffer, `card` its card values.
     /// True when this frame stops it.
     pub fn observe(&mut self, seconds: f64, card: u64) -> bool {
         if self.stopped {
@@ -161,7 +164,7 @@ impl GeneratorRenderer {
             let card = layers.iter().find(|layer| &layer.layer_id == layer_id).map_or(0, card_fingerprint);
             if state.runaway.observe(seconds, card) {
                 eprintln!(
-                    "[runaway] layer {layer_id}: GPU frame {seconds:.2} s, over {RUNAWAY_LAYER_FRAME_SECONDS} s \
+                    "[runaway] layer {layer_id}: one GPU buffer ran {seconds:.2} s, over {RUNAWAY_LAYER_FRAME_SECONDS} s \
                      {RUNAWAY_LAYER_FRAMES} frames in a row; it stops drawing"
                 );
                 news.push(LayerNews::Stopped(layer_id.clone()));
@@ -214,6 +217,28 @@ mod tests {
     const SLOW: f64 = RUNAWAY_LAYER_FRAME_SECONDS * 2.0;
     const FAST: f64 = RUNAWAY_LAYER_FRAME_SECONDS / 4.0;
     const CARD: u64 = 7;
+
+    /// What the frame timer reports for a frame of these buffers: the longest
+    /// (`GpuSpanTimer`'s GPU proof holds it to that).
+    fn frame(buffers: &[f64]) -> f64 {
+        buffers.iter().copied().fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn many_short_buffers_never_stop_a_layer_and_one_long_buffer_does() {
+        let mut watch = RunawayWatch::default();
+        // A heavy ray-traced frame: twenty tiles of 50 ms is a full second.
+        let tiled = [0.05; 20];
+        assert!(tiled.iter().sum::<f64>() > RUNAWAY_LAYER_FRAME_SECONDS);
+        for _ in 0..10 {
+            assert!(!watch.observe(frame(&tiled), CARD), "a slow tiled frame renders slowly, never stops");
+        }
+        // One huge instanced draw in a single buffer, three frames in a row.
+        let lockup = [0.004, SLOW, 0.004];
+        assert!(!watch.observe(frame(&lockup), CARD));
+        assert!(!watch.observe(frame(&lockup), CARD));
+        assert!(watch.observe(frame(&lockup), CARD), "the third frame holding one long buffer stops the layer");
+    }
 
     #[test]
     fn three_runaway_frames_in_a_row_stop_the_layer_and_an_edit_restores_it() {

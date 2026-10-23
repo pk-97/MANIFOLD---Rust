@@ -47,8 +47,8 @@ impl LayerNotices {
                         next.stopped.push(layer_id.clone());
                     }
                     let message = format!(
-                        "Stopped drawing: its GPU frame ran over {RUNAWAY_LAYER_FRAME_SECONDS} s {RUNAWAY_LAYER_FRAMES} \
-                         frames in a row, which freezes the Mac. Draw Again on the World card, or any edit, brings it back."
+                        "Stopped drawing: it held the GPU for over {RUNAWAY_LAYER_FRAME_SECONDS} s at a time, \
+                         {RUNAWAY_LAYER_FRAMES} frames in a row, which freezes the Mac. Draw Again on the World card, or any edit, brings it back."
                     );
                     (layer_id, Arc::from(message))
                 }
