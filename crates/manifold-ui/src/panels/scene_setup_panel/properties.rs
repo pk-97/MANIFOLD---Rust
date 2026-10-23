@@ -216,7 +216,9 @@ impl ScenePanel {
                     continue;
                 }
                 let revealed = self.property_explicitly_revealed(p);
-                let dormant = matches!(role, MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..));
+                // A Hidden material row belongs to a map with no texture.
+                let dormant = matches!(role, MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..))
+                    || p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden);
                 let feature_off = row_feature(p).is_some_and(|feature| !material.features.contains(&feature));
                 if (dormant || feature_off) && !revealed {
                     continue;

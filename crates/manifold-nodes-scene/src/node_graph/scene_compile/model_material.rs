@@ -67,6 +67,13 @@ pub(crate) fn emit(
     maps
 }
 
+/// The `node.scene_object` ports [`emit`] feeds for `model`'s material
+/// `material`.
+pub(super) fn map_ports(model: &ModelFile, material: Option<u32>) -> impl Iterator<Item = &'static str> + '_ {
+    let m = model.material(material);
+    std::iter::once(&BASE_COLOR).chain(MAP_FAMILIES).filter(move |family| (family.texture)(m).is_some()).map(|family| family.port)
+}
+
 /// The glTF factors, the computed params and every map's texture transform,
 /// sampler and UV set, written onto the surface node.
 fn write_surface(b: &mut Builder<'_>, surface: u32, m: &GltfMaterialInfo) {

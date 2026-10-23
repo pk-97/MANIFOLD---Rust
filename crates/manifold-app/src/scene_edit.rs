@@ -228,23 +228,20 @@ pub(crate) fn remove(project: &Project, layer: &LayerId, items: &[ItemId]) -> Re
     if commands.is_empty() {
         return Err("That item is no longer in the scene".to_owned());
     }
-    // (any user removed, any user kept) per Material.
+    // A Material goes when every item drawing with it goes.
     let effective = doc.effective_materials();
-    let mut users: std::collections::HashMap<&ItemId, (bool, bool)> = std::collections::HashMap::new();
+    let mut leaving: std::collections::HashMap<&ItemId, usize> = std::collections::HashMap::new();
     doc.walk(|item, _| {
-        if manifold_core::scene_doc::draws_with_material(item)
+        if gone.contains(&item.id)
+            && manifold_core::scene_doc::draws_with_material(item)
             && let Some(material) = effective.get(&item.id)
         {
-            let entry = users.entry(material).or_default();
-            if gone.contains(&item.id) {
-                entry.0 = true;
-            } else {
-                entry.1 = true;
-            }
+            *leaving.entry(material).or_default() += 1;
         }
     });
+    let users = doc.material_users();
     doc.walk(|item, _| {
-        if users.get(&item.id).is_some_and(|&(removed, kept)| removed && !kept) && !gone.contains(&item.id) {
+        if leaving.get(&item.id).is_some_and(|count| users.get(&item.id) == Some(count)) && !gone.contains(&item.id) {
             commands.push(Box::new(RemoveSceneItemCommand::new(layer.clone(), item.id.clone())));
         }
     });
@@ -464,16 +461,18 @@ pub(crate) const PASSES_LIGHT: [manifold_core::material_inspector::MaterialFeatu
     [Core::Glass, Core::Translucency, Core::Subsurface]
 };
 
-/// Whether a Metallic value is full metal, where [`PASSES_LIGHT`] features
-/// cannot show.
-pub(crate) fn full_metal(metallic: f32) -> bool {
-    metallic >= 1.0 - 1e-4
+/// Whether a Material at this Metallic is full metal everywhere, where
+/// [`PASSES_LIGHT`] features cannot show. With a metallic-roughness map fed,
+/// metal is per texel and the map decides, so the factor alone never is.
+pub(crate) fn full_metal(doc: &SceneDoc, fields: &MaterialFields, metallic: f32) -> bool {
+    metallic >= 1.0 - 1e-4 && !manifold_nodes_scene::node_graph::scene_compile::fed_map_ports(doc, fields).contains(&"mr_map")
 }
 
-/// Add a feature to a material or remove it, in one undo step. A first add
-/// writes its starting values; a feature light passes through, added at
-/// Metallic 1, also sets Metallic 0. Remove keeps the feature and its values,
-/// switched to Removed, so adding it again brings them back.
+/// Add a feature to a material or remove it, in one undo step. An add writes
+/// its starting values wherever the performer has not moved them; a feature
+/// light passes through, added to a full metal, also sets Metallic 0. Remove
+/// keeps the feature and its values, switched to Removed, so adding it again
+/// brings them back.
 pub(crate) fn material_feature(project: &Project, layer: &LayerId, material: &ItemId, feature: UiFeature, add: bool) -> Result<Option<SceneEdit>, String> {
     let doc = doc(project, layer)?;
     let found = doc.find(material).ok_or("That material is no longer in the scene")?;
@@ -492,12 +491,10 @@ pub(crate) fn material_feature(project: &Project, layer: &LayerId, material: &It
     let edited = ItemFields::Material(MaterialFields { features, ..fields.clone() });
     let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), material.clone(), edited))];
     if add {
-        if held.is_none() {
-            commands.extend(seed_writes(project, layer, material, feature_seeds(feature)));
-        }
+        commands.extend(seed_writes(project, layer, material, feature_seeds(feature)));
         if PASSES_LIGHT.contains(&core)
             && let Some(metallic) = instance(project, layer).and_then(|inst| base(inst, material, "metallic"))
-            && full_metal(metallic)
+            && full_metal(doc, fields, metallic)
         {
             commands.push(write(layer, material, "metallic", metallic, 0.0));
         }
@@ -808,9 +805,6 @@ mod tests {
         let (mut project, layer, cube) = cube_scene();
         let material = doc(&project, &layer).unwrap().effective_material(&cube).unwrap();
         let value = |project: &Project, property: &str| base(instance(project, &layer).unwrap(), &material, property).unwrap();
-        for map_row in ["uv_m00", "uv_set", "wrap_u", "sheen_color_wrap_u", "clearcoat_uv_tx", "transmission_tex_coord"] {
-            assert_eq!(base(instance(&project, &layer).unwrap(), &material, map_row), None, "{map_row} is a row only while its map has a texture");
-        }
         let metallic = value(&project, "metallic");
         write(&layer, &material, "metallic", metallic, 1.0).execute(&mut project);
 
@@ -859,5 +853,79 @@ mod tests {
         assert_eq!(doc(&project, &layer).unwrap().effective_material(&copy), Some(material.clone()), "a duplicate shares the Material");
         remove(&project, &layer, std::slice::from_ref(&cube)).unwrap().command.execute(&mut project);
         assert_eq!(doc(&project, &layer).unwrap().effective_material(&copy), Some(material), "a shared Material stays");
+    }
+
+    fn set_texture(project: &mut Project, layer: &LayerId, material: &ItemId, texture: TextureSource) {
+        let ItemFields::Material(fields) = doc(project, layer).unwrap().find(material).unwrap().fields.clone() else { panic!("not a material") };
+        let edited = ItemFields::Material(MaterialFields { texture, ..fields });
+        SetSceneItemFieldsCommand::new(layer.clone(), material.clone(), edited).execute(project);
+    }
+
+    /// The Default look puts Glass's values back; adding Glass after it
+    /// starts it at its seed again, so it shows.
+    #[test]
+    fn glass_added_after_the_default_look_shows() {
+        let (mut project, layer, cube) = cube_scene();
+        let material = doc(&project, &layer).unwrap().effective_material(&cube).unwrap();
+        let transmission = |project: &Project| base(instance(project, &layer).unwrap(), &material, "transmission").unwrap();
+        material_look(&project, &layer, &material, UiLook::Glass).unwrap().expect("the Glass look applies").command.execute(&mut project);
+        material_look(&project, &layer, &material, UiLook::Default).unwrap().expect("the Default look applies").command.execute(&mut project);
+        assert_eq!(glass_mode(&project, &layer, &material), Some(FeatureSetting::REMOVED));
+        assert_eq!(transmission(&project), 0.0);
+
+        material_feature(&project, &layer, &material, UiFeature::Glass, true).unwrap().expect("Glass adds").command.execute(&mut project);
+        assert_eq!(glass_mode(&project, &layer, &material), Some(FeatureSetting::ON));
+        assert_eq!(transmission(&project), 1.0, "Glass shows");
+    }
+
+    /// An import's metal map decides metal per texel: Glass added at
+    /// Metallic 1 keeps Metallic, and the rows carry no metal reason.
+    #[test]
+    fn glass_on_an_import_with_a_metal_map_keeps_metallic() {
+        let (mut project, layer, cube) = cube_scene();
+        let material = doc(&project, &layer).unwrap().effective_material(&cube).unwrap();
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/gltf/DamagedHelmet.glb");
+        let (facts, _) = manifold_nodes_scene::node_graph::gltf_import::read_facts(std::path::Path::new(file)).unwrap();
+        let (_, scene_layer) = project.timeline.find_layer_by_id_mut(layer.as_str()).unwrap();
+        scene_layer.gen_params_mut().unwrap().scene.as_mut().unwrap().models.insert(file.to_owned(), facts);
+        set_texture(&mut project, &layer, &material, TextureSource::Model { file: file.to_owned(), material: Some(0) });
+        let metallic = base(instance(&project, &layer).unwrap(), &material, "metallic").unwrap();
+        write(&layer, &material, "metallic", metallic, 1.0).execute(&mut project);
+
+        let scene = doc(&project, &layer).unwrap();
+        let ItemFields::Material(fields) = &scene.find(&material).unwrap().fields else { panic!("not a material") };
+        assert!(manifold_nodes_scene::node_graph::scene_compile::fed_map_ports(scene, fields).contains(&"mr_map"), "the helmet has a metal map");
+        assert!(!full_metal(scene, fields, 1.0), "a metal map is not full metal");
+        material_feature(&project, &layer, &material, UiFeature::Glass, true).unwrap().expect("Glass adds").command.execute(&mut project);
+        assert_eq!(base(instance(&project, &layer).unwrap(), &material, "metallic"), Some(1.0), "the map keeps its metal");
+    }
+
+    /// A map's placement rows outlive its texture: removing the texture and
+    /// adding it back keeps their values and their LFOs.
+    #[test]
+    fn a_texture_leaving_and_returning_keeps_its_rows_and_their_lfos() {
+        use manifold_core::effects::ParameterDriver;
+        use manifold_core::{BeatDivision, DriverWaveform};
+        let (mut project, layer, cube) = cube_scene();
+        let material = doc(&project, &layer).unwrap().effective_material(&cube).unwrap();
+        let picture = TextureSource::File { path: "picture.png".to_owned() };
+        set_texture(&mut project, &layer, &material, picture.clone());
+        let row = param_id(&material, "uv_tx");
+        let held = base(instance(&project, &layer).unwrap(), &material, "uv_tx").expect("a placement row");
+        write(&layer, &material, "uv_tx", held, 0.25).execute(&mut project);
+        let (_, scene_layer) = project.timeline.find_layer_by_id_mut(layer.as_str()).unwrap();
+        scene_layer.gen_params_mut().unwrap().drivers_mut().push(ParameterDriver::new(row.clone(), BeatDivision::Quarter, DriverWaveform::Sine));
+        let check = |project: &Project, hidden: bool| {
+            let inst = instance(project, &layer).unwrap();
+            assert_eq!(base(inst, &material, "uv_tx"), Some(0.25), "the row keeps its value");
+            assert!(inst.drivers.iter().flatten().any(|driver| driver.param_id == row), "the row keeps its LFO");
+            let role = inst.params.get(&row).unwrap().spec.scene.map(|scene| scene.role);
+            assert_eq!(role == Some(manifold_core::scene_surface::SurfaceRole::Hidden), hidden);
+        };
+        check(&project, false);
+        set_texture(&mut project, &layer, &material, TextureSource::None);
+        check(&project, true);
+        set_texture(&mut project, &layer, &material, picture);
+        check(&project, false);
     }
 }
