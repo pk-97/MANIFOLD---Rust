@@ -455,7 +455,7 @@ mod tests {
         let before = loop_card(&project);
         assert!(before.add_loop_camera, "a Scene Loop with no Loop camera offers one");
         assert_eq!(camera_only(&before), 0, "rows only a Loop camera reads stay hidden");
-        assert!(before.parameter_ids.contains(&param_id(&card, "cell_size")), "the corridor's own rows show");
+        assert!(before.parameter_ids.contains(&param_id(&card, "spacing")), "the corridor's own rows show");
 
         let mut edit = crate::scene_edit::add_loop_camera(&project, &layer).expect("the button adds a camera");
         edit.command.execute(&mut project);
