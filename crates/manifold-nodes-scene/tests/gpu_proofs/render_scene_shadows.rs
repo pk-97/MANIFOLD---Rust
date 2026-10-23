@@ -14,9 +14,8 @@
 //! the ONLY difference is the shadow it drops on the ground. Total scene
 //! luma with shadows on MUST be lower than with shadows off — a direct
 //! readout of "the occluder removed light from the ground". A second test
-//! wires MORE than `MAX_SHADOW_CASTING_LIGHTS` casters and asserts the frame
-//! still renders finite and lit (the caster beyond the cap illuminates even
-//! though it casts no shadow — D4/F2).
+//! wires twelve casters and asserts they still shadow; the per-light proof
+//! is `rt_6caster_shadow.rs`.
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
@@ -227,13 +226,16 @@ fn occluder_casts_shadow_that_darkens_the_ground() {
 }
 
 #[test]
-fn more_than_k_casters_still_render_finite_and_lit() {
-    // 5 casters — one past MAX_SHADOW_CASTING_LIGHTS (=4). The 5th light
-    // gets no shadow map but must still illuminate; the frame must render
-    // finite (no validation error, no NaN) and non-black.
-    let (bytes, w, h) = render_readback(&shadow_scene_json(true, 5));
-    write_png(&bytes, w, h, "/tmp/render_scene_shadow_5casters.png");
-    let (sum, peak) = luma(&bytes);
-    assert!(peak > 0.2, "5-caster scene is unlit (peak {peak})");
-    assert!(sum > 0.0, "5-caster scene rendered black");
+fn many_casters_all_cast_shadows() {
+    // Twelve casters: past both old caps (four raster, eight ray traced).
+    // The shadowed frame must be darker than the same frame with shadows off.
+    let (on, w, h) = render_readback(&shadow_scene_json(true, 12));
+    let (off, _, _) = render_readback(&shadow_scene_json(false, 12));
+    write_png(&on, w, h, "/tmp/render_scene_shadow_12casters.png");
+    let (sum_on, peak) = luma(&on);
+    let (sum_off, _) = luma(&off);
+    assert!(peak > 0.2, "12-caster scene is unlit (peak {peak})");
+    let drop = (sum_off - sum_on) / sum_off;
+    eprintln!("12 casters: off={sum_off:.1} on={sum_on:.1} drop={:.1}%", drop * 100.0);
+    assert!(drop > 0.01, "12 casters must cast shadows: drop {drop}");
 }

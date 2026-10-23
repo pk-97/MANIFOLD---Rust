@@ -22,7 +22,6 @@ impl RenderScene {
         irr_filtered_valid: bool,
     ) -> Option<Pass2Targets> {
         let FramePrelude {
-            ref caster_table,
             envmap_wired, wants_shafts_now, width, height,
             temporal_upscale, rt_firefly_clamp_enabled, denoise_aux_ready,
             normals_resolve_target, roughness_resolve_target,
@@ -117,25 +116,11 @@ impl RenderScene {
         let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
         let dummy_depth = self.dummy_depth.as_ref().expect("stubs ensured");
         let envmap_texture = envmap_wired.unwrap_or(dummy);
-        // Shadow map per slot → the real map if that slot has a caster, else
-        // the 1×1 dummy depth. The shader never samples a −1 (non-caster)
-        // slot, but every declared @binding(10..13) must be a valid depth
-        // texture. Hand-unrolled for K=4 (WGSL has no dynamic texture-binding
-        // indexing); the assert trips if K changes and this list doesn't.
-        const _: () = assert!(
-            MAX_RASTER_SHADOW_CASTERS == 4,
-            "shadow-map bindings @10..13 + shader switch are hand-unrolled for K=4"
-        );
-        let shadow_tex = |slot: usize| -> &manifold_gpu::GpuTexture {
-            self.shadow_maps[slot]
-                .as_ref()
-                .map(|(_, t)| t)
-                .unwrap_or(dummy_depth)
-        };
-        let shadow_0 = shadow_tex(0);
-        let shadow_1 = shadow_tex(1);
-        let shadow_2 = shadow_tex(2);
-        let shadow_3 = shadow_tex(3);
+        // Every caster's shadow map is a layer of one array; the 1-layer
+        // stand-in keeps the binding valid in a scene with no casters.
+        let shadow_maps = self.shadow_maps.as_ref().map(|maps| &maps.texture)
+            .unwrap_or_else(|| self.dummy_depth_array.as_ref().expect("stubs ensured"));
+        let dummy_mask_array = self.dummy_mask_array.as_ref().expect("stubs ensured");
 
         if !draws.iter().any(|d| d.vertex_count > 0) {
             // Every object had zero drawable vertices — clear so stale
@@ -154,10 +139,9 @@ impl RenderScene {
 
         // Binding arrays must outlive the batch call, so build them all
         // first, then reference each from a `DepthMsaaDraw`. The light buffer
-        // (this frame's ring slot) and caster table are scene-wide — every
-        // object's set borrows the same ones.
+        // (this frame's ring slot, which also holds the caster table) is
+        // scene-wide — every object's set borrows the same one.
         let light_buffer = &self.light_buffers[self.light_frame];
-        let caster_bytes: &[u8] = bytemuck::cast_slice(caster_table);
         let prefiltered_specular = self.prefiltered_specular.as_ref().expect("ensured");
         let irradiance_map = self.irradiance_map.as_ref().expect("ensured");
         let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
@@ -178,12 +162,7 @@ impl RenderScene {
         // the `rt_irr_tex` discipline below. Before SV-ACCUM this bound
         // the raw post-atrous `rt_mask_full` — the only RT channel with
         // no temporal amortization, and the penumbra boil Peter reported.
-        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        // RS-A (caster cap 4 -> 8): second shadow-visibility quad binding
-        // — the accumulated history for caster slots 4-7 (same format and
-        // ABI-stub discipline as `rt_mask_tex`). Always bound; dummy when RT
-        // isn't active.
-        let rt_mask_tex2 = self.rt_sv2_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy_mask_array);
         // RAYTRACING_DESIGN.md section 5.2 P2, extended RT-T1-C: the temporally-
         // accumulated demodulated-irradiance history — `rt_history_ping`
         // always indexes whichever ping-pong slot `accumulate_irradiance`
@@ -211,7 +190,7 @@ impl RenderScene {
         // D11: Pass 2 binds its own identity stub (each pass binds what it
         // needs since the stage-2 carve — the ensure block guarantees it).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 56]> = draws
+        let binding_sets: Vec<[GpuBinding; 52]> = draws
             .iter().enumerate()
             .map(|(draw_index, draw)| {
                 [
@@ -262,27 +241,16 @@ impl RenderScene {
                         buffer: light_buffer,
                         offset: 0,
                     },
-                    // Caster table (fixed K×5 vec4, zeroed for empty slots) —
-                    // always bound, same D4 discipline as the light buffer.
-                    GpuBinding::Bytes {
+                    // The caster table, after the lights in the same ring
+                    // slot — always bound, same D4 discipline.
+                    GpuBinding::Buffer {
                         binding: 9,
-                        data: caster_bytes,
+                        buffer: light_buffer,
+                        offset: self.caster_offset,
                     },
                     GpuBinding::Texture {
                         binding: 10,
-                        texture: shadow_0,
-                    },
-                    GpuBinding::Texture {
-                        binding: 11,
-                        texture: shadow_1,
-                    },
-                    GpuBinding::Texture {
-                        binding: 12,
-                        texture: shadow_2,
-                    },
-                    GpuBinding::Texture {
-                        binding: 13,
-                        texture: shadow_3,
+                        texture: shadow_maps,
                     },
                     GpuBinding::Sampler {
                         binding: 14,
@@ -462,10 +430,6 @@ impl RenderScene {
                     GpuBinding::Texture {
                         binding: 43,
                         texture: rt_refl_tex,
-                    },
-                    GpuBinding::Texture {
-                        binding: 44,
-                        texture: rt_mask_tex2,
                     },
                     GpuBinding::Texture {
                         binding: 45,

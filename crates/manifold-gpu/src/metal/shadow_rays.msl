@@ -59,25 +59,10 @@ static void rt_sanitize_ray(thread ray& r, uint stage, uint2 pix,
     }
 }
 
-// Per-caster shadow support (multi-caster fix): mirrors the Rust
-// `RtCasterParams` field-for-field (P0 section 5.1 kernel lesson). `kind`
-// 0 = sun (`dir_or_pos` = normalized direction FROM surface TOWARD the
-// sun, `cone_or_size` = cone half-angle radians); `kind` 1 = point
-// (`dir_or_pos` = world-space light position, `cone_or_size` = world-units
-// light diameter, 0.0 = hard shadows). `color` is premultiplied
-// color*intensity.
-struct RtCasterParams {
-    packed_float3 dir_or_pos;
-    float  cone_or_size;
-    packed_float3 color;
-    uint   kind;
-};
-
-// MAX_RT_CASTERS: fixed shadow-caster slot count, matches manifold-gpu's
-// Rust `MAX_RT_CASTERS` (no compiler-enforced link between an embedded MSL
-// string constant and a Rust const — same manual-sync discipline this file
-// already uses for `MAX_RT_MATERIAL_TEXTURES`).
-constant uint MAX_RT_CASTERS = 8;
+// `ShadowCaster` (one shadow-casting light, shared with the raster) is
+// generated from the Rust record and prepended to this file at compile time.
+// Stride of the per-caster random streams in the GI and reflection seeds.
+constant uint RT_CASTER_SEED_STRIDE = 8;
 
 // RT-TL-B cost recovery (RAYTRACING_DESIGN.md section 16.4): pipeline
 // permutation — false = binary scene (pre-TL-B codegen, walk_with_alpha_test
@@ -93,7 +78,7 @@ constant uint TRACE_REFLECTION = 2u;
 // RS-B (RAYTRACING_DESIGN.md section 15.3): per-triangle emissive light table
 // cap — power-rank truncated. Matches manifold-gpu's Rust
 // `MAX_RT_EMISSIVE_TRIANGLES` (no compiler-enforced link, same manual-sync
-// discipline as `MAX_RT_CASTERS` above).
+// discipline as `RT_MASK_VISIBLE` below).
 constant uint MAX_RT_EMISSIVE_TRIANGLES = 4096;
 
 // P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): ONE shared triangle-index
@@ -204,8 +189,8 @@ struct EmissiveCandidate {
 };
 
 // RT instance mask bits — matches manifold-gpu's Rust `RT_MASK_VISIBLE` /
-// `RT_MASK_SHADOW_CASTER` (same manual-sync discipline as `MAX_RT_CASTERS`
-// above). Shadow rays (direct-light visibility + the GI/reflection
+// `RT_MASK_SHADOW_CASTER` (manual-sync with the Rust constants). Shadow rays
+// (direct-light visibility + the GI/reflection
 // sun-bounce rays) mask against `RT_MASK_SHADOW_CASTER` alone, so a
 // `cast_shadows = false` object drops out of shadowing ONLY — every other
 // query (primary, AO, GI, reflection) masks against `RT_MASK_VISIBLE`,
@@ -224,16 +209,12 @@ struct ShadowRayParams {
     // per pixel — emissive-hit + sun-bounce (closes the section 5.1 "no sun-bounce
     // term" gap). 0 = GI gather skipped, matching the ao_spp==0 discipline.
     uint   gi_spp;
-    // Multi-caster fix: number of valid entries in `casters` below. Slots
-    // at/beyond this count are skipped by `trace_shadow_rays` and read back
-    // as visibility 1.0 (unshadowed).
+    // `caster_count` ShadowCaster entries at GPU address `caster_data_addr`.
     uint   caster_count;
-    RtCasterParams casters[MAX_RT_CASTERS];
+    ulong  caster_data_addr;
     // RT-P2's `ambient_color` is DELETED (ED2, RAYTRACING_DESIGN.md section
     // 14.2): the flat ambient term no longer enters the kernel — it is
     // recomposed consumer-side in `render_scene.wgsl`'s `rt_or_flat_ambient`.
-    // The `[[buffer(1)]]` block keeps the 16-byte alignment for
-    // `inv_view_proj` at 208 by construction (the Rust mirror asserts it).
     // RT-T1-B: world-space camera eye — origin of the primary visibility
     // ray cast to find the real hit triangle at this pixel (see
     // `fetch_interpolated_normal` below). Unused when ao_spp==0 && gi_spp==0.
@@ -254,15 +235,13 @@ struct ShadowRayParams {
     // sun (u32::MAX on the Rust side — every slot index is below that).
     uint   svt_slot;
     // Radians every environment lookup turns by (`refl_env_sample`), the
-    // render's `env_rotation`. The float4x4 below still aligns to 336.
+    // render's `env_rotation`. The float4x4 below lands on 80.
     float  env_rotation;
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
-    // and `render_scene.wgsl`'s `Uniforms.view_proj` convention. `casters`'
-    // fixed 4*32=128B size lands this at byte offset 208 (a 16-byte
-    // multiple) with no extra alignment padding needed — see the Rust
-    // mirror's offset assert.
+    // and `render_scene.wgsl`'s `Uniforms.view_proj` convention. The Rust
+    // mirror asserts its offset (80).
     float4x4 inv_view_proj;
     // RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows —
     // the tables are ONE buffer with canonical per-object rows at [0, N)
@@ -277,6 +256,11 @@ struct ShadowRayParams {
     uint   light_count;
     ulong  light_data_addr;
 };
+
+// Caster `i` of this dispatch (`i < p.caster_count`).
+inline ShadowCaster rt_caster(constant ShadowRayParams& p, uint i) {
+    return ((device const ShadowCaster*)p.caster_data_addr)[i];
+}
 
 // RT-P3: one entry per RT object (SAME order as `RtObjectGeometry`'s
 // `objects` slice at accel-build time, which is also Metal's per-instance
@@ -1549,12 +1533,12 @@ static float3 sun_bounce_at_hit(
 {
     float3 term = float3(0.0);
     for (uint sc = 0; sc < n_casters; sc++) {
-        RtCasterParams sun_cst = p.casters[sc];
-        if (sun_cst.kind != 0u) continue;
-        float3 sdir = float3(sun_cst.dir_or_pos);
+        ShadowCaster sun_cst = rt_caster(p, sc);
+        if (sun_cst.color.w != 0.0f) continue;
+        float3 sdir = sun_cst.source.xyz;
         ray sun_r;
         sun_r.origin = hit_pos + sdir * bias_eps;
-        sun_r.direction = cone_sample(sdir, sun_cst.cone_or_size, rand2(tid, p.frame_index, seed_base + sc));
+        sun_r.direction = cone_sample(sdir, sun_cst.source.w, rand2(tid, p.frame_index, seed_base + sc));
         sun_r.min_distance = bias_eps * 0.5;
         sun_r.max_distance = INFINITY;
         intersection_query<triangle_data, instancing> sun_q;
@@ -1577,17 +1561,17 @@ static float3 sun_bounce_at_hit(
         float hit_tl = clamp(hit_translucency.x, 0.0, 1.0);
         if (HAS_TRANSLUCENCY) {
             float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures, tid, p.frame_index, RT_APP_STREAM_SUN_BOUNCE + seed_base + sc);
-            term += hit_albedo * float3(sun_cst.color) * hit_sun_tint * hit_ndotl
+            term += hit_albedo * sun_cst.color.rgb * hit_sun_tint * hit_ndotl
                 * (1.0 - hit_tl) * SUN_BOUNCE_INTENSITY_SCALE;
-            term += float3(sun_cst.color) * hit_sun_tint
+            term += sun_cst.color.rgb * hit_sun_tint
                 * hit_tl * float3(hit_translucency.yzw)
                 * hit_back_l * SUN_BOUNCE_INTENSITY_SCALE;
         } else {
             float sun_brightness;
             float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_SUN_BOUNCE + seed_base + sc, sun_brightness) ? 0.0 : 1.0;
-            term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl
+            term += hit_albedo * sun_cst.color.rgb * hit_sun_vis * hit_ndotl
                 * (1.0 - hit_tl) * SUN_BOUNCE_INTENSITY_SCALE;
-            term += float3(sun_cst.color) * hit_sun_vis
+            term += sun_cst.color.rgb * hit_sun_vis
                 * hit_tl * float3(hit_translucency.yzw)
                 * hit_back_l * SUN_BOUNCE_INTENSITY_SCALE;
         }
@@ -1851,7 +1835,7 @@ static float3 rt_direct_lights(instance_acceleration_structure accel,device RtNo
     if(p.light_data_addr==0ul) {
         float3 f=rt_surface_fresnel(m,max(dot(m.n,view),0.001f));
         float kd=(1.0f-max(f.x,max(f.y,f.z)))*(1.0f-m.metallic);
-        return sun_bounce_at_hit(accel,sources,materials,textures,p,min(p.caster_count,MAX_RT_CASTERS),position,m.n,m.albedo*kd,m.translucency,eps,pixel,seed,diagnostics);
+        return sun_bounce_at_hit(accel,sources,materials,textures,p,p.caster_count,position,m.n,m.albedo*kd,m.translucency,eps,pixel,seed,diagnostics);
     }
     device const float4* lights=(device const float4*)p.light_data_addr;
     float3 total=float3(0.0f);
@@ -1984,9 +1968,8 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 // visibility ray + [`RtNormalSource`]'s bindless per-object indirection —
 // replacing the P1-era screen-space depth finite-difference reconstruction
 // (camera-facing, wrong at silhouettes/thin geometry). Output (trace_size):
-// out_sv = per-caster visibility [0,1], one channel per shadow-caster slot
-// (r=slot 0 .. a=slot 3; slots >= caster_count read 1.0, unshadowed) —
-// multi-caster fix (RT shadows previously traced only casters[0]). AO is
+// out_sv = per-caster visibility [0,1], caster c in channel c % 4 of layer
+// c / 4 (channels past caster_count read 1.0, unshadowed). AO is
 // gathered in-kernel but folded straight into out_irr below, never written
 // to out_sv. out_irr
 // (RT-P2/D3, ED2): demodulated (no-albedo) irradiance — `.rgb` = the
@@ -2019,18 +2002,12 @@ kernel void trace_shadow_rays(
     // zero-stats buffer when the scene has no table).
     device const EmissiveTableStats* emissive_stats [[buffer(9)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
-    texture2d<float, access::write>  out_sv         [[texture(1)]],
-    // RS-A (caster cap 4 -> 8): second shadow-visibility output — caster
-    // slots 4-7 (rgba respectively). Same Rgba16Float format and write
-    // discipline as out_sv; a texel with <4 casters writes white (unoccluded)
-    // for the unused high slots, same as out_sv's low-slot overflow.
-    // Binding 70: the first free slot above the 64 material textures (4..67)
-    // + out_refl (68) + prefiltered_env (69).
-    texture2d<float, access::write>  out_sv2        [[texture(70)]],
+    // Shadow visibility, four casters per layer (see the caster loop).
+    texture2d_array<float, access::write> out_sv   [[texture(1)]],
     // RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): rgb sun-transmission tint
     // for the ONE designated sun caster — written by the same caster loop
     // below, at the same half-res dispatch. Binding 71 = 7 + MAX_RT_MATERIAL_
-    // TEXTURES (sv2 took 70). Always written (white when SVT_SLOT_NONE, so a
+    // TEXTURES. Always written (white when SVT_SLOT_NONE, so a
     // no-designated-sun scene binds this as off-white across the chain and
     // fs_pbr reads (1,1,1) — the ABI-stub discipline).
     texture2d<float, access::write>  out_svt        [[texture(71)]],
@@ -2083,8 +2060,7 @@ kernel void trace_shadow_rays(
         // unoccluded ao 1.0). `.w = -1`: no object (RT-T2-C).
         // RT-A3a: gate writes on dispatch role.
         if (do_shadow && p.shadow_spp > 0u) {
-            out_sv.write(float4(1, 1, 1, 1), tid);
-            out_sv2.write(float4(1, 1, 1, 1), tid);
+            for (uint g = 0; g < out_sv.get_array_size(); g++) out_sv.write(float4(1, 1, 1, 1), tid, g);
             // RT-TL-C: void sky = unoccluded sun everywhere; white tint.
             out_svt.write(float4(1, 1, 1, 1), tid);
         }
@@ -2242,30 +2218,30 @@ kernel void trace_shadow_rays(
     // even after the epsilon-scale fix above. A caster's direction is
     // exact (CPU-computed, never reconstructed), and biasing toward the
     // light is correct for a shadow ray.
-    // RS-A (caster cap 4 -> 8): two float4 visibility vectors — sv_lo holds
-    // slots 0-3 (out_sv), sv_hi holds slots 4-7 (out_sv2). Each written to
-    // its own Rgba16Float texture; the WGSL shadow_factor consumer indexes
-    // across both with slot_f >= 4.0 selecting the second texture.
-    float4 sv_lo = float4(1.0, 1.0, 1.0, 1.0);
-    float4 sv_hi = float4(1.0, 1.0, 1.0, 1.0);
+    // Visibility is written four casters per `out_sv` layer: caster c is
+    // channel c % 4 of layer c / 4. Channels past caster_count stay 1.0.
     // RT-TL-C (TL5): rgb tint for the designated sun caster, accumulated
     // over spp exactly like vis_rgb per caster. White when no caster
     // matches svt_slot (unoccluded sun).
     float3 svt = float3(1.0);
-    uint n_casters = min(p.caster_count, MAX_RT_CASTERS);
+    uint n_casters = p.caster_count;
     // RT-A3a: shadow_spp == 0 (lighting-only dispatch) must skip the caster
     // rays outright — the out_sv write below is gated, and without this guard
     // the lighting dispatch traces every shadow ray and discards the result
     // (measured +13ms/frame at half-res 4K, A3 cost matrix 2026-08-02).
     if (do_shadow && p.shadow_spp > 0u) {
     uint spp = p.shadow_spp;
-    for (uint c = 0; c < n_casters; c++) {
-        RtCasterParams cst = p.casters[c];
+    for (uint g = 0; g < out_sv.get_array_size(); g++) {
+    float4 sv_quad = float4(1.0);
+    for (uint j = 0; j < 4u; j++) {
+        uint c = g * 4u + j;
+        if (c >= n_casters) break;
+        ShadowCaster cst = rt_caster(p, c);
         // Production uses the complete light table. Keep an inactive light's
         // slot neutral so its shadow cannot disturb another channel's temporal
         // variance gate. Legacy visibility-only callers still trace regardless
         // of radiance, as their output is geometric visibility itself.
-        if (p.light_data_addr != 0ul && all(float3(cst.color) == float3(0.0f))) continue;
+        if (p.light_data_addr != 0ul && all(cst.color.rgb == float3(0.0f))) continue;
         float3 to_light;
         float cone_half_angle;
         float max_dist;
@@ -2275,19 +2251,19 @@ kernel void trace_shadow_rays(
         // for the intersector (the RS-C I-RS3 GPU hang). Such a texel is
         // effectively ON the light: skip the trace, count unshadowed.
         bool interval_ok = true;
-        if (cst.kind == 0u) {
-            // Sun: dir_or_pos is the normalized toward-sun direction.
-            to_light = float3(cst.dir_or_pos);
-            cone_half_angle = cst.cone_or_size;
+        if (cst.color.w == 0.0f) {
+            // Sun: source.xyz is the normalized toward-sun direction.
+            to_light = cst.source.xyz;
+            cone_half_angle = cst.source.w;
             max_dist = INFINITY;
         } else {
-            // Point: dir_or_pos is the world-space light position.
+            // Point: source.xyz is the world-space light position.
             // Occluders BEYOND the light itself must not count, so the
             // ray stops just short of it.
-            float3 delta = float3(cst.dir_or_pos) - wp;
+            float3 delta = cst.source.xyz - wp;
             float dist = length(delta);
             to_light = dist > 1e-6 ? delta / dist : float3(0.0, 1.0, 0.0);
-            cone_half_angle = cst.cone_or_size > 0.0 ? atan(0.5 * cst.cone_or_size / max(dist, 1e-6)) : 0.0;
+            cone_half_angle = cst.source.w > 0.0 ? atan(0.5 * cst.source.w / max(dist, 1e-6)) : 0.0;
             max_dist = max(dist - bias_eps, 0.0);
             interval_ok = rt_finite(dist) && dist > 2.0f * bias_eps;
         }
@@ -2343,7 +2319,9 @@ kernel void trace_shadow_rays(
         } else {
             vis /= float(spp);
         }
-        if (c < 4u) { sv_lo[c] = vis; } else { sv_hi[c - 4u] = vis; }
+        sv_quad[j] = vis;
+    }
+    out_sv.write(sv_quad, tid, g);
     }
     } // shadow_spp > 0
 
@@ -2372,8 +2350,6 @@ kernel void trace_shadow_rays(
     }
     // RT-A3a: gate mask write on shadow_spp so lighting-only dispatch leaves texture untouched.
     if (do_shadow && p.shadow_spp > 0u) {
-        out_sv.write(sv_lo, tid);
-        out_sv2.write(sv_hi, tid);
         // RT-TL-C: rgb sun-transmission tint. White when no caster matched
         // svt_slot — fs_pbr gates on rt_flags.z anyway (0 = none). The
         // lighting-only dispatch (shadow_spp==0) never writes this.
@@ -2496,7 +2472,7 @@ kernel void trace_shadow_rays(
                 float hit_kd = (1.0f - max(hit_f.r,max(hit_f.g,hit_f.b))) * (1.0f-surface.metallic);
                 float sheen_scale = p.light_data_addr != 0ul ? rt_sheen_scale(surface,-gr.direction,secondary_brdf) : 1.0f;
                 float3 bounce_term = rt_direct_lights(accel,slot_sources,slot_materials,material_textures,p,
-                    surface,hit_pos,-gr.direction,bias_eps,tid,400u+s*MAX_RT_CASTERS,sheen_scale,diagnostics);
+                    surface,hit_pos,-gr.direction,bias_eps,tid,400u+s*RT_CASTER_SEED_STRIDE,sheen_scale,diagnostics);
                 // RS7: the bounce-0 direct-emissive term is owned by the
                 // emissive direct-light sampler when active (substitution,
                 // never addition — the 818a06b0 double-count trap).
@@ -2518,7 +2494,7 @@ kernel void trace_shadow_rays(
                     // Sample both diffuse hemispheres with their material
                     // mixture probabilities; division by that probability
                     // cancels the same weight in the diffuse BTDF/BRDF.
-                    bool through = rand2(tid,p.frame_index,900u+s*MAX_RT_CASTERS+bounce).x
+                    bool through = rand2(tid,p.frame_index,900u+s*RT_CASTER_SEED_STRIDE+bounce).x
                         < surface.translucency.x;
                     throughput *= (through ? surface.translucency.yzw : hit_albedo) * base_energy;
                     if (through) hit_n = -hit_n;
@@ -2526,7 +2502,7 @@ kernel void trace_shadow_rays(
                     // Extension directions use the plain hash stream (seed
                     // base 600u), NOT blue_noise_sample — the blue-noise
                     // sequence is budgeted per first-bounce sample index.
-                    gr.direction = cosine_hemisphere(hit_n, rand2(tid, p.frame_index, 600u + s * MAX_RT_CASTERS + bounce));
+                    gr.direction = cosine_hemisphere(hit_n, rand2(tid, p.frame_index, 600u + s * RT_CASTER_SEED_STRIDE + bounce));
                 }
             }
         }
@@ -2903,12 +2879,9 @@ kernel void trace_shadow_rays(
 kernel void upsample_shadow(
     constant ShadowRayParams&       p         [[buffer(1)]],
     depth2d<float>                  depth_tex [[texture(0)]],
-    texture2d<float>                lo_sv     [[texture(1)]],
-    texture2d<float, access::write> hi_sv     [[texture(2)]],
-    // RS-A (caster cap 4 -> 8): second shadow-visibility quad — same
-    // half->full bilateral upsample, depth+normal edge-stopped.
-    texture2d<float>                lo_sv2    [[texture(9)]],
-    texture2d<float, access::write> hi_sv2    [[texture(10)]],
+    // Shadow visibility, every layer upsampled with the same tap weights.
+    texture2d_array<float>                lo_sv [[texture(1)]],
+    texture2d_array<float, access::write> hi_sv [[texture(2)]],
     texture2d<float>                lo_irr    [[texture(3)]],
     texture2d<float, access::write> hi_irr    [[texture(4)]],
     // RT-T1-C (BUG-311): the SAME bilateral upsample widened once more (D16's
@@ -2940,10 +2913,10 @@ kernel void upsample_shadow(
     // by texture size so the params ABI and fused path are untouched.
     bool sv_native = lo_sv.get_width() == p.gbuffer_size.x && lo_sv.get_height() == p.gbuffer_size.y;
     if (d <= 0.0) {
-        hi_sv.write(sv_native ? lo_sv.read(tid) : float4(1, 1, 1, 1), tid);
-        hi_sv2.write(sv_native ? lo_sv2.read(tid) : float4(1, 1, 1, 1), tid);
+        for (uint g = 0; g < hi_sv.get_array_size(); g++)
+            hi_sv.write(sv_native ? lo_sv.read(tid, g) : float4(1, 1, 1, 1), tid, g);
         // RT-TL-C: void sky = unoccluded sun; white tint. sv_native passthrough
-        // when the mask dispatch ran at native res (same as sv/sv2 above).
+        // when the mask dispatch ran at native res (same as sv above).
         hi_svt.write(sv_native ? lo_svt.read(tid) : float4(1, 1, 1, 1), tid);
         hi_irr.write(float4(0, 0, 0, 1.0), tid);
         hi_n.write(float4(0, 1, 0, -1.0), tid);
@@ -2969,7 +2942,9 @@ kernel void upsample_shadow(
     // normal divergence to near-zero weight while still full-weighting a
     // shared flat surface's own precision noise.
     const float UPSAMPLE_NORMAL_POWER = 32.0;
-    float4 acc_sv = 0.0; float4 acc_sv2 = 0.0; float3 acc_irr = 0.0; float acc_ao = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float3 acc_svt = 0.0; float wsum = 0.0;
+    // Accepted taps and their weights, replayed per visibility layer below.
+    uint2 tap_q[4]; float tap_w[4]; uint tap_count = 0u;
+    float3 acc_irr = 0.0; float acc_ao = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float3 acc_svt = 0.0; float wsum = 0.0;
     // All-reject has two sub-cases with different right answers. VOID among
     // the taps = a silhouette the half-res grid straddles: the floored
     // equal-average below then blends lit surface with background at full
@@ -3008,7 +2983,7 @@ kernel void upsample_shadow(
         float w_depth = exp(-fabs(qd - d) / 0.001);
         float w_normal = pow(max(dot(ref_n, qn), 0.0), UPSAMPLE_NORMAL_POWER);
         float w = max(w_bilin * w_depth * w_normal, 1e-5);
-        if (!sv_native) { acc_sv += lo_sv.read(uint2(q)) * w; acc_sv2 += lo_sv2.read(uint2(q)) * w; }
+        tap_q[tap_count] = uint2(q); tap_w[tap_count] = w; tap_count++;
         // RT-TL-C: svt blends with the same shared w as sv (MASK-class signal).
         acc_svt += lo_svt.read(uint2(q)).rgb * w;
         float4 qirr = lo_irr.read(uint2(q));
@@ -3020,8 +2995,8 @@ kernel void upsample_shadow(
     }
     if (wsum < 1e-4 && void_taps > 0u) {
         uint2 uq = uint2(any_nonvoid ? nearest_nonvoid : nearest_lo);
-        hi_sv.write(sv_native ? lo_sv.read(tid) : lo_sv.read(uq), tid);
-        hi_sv2.write(sv_native ? lo_sv2.read(tid) : lo_sv2.read(uq), tid);
+        for (uint g = 0; g < hi_sv.get_array_size(); g++)
+            hi_sv.write(sv_native ? lo_sv.read(tid, g) : lo_sv.read(uq, g), tid, g);
         // RT-TL-C: nearest tap passthrough for all-reject (same as refl).
         hi_svt.write(sv_native ? lo_svt.read(tid) : lo_svt.read(uq), tid);
         hi_irr.write(lo_irr.read(uq), tid);
@@ -3029,8 +3004,13 @@ kernel void upsample_shadow(
         hi_refl.write(lo_refl.read(uq), tid);
         return;
     }
-    hi_sv.write(sv_native ? lo_sv.read(tid) : acc_sv / wsum, tid);
-    hi_sv2.write(sv_native ? lo_sv2.read(tid) : acc_sv2 / wsum, tid);
+    for (uint g = 0; g < hi_sv.get_array_size(); g++) {
+        float4 acc_sv = 0.0;
+        if (!sv_native) {
+            for (uint k = 0; k < tap_count; k++) acc_sv += lo_sv.read(tap_q[k], g) * tap_w[k];
+        }
+        hi_sv.write(sv_native ? lo_sv.read(tid, g) : acc_sv / wsum, tid, g);
+    }
     // RT-TL-C: svt blends with the same wsum as sv (MASK-class signal).
     hi_svt.write(sv_native ? lo_svt.read(tid) : float4(acc_svt / wsum, 1.0), tid);
     hi_irr.write(float4(acc_irr / wsum, acc_ao / wsum), tid);
@@ -3091,8 +3071,8 @@ kernel void atrous_filter(
     device GiMaterial*            gi_materials [[buffer(2)]],
     depth2d<float>                   depth_tex    [[texture(0)]],
     texture2d<float>                 moments_read [[texture(1)]],
-    texture2d<float>                 src_sv       [[texture(2)]],
-    texture2d<float, access::write>  dst_sv       [[texture(3)]],
+    texture2d_array<float>                src_sv [[texture(2)]],
+    texture2d_array<float, access::write> dst_sv [[texture(3)]],
     texture2d<float>                 src_irr      [[texture(4)]],
     texture2d<float, access::write>  dst_irr      [[texture(5)]],
     texture2d<float>                 src_n        [[texture(6)]],
@@ -3103,11 +3083,6 @@ kernel void atrous_filter(
     // harder; shiny surface = narrow sigma = preserve crisp mirror image).
     texture2d<float>                 src_refl     [[texture(8)]],
     texture2d<float, access::write>  dst_refl     [[texture(9)]],
-    // RS-A (caster cap 4 -> 8): second shadow-visibility quad — filtered
-    // with the same depth + normal edge-stops; separate accumulator so
-    // a high-slot visibility change doesn't bleed into the low slots.
-    texture2d<float>                 src_sv2      [[texture(11)]],
-    texture2d<float, access::write>  dst_sv2      [[texture(12)]],
     // RT-TL-C (section 16 TL5): sun-transmission tint — filtered with the
     // same depth + normal edge-stops as sv (MASK-class signal).
     texture2d<float>                 src_svt      [[texture(13)]],
@@ -3119,8 +3094,7 @@ kernel void atrous_filter(
     if (center_depth <= 0.0) {
         // Void background: pass through unfiltered (nothing to edge-stop
         // against; matches every other stage's void-background handling).
-        dst_sv.write(src_sv.read(tid), tid);
-        dst_sv2.write(src_sv2.read(tid), tid);
+        for (uint g = 0; g < dst_sv.get_array_size(); g++) dst_sv.write(src_sv.read(tid, g), tid, g);
         dst_svt.write(src_svt.read(tid), tid);
         dst_irr.write(src_irr.read(tid), tid);
         dst_n.write(src_n.read(tid), tid);
@@ -3217,15 +3191,8 @@ kernel void atrous_filter(
         int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1)
     };
     float3 acc_irr = center_irr;
-    // Multi-caster fix: `src_sv`/`dst_sv` now carry up to 4 independent
-    // caster-slot visibility channels (.rgba), not 2 (.rg — vis+AO, AO
-    // since moved into irradiance) — reading/writing only `.rg` here would
-    // silently zero slots 2/3 on every à-trous pass, outside this file's
-    // stated edit list but a direct correctness consequence of the format
-    // change above (not a judgment call — same treatment as
-    // `upsample_shadow`).
-    float4 acc_sv = src_sv.read(tid);
-    float4 acc_sv2 = src_sv2.read(tid);
+    // Shadow visibility reuses these tap weights per layer after the loop.
+    float sv_tap_w[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
     float3 acc_svt = src_svt.read(tid).rgb;
     float3 acc_refl = src_refl.read(tid).rgb;
     float wsum = 1.0;
@@ -3242,8 +3209,7 @@ kernel void atrous_filter(
         float w_luma = exp(-fabs(luma(qirr) - center_luma) / luma_sigma);
         float w = w_depth * w_normal * w_luma;
         acc_irr += qirr * w;
-        acc_sv += src_sv.read(uq) * w;
-        acc_sv2 += src_sv2.read(uq) * w;
+        sv_tap_w[i] = w;
         // RT-TL-C: svt filters with the same shared w (MASK-class).
         acc_svt += src_svt.read(uq).rgb * w;
         // RT-R2: the refl channel's own weight — shared depth/normal stops,
@@ -3255,8 +3221,14 @@ kernel void atrous_filter(
         wsum += w;
     }
     dst_irr.write(float4(acc_irr / wsum, center_ao), tid);
-    dst_sv.write(acc_sv / wsum, tid);
-    dst_sv2.write(acc_sv2 / wsum, tid);
+    for (uint g = 0; g < dst_sv.get_array_size(); g++) {
+        float4 acc_sv = src_sv.read(tid, g);
+        for (int i = 0; i < 8; i++) {
+            if (sv_tap_w[i] == 0.0) continue;
+            acc_sv += src_sv.read(uint2(int2(tid) + offsets[i] * int(p.step)), g) * sv_tap_w[i];
+        }
+        dst_sv.write(acc_sv / wsum, tid, g);
+    }
     // RT-TL-C: svt filters with the same wsum as sv (MASK-class signal).
     dst_svt.write(float4(acc_svt / wsum, 1.0), tid);
     // RT-T2-C: `.w` = object id, passed through untouched (never blended).
@@ -3505,9 +3477,11 @@ kernel void accumulate_irradiance(
     // term is raw per-frame samples at half res — spatially blurred by the
     // atrous but temporally unfiltered, the boil Peter sees on every
     // penumbra.
-    texture2d<float>                     hi_sv               [[texture(14)]],
-    texture2d<float>                     sv_history_read     [[texture(15)]],
-    texture2d<float, access::write>      sv_history_write    [[texture(16)]],
+    // Every visibility texture below is a layer stack, four casters per
+    // layer; each layer runs this whole gate on its own.
+    texture2d_array<float>                     hi_sv               [[texture(14)]],
+    texture2d_array<float>                     sv_history_read     [[texture(15)]],
+    texture2d_array<float, access::write>      sv_history_write    [[texture(16)]],
     // SV-ACCUM moments: per-channel (per-caster-slot) first/second moments
     // of the visibility signal — the discriminator the sv change gate
     // needs. A per-frame |cur − hist| delta is statistically IDENTICAL for
@@ -3518,10 +3492,10 @@ kernel void accumulate_irradiance(
     // Rgba16Float suffices: visibility is 0..1, its variance ~0.25 at the
     // noisiest, nowhere near the cancellation floor the irr luma moments
     // needed Rgba32Float for.
-    texture2d<float>                     sv_m1_read          [[texture(17)]],
-    texture2d<float, access::write>      sv_m1_write         [[texture(18)]],
-    texture2d<float>                     sv_m2_read          [[texture(19)]],
-    texture2d<float, access::write>      sv_m2_write         [[texture(20)]],
+    texture2d_array<float>                     sv_m1_read          [[texture(17)]],
+    texture2d_array<float, access::write>      sv_m1_write         [[texture(18)]],
+    texture2d_array<float>                     sv_m2_read          [[texture(19)]],
+    texture2d_array<float, access::write>      sv_m2_write         [[texture(20)]],
     // SV-ACCUM snap-hold countdown (`.x`, per texel). The sigma gate alone
     // fires ONCE on a real crossing: the moments then straddle the old and
     // new levels, the honest sigma inflates to ~half the step, and 4*sigma
@@ -3534,22 +3508,8 @@ kernel void accumulate_irradiance(
     // honest again, so boil never re-trips. No moment reset on snap: with
     // a reset the floor/relative terms alone gate a noisy penumbra's delta
     // and the texel snaps every frame forever, never amortizing.
-    texture2d<float>                     sv_hold_read        [[texture(21)]],
-    texture2d<float, access::write>      sv_hold_write       [[texture(22)]],
-    // RS-A (caster cap 4 -> 8): second shadow-visibility quad (slots 4-7) —
-    // independent SV-ACCUM pipeline: own history, moments, and snap-hold,
-    // same flip clock as the first channel, so a penumbra boil in slots 4-7
-    // never trips the gate on slots 0-3. The surface-history validity test
-    // is shared (a shadow lives on its surface), same as the first channel.
-    texture2d<float>                     hi_sv2              [[texture(23)]],
-    texture2d<float>                     sv2_history_read    [[texture(24)]],
-    texture2d<float, access::write>      sv2_history_write   [[texture(25)]],
-    texture2d<float>                     sv2_m1_read         [[texture(26)]],
-    texture2d<float, access::write>      sv2_m1_write        [[texture(27)]],
-    texture2d<float>                     sv2_m2_read         [[texture(28)]],
-    texture2d<float, access::write>      sv2_m2_write        [[texture(29)]],
-    texture2d<float>                     sv2_hold_read       [[texture(30)]],
-    texture2d<float, access::write>      sv2_hold_write      [[texture(31)]],
+    texture2d_array<float>                     sv_hold_read        [[texture(21)]],
+    texture2d_array<float, access::write>      sv_hold_write       [[texture(22)]],
     // RT-TL-C (section 16 TL5/TL8): sun-transmission tint channel — current
     // frame's filtered tint (`.rgb`), its own ping-pong history pair with the
     // SAME flip clock as the irradiance/reflection pairs. TL8: same weights
@@ -3563,8 +3523,6 @@ kernel void accumulate_irradiance(
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
     float4 cur = hi_irr.read(tid);
-    float4 cur_sv = hi_sv.read(tid);
-    float4 cur_sv2 = hi_sv2.read(tid);
     // RT-TL-C (TL8): current frame's filtered sun-transmission tint.
     float3 cur_svt = hi_svt.read(tid).rgb;
     float  cur_depth = depth_tex.read(tid, 0);
@@ -3589,6 +3547,9 @@ kernel void accumulate_irradiance(
     // is double temporal filtering (the fused-path look rejection's
     // confound 1). `alpha_floor` replaces `p.alpha` at every blend below.
     bool denoise_near_raw  = (p.reset & 32u) != 0u;
+    // Bit 6: the visibility arrays were just reallocated (more casters);
+    // only visibility restarts, from the current frame.
+    bool sv_reset          = (p.reset & 64u) != 0u;
     float alpha_floor = denoise_near_raw ? max(p.alpha, 0.25) : p.alpha;
     if ((p.reset & 1u) != 0u) {
         // `.a` = accumulated frame count (BUG-boil): a cold texel has
@@ -3610,14 +3571,13 @@ kernel void accumulate_irradiance(
         // RT-TL-C (TL8): tint history reset — same reset path as the
         // irradiance texture (current frame, written fresh).
         svt_history_write.write(float4(cur_svt, 1.0), tid);
-        sv_history_write.write(cur_sv, tid);
-        sv_m1_write.write(cur_sv, tid);
-        sv_m2_write.write(cur_sv * cur_sv, tid);
-        sv_hold_write.write(float4(0.0), tid);
-        sv2_history_write.write(cur_sv2, tid);
-        sv2_m1_write.write(cur_sv2, tid);
-        sv2_m2_write.write(cur_sv2 * cur_sv2, tid);
-        sv2_hold_write.write(float4(0.0), tid);
+        for (uint g = 0; g < hi_sv.get_array_size(); g++) {
+            float4 cur_sv = hi_sv.read(tid, g);
+            sv_history_write.write(cur_sv, tid, g);
+            sv_m1_write.write(cur_sv, tid, g);
+            sv_m2_write.write(cur_sv * cur_sv, tid, g);
+            sv_hold_write.write(float4(0.0), tid, g);
+        }
         return;
     }
 
@@ -3642,19 +3602,15 @@ kernel void accumulate_irradiance(
     // irradiance alpha, NOT the sv sigma-gate. cur_svt is the fallback
     // whenever history is rejected.
     float3 svt_blended = cur_svt;
-    // SV-ACCUM: the four caster-visibility channels blend with the SAME
-    // weight `alpha` as the irradiance rgb — one convergence clock, one
-    // snap decision. `cur_sv` is the fallback whenever history is rejected.
-    float4 sv_blended = cur_sv;
-    float4 sv_m1w = cur_sv;
-    float4 sv_m2w = cur_sv * cur_sv;
-    float sv_hold_w = 0.0;
-    // RS-A: second shadow-visibility quad — independent sigma-gate,
-    // same surface-history validity (a shadow lives on its surface).
-    float4 sv2_blended = cur_sv2;
-    float4 sv2_m1w = cur_sv2;
-    float4 sv2_m2w = cur_sv2 * cur_sv2;
-    float sv2_hold_w = 0.0;
+    // SV-ACCUM: shadow visibility reuses the surface's validated history
+    // taps (a shadow lives on its surface). They are recorded here and
+    // replayed per visibility layer after the surface blend.
+    bool sv_reproj = false;
+    float sv_w[4] = { 0.0, 0.0, 0.0, 0.0 };
+    uint2 sv_t[4] = { uint2(0), uint2(0), uint2(0), uint2(0) };
+    float sv_wsum = 1.0;
+    float sv_n_full = 1.0;
+    float sv_m_alpha = 1.0;
     // Frames of history behind this texel, carried in `moments_write.w`
     // (was `history_write.a` — ED2 moved the ao there). 1 = this frame only
     // (a rejected/disoccluded texel is a cold start).
@@ -3759,16 +3715,6 @@ kernel void accumulate_irradiance(
                 // RT-TL-C (TL8): svt history resampled through the SAME
                 // validated taps as the irradiance channel.
                 float3 svtsum = float3(0.0);
-                float4 svsum = float4(0.0);
-                float4 sv1sum = float4(0.0);
-                float4 sv2sum = float4(0.0);
-                float svhsum = 0.0;
-                // RS-A: second shadow-visibility quad — resampled through
-                // the SAME validated taps (no separate reprojection test).
-                float4 sv2hsum = float4(0.0);
-                float4 sv2h1sum = float4(0.0);
-                float4 sv2h2sum = float4(0.0);
-                float sv2hhsum = 0.0;
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
                     uint2 tt = uint2(t);
@@ -3790,20 +3736,12 @@ kernel void accumulate_irradiance(
                         // visibility history never gets its own reprojection
                         // test because a shadow lives ON a surface: if the
                         // surface's history is valid here, so is its shadow's.
-                        svsum += w[i] * sv_history_read.read(tt);
-                        sv1sum += w[i] * sv_m1_read.read(tt);
-                        sv2sum += w[i] * sv_m2_read.read(tt);
-                        svhsum += w[i] * sv_hold_read.read(tt).x;
+                        sv_t[i] = tt;
+                        sv_w[i] = w[i];
                         // RT-TL-C (TL8): svt history resampled through the
                         // SAME validated taps — tint lives on its surface
                         // exactly like shadow visibility.
                         svtsum += w[i] * svt_history_read.read(tt).rgb;
-                        // RS-A: second visibility channel — same taps,
-                        // same weights, independent sigma-gate after.
-                        sv2hsum += w[i] * sv2_history_read.read(tt);
-                        sv2h1sum += w[i] * sv2_m1_read.read(tt);
-                        sv2h2sum += w[i] * sv2_m2_read.read(tt);
-                        sv2hhsum += w[i] * sv2_hold_read.read(tt).x;
                     }
                 }
                 if (wsum > 1e-4) {
@@ -3917,43 +3855,11 @@ kernel void accumulate_irradiance(
                     // caster intensity strobe doesn't change it, and snapping
                     // on the CPU key would discard convergence every strobe
                     // (D3). A caster MOVE shows up per-texel through this
-                    // gate anyway.
-                    float4 sv_hist = svsum / wsum;
-                    float4 sv_hm1 = sv1sum / wsum;
-                    float4 sv_hm2 = sv2sum / wsum;
-                    float4 sv_sd = sqrt(max(sv_hm2 - sv_hm1 * sv_hm1, float4(0.0)));
-                    float4 sv_d4 = abs(cur_sv - sv_hist);
-                    float4 sv_gate = max(4.0 * sv_sd,
-                                         0.15 * max(sv_hist, cur_sv));
-                    // BUG-tr5o / D-64 addendum: motion_band scales the WHOLE
-                    // band including the 0.05 floor — unlike the refl gate's
-                    // 1e-4 numerical floor, 0.05 here is a data floor and it
-                    // is what binds at a converged penumbra texel under
-                    // subpixel-per-frame camera motion: the true edge shift
-                    // lands above 0.05 while sigma is still small from the
-                    // last snap, so the gate re-trips every frame and the
-                    // mask pins at alpha 0.5 for the whole move (measured
-                    // 2026-08-01 via the sv_hold capture: orbit mean hold
-                    // ~0.01 vs static ~0.00001, 1000x). cam_motion = 0 on a
-                    // held camera, so the static path is byte-identical.
-                    // Section 10 addendum: a geometry gesture (two consecutive
-                    // frames of caster-move/svt-slot-swap) forces the trip
-                    // past the sigma gate — the snap-hold machinery below
-                    // runs unchanged and the BUG-boil floored-moments update
-                    // stays self-sustaining. Single (non-gesture) geo changes
-                    // still go through the sigma gate.
-                    bool sv_changed = any(sv_d4 > max(sv_gate, float4(0.05)) * motion_band)
-                        || cpu_geo_gesture;
-                    // Snap-hold: the gate fires once, then the straddling
-                    // moments inflate sigma and the gate goes dead — so a
-                    // trip holds the n=2 snap for 4 more frames while the
-                    // moments keep updating (see the binding-21 comment).
-                    float sv_hold_hist = svhsum / wsum;
-                    sv_hold_w = sv_changed ? 4.0 : max(sv_hold_hist - 1.0, 0.0);
-                    bool sv_snap = sv_changed || sv_hold_hist >= 1.0;
-                    float sv_n = sv_snap ? 2.0 : n_full;
-                    float sv_alpha = max(1.0 / sv_n, alpha_floor);
-                    sv_blended = mix(sv_hist, cur_sv, sv_alpha);
+                    // gate anyway. The gate runs per visibility layer after
+                    // the surface blend; this records the clock it runs on.
+                    sv_reproj = true;
+                    sv_wsum = wsum;
+                    sv_n_full = n_full;
                     valid = true;
                     // The moments update on a FLOORED window (>= 4 samples)
                     // even when the colour snaps to 2. One counter serves both,
@@ -3964,37 +3870,7 @@ kernel void accumulate_irradiance(
                     float m_alpha = max(1.0 / max(n, 4.0), alpha_floor);
                     moment1 = mix(hm1, cur_luma, m_alpha);
                     moment2 = mix(hm2, cur_luma * cur_luma, m_alpha);
-                    // SV-ACCUM: visibility moments on the SAME floored
-                    // window, updated even through a snap — a real crossing
-                    // inflates sigma for a few frames (the snap-hold above
-                    // covers the blend meanwhile), then the statistic
-                    // settles honest at the new level.
-                    sv_m1w = mix(sv_hm1, cur_sv, m_alpha);
-                    sv_m2w = mix(sv_hm2, cur_sv * cur_sv, m_alpha);
-                    // RS-A (caster cap 4 -> 8): independent sigma-gate for
-                    // the second shadow-visibility quad (slots 4-7). The
-                    // surface-history validity test is shared (a shadow
-                    // lives on its surface); the change verdict is fully
-                    // independent so a boil in one quad never trips the
-                    // other. Same constants, same snap-hold discipline as
-                    // the first channel.
-                    float4 sv2_hist = sv2hsum / wsum;
-                    float4 sv2_hm1 = sv2h1sum / wsum;
-                    float4 sv2_hm2 = sv2h2sum / wsum;
-                    float4 sv2_hsd = sqrt(max(sv2_hm2 - sv2_hm1 * sv2_hm1, float4(0.0)));
-                    float4 sv2_d4 = abs(cur_sv2 - sv2_hist);
-                    float4 sv2_gate = max(4.0 * sv2_hsd,
-                                         0.15 * max(sv2_hist, cur_sv2));
-                    bool sv2_changed = any(sv2_d4 > max(sv2_gate, float4(0.05)) * motion_band)
-                        || cpu_geo_gesture;
-                    float sv2_hold_hist = sv2hhsum / wsum;
-                    sv2_hold_w = sv2_changed ? 4.0 : max(sv2_hold_hist - 1.0, 0.0);
-                    bool sv2_snap = sv2_changed || sv2_hold_hist >= 1.0;
-                    float sv2_n = sv2_snap ? 2.0 : n_full;
-                    float sv2_alpha = max(1.0 / sv2_n, alpha_floor);
-                    sv2_blended = mix(sv2_hist, cur_sv2, sv2_alpha);
-                    sv2_m1w = mix(sv2_hm1, cur_sv2, m_alpha);
-                    sv2_m2w = mix(sv2_hm2, cur_sv2 * cur_sv2, m_alpha);
+                    sv_m_alpha = m_alpha;
                     // The SURFACE's lighting changed, so its specular history
                     // is stale for the same reason — one decision, both
                     // channels (the reflection block below reads this).
@@ -4012,21 +3888,80 @@ kernel void accumulate_irradiance(
     history_write.write(valid ? float4(blended, ao_blended) : float4(cur.xyz, cur.a), tid);
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
     moments_write.write(float4(moment1, moment2, ao_blended, valid ? hist_len : 1.0), tid);
-    // SV-ACCUM: rejected/disoccluded texels cold-start from the current
-    // frame's visibility, same fallback discipline as the irradiance write.
-    sv_history_write.write(valid ? sv_blended : cur_sv, tid);
-    sv_m1_write.write(sv_m1w, tid);
-    sv_m2_write.write(sv_m2w, tid);
-    sv_hold_write.write(float4(sv_hold_w, 0.0, 0.0, 0.0), tid);
-    // RS-A (caster cap 4 -> 8): independent second shadow-visibility
-    // channel — same cold-start discipline.
-    sv2_history_write.write(valid ? sv2_blended : cur_sv2, tid);
     // RT-TL-C (TL8): svt history write — same cold-start discipline as
     // the irradiance write (cur_svt when rejected, blended when valid).
     svt_history_write.write(valid ? float4(svt_blended, 1.0) : float4(cur_svt, 1.0), tid);
-    sv2_m1_write.write(sv2_m1w, tid);
-    sv2_m2_write.write(sv2_m2w, tid);
-    sv2_hold_write.write(float4(sv2_hold_w, 0.0, 0.0, 0.0), tid);
+    // SV-ACCUM, one visibility layer (four casters) at a time, each with its
+    // own change gate. Rejected/disoccluded texels cold-start from the
+    // current frame's visibility, same as the irradiance write.
+    for (uint g = 0; g < hi_sv.get_array_size(); g++) {
+        float4 cur_sv = hi_sv.read(tid, g);
+        float4 sv_blended = cur_sv;
+        float4 sv_m1w = cur_sv;
+        float4 sv_m2w = cur_sv * cur_sv;
+        float sv_hold_w = 0.0;
+        if (sv_reproj && !sv_reset) {
+            float wsum = sv_wsum;
+            float n_full = sv_n_full;
+            float4 svsum = float4(0.0);
+            float4 sv1sum = float4(0.0);
+            float4 sv2sum = float4(0.0);
+            float svhsum = 0.0;
+            for (int i = 0; i < 4; ++i) {
+                if (sv_w[i] == 0.0) continue;
+                svsum += sv_w[i] * sv_history_read.read(sv_t[i], g);
+                sv1sum += sv_w[i] * sv_m1_read.read(sv_t[i], g);
+                sv2sum += sv_w[i] * sv_m2_read.read(sv_t[i], g);
+                svhsum += sv_w[i] * sv_hold_read.read(sv_t[i], g).x;
+            }
+            float4 sv_hist = svsum / wsum;
+            float4 sv_hm1 = sv1sum / wsum;
+            float4 sv_hm2 = sv2sum / wsum;
+            float4 sv_sd = sqrt(max(sv_hm2 - sv_hm1 * sv_hm1, float4(0.0)));
+            float4 sv_d4 = abs(cur_sv - sv_hist);
+            float4 sv_gate = max(4.0 * sv_sd,
+                                 0.15 * max(sv_hist, cur_sv));
+            // BUG-tr5o / D-64 addendum: motion_band scales the WHOLE
+            // band including the 0.05 floor — unlike the refl gate's
+            // 1e-4 numerical floor, 0.05 here is a data floor and it
+            // is what binds at a converged penumbra texel under
+            // subpixel-per-frame camera motion: the true edge shift
+            // lands above 0.05 while sigma is still small from the
+            // last snap, so the gate re-trips every frame and the
+            // mask pins at alpha 0.5 for the whole move (measured
+            // 2026-08-01 via the sv_hold capture: orbit mean hold
+            // ~0.01 vs static ~0.00001, 1000x). cam_motion = 0 on a
+            // held camera, so the static path is byte-identical.
+            // Section 10 addendum: a geometry gesture (two consecutive
+            // frames of caster-move/svt-slot-swap) forces the trip
+            // past the sigma gate — the snap-hold machinery below
+            // runs unchanged and the BUG-boil floored-moments update
+            // stays self-sustaining. Single (non-gesture) geo changes
+            // still go through the sigma gate.
+            bool sv_changed = any(sv_d4 > max(sv_gate, float4(0.05)) * motion_band)
+                || cpu_geo_gesture;
+            // Snap-hold: the gate fires once, then the straddling
+            // moments inflate sigma and the gate goes dead — so a
+            // trip holds the n=2 snap for 4 more frames while the
+            // moments keep updating (see the binding-21 comment).
+            float sv_hold_hist = svhsum / wsum;
+            sv_hold_w = sv_changed ? 4.0 : max(sv_hold_hist - 1.0, 0.0);
+            bool sv_snap = sv_changed || sv_hold_hist >= 1.0;
+            float sv_n = sv_snap ? 2.0 : n_full;
+            float sv_alpha = max(1.0 / sv_n, alpha_floor);
+            sv_blended = mix(sv_hist, cur_sv, sv_alpha);
+            // Visibility moments on the SAME floored window as the surface,
+            // updated even through a snap — a real crossing inflates sigma
+            // for a few frames (the snap-hold covers the blend meanwhile),
+            // then the statistic settles honest at the new level.
+            sv_m1w = mix(sv_hm1, cur_sv, sv_m_alpha);
+            sv_m2w = mix(sv_hm2, cur_sv * cur_sv, sv_m_alpha);
+        }
+        sv_history_write.write(sv_blended, tid, g);
+        sv_m1_write.write(sv_m1w, tid, g);
+        sv_m2_write.write(sv_m2w, tid, g);
+        sv_hold_write.write(float4(sv_hold_w, 0.0, 0.0, 0.0), tid, g);
+    }
     // Specular history length, `normal_history.w`. Written below the
     // reflection block (which computes it) — the normal itself is settled
     // here, so the deferred write costs nothing.

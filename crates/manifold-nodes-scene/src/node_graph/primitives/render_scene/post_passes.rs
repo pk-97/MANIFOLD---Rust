@@ -20,26 +20,13 @@ impl RenderScene {
         shaft_light_count: u32,
         rt_ready: bool,
     ) {
-        let FramePrelude { ref caster_table, cam, atmosphere, aspect, rt_enabled, wants_shafts_now, .. } = *pre;
-        let caster_bytes: &[u8] = bytemuck::cast_slice(caster_table);
-        let dummy = self.dummy_texture.as_ref().expect("just inserted");
-        let dummy_depth = self.dummy_depth.as_ref().expect("stubs ensured");
+        let FramePrelude { cam, atmosphere, aspect, rt_enabled, wants_shafts_now, .. } = *pre;
+        let shadow_maps = self.shadow_maps.as_ref().map(|maps| &maps.texture)
+            .unwrap_or_else(|| self.dummy_depth_array.as_ref().expect("stubs ensured"));
+        let light_buffer = &self.light_buffers[self.light_frame];
         let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
-        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        const _: () = assert!(
-            MAX_RASTER_SHADOW_CASTERS == 4,
-            "shadow-map bindings + shader switch are hand-unrolled for K=4"
-        );
-        let shadow_tex = |slot: usize| -> &manifold_gpu::GpuTexture {
-            self.shadow_maps[slot]
-                .as_ref()
-                .map(|(_, t)| t)
-                .unwrap_or(dummy_depth)
-        };
-        let shadow_0 = shadow_tex(0);
-        let shadow_1 = shadow_tex(1);
-        let shadow_2 = shadow_tex(2);
-        let shadow_3 = shadow_tex(3);
+        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref()
+            .unwrap_or_else(|| self.dummy_mask_array.as_ref().expect("stubs ensured"));
 
         // depth-aware bilateral upsample + additive composite. Runs ONLY
         // when `wants_shafts_now` (the V1/D1 gate) — the default
@@ -120,11 +107,8 @@ impl RenderScene {
                         GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
                         GpuBinding::Texture { binding: 1, texture: half_depth },
                         GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
-                        GpuBinding::Bytes { binding: 3, data: caster_bytes },
-                        GpuBinding::Texture { binding: 4, texture: shadow_0 },
-                        GpuBinding::Texture { binding: 5, texture: shadow_1 },
-                        GpuBinding::Texture { binding: 6, texture: shadow_2 },
-                        GpuBinding::Texture { binding: 7, texture: shadow_3 },
+                        GpuBinding::Buffer { binding: 3, buffer: light_buffer, offset: self.caster_offset },
+                        GpuBinding::Texture { binding: 4, texture: shadow_maps },
                         GpuBinding::Sampler { binding: 8, sampler: shadow_sampler },
                         GpuBinding::Texture { binding: 9, texture: inscatter },
                         GpuBinding::Texture { binding: 10, texture: rt_mask_tex },

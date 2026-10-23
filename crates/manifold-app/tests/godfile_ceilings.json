@@ -14,7 +14,7 @@
     "crates/manifold-core/src/effects/mod.rs": 250,
     "crates/manifold-core/src/project/mod.rs": 350,
     "crates/manifold-editing/tests/command_roundtrips.rs": 2858,
-    "crates/manifold-gpu/src/metal/encoder.rs": 3742,
+    "crates/manifold-gpu/src/metal/encoder.rs": 3760,
     "crates/manifold-gpu/src/metal/raytrace/tracer.rs": 3241,
     "crates/manifold-node-engine/src/exec/execution.rs": 6070,
     "crates/manifold-node-engine/src/freeze/codegen/fused.rs": 1850,

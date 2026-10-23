@@ -1,6 +1,6 @@
 //! CPU mirrors of the MSL kernel param structs (ShadowRayParams,
-//! AccumulateParams, the atrous/firefly/atrous-post params), the caster
-//! and material tables (RtCasterParams, GiMaterial, RtNormalSource), and the
+//! AccumulateParams, the atrous/firefly/atrous-post params), the material
+//! tables (GiMaterial, RtNormalSource), and the
 //! instance-descriptor mirrors with their writers. Size/offset asserts stay
 //! beside the struct they pin (BUG-xmsx driver split); see `raytrace.rs` for
 //! the module map.
@@ -53,45 +53,6 @@ const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, material_count) == 
 const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, query_units_per_pixel) == 104);
 const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, env_rotation) == 108);
 
-/// One shadow-casting light's ray-tracing params — the per-caster payload
-/// of [`ShadowRayParams::casters`]. Field order/packing mirrors the MSL
-/// `RtCasterParams` exactly (P0 section 5.1 kernel lesson).
-///
-/// `kind` 0 = sun (`dir_or_pos` = normalized direction FROM the surface
-/// TOWARD the sun, `cone_or_size` = cone half-angle radians); `kind` 1 =
-/// point (`dir_or_pos` = world-space light position, `cone_or_size` =
-/// world-units light diameter, `0.0` = hard shadows). `color` is
-/// premultiplied color×intensity, same convention as `render_scene.rs`'s
-/// `Light::color`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct RtCasterParams {
-    pub dir_or_pos: [f32; 3],
-    pub cone_or_size: f32,
-    pub color: [f32; 3],
-    pub kind: u32,
-}
-
-const _: () = assert!(std::mem::size_of::<RtCasterParams>() == 32);
-
-impl RtCasterParams {
-    pub const ZERO: Self = Self {
-        dir_or_pos: [0.0; 3],
-        cone_or_size: 0.0,
-        color: [0.0; 3],
-        kind: 0,
-    };
-
-    pub fn new(dir_or_pos: [f32; 3], cone_or_size: f32, color: [f32; 3], kind: u32) -> Self {
-        Self {
-            dir_or_pos,
-            cone_or_size,
-            color,
-            kind,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct RtTraceDiagnostics {
@@ -123,10 +84,8 @@ pub(crate) struct RtTraceDiagnostics {
 /// `rt_or_flat_ambient` (no albedo folded in here — that happens once,
 /// downstream, per D3's "accumulate lighting separated from albedo").
 ///
-/// Per-caster shadow support (multi-caster fix): `sun_dir`/`sun_cone`/
-/// `sun_color` (single-caster-only) replaced with `casters`/`caster_count`
-/// — up to [`MAX_RT_CASTERS`] independently-traced casters, one visibility
-/// channel per slot in `trace_shadow_rays`'s `out_sv` output.
+/// Casters: `caster_count` [`ShadowCaster`] entries at `caster_data_addr`,
+/// any number; caster `i` writes channel `i % 4` of `out_sv` layer `i / 4`.
 /// RT quality A3a: Split-dispatch control.
 /// The single `trace_shadow_rays` kernel now runs twice with different spp masks:
 /// - Mask dispatch: shadow_spp > 0, ao_spp=0, gi_spp=0, refl_spp=0 → writes out_sv only
@@ -148,11 +107,10 @@ pub struct ShadowRayParams {
     /// RT-P3: one-bounce GI gather rays/pixel (emissive-hit + sun-bounce).
     /// 0 skips the gather entirely (same discipline as `ao_spp == 0`).
     pub gi_spp: u32,
-    /// Number of valid entries in `casters` (0..=[`MAX_RT_CASTERS`]). Slots
-    /// at/beyond this count are ignored by the kernel and read back as
-    /// visibility 1.0 (unshadowed).
+    /// Number of entries in the [`ShadowCaster`] table at `caster_data_addr`.
     pub caster_count: u32,
-    pub casters: [RtCasterParams; MAX_RT_CASTERS],
+    /// GPU address of the caster table (zero when `caster_count` is 0).
+    pub caster_data_addr: u64,
     /// RT-T1-B: world-space camera eye position — the origin of the
     /// PRIMARY visibility ray `trace_shadow_rays` now casts (closest-hit,
     /// toward the depth-reconstructed `wp`) to find which triangle/instance
@@ -177,8 +135,7 @@ pub struct ShadowRayParams {
     /// stats (`emissive_table_mean_power`/`_count`/`_total_area` and
     /// `emissive_entries_are_local`) are DELETED — the trace and firefly
     /// kernels read the GPU-written 16-byte `EmissiveTableStats` buffer
-    /// (buffer(9)) instead. The explicit pad below keeps `inv_view_proj`
-    /// at 336 and the total at 416.
+    /// (buffer(9)) instead.
     /// RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): index of the designated
     /// sun caster whose rgb transmission tint fills `out_svt`;
     /// SVT_SLOT_NONE = no designated sun.
@@ -186,7 +143,6 @@ pub struct ShadowRayParams {
     /// Radians every environment lookup turns by, counter-clockwise seen
     /// from above: the render's `env_rotation` (`refl_env_sample`).
     pub env_rotation: f32,
-    pub _pad_emissive: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
     /// RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows in
@@ -203,24 +159,16 @@ pub struct ShadowRayParams {
     pub light_data_addr: u64,
 }
 
-/// Fixed per-dispatch shadow-caster slot count — mirrors the embedded MSL
-/// `MAX_RT_CASTERS` at `raytrace.rs` (metal) `:565` (both are 8; no
-/// compiler-enforced link between the two, same manual-sync discipline this
-/// file already uses for other cross-constant constants). RS-A (caster cap
-/// 4 -> 8): doubled from 4; the MSL mirror must stay in sync.
-pub const MAX_RT_CASTERS: usize = 8;
-
 /// RT-TL-C (section 16 TL5): sentinel for no designated sun caster —
 /// `out_svt` reads white (1,1,1) everywhere and fs_pbr keeps the luma channel.
 pub const SVT_SLOT_NONE: u32 = u32::MAX;
 
 impl ShadowRayParams {
-    /// Construct with the alignment padding zeroed. `casters` may contain
-    /// up to [`MAX_RT_CASTERS`] entries; extras beyond that are ignored and
-    /// `caster_count` is clamped to the slice's (capped) length.
+    /// `caster_count` entries of [`ShadowCaster`] sit at `caster_data_addr`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        casters: &[RtCasterParams],
+        caster_count: u32,
+        caster_data_addr: u64,
         shadow_spp: u32,
         frame_index: u32,
         trace_size: [u32; 2],
@@ -235,11 +183,6 @@ impl ShadowRayParams {
         refl_rough_band: f32,
         svt_slot: u32,
     ) -> Self {
-        let caster_count = casters.len().min(MAX_RT_CASTERS) as u32;
-        let mut caster_arr = [RtCasterParams::ZERO; MAX_RT_CASTERS];
-        for (slot, c) in caster_arr.iter_mut().zip(casters.iter()) {
-            *slot = *c;
-        }
         Self {
             shadow_spp,
             frame_index,
@@ -249,14 +192,13 @@ impl ShadowRayParams {
             ao_spp,
             gi_spp,
             caster_count,
-            casters: caster_arr,
+            caster_data_addr,
             camera_pos,
             refl_spp,
             refl_max_roughness,
             refl_rough_band,
             svt_slot,
             env_rotation: 0.0,
-            _pad_emissive: [0; 2],
             inv_view_proj,
             slot_row_base: 0,
             light_count: 0,
@@ -390,17 +332,15 @@ impl GiMaterial {
 // as clearly — if `inv_view_proj`'s offset ever drifts from its required
 // 16-byte-aligned value (a field reordered/resized above it), this fails at
 // compile time instead of silently reading garbage on the GPU.
-// RS-A (caster cap 4 -> 8): casters grew from 4×32=128B to 8×32=256B;
-// inv_view_proj offset and total size recomputed. 336 % 16 == 0.
-// RT_INSTANCING_DESIGN.md D11: slot_row_base appended after inv_view_proj
-// (offset 400). The light table count/address then occupy offsets 404/408;
-// the u64 naturally rounds the complete payload to 416 bytes.
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, env_rotation) == 324);
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 336);
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, slot_row_base) == 400);
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, light_count) == 404);
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, light_data_addr) == 408);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 416);
+// `caster_data_addr` is an 8-aligned u64 at 40, so `inv_view_proj` lands on
+// 80 with no padding in either language.
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, caster_data_addr) == 40);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, env_rotation) == 76);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 80);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, slot_row_base) == 144);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, light_count) == 148);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, light_data_addr) == 152);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 160);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object bindless
 /// indirection for real vertex-normal interpolation in the RT trace kernel
@@ -916,6 +856,10 @@ pub const ACCUM_FLAG_GEO_GESTURE: u32 = 16;
 /// replaces ours — feeding it pre-smoothed frames is double temporal
 /// filtering (Peter's fused-path look rejection, confound 1).
 pub const ACCUM_FLAG_DENOISE_NEAR_RAW: u32 = 32;
+/// Bit 6 — the shadow-visibility arrays grew this frame: their histories
+/// restart from the current frame while irradiance, reflection and tint
+/// keep accumulating.
+pub const ACCUM_FLAG_SV_RESET: u32 = 64;
 
 /// CPU mirror of the MSL `AtrousParams` struct backing `atrous_filter`
 /// (RT-T1-D, BUG-312). MSL uint2 requires eight-byte alignment, including

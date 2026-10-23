@@ -32,6 +32,7 @@ pub(crate) fn to_mtl_texture_type(dim: GpuTextureDimension, _depth: u32) -> MTLT
     match dim {
         GpuTextureDimension::D2 => MTLTextureType::Type2D,
         GpuTextureDimension::D3 => MTLTextureType::Type3D,
+        GpuTextureDimension::D2Array => MTLTextureType::Type2DArray,
     }
 }
 

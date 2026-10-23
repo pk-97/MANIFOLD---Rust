@@ -337,24 +337,25 @@ fn light_direction_attenuation(index: u32, world_pos: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(direction, attenuation);
 }
 
-// Shadow-caster table: MAX_RASTER_SHADOW_CASTERS (=4) slots × 5 vec4.
-// Per slot: [0..3] = the caster's light-space view_proj columns,
-// [4] = (bias, kernel_half_width, texel_size, light_size). Filled only for
-// active casters (zeroed otherwise); a light's caster slot rides
-// lights[i*4+1].w (−1.0 = this light casts no shadow). The four shadow maps
-// are separate bindings because WGSL has no dynamic texture-binding
-// indexing — the K=4 switch in sample_shadow() picks the right one.
-// `kernel_half_width` doubles as the PCSS dispatch: a NEGATIVE value (D12,
-// REALTIME_3D_DESIGN section 11) means this caster is the `Contact` softness tier
-// — `shadow_factor` runs the PCSS blocker-search branch instead of the
-// fixed kernel, and `light_size` (the 4th component, otherwise unused —
-// "zero layout growth" per D12) drives both the blocker-search radius and
-// the penumbra-width estimate.
-@group(0) @binding(9) var<storage, read> casters: array<vec4<f32>>;
-@group(0) @binding(10) var shadow_map_0: texture_depth_2d;
-@group(0) @binding(11) var shadow_map_1: texture_depth_2d;
-@group(0) @binding(12) var shadow_map_2: texture_depth_2d;
-@group(0) @binding(13) var shadow_map_3: texture_depth_2d;
+// One entry per shadow-casting light, shared with the ray tracer; a
+// light's caster slot rides lights[i*4+1].w (-1.0 = no shadow). The struct
+// text is generated from manifold-gpu's Rust `ShadowCaster` and a test keeps
+// this copy identical. `shadow` = (bias, kernel_half_width, texel_size,
+// light_size): a NEGATIVE `kernel_half_width` (D12, REALTIME_3D_DESIGN
+// section 11) is the `Contact` tier — `shadow_factor` runs the PCSS
+// blocker search, with `light_size` driving the search radius and the
+// penumbra estimate.
+struct ShadowCaster {
+    view_proj: mat4x4<f32>,
+    shadow: vec4<f32>,
+    source: vec4<f32>,
+    color: vec4<f32>,
+}
+@group(0) @binding(9) var<storage, read> casters: array<ShadowCaster>;
+// One shadow-map layer per caster slot. Every layer has the largest
+// requested resolution; a caster asking for less renders into the top-left
+// 1/texel_size square of its layer.
+@group(0) @binding(10) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(14) var shadow_sampler: sampler_comparison;
 
 // Per-object instancing (REALTIME_3D_DESIGN.md section 10 D11+P8). One always-bound
@@ -376,9 +377,7 @@ struct Instance {
 // regardless of whether `envmap` is wired; `fs_pbr` only actually samples
 // them for PBR materials, which already require `envmap` wired.
 // `PREFILTER_MAX_MIP` must stay in sync with the Rust-side
-// `PREFILTER_MIP_COUNT - 1` (render_scene.rs) — same
-// shared-compile-time-constant discipline as `CASTER_STRIDE`/
-// `MAX_RASTER_SHADOW_CASTERS` above.
+// `PREFILTER_MIP_COUNT - 1` (render_scene.rs).
 const PREFILTER_MAX_MIP: f32 = 5.0;
 // RAYTRACING_DESIGN.md section 14 ED2: the flat ambient's knob-at-1
 // ceiling — mirrors `render_scene.rs`'s `AMBIENT_IRRADIANCE_SCALE` (0.15).
@@ -447,13 +446,11 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 // exact fragment pixel (already native-res, depth-aware-upsampled — no
 // filtering) instead of the shadow-map path when `u.scene_params.w > 0.5`.
 // Always bound (ABI-stub discipline); a 1x1 dummy when RT isn't active
-// this frame. Multi-caster shadow fix: rgba = one visibility channel per
-// shadow-caster slot (r=slot 0 .. a=slot 3 — same slot index the
-// non-RT caster table uses), replacing the single r=sun-visibility
-// channel that traced only `casters[0]`. AO no longer rides this texture
+// this frame. Caster slot c is channel c % 4 of layer c / 4 (the same slot
+// index the caster table uses). AO does not ride this texture
 // at all — it's folded into the RT irradiance term (`rt_irradiance_mask`
 // below) in-kernel.
-@group(0) @binding(41) var rt_shadow_mask: texture_2d<f32>;
+@group(0) @binding(41) var rt_shadow_mask: texture_2d_array<f32>;
 // RAYTRACING_DESIGN.md section 5.2 P2/D3, ED2 (section 14.2): full-res,
 // temporally-accumulated demodulated irradiance — `.rgb` = the env+GI
 // gather (the flat ambient no longer enters the kernel), `.a` = the
@@ -470,10 +467,6 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 // a 1x1 dummy when RT reflections are off this frame), exactly like
 // rt_irradiance_mask above. Consumed in exactly ONE place (I-R3).
 @group(0) @binding(43) var rt_reflection: texture_2d<f32>;
-// RS-A (caster cap 4 -> 8): second shadow-visibility quad — caster slots
-// 4-7 (rgba respectively). Same format and ABI-stub discipline as
-// rt_shadow_mask. Always bound; a 1x1 dummy when RT isn't active.
-@group(0) @binding(44) var rt_shadow_mask2: texture_2d<f32>;
 // RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): full-res rgb
 // sun-transmission tint for the ONE designated sun caster (rt_flags.z =
 // slot+1, 0 = none). Always bound; 1x1 dummy when RT off, no designated
@@ -626,47 +619,30 @@ fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
     return rz * ry * rx;
 }
 
-const CASTER_STRIDE: u32 = 5u;
+// Caster `slot`'s map coordinates `suv` ([0,1] over its own resolution)
+// scaled into its square of the layer, clamped half a texel inside so
+// filter taps never reach past the rendered square.
+fn shadow_layer_uv(slot: i32, suv: vec2<f32>) -> vec2<f32> {
+    let texel = casters[slot].shadow.z;
+    let half_texel = vec2<f32>(0.5 * texel);
+    let scale = 1.0 / (texel * f32(textureDimensions(shadow_maps).x));
+    return clamp(suv, half_texel, vec2<f32>(1.0) - half_texel) * scale;
+}
 
-// Pick shadow map `slot` (0..3) and do one hardware comparison sample.
+// One hardware comparison sample of caster `slot`'s shadow map.
 // `textureSampleCompareLevel` (level 0, no derivatives) is legal in the
 // data-dependent control flow the per-light loop creates — plain
 // `textureSampleCompare` would not be.
 fn sample_shadow(slot: i32, suv: vec2<f32>, ref_depth: f32) -> f32 {
-    switch slot {
-        case 0: { return textureSampleCompareLevel(shadow_map_0, shadow_sampler, suv, ref_depth); }
-        case 1: { return textureSampleCompareLevel(shadow_map_1, shadow_sampler, suv, ref_depth); }
-        case 2: { return textureSampleCompareLevel(shadow_map_2, shadow_sampler, suv, ref_depth); }
-        default: { return textureSampleCompareLevel(shadow_map_3, shadow_sampler, suv, ref_depth); }
-    }
+    return textureSampleCompareLevel(shadow_maps, shadow_sampler, shadow_layer_uv(slot, suv), slot, ref_depth);
 }
 
-// Plain (non-comparison) depth read for the PCSS blocker search (D12) —
-// nearest texel, no hardware PCF. `texture_depth_2d` supports `textureLoad`
-// directly (standard WGSL builtin), so this needs no second binding or
-// sampler — the VERIFY-AT-IMPL in REALTIME_3D_DESIGN section 11 resolves to "yes,
-// via the existing binding": same four textures `sample_shadow` above
-// already binds.
+// Plain (non-comparison) nearest-texel depth read for the PCSS blocker
+// search (D12), no hardware PCF.
 fn plain_shadow_depth(slot: i32, uv: vec2<f32>) -> f32 {
     let clamped = clamp(uv, vec2<f32>(0.0), vec2<f32>(0.999999));
-    switch slot {
-        case 0: {
-            let px = vec2<i32>(clamped * vec2<f32>(textureDimensions(shadow_map_0)));
-            return textureLoad(shadow_map_0, px, 0);
-        }
-        case 1: {
-            let px = vec2<i32>(clamped * vec2<f32>(textureDimensions(shadow_map_1)));
-            return textureLoad(shadow_map_1, px, 0);
-        }
-        case 2: {
-            let px = vec2<i32>(clamped * vec2<f32>(textureDimensions(shadow_map_2)));
-            return textureLoad(shadow_map_2, px, 0);
-        }
-        default: {
-            let px = vec2<i32>(clamped * vec2<f32>(textureDimensions(shadow_map_3)));
-            return textureLoad(shadow_map_3, px, 0);
-        }
-    }
+    let px = vec2<i32>(clamped / casters[slot].shadow.z);
+    return textureLoad(shadow_maps, px, slot, 0);
 }
 
 // Shared (2·khw+1)² box-average PCF loop — byte-identical to the loop
@@ -814,42 +790,32 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     // maps are rendered and the raster PCSS/PCF path below runs. Native-
     // res `frag_xy` (`@builtin(position)`, already pixel coordinates)
     // indexes the shadow-mask textures directly — they're already full-res
-    // and depth-aware-upsampled, no filtering needed. Multi-caster shadow fix:
-    // one visibility channel per caster slot. RS-A (caster cap 4 -> 8):
-    // two Rgba16Float textures — slots 0-3 in `rt_shadow_mask`, slots 4-7
-    // in `rt_shadow_mask2`; `slot_f >= 4.0` selects the second texture with
-    // the slot index reduced by 4.
+    // and depth-aware-upsampled, no filtering needed. Caster slot c is
+    // channel c % 4 of layer c / 4.
     // RT toggle: when rt_shadows is off (`rt_flags.w <= 0.5`), fall through
     // to raster shadow maps even though RT is active for other terms. The
     // sv textures weren't written (shadow_spp=0 in kernel), so reading them
     // would deliver stale history — this gate is the read side.
     if u.scene_params.w > 0.5 && u.rt_flags.w > 0.5 {
-        let texel = textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), 0);
-        let texel2 = textureLoad(rt_shadow_mask2, vec2<i32>(frag_xy), 0);
-        let ch = i32(slot_f + 0.5);
-        if ch < 4 {
-            return texel[ch];
+        let ch = u32(slot_f + 0.5);
+        // A caster past the visibility arrays' capacity (memory refused
+        // to grow them) is unshadowed, never another caster's layer.
+        if ch / 4u >= u32(textureNumLayers(rt_shadow_mask)) {
+            return 1.0;
         }
-        return texel2[ch - 4];
-    }
-    // Raster has four map/table entries, even if this light owns an RT slot.
-    // This guard also covers RT unavailable or its shadow term switched off.
-    if slot_f >= 4.0 {
-        return 1.0;
+        return textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), i32(ch / 4u), 0)[ch % 4u];
     }
     let slot = i32(slot_f + 0.5);
-    let base = u32(slot) * CASTER_STRIDE;
-    let vp = mat4x4<f32>(
-        casters[base],
-        casters[base + 1u],
-        casters[base + 2u],
-        casters[base + 3u],
-    );
-    let params = casters[base + 4u];
+    let vp = casters[slot].view_proj;
+    let params = casters[slot].shadow;
     let bias = params.x;
     let khw_raw = params.y;
     let texel = params.z;
     let light_size = params.w;
+    // Texel 0 marks a caster with no shadow-map layer: unshadowed.
+    if texel <= 0.0 {
+        return 1.0;
+    }
 
     let clip = vp * vec4<f32>(world_pos, 1.0);
     if clip.w <= 0.0 {

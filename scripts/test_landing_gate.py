@@ -2142,5 +2142,14 @@ class DeliveryTests(unittest.TestCase):
             self.assertNotIn("--keep-going", gate.call_args.args[0])
 
 
+class NamedRedCoverageTests(unittest.TestCase):
+    def test_two_known_reds_in_one_check_are_covered_together_and_a_third_is_not(self):
+        waivers = [('BUG-a', 'whitewater_golden'), ('BUG-b', 'code_terminal')]
+        both = ['main::whitewater_golden', 'main::code_terminal_fusion']
+        self.assertEqual(landing_gate.covering_bugs(both, waivers), 'BUG-a+BUG-b')
+        self.assertIsNone(landing_gate.covering_bugs(both + ['main::new_red'], waivers))
+        self.assertIsNone(landing_gate.covering_bugs([], waivers))
+
+
 if __name__ == "__main__":
     unittest.main()

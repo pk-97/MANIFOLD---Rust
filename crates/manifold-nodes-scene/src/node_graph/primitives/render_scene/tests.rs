@@ -27,7 +27,7 @@
     }
 
     /// RAYTRACING_DESIGN.md section 16 TL5: the designated-sun slot pick —
-    /// first Sun-mode caster under the RT caster cap, None otherwise.
+    /// first Sun-mode caster, None otherwise.
     /// Tested against the production fn (never a duplicated copy — a copy
     /// drifts silently).
     fn svt_test_light(mode: manifold_node_engine::scene::light::LightMode) -> manifold_node_engine::scene::light::Light {
@@ -63,13 +63,25 @@
     }
 
     #[test]
-    fn rt_svt_slot_sun_past_cap_is_none() {
+    fn rt_svt_slot_finds_a_sun_after_many_casters() {
         use manifold_node_engine::scene::light::LightMode;
-        let mut casters: Vec<_> = (0..manifold_gpu::raytrace::MAX_RT_CASTERS)
-            .map(|_| svt_test_light(LightMode::Point))
-            .collect();
+        let mut casters: Vec<_> = (0..10).map(|_| svt_test_light(LightMode::Point)).collect();
         casters.push(svt_test_light(LightMode::Sun));
-        assert_eq!(rt_svt_slot(&casters), None);
+        assert_eq!(rt_svt_slot(&casters), Some(10));
+    }
+
+    /// Both renderers read one caster table. The WGSL copies of its struct
+    /// must match the text generated from the Rust record (the Metal side
+    /// is generated outright).
+    #[test]
+    fn wgsl_caster_struct_matches_the_rust_record() {
+        let generated = manifold_gpu::ShadowCaster::WGSL;
+        for (name, src) in [
+            ("render_scene.wgsl", include_str!("../shaders/render_scene.wgsl")),
+            ("shaft_march.wgsl", include_str!("../shaders/shaft_march.wgsl")),
+        ] {
+            assert!(src.contains(generated), "{name} must carry the generated ShadowCaster struct:\n{generated}");
+        }
     }
 
     /// RAYTRACING_DESIGN.md RT-D3: `mat4_inverse` feeds the RT shadow-ray
@@ -852,8 +864,8 @@
 
     #[test]
     fn geo_key_ignores_color() {
-        let c1 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [1.0, 0.0, 0.0], 0);
-        let c2 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [0.0, 1.0, 0.0], 0);
+        let c1 = manifold_gpu::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [1.0, 0.0, 0.0], 0);
+        let c2 = manifold_gpu::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [0.0, 1.0, 0.0], 0);
         assert_eq!(
             compute_rt_lighting_geo_key(&[c1], 0),
             compute_rt_lighting_geo_key(&[c2], 0),
@@ -863,8 +875,8 @@
 
     #[test]
     fn geo_key_flips_on_position_change() {
-        let c1 = manifold_gpu::raytrace::RtCasterParams::new([0.0, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
-        let c2 = manifold_gpu::raytrace::RtCasterParams::new([0.1, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
+        let c1 = manifold_gpu::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
+        let c2 = manifold_gpu::ShadowCaster::traced([0.1, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
         assert_ne!(
             compute_rt_lighting_geo_key(&[c1], 0),
             compute_rt_lighting_geo_key(&[c2], 0),

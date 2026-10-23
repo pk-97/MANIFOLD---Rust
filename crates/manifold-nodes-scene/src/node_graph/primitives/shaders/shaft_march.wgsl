@@ -21,9 +21,8 @@ fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
 }
 
 // Shadow lookup (`shadow_vis`) is forked from render_scene.wgsl's
-// `project_to_shadow_uv`/`sample_shadow` — same caster-table layout
-// (`CASTER_STRIDE` vec4s: view_proj columns 0-3, then (bias, kernel_half_
-// width, texel_size, light_size)), ONE `textureSampleCompareLevel` tap, no
+// `shadow_layer_uv`/`sample_shadow` — same caster table and layered maps,
+// ONE `textureSampleCompareLevel` tap, no
 // PCF kernel (the half-res upsample is the softener, per D2). This file's
 // header convention: forked, not shared — same discipline render_scene.wgsl
 // itself documents for its own PCF loop.
@@ -32,7 +31,6 @@ fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
 // of this file at pipeline-creation time (render_scene.rs).
 
 const PI: f32 = 3.14159265358979;
-const CASTER_STRIDE: u32 = 5u;
 // P3: 4 vec4s per light (was 2 in P2's Sun-only packing) — see the binding(2)
 // doc comment below for the field layout.
 const LIGHT_STRIDE: u32 = 4u;
@@ -66,11 +64,16 @@ struct Uniforms {
 // Point light) when RT is enabled — a real, physically-motivated light
 // source in this SAME march, not a separate glow pass.
 @group(0) @binding(2) var<storage, read> shaft_lights: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read> casters: array<vec4<f32>>;
-@group(0) @binding(4) var shadow_map_0: texture_depth_2d;
-@group(0) @binding(5) var shadow_map_1: texture_depth_2d;
-@group(0) @binding(6) var shadow_map_2: texture_depth_2d;
-@group(0) @binding(7) var shadow_map_3: texture_depth_2d;
+// Generated from manifold-gpu's Rust `ShadowCaster`; a test keeps this copy
+// identical.
+struct ShadowCaster {
+    view_proj: mat4x4<f32>,
+    shadow: vec4<f32>,
+    source: vec4<f32>,
+    color: vec4<f32>,
+}
+@group(0) @binding(3) var<storage, read> casters: array<ShadowCaster>;
+@group(0) @binding(4) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(8) var shadow_sampler: sampler_comparison;
 @group(0) @binding(9) var output_tex: texture_storage_2d<rgba16float, write>;
 // RAYTRACING_DESIGN.md section 5.2 P3 (D5, "volumetric march sampling shadow-ray
@@ -82,32 +85,31 @@ struct Uniforms {
 // 1x1 dummy when RT isn't active this frame, same texture render_scene.wgsl
 // itself falls back to via `rt_mask_tex`) — reading it when `rt_enabled ==
 // 0.0` never happens (the branch below gates on the flag first).
-@group(0) @binding(10) var rt_shadow_mask: texture_2d<f32>;
+@group(0) @binding(10) var rt_shadow_mask: texture_2d_array<f32>;
 
 fn sample_shadow(slot: i32, suv: vec2<f32>, ref_depth: f32) -> f32 {
-    switch slot {
-        case 0: { return textureSampleCompareLevel(shadow_map_0, shadow_sampler, suv, ref_depth); }
-        case 1: { return textureSampleCompareLevel(shadow_map_1, shadow_sampler, suv, ref_depth); }
-        case 2: { return textureSampleCompareLevel(shadow_map_2, shadow_sampler, suv, ref_depth); }
-        default: { return textureSampleCompareLevel(shadow_map_3, shadow_sampler, suv, ref_depth); }
-    }
+    let texel = casters[slot].shadow.z;
+    let half_texel = vec2<f32>(0.5 * texel);
+    let scale = 1.0 / (texel * f32(textureDimensions(shadow_maps).x));
+    let uv = clamp(suv, half_texel, vec2<f32>(1.0) - half_texel) * scale;
+    return textureSampleCompareLevel(shadow_maps, shadow_sampler, uv, slot, ref_depth);
 }
 
 // D2's `shadow(l, x)`: no caster slot (`slot_f < 0`) -> unshadowed glow
 // (1.0); outside the caster's frustum -> also 1.0 (no shadow data there);
 // otherwise ONE comparison tap, biased the same as the main pass.
 fn shadow_vis(slot_f: f32, world_pos: vec3<f32>) -> f32 {
-    // The shared light list can contain eight RT slots; this lookup has
-    // only four raster shadow maps. Guard before reading the caster table,
-    // including when WGSL select evaluates this alongside RT visibility.
-    if slot_f < 0.0 || slot_f >= 4.0 {
+    if slot_f < 0.0 {
         return 1.0;
     }
     let slot = i32(slot_f + 0.5);
-    let base = u32(slot) * CASTER_STRIDE;
-    let vp = mat4x4<f32>(casters[base], casters[base + 1u], casters[base + 2u], casters[base + 3u]);
-    let params = casters[base + 4u];
+    let vp = casters[slot].view_proj;
+    let params = casters[slot].shadow;
     let bias = params.x;
+    // Texel 0 marks a caster with no shadow-map layer: unshadowed.
+    if params.z <= 0.0 {
+        return 1.0;
+    }
 
     let clip = vp * vec4<f32>(world_pos, 1.0);
     if clip.w <= 0.0 {
@@ -193,7 +195,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if rt_enabled {
         let full_dims = vec2<f32>(textureDimensions(rt_shadow_mask));
         let full_pix = vec2<i32>(min(uv * full_dims, full_dims - vec2<f32>(1.0, 1.0)));
-        rt_sun_vis = textureLoad(rt_shadow_mask, full_pix, 0).r;
+        rt_sun_vis = textureLoad(rt_shadow_mask, full_pix, 0, 0).r;
     }
 
     let fog_density = u.fog_shaft.x;

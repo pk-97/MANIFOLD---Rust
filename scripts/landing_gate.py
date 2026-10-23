@@ -94,6 +94,22 @@ RAN_EVERY_CHECK = contextvars.ContextVar('ran_every_check', default=False)
 # expensive_blocked (covered cheap reds do not stop the run) and finish.
 COVERED_REDS = {}
 WAIVERS = []
+
+
+def covering_bugs(failed_names, waivers):
+    """The named reds covering a check, joined by '+', when every failed test
+    contains some waiver's TEST; None when any failure matches none. Two known
+    reds can fail inside one check, so coverage is per test, not per waiver."""
+    if not failed_names:
+        return None
+    bugs = []
+    for name in failed_names:
+        bug = next((bug for bug, test in waivers if test in name), None)
+        if bug is None:
+            return None
+        if bug not in bugs:
+            bugs.append(bug)
+    return '+'.join(bugs)
 # Seconds this gate spent waiting for the machine-wide GPU lock; None when no
 # leg needed it. Logged per run: queue time is landing time nobody saw before.
 GPU_WAIT = contextvars.ContextVar('gpu_wait', default=None)
@@ -413,11 +429,9 @@ def run_check(label, cmd, cwd, timeout, passed=None):
     exit_, out, err, seconds = result
     timed_out = exit_ == -1
     if exit_ and not timed_out and WAIVERS:
-        failed_names = gate_passes.parse_failed_tests(out + '\n' + err)
-        for bug, test in WAIVERS:
-            if failed_names and all(test in name for name in failed_names):
-                COVERED_REDS[label] = bug
-                break
+        bugs = covering_bugs(gate_passes.parse_failed_tests(out + '\n' + err), WAIVERS)
+        if bugs:
+            COVERED_REDS[label] = bugs
     proof_refusal = (exit_ == PROOF_INPUTS_CHANGED and len(cmd) > 1
                      and Path(cmd[1]).name == 'gpu_proofs_gate.py')
     # A timing-only red (every test passed, rerun done) is a check that ran.

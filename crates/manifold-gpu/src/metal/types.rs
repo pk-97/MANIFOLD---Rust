@@ -178,6 +178,33 @@ impl GpuTexture {
             residency: self.residency.clone(),
         }
     }
+
+    /// A plain 2D view of one layer of a `D2Array` texture, sharing its
+    /// storage. Used to render into a single layer (one shadow map per
+    /// light). Views are Metal objects: create them when the array is
+    /// allocated and keep them, never per frame.
+    pub fn layer_view(&self, layer: u32) -> GpuTexture {
+        assert!(layer < self.depth, "layer {layer} out of range ({} layers)", self.depth);
+        let mtl_format = super::format::to_mtl_pixel_format(self.format);
+        let view = unsafe {
+            self.raw.newTextureViewWithPixelFormat_textureType_levels_slices(
+                mtl_format,
+                objc2_metal::MTLTextureType::Type2D,
+                objc2_foundation::NSRange { location: 0, length: 1 },
+                objc2_foundation::NSRange { location: layer as usize, length: 1 },
+            )
+        }
+        .expect("newTextureViewWithPixelFormat_textureType_levels_slices failed");
+        GpuTexture {
+            raw: view,
+            width: self.width,
+            height: self.height,
+            depth: 1,
+            format: self.format,
+            retire: self.retire.clone(),
+            residency: self.residency.clone(),
+        }
+    }
 }
 
 // ─── GpuBuffer ────────────────────────────────────────────────────────

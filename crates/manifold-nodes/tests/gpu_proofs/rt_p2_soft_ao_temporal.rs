@@ -114,11 +114,34 @@ fn upload_irr(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) -> GpuTex
     texture
 }
 
-/// Write targets for the accumulate channels a proof does not inspect. The
-/// read-only uploaded dummies cannot take a shader write, and binding one
-/// texture as both read and write in one dispatch races.
-fn write_sinks(device: &GpuDevice) -> [GpuTexture; 5] {
-    std::array::from_fn(|i| make_history(device, &format!("p2-write-sink-{i}")))
+/// Shadow visibility is a texture array, four casters per layer; one layer
+/// covers every fixture here.
+fn upload_sv(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) -> GpuTexture {
+    let texture = device.create_texture(&GpuTextureDesc {
+        width: W,
+        height: H,
+        depth: 1,
+        format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2Array,
+        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        label,
+        mip_levels: 1,
+    });
+    device.upload_texture(&texture, as_bytes(&flat_rgba_f16(W, H, r, g, b)));
+    texture
+}
+
+fn make_sv_history(device: &GpuDevice, label: &str) -> GpuTexture {
+    device.create_texture(&GpuTextureDesc {
+        width: W,
+        height: H,
+        depth: 1,
+        format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2Array,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        label,
+        mip_levels: 1,
+    })
 }
 
 /// A history texture, freshly allocated (undefined content — every use
@@ -277,20 +300,20 @@ impl HistorySet {
                 make_history(device, &format!("{label}-refl-b")),
             ],
             sv: [
-                make_history(device, &format!("{label}-sv-a")),
-                make_history(device, &format!("{label}-sv-b")),
+                make_sv_history(device, &format!("{label}-sv-a")),
+                make_sv_history(device, &format!("{label}-sv-b")),
             ],
             sv_m1: [
-                make_history(device, &format!("{label}-sv-m1-a")),
-                make_history(device, &format!("{label}-sv-m1-b")),
+                make_sv_history(device, &format!("{label}-sv-m1-a")),
+                make_sv_history(device, &format!("{label}-sv-m1-b")),
             ],
             sv_m2: [
-                make_history(device, &format!("{label}-sv-m2-a")),
-                make_history(device, &format!("{label}-sv-m2-b")),
+                make_sv_history(device, &format!("{label}-sv-m2-a")),
+                make_sv_history(device, &format!("{label}-sv-m2-b")),
             ],
             sv_hold: [
-                make_history(device, &format!("{label}-sv-hold-a")),
-                make_history(device, &format!("{label}-sv-hold-b")),
+                make_sv_history(device, &format!("{label}-sv-hold-a")),
+                make_sv_history(device, &format!("{label}-sv-hold-b")),
             ],
             svt: [
                 make_history(device, &format!("{label}-svt-a")),
@@ -456,7 +479,7 @@ fn run_accumulate_with_motion(
     // SV-ACCUM: fully-lit visibility for the current frame (1 = no shadow)
     // — the tests here assert on the irr/refl channels, so a constant
     // pass-through sv is the honest inert input.
-    let hi_sv_lit = upload_irr(device, 1.0, 1.0, 1.0, "p2-hi-sv-lit");
+    let hi_sv_lit = upload_sv(device, 1.0, 1.0, 1.0, "p2-hi-sv-lit");
     run_accumulate_with_sv(
         device, tracer, hi_irr, depth_tex, hi_normal, history, alpha, reset, obj_count,
         obj_motion, prev_view_proj, &hi_sv_lit, label,
@@ -501,8 +524,7 @@ fn run_accumulate_with_sv(
         }
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
-    let sv2_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-sv2-dummy");
-    let sinks = write_sinks(device);
+    let svt_sink = make_history(device, "p2-svt-sink");
     let svt_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-svt-dummy");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
@@ -537,8 +559,7 @@ fn run_accumulate_with_sv(
             history.write_sv_m2(),
             history.read_sv_hold(),
             history.write_sv_hold(),
-            &sv2_dummy, &sv2_dummy, &sinks[0], &sv2_dummy, &sinks[1], &sv2_dummy, &sinks[2], &sv2_dummy, &sinks[3],
-            &svt_dummy, &svt_dummy, &sinks[4],
+            &svt_dummy, &svt_dummy, &svt_sink,
             label,
         );
     }
@@ -584,8 +605,6 @@ fn run_accumulate_with_svt(
         }
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
-    let sv2_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-sv2-dummy");
-    let sinks = write_sinks(device);
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
     {
@@ -619,7 +638,6 @@ fn run_accumulate_with_svt(
             history.write_sv_m2(),
             history.read_sv_hold(),
             history.write_sv_hold(),
-            &sv2_dummy, &sv2_dummy, &sinks[0], &sv2_dummy, &sinks[1], &sv2_dummy, &sinks[2], &sv2_dummy, &sinks[3],
             hi_svt,
             history.read_svt(),
             history.write_svt(),
@@ -966,22 +984,17 @@ fn refl_channel_blends_history_and_current() {
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // SV-ACCUM: inert fully-lit visibility input + history/output pair —
     // these legs assert on the refl channel only.
-    let hi_sv = upload_irr(device, 1.0, 1.0, 1.0, "bisect-hi-sv");
-    let sv_history = make_history(device, "bisect-sv-history");
-    let sv_output = make_history(device, "bisect-sv-output");
-    let sv_m1_in = make_history(device, "bisect-sv-m1-in");
-    let sv_m1_out = make_history(device, "bisect-sv-m1-out");
-    let sv_m2_in = make_history(device, "bisect-sv-m2-in");
-    let sv_m2_out = make_history(device, "bisect-sv-m2-out");
-    let sv_hold_in = make_history(device, "bisect-sv-hold-in");
-    let sv_hold_out = make_history(device, "bisect-sv-hold-out");
-    // RS-A (caster cap 4 -> 8): 1x1 dummies for the sv2 channel, unread by this proof.
-    let sv2_dummy = make_history(device, "bisect-sv2-dummy");
-    let sinks = write_sinks(device);
+    let hi_sv = upload_sv(device, 1.0, 1.0, 1.0, "bisect-hi-sv");
+    let sv_history = make_sv_history(device, "bisect-sv-history");
+    let sv_output = make_sv_history(device, "bisect-sv-output");
+    let sv_m1_in = make_sv_history(device, "bisect-sv-m1-in");
+    let sv_m1_out = make_sv_history(device, "bisect-sv-m1-out");
+    let sv_m2_in = make_sv_history(device, "bisect-sv-m2-in");
+    let sv_m2_out = make_sv_history(device, "bisect-sv-m2-out");
+    let sv_hold_in = make_sv_history(device, "bisect-sv-hold-in");
+    let sv_hold_out = make_sv_history(device, "bisect-sv-hold-out");
+    let svt_sink = make_history(device, "p2-svt-sink");
     let svt_dummy = make_history(device, "bisect-svt-dummy");
-    let _sv2_m1_dummy = make_history(device, "bisect-sv2-m1-dummy");
-    let _sv2_m2_dummy = make_history(device, "bisect-sv2-m2-dummy");
-    let _sv2_hold_dummy = make_history(device, "bisect-sv2-hold-dummy");
 
     // ── Leg 1: reset = false — history must blend toward current ──────
     let blend_params = AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], 0.0, IDENTITY, IDENTITY);
@@ -1017,8 +1030,7 @@ fn refl_channel_blends_history_and_current() {
             &sv_m2_out,
             &sv_hold_in,
             &sv_hold_out,
-            &sv2_dummy, &sv2_dummy, &sinks[0], &sv2_dummy, &sinks[1], &sv2_dummy, &sinks[2], &sv2_dummy, &sinks[3],
-            &svt_dummy, &svt_dummy, &sinks[4],
+            &svt_dummy, &svt_dummy, &svt_sink,
             "bisect-blend",
         );
         enc.commit_and_wait_completed();
@@ -1143,8 +1155,7 @@ fn refl_channel_blends_history_and_current() {
             &sv_m2_out,
             &sv_hold_in,
             &sv_hold_out,
-            &sv2_dummy, &sv2_dummy, &sinks[0], &sv2_dummy, &sinks[1], &sv2_dummy, &sinks[2], &sv2_dummy, &sinks[3],
-            &svt_dummy, &svt_dummy, &sinks[4],
+            &svt_dummy, &svt_dummy, &svt_sink,
             "bisect-reset",
         );
         enc.commit_and_wait_completed();
@@ -1528,8 +1539,8 @@ fn sv_channel_converges_under_max_amplitude_flicker() {
     // blend amortizes at 1/n; a full 0↔1 step is a shadow edge crossing
     // and correctly snaps. Constant irradiance keeps the irr gate quiet
     // for the same reason.
-    let sv_lo = upload_irr(&h.device, 0.3, 0.3, 0.3, "sv-accum-sv-lo");
-    let sv_hi = upload_irr(&h.device, 0.7, 0.7, 0.7, "sv-accum-sv-hi");
+    let sv_lo = upload_sv(&h.device, 0.3, 0.3, 0.3, "sv-accum-sv-lo");
+    let sv_hi = upload_sv(&h.device, 0.7, 0.7, 0.7, "sv-accum-sv-hi");
     let mut history = HistorySet::new(&h.device, "sv-accum-history");
 
     // Alternate dim/bright frames around the mean. Center pixel read back
@@ -1572,8 +1583,8 @@ fn sv_channel_reset_cold_starts_from_current_frame() {
     let hi_irr = upload_irr(&h.device, 0.5, 0.5, 0.5, "sv-reset-irr");
     // Warm the sv history on a lit frame, then reset on a 0.25 frame:
     // history must read exactly the current frame, no lit ghost.
-    let sv_lit = upload_irr(&h.device, 1.0, 1.0, 1.0, "sv-reset-sv-lit");
-    let sv_quarter = upload_irr(&h.device, 0.25, 0.25, 0.25, "sv-reset-sv-quarter");
+    let sv_lit = upload_sv(&h.device, 1.0, 1.0, 1.0, "sv-reset-sv-lit");
+    let sv_quarter = upload_sv(&h.device, 0.25, 0.25, 0.25, "sv-reset-sv-quarter");
     let mut history = HistorySet::new(&h.device, "sv-reset-history");
     for frame in 0..6 {
         run_accumulate_with_sv(
@@ -1612,8 +1623,8 @@ fn sv_channel_snaps_when_shadow_arrives() {
     let depth_tex = make_constant_depth(&h.device, "sv-snap-depth");
     let hi_normal = make_constant_normal(&h.device, "sv-snap-normal");
     let hi_irr = upload_irr(&h.device, 0.5, 0.5, 0.5, "sv-snap-irr");
-    let sv_lit = upload_irr(&h.device, 1.0, 1.0, 1.0, "sv-snap-sv-lit");
-    let sv_dark = upload_irr(&h.device, 0.0, 0.0, 0.0, "sv-snap-sv-dark");
+    let sv_lit = upload_sv(&h.device, 1.0, 1.0, 1.0, "sv-snap-sv-lit");
+    let sv_dark = upload_sv(&h.device, 0.0, 0.0, 0.0, "sv-snap-sv-dark");
     let mut history = HistorySet::new(&h.device, "sv-snap-history");
     for frame in 0..6 {
         run_accumulate_with_sv(
@@ -1666,7 +1677,7 @@ fn svt_history_reset_writes_current_tint_verbatim() {
 
     // hi_sv: fully lit — the sv channel's value is irrelevant to the svt
     // accumulation (TL8: svt blends with irr alpha).
-    let hi_sv_lit = upload_irr(&h.device, 1.0, 1.0, 1.0, "p2-svt-reset-sv");
+    let hi_sv_lit = upload_sv(&h.device, 1.0, 1.0, 1.0, "p2-svt-reset-sv");
 
     // Tint A: warm red-ish (0.8, 0.1, 0.1).
     let hi_irr_a = upload_irr(&h.device, 0.5, 0.5, 0.5, "p2-svt-reset-irr-a");
@@ -1722,7 +1733,7 @@ fn svt_history_blends_toward_changed_tint_by_running_mean() {
     let tracer = MetalShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "p2-svt-blend-depth");
     let hi_normal = make_constant_normal(&h.device, "p2-svt-blend-normal");
-    let hi_sv_lit = upload_irr(&h.device, 1.0, 1.0, 1.0, "p2-svt-blend-sv");
+    let hi_sv_lit = upload_sv(&h.device, 1.0, 1.0, 1.0, "p2-svt-blend-sv");
 
     // Tint A: (0.9, 0.05, 0.05) — deep red.
     let hi_irr_a = upload_irr(&h.device, 0.5, 0.5, 0.5, "p2-svt-blend-irr-a");

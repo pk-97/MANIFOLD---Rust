@@ -283,7 +283,7 @@ pub trait ShadowRayTracer {
     /// ray origins + bias normal reconstructed in-kernel from `depth_tex`
     /// (the full-res opaque-depth prepass) + `params.inv_view_proj` — no
     /// world-pos/normal G-buffer target. Writes per-caster visibility to
-    /// `out_sv` (slots 0-3) + `out_sv2` (slots 4-7, RS-A) and demodulated
+    /// `out_sv` (a layer array, four casters per layer) and demodulated
     /// irradiance (now including the GI gather) to `out_irr`, all at
     /// `params.trace_size`.
     /// `current_objects` must be the identical ordered slice used to build
@@ -311,16 +311,15 @@ pub trait ShadowRayTracer {
         // (setBytes snapshots at encode) — no CPU-mapped params buffer a
         // later frame's encode could tear under an in-flight trace.
         params: &ShadowRayParams,
-        // Retained for the existing backend seam; params are now bound from
-        // `params` as inline bytes below.
-        _params_buffer: &GpuBuffer,
+        // The buffer holding the caster table at `params.caster_data_addr`;
+        // the kernel reads it by address, so it is declared to Metal here.
+        casters: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
         current_objects: &[RtObjectGeometry<'_>],
         alpha_textures: &[&GpuTexture],
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
-        out_sv2: &GpuTexture,
         // RT-TL-C (section 16 TL5): rgb sun-transmission tint for the
         // designated sun caster — half-res trace output, rides the chain.
         out_svt: &GpuTexture,
@@ -349,9 +348,8 @@ pub trait ShadowRayTracer {
     /// (RT-D3's "D11 trivial pass"; RT-P2 widened the SAME upsample to
     /// also carry irradiance; RT-T1-C widens it once more to carry the
     /// primary-hit vertex normal `accumulate_irradiance`'s reprojection
-    /// validity test needs). RS-A (caster cap 4 -> 8): `lo_sv2`/`hi_sv2`
-    /// carry the second shadow-visibility quad (caster slots 4-7), same
-    /// half->full bilateral upsample as the first.
+    /// validity test needs). The
+    /// visibility textures are layer arrays; every layer is upsampled.
     #[allow(clippy::too_many_arguments)]
     fn upsample_shadow(
         &self,
@@ -365,8 +363,6 @@ pub trait ShadowRayTracer {
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
-        lo_sv2: &GpuTexture,
-        hi_sv2: &GpuTexture,
         lo_irr: &GpuTexture,
         hi_irr: &GpuTexture,
         lo_n: &GpuTexture,
@@ -387,9 +383,8 @@ pub trait ShadowRayTracer {
     /// same lag convention as the depth/normal history reads). Called
     /// `ATROUS_ITERATIONS`-1 times by the caller with an increasing
     /// `step` (1, 2, ...), after `upsample_shadow` has already produced
-    /// the initial full-res `src_*` set. RS-A: `src_sv2`/`dst_sv2` filter
-    /// the second shadow-visibility quad independently with the same
-    /// depth+normal edge-stops.
+    /// the initial full-res `src_*` set. The
+    /// visibility layers all filter with the same edge-stops.
     #[allow(clippy::too_many_arguments)]
     fn atrous_pass(
         &self,
@@ -402,8 +397,6 @@ pub trait ShadowRayTracer {
         moments_read: &GpuTexture,
         src_sv: &GpuTexture,
         dst_sv: &GpuTexture,
-        src_sv2: &GpuTexture,
-        dst_sv2: &GpuTexture,
         src_irr: &GpuTexture,
         dst_irr: &GpuTexture,
         src_n: &GpuTexture,
@@ -501,7 +494,7 @@ pub trait ShadowRayTracer {
         refl_history_read: &GpuTexture,
         refl_history_write: &GpuTexture,
         gi_materials: &GpuBuffer,
-        // SV-ACCUM: shadow-visibility channel (4 caster slots, 0-3) — current
+        // SV-ACCUM: shadow-visibility layer arrays (four casters per layer) — current
         // frame post-atrous mask + its own ping-pong history pair, same
         // flip clock as the irradiance/reflection pairs.
         hi_sv: &GpuTexture,
@@ -519,20 +512,6 @@ pub trait ShadowRayTracer {
         // moments deaden the sigma gate right after a crossing.
         sv_hold_read: &GpuTexture,
         sv_hold_write: &GpuTexture,
-        // RS-A (caster cap 4 -> 8): second shadow-visibility channel
-        // (caster slots 4-7) — same SV-ACCUM pipeline (running-mean blend
-        // with its own sigma-gate + snap-hold), same flip clock, fully
-        // independent from the first channel so a penumbra boil in an
-        // upper-slot caster never trips the non-boiling lower slots.
-        hi_sv2: &GpuTexture,
-        sv2_history_read: &GpuTexture,
-        sv2_history_write: &GpuTexture,
-        sv2_m1_read: &GpuTexture,
-        sv2_m1_write: &GpuTexture,
-        sv2_m2_read: &GpuTexture,
-        sv2_m2_write: &GpuTexture,
-        sv2_hold_read: &GpuTexture,
-        sv2_hold_write: &GpuTexture,
         // RT-TL-C (section 16 TL5/TL8): sun-transmission tint channel —
         // same flip clock, same weights/reset as irradiance (not sv sigma-gate).
         hi_svt: &GpuTexture,
@@ -808,7 +787,7 @@ impl RtPipelines {
         // the WGSL path's pinned older version — matches the prototype's
         // `Gpu::compile_library`.
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        let source = format!("{prelude}{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}");
+        let source = format!("{}{prelude}{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}", crate::ShadowCaster::MSL);
         let src_ns = NSString::from_str(&source);
         let library = device
             .raw_device()
@@ -852,8 +831,6 @@ impl RtPipelines {
         // RT-R1: prefiltered_env, MSL [[texture(69)]] — miss-branch
         // radiance source.
         trace_slots.push((5 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
-        // RS-A (caster cap 4 -> 8): out_sv2, MSL [[texture(70)]].
-        trace_slots.push((6 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         // RT-TL-C: out_svt, MSL [[texture(71)]].
         trace_slots.push((7 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         trace_slots.push((10, SlotKind::Buffer));
@@ -951,9 +928,6 @@ impl RtPipelines {
                 // slot-map note (T3 missed these too).
                 (7, SlotKind::Texture),
                 (8, SlotKind::Texture),
-                // RS-A (caster cap 4 -> 8): lo_sv2/hi_sv2, MSL [[texture(9)]]/[[texture(10)]].
-                (9, SlotKind::Texture),
-                (10, SlotKind::Texture),
                 // RT-TL-C: lo_svt/hi_svt, MSL [[texture(11)]]/[[texture(12)]].
                 (11, SlotKind::Texture),
                 (12, SlotKind::Texture),
@@ -977,9 +951,6 @@ impl RtPipelines {
                 // pipeline's slot-map note (T3 missed these too).
                 (8, SlotKind::Texture),
                 (9, SlotKind::Texture),
-                // RS-A (caster cap 4 -> 8): src_sv2/dst_sv2, MSL [[texture(11)]]/[[texture(12)]].
-                (11, SlotKind::Texture),
-                (12, SlotKind::Texture),
                 // RT-TL-C: src_svt/dst_svt, MSL [[texture(13)]]/[[texture(14)]].
                 (13, SlotKind::Texture),
                 (14, SlotKind::Texture),
@@ -1027,17 +998,6 @@ impl RtPipelines {
                 // SV-ACCUM snap-hold countdown pair.
                 (21, SlotKind::Texture),
                 (22, SlotKind::Texture),
-                // RS-A (caster cap 4 -> 8): sv2 channel — full SV-ACCUM
-                // pipeline at [[texture(23)]] through [[texture(31)]].
-                (23, SlotKind::Texture),
-                (24, SlotKind::Texture),
-                (25, SlotKind::Texture),
-                (26, SlotKind::Texture),
-                (27, SlotKind::Texture),
-                (28, SlotKind::Texture),
-                (29, SlotKind::Texture),
-                (30, SlotKind::Texture),
-                (31, SlotKind::Texture),
                 // RT-TL-C: hi_svt at [[texture(32)]] and svt history at
                 // [[texture(33)]]/[[texture(34)]].
                 (32, SlotKind::Texture),
@@ -2092,14 +2052,13 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // (setBytes snapshots at encode) — no CPU-mapped params buffer a
         // later frame's encode could tear under an in-flight trace.
         params: &ShadowRayParams,
-        _params_buffer: &GpuBuffer,
+        casters: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
         current_objects: &[RtObjectGeometry<'_>],
         alpha_textures: &[&GpuTexture],
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
-        out_sv2: &GpuTexture,
         out_svt: &GpuTexture,
         out_irr: &GpuTexture,
         out_n: &GpuTexture,
@@ -2244,13 +2203,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 5 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: prefiltered_env,
         });
-        // RS-A (caster cap 4 -> 8): out_sv2 at [[texture(70)]] — the first slot
-        // after prefiltered_env (69).
-        bindings.push(GpuBinding::Texture {
-            binding: 6 + MAX_RT_MATERIAL_TEXTURES as u32,
-            texture: out_sv2,
-        });
-        // RT-TL-C: out_svt at [[texture(71)]] — the slot after out_sv2 (70).
+        // RT-TL-C: out_svt at [[texture(71)]]. [[texture(70)]] is unused.
         bindings.push(GpuBinding::Texture {
             binding: 7 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: out_svt,
@@ -2272,9 +2225,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 10 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: self.secondary_prefiltered_sheen.as_ref().unwrap_or(prefiltered_env),
         });
-        let caster_count = params.caster_count.min(MAX_RT_CASTERS as u32);
-        let sun_count = params.casters[..caster_count as usize].iter()
-            .filter(|caster| caster.kind == 0).count() as u32;
+        let caster_count = params.caster_count;
+        let table_bytes = u64::from(caster_count) * std::mem::size_of::<crate::ShadowCaster>() as u64;
+        assert!(caster_count == 0 || (params.caster_data_addr >= casters.gpu_address()
+            && params.caster_data_addr + table_bytes <= casters.gpu_address() + casters.size),
+            "RT caster table lies outside the buffer passed with it");
         // P4a: the sampler-active heuristic reads the GPU stats buffer's
         // count (CPU params no longer carry it). A frame-stale value is
         // fine for a cost estimate; an unmappable buffer reads as inactive.
@@ -2282,10 +2237,12 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             .mapped_ptr()
             .map(|p| unsafe { (p as *const u32).read_unaligned() != 0 })
             .unwrap_or(false);
+        // Without the light table the secondary hits light from the sun
+        // casters only; every caster is the cost bound there.
         let diffuse_light_count = if params.light_data_addr != 0 {
             params.light_count
         } else {
-            sun_count
+            caster_count
         };
         let query_units = estimate_trace_query_units_per_pixel(
             caster_count, diffuse_light_count, params.shadow_spp, params.ao_spp,
@@ -2320,7 +2277,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     current_objects.iter()
                         .filter(|object| object.instances_addr != 0)
                         .map(|object| object.instances_buffer
-                            .expect("validated RT wired instance source buffer")),
+                            .expect("validated RT wired instance source buffer"))
+                        .chain(std::iter::once(casters)),
                     Some((8, trace_region_bytes(&region))),
                     dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
                     diagnostic_label.as_deref().unwrap_or(&pipeline.label),
@@ -2353,8 +2311,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
-        lo_sv2: &GpuTexture,
-        hi_sv2: &GpuTexture,
         lo_irr: &GpuTexture,
         hi_irr: &GpuTexture,
         lo_n: &GpuTexture,
@@ -2387,15 +2343,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 2,
                     texture: hi_sv,
-                },
-                // RS-A (caster cap 4 -> 8): second shadow-visibility quad.
-                GpuBinding::Texture {
-                    binding: 9,
-                    texture: lo_sv2,
-                },
-                GpuBinding::Texture {
-                    binding: 10,
-                    texture: hi_sv2,
                 },
                 GpuBinding::Texture {
                     binding: 3,
@@ -2447,8 +2394,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         moments_read: &GpuTexture,
         src_sv: &GpuTexture,
         dst_sv: &GpuTexture,
-        src_sv2: &GpuTexture,
-        dst_sv2: &GpuTexture,
         src_irr: &GpuTexture,
         dst_irr: &GpuTexture,
         src_n: &GpuTexture,
@@ -2488,15 +2433,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 3,
                     texture: dst_sv,
-                },
-                // RS-A (caster cap 4 -> 8): second shadow-visibility quad.
-                GpuBinding::Texture {
-                    binding: 11,
-                    texture: src_sv2,
-                },
-                GpuBinding::Texture {
-                    binding: 12,
-                    texture: dst_sv2,
                 },
                 GpuBinding::Texture {
                     binding: 4,
@@ -2656,7 +2592,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         refl_history_read: &GpuTexture,
         refl_history_write: &GpuTexture,
         gi_materials: &GpuBuffer,
-        // SV-ACCUM: shadow-visibility channel (caster slots 0-3).
+        // SV-ACCUM: shadow-visibility layer arrays (four casters per layer).
         hi_sv: &GpuTexture,
         sv_history_read: &GpuTexture,
         sv_history_write: &GpuTexture,
@@ -2668,17 +2604,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // SV-ACCUM snap-hold countdown pair (`.x`).
         sv_hold_read: &GpuTexture,
         sv_hold_write: &GpuTexture,
-        // RS-A (caster cap 4 -> 8): second shadow-visibility channel
-        // (slots 4-7) — independent SV-ACCUM pipeline.
-        hi_sv2: &GpuTexture,
-        sv2_history_read: &GpuTexture,
-        sv2_history_write: &GpuTexture,
-        sv2_m1_read: &GpuTexture,
-        sv2_m1_write: &GpuTexture,
-        sv2_m2_read: &GpuTexture,
-        sv2_m2_write: &GpuTexture,
-        sv2_hold_read: &GpuTexture,
-        sv2_hold_write: &GpuTexture,
         // RT-TL-C (section 16 TL5/TL8): sun-transmission tint channel —
         // same flip clock, same weights/reset as irradiance.
         hi_svt: &GpuTexture,
@@ -2795,44 +2720,6 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 22,
                     texture: sv_hold_write,
                 },
-                // RS-A (caster cap 4 -> 8): sv2 channel — full SV-ACCUM
-                // pipeline, independent sigma-gate per quad.
-                GpuBinding::Texture {
-                    binding: 23,
-                    texture: hi_sv2,
-                },
-                GpuBinding::Texture {
-                    binding: 24,
-                    texture: sv2_history_read,
-                },
-                GpuBinding::Texture {
-                    binding: 25,
-                    texture: sv2_history_write,
-                },
-                GpuBinding::Texture {
-                    binding: 26,
-                    texture: sv2_m1_read,
-                },
-                GpuBinding::Texture {
-                    binding: 27,
-                    texture: sv2_m1_write,
-                },
-                GpuBinding::Texture {
-                    binding: 28,
-                    texture: sv2_m2_read,
-                },
-                GpuBinding::Texture {
-                    binding: 29,
-                    texture: sv2_m2_write,
-                },
-                GpuBinding::Texture {
-                    binding: 30,
-                    texture: sv2_hold_read,
-                },
-                GpuBinding::Texture {
-                    binding: 31,
-                    texture: sv2_hold_write,
-                },
                 // RT-TL-C: hi_svt at [[texture(32)]] and svt history pair
                 // at [[texture(33)]]/[[texture(34)]].
                 GpuBinding::Texture {
@@ -2902,6 +2789,14 @@ mod tests {
     }
 
     #[cfg(feature = "gpu-proofs")]
+    fn test_sv_array(device: &GpuDevice, label: &str) -> GpuTexture {
+        device.create_texture(&GpuTextureDesc { width: 9, height: 9, depth: 1,
+            format: GpuTextureFormat::Rgba32Float, dimension: GpuTextureDimension::D2Array,
+            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+            label, mip_levels: 1 })
+    }
+
+    #[cfg(feature = "gpu-proofs")]
     fn test_depth_texture(device: &GpuDevice) -> GpuTexture {
         let tex = device.create_texture(&GpuTextureDesc { width: 9, height: 9, depth: 1,
             format: GpuTextureFormat::R32Float, dimension: GpuTextureDimension::D2,
@@ -2929,6 +2824,7 @@ mod tests {
             [v, v, v, 1.0]
         });
         let src_tex = test_rgba_texture(&device, "f7f1-src", &src);
+        let src_sv = test_sv_array(&device, "f7f1-src-sv");
         let params_buffer = device.create_buffer_shared(24);
         let materials = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
         materials.zero_fill();
@@ -2941,9 +2837,14 @@ mod tests {
         };
         for post in [false, true] {
             // Two batched outputs, then the same two passes submitted one at
-            // a time as references. Each regular pass needs six output textures.
+            // a time as references. Each regular pass needs five output
+            // textures; index 1 is unused.
             let outputs: [[GpuTexture; 6]; 4] = std::array::from_fn(|_| {
-                std::array::from_fn(|_| test_rgba_texture(&device, "f7f1-output", &[[0.0; 4]; 81]))
+                std::array::from_fn(|i| if i == 0 {
+                    test_sv_array(&device, "f7f1-output-sv")
+                } else {
+                    test_rgba_texture(&device, "f7f1-output", &[[0.0; 4]; 81])
+                })
             });
             let dispatch = |enc: &mut GpuEncoder, step: u32, out: &[GpuTexture; 6]| {
                 if post {
@@ -2952,7 +2853,7 @@ mod tests {
                 } else {
                     tracer.atrous_pass(enc, &AtrousParams::new([9, 9], step, true, 0),
                         &params_buffer, &materials, &depth, &moments,
-                        &src_tex, &out[0], &src_tex, &out[1], &src_tex, &out[2],
+                        &src_sv, &out[0], &src_tex, &out[2],
                         &normal, &out[3], &src_tex, &out[4], &src_tex, &out[5], "f7f1-atrous");
                 }
             };
@@ -3066,7 +2967,7 @@ mod tests {
     fn normal_map_degenerate_frame_stays_finite() {
         use super::*;
         let device = GpuDevice::new();
-        let source = format!("{}\n{}", SHADOW_RAYS_MSL, r#"
+        let source = format!("{}{}\n{}", crate::ShadowCaster::MSL, SHADOW_RAYS_MSL, r#"
         kernel void normal_guard_probe(device const float4* input [[buffer(0)]],
             device float4* output [[buffer(1)]], uint2 tid [[thread_position_in_grid]]) {
             if (tid.y != 0 || tid.x >= 8) return;
@@ -3125,7 +3026,7 @@ mod tests {
     fn trace_diagnostics_records_invalid_ray() {
         use super::*;
         let device = GpuDevice::new();
-        let source = format!("{}\n{}", SHADOW_RAYS_MSL, r#"
+        let source = format!("{}{}\n{}", crate::ShadowCaster::MSL, SHADOW_RAYS_MSL, r#"
         kernel void diag_probe(device RtTraceDiagnostics* d [[buffer(0)]],
             device float4* out [[buffer(1)]], uint2 tid [[thread_position_in_grid]]) {
             if (tid.x != 0 || tid.y != 0) return;

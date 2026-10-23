@@ -20,6 +20,8 @@ pub mod testkit;
 pub mod queue;
 pub mod types;
 pub use types::*;
+pub mod shadow_caster;
+pub use shadow_caster::{ShadowCaster, upload_shadow_casters};
 pub mod trace_planner;
 pub use trace_planner::*;
 // The recording core is unused on Vulkan until its store records command
