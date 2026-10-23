@@ -225,8 +225,9 @@ Suspects, ranked:
 
 ### SB Next tick overlaps this frame (Opus)
 Files: `crates/manifold-node-engine/src/exec/execution.rs` (6027 lines; the lead writes a line map into the brief), `substeps.rs`, `liquid_state.rs`, `liquid_frame.rs`.
-1. The next sim tick encodes and runs while this frame renders. `fluid_capture`'s `submit_wait_ms` drops to about 0 on the Dam Break at 64.
-2. The existing timing and frame-exact tests pass. Reading the past never changes it.
+1. The water simulation runs on its own compute queue through `manifold-gpu`, so the GPU computes the next tick while this frame draws. The render reads retired history slots, never the live state, so the only ordering point is the publication copy, fenced by a shared event. The API is shaped so Vulkan's queue and timeline semaphore map onto it (`docs/VULKAN_BACKEND_DESIGN.md`).
+2. Measured by live tick interval on the Dam Break at 64, interleaved A/B under the GPU lock (memory: frame-timing method), never by `fluid_capture`'s `submit_wait_ms`, which wraps sim and render in one wait. If the A/B shows no gain, report the numbers and commit nothing.
+3. The existing timing and frame-exact tests pass; export stays exact. Reading the past never changes it.
 
 ### S1 Storage helpers and step kernels (Opus)
 Files: `TileTable` (`gpu_flip_step` submodules, `:117-217`), grown in place into the storage helpers in `crates/manifold-water-liquid/` (Rust plus one WGSL include); the S0 step submodules and the step WGSL. Design: `GPU_FLIP_SPARSE_BLOCKS_DESIGN.md` sections 3 and 4.
@@ -334,3 +335,5 @@ Lanes read this section from the main checkout before pausing on any fork.
 - **W5. Blockers are decided by the lead, logged here and in the report, and work continues.**
 - **W6. W3 is replaced by the disk rule in section 3** (free space minus the reserve, 60 GB per built slot, re-checked at each launch). Read-only work runs alongside without a slot, and look items start their simulation half before the march merges.
 - **W7. Field build forks (R1a).** Count and carry radii are in cells as D2 says (1.5 and 2 cells, named constants citing the prototype), so Particle Scale never shifts the weights. The weights are a pure function of the frame's blended particles, with no cross-frame display state: a blend over display frames would make a frame depend on how it was reached. Flicker without the time blend is measured against the prototype; a per-tick blend on the sim side follows only if it flickers. `clamp_liquid_to_solids` runs twice (carry into all solids early, keep drawn solids late), and its drawn-solids input is wired by R1b. `FluidBlob` shrinks to centre plus radius in R1a (I11).
+- **W8. SB is the simulation on its own compute queue.** The live app never waits on the GPU per frame; sim and render share one command buffer and run in order. `submit_wait_ms` measured the capture tool's own wait, so SB is judged by live tick interval and commits nothing if it gains nothing.
+- **W9. `LiveExtent` stays.** The refinement made it a general type (the fragment cut, `frame_setup.rs:108-111`). RD deletes only water's published-extent path, and its rg check lists the remaining non-water uses by file instead of expecting none.
