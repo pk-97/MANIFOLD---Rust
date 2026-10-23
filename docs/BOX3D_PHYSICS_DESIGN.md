@@ -478,6 +478,8 @@ counting as one (`manifold_physics::default_worker_count`), with Box3D's own
 scheduler; `PhysicsWorld::new` (tests, tools) steps on one. Box3D solves in the
 same order at any worker count.
 Capacity is not a measured real-time guarantee; use the HUD to measure the scene.
+A scan Collider collides as its exact mesh: worst case 0.78 ms per step, a
+1.15 m cube on the cliff scan at 0.049 scale.
 Pose upload at 4,000 copies is 128 KB/frame through the existing compute-upload
 path. Preview gives physics one project-frame CPU interval per work batch, with
 no fixed catch-up tick cap and no discarded simulation time. Rendering follows
