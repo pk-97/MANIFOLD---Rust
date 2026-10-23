@@ -467,6 +467,23 @@ pub struct FeatureSetting {
     pub mode: u32,
 }
 
+impl FeatureSetting {
+    /// The node's mode values (`node.pbr_material`'s feature modes). A
+    /// feature absent from the list follows its values, as an import's do.
+    pub const ON: u32 = 2;
+    /// A removed feature stays in the list so its values come back when it
+    /// is added again; the node runs it as Off.
+    pub const REMOVED: u32 = 3;
+
+    pub fn on(feature: MaterialFeature) -> Self {
+        Self { feature, mode: Self::ON }
+    }
+
+    pub fn removed(&self) -> bool {
+        self.mode == Self::REMOVED
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct WaterFields {

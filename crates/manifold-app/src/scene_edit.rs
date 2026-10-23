@@ -206,21 +206,48 @@ const SWARM_FORCES: [SwarmForce; 3] = [
 ];
 
 /// Remove each of `items` and everything under it, in one undo step. An item
-/// inside another removed item goes with it.
+/// inside another removed item goes with it, and so does every Material only
+/// removed items drew with (ruling 1 of SCENE_REFINEMENT_DESIGN.md section
+/// 2 (Rulings)).
 pub(crate) fn remove(project: &Project, layer: &LayerId, items: &[ItemId]) -> Result<SceneEdit, String> {
     let doc = doc(project, layer)?;
     if items.iter().any(|item| doc.find(item).is_some_and(|found| found.kind() == ItemKind::World)) {
         return Err("The World cannot be removed".to_owned());
     }
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
+    let mut gone = std::collections::HashSet::new();
     doc.walk(|item, ancestors| {
-        if items.contains(&item.id) && !ancestors.iter().any(|above| items.contains(&above.id)) {
+        let inside = ancestors.iter().any(|above| items.contains(&above.id));
+        if items.contains(&item.id) && !inside {
             commands.push(Box::new(RemoveSceneItemCommand::new(layer.clone(), item.id.clone())));
+        }
+        if inside || items.contains(&item.id) {
+            gone.insert(item.id.clone());
         }
     });
     if commands.is_empty() {
         return Err("That item is no longer in the scene".to_owned());
     }
+    // (any user removed, any user kept) per Material.
+    let effective = doc.effective_materials();
+    let mut users: std::collections::HashMap<&ItemId, (bool, bool)> = std::collections::HashMap::new();
+    doc.walk(|item, _| {
+        if manifold_core::scene_doc::draws_with_material(item)
+            && let Some(material) = effective.get(&item.id)
+        {
+            let entry = users.entry(material).or_default();
+            if gone.contains(&item.id) {
+                entry.0 = true;
+            } else {
+                entry.1 = true;
+            }
+        }
+    });
+    doc.walk(|item, _| {
+        if users.get(&item.id).is_some_and(|&(removed, kept)| removed && !kept) && !gone.contains(&item.id) {
+            commands.push(Box::new(RemoveSceneItemCommand::new(layer.clone(), item.id.clone())));
+        }
+    });
     Ok(batch(commands, "Remove", None))
 }
 
@@ -415,22 +442,38 @@ pub(crate) fn core_feature(feature: UiFeature) -> manifold_core::material_inspec
 
 /// What a newly added feature starts at, so it shows when it appears: the
 /// material params its rows edit, set only where the performer has not moved
-/// them.
+/// them. Sheen at roughness 0 has no lobe at all; Blender starts it at 0.5.
 fn feature_seeds(feature: UiFeature) -> &'static [(&'static str, f32)] {
     match feature {
         UiFeature::Coat => &[("clearcoat", 1.0)],
         UiFeature::Iridescence => &[("iridescence", 1.0)],
         UiFeature::Emission => &[("emission_r", 1.0), ("emission_g", 1.0), ("emission_b", 1.0), ("emission_intensity", 1.0)],
         UiFeature::Glass => &[("transmission", 1.0)],
-        UiFeature::Sheen => &[("sheen_color_r", 0.5), ("sheen_color_g", 0.5), ("sheen_color_b", 0.5)],
+        UiFeature::Sheen => &[("sheen_color_r", 0.5), ("sheen_color_g", 0.5), ("sheen_color_b", 0.5), ("sheen_roughness", 0.5)],
         UiFeature::Anisotropy => &[("anisotropy_strength", 0.5)],
         UiFeature::Translucency => &[("translucency", 0.5)],
         UiFeature::Subsurface => &[("subsurface_weight", 0.5)],
     }
 }
 
-/// Add a feature to a material (with its starting values, in the same undo
-/// step) or remove it.
+/// The features whose light passes through the surface. A metal passes none
+/// (glTF and Blender scale them by one minus metallic), so they show only
+/// below Metallic 1.
+pub(crate) const PASSES_LIGHT: [manifold_core::material_inspector::MaterialFeature; 3] = {
+    use manifold_core::material_inspector::MaterialFeature as Core;
+    [Core::Glass, Core::Translucency, Core::Subsurface]
+};
+
+/// Whether a Metallic value is full metal, where [`PASSES_LIGHT`] features
+/// cannot show.
+pub(crate) fn full_metal(metallic: f32) -> bool {
+    metallic >= 1.0 - 1e-4
+}
+
+/// Add a feature to a material or remove it, in one undo step. A first add
+/// writes its starting values; a feature light passes through, added at
+/// Metallic 1, also sets Metallic 0. Remove keeps the feature and its values,
+/// switched to Removed, so adding it again brings them back.
 pub(crate) fn material_feature(project: &Project, layer: &LayerId, material: &ItemId, feature: UiFeature, add: bool) -> Result<Option<SceneEdit>, String> {
     let doc = doc(project, layer)?;
     let found = doc.find(material).ok_or("That material is no longer in the scene")?;
@@ -438,20 +481,26 @@ pub(crate) fn material_feature(project: &Project, layer: &LayerId, material: &It
         return Err("That item is not a material".to_owned());
     };
     let core = core_feature(feature);
-    let present = fields.features.iter().any(|setting| setting.feature == core);
-    if present == add {
-        return Ok(None);
-    }
+    let held = fields.features.iter().position(|setting| setting.feature == core);
     let mut features = fields.features.clone();
-    if add {
-        features.push(FeatureSetting { feature: core, mode: 2 });
-    } else {
-        features.retain(|setting| setting.feature != core);
+    match (held, add) {
+        (Some(index), true) if features[index].removed() => features[index].mode = FeatureSetting::ON,
+        (None, true) => features.push(FeatureSetting::on(core)),
+        (Some(index), false) if !features[index].removed() => features[index].mode = FeatureSetting::REMOVED,
+        _ => return Ok(None),
     }
     let edited = ItemFields::Material(MaterialFields { features, ..fields.clone() });
     let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), material.clone(), edited))];
     if add {
-        commands.extend(seed_writes(project, layer, material, feature_seeds(feature)));
+        if held.is_none() {
+            commands.extend(seed_writes(project, layer, material, feature_seeds(feature)));
+        }
+        if PASSES_LIGHT.contains(&core)
+            && let Some(metallic) = instance(project, layer).and_then(|inst| base(inst, material, "metallic"))
+            && full_metal(metallic)
+        {
+            commands.push(write(layer, material, "metallic", metallic, 0.0));
+        }
     }
     Ok(Some(batch(commands, if add { "Add Material Feature" } else { "Remove Material Feature" }, None)))
 }
@@ -486,7 +535,9 @@ pub(crate) fn make_material_unique(project: &Project, layer: &LayerId, owner: &I
 
 /// Apply a starting look to a Material: its features become the look's and
 /// the look's factors are written, in one undo step. Default puts every
-/// factor back and takes every feature off.
+/// factor back and takes every feature off. A feature the look does not
+/// have is Removed, as the feature's own remove does, so its values never
+/// shade with no rows to show them.
 pub(crate) fn material_look(project: &Project, layer: &LayerId, material: &ItemId, look: UiLook) -> Result<Option<SceneEdit>, String> {
     let doc = doc(project, layer)?;
     let found = doc.find(material).ok_or("That material is no longer in the scene")?;
@@ -496,8 +547,12 @@ pub(crate) fn material_look(project: &Project, layer: &LayerId, material: &ItemI
     let inst = instance(project, layer).ok_or("There is no scene to edit")?;
     let recipe = crate::scene_material_look::recipe(look);
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
-    let features: Vec<FeatureSetting> =
-        recipe.features.iter().map(|feature| FeatureSetting { feature: core_feature(*feature), mode: 2 }).collect();
+    let mut features: Vec<FeatureSetting> = recipe.features.iter().map(|feature| FeatureSetting::on(core_feature(*feature))).collect();
+    for setting in &fields.features {
+        if !features.iter().any(|kept| kept.feature == setting.feature) {
+            features.push(FeatureSetting { feature: setting.feature, mode: FeatureSetting::REMOVED });
+        }
+    }
     if features != fields.features {
         let edited = ItemFields::Material(MaterialFields { features, ..fields.clone() });
         commands.push(Box::new(SetSceneItemFieldsCommand::new(layer.clone(), material.clone(), edited)));
@@ -708,12 +763,7 @@ mod tests {
     /// Material in the same undo step, and undo takes both back.
     #[test]
     fn a_shape_set_to_ocean_takes_the_water_look_in_one_step() {
-        let mut project = Project::default();
-        let index = project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
-        let layer = project.timeline.layers[index].layer_id.clone();
-        let mut added = add(&project, &layer, "object.cube", None, &[]).expect("a cube adds to the base scene");
-        added.command.execute(&mut project);
-        let cube = added.select.expect("the add selects the new cube");
+        let (mut project, layer, cube) = cube_scene();
         let material = doc(&project, &layer).unwrap().effective_material(&cube).expect("a new cube has its own Material");
         let before: Vec<Option<f32>> = scene_schema::OCEAN_LOOK.iter().map(|(property, _)| base(instance(&project, &layer).unwrap(), &material, property)).collect();
 
@@ -733,5 +783,81 @@ mod tests {
                 assert_eq!(base(instance(&project, &layer).unwrap(), &material, property), Some(old), "{property} after undo");
             }
         }
+    }
+
+    /// A scene layer holding a new cube: the project, the layer, the cube.
+    fn cube_scene() -> (Project, LayerId, ItemId) {
+        let mut project = Project::default();
+        let index = project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
+        let layer = project.timeline.layers[index].layer_id.clone();
+        let mut added = add(&project, &layer, "object.cube", None, &[]).expect("a cube adds to the base scene");
+        added.command.execute(&mut project);
+        (project, layer, added.select.expect("the add selects the new cube"))
+    }
+
+    fn glass_mode(project: &Project, layer: &LayerId, material: &ItemId) -> Option<u32> {
+        let ItemFields::Material(fields) = &doc(project, layer).unwrap().find(material).unwrap().fields else { panic!("not a material") };
+        fields.features.iter().find(|setting| setting.feature == core_feature(UiFeature::Glass)).map(|setting| setting.mode)
+    }
+
+    /// Glass added to a metal turns it dielectric in the same step; removing
+    /// it keeps it Removed with its values, and adding it again brings them
+    /// back. Undo of the add is exact.
+    #[test]
+    fn glass_on_metal_sets_metallic_zero_and_remove_keeps_its_values() {
+        let (mut project, layer, cube) = cube_scene();
+        let material = doc(&project, &layer).unwrap().effective_material(&cube).unwrap();
+        let value = |project: &Project, property: &str| base(instance(project, &layer).unwrap(), &material, property).unwrap();
+        for map_row in ["uv_m00", "uv_set", "wrap_u", "sheen_color_wrap_u", "clearcoat_uv_tx", "transmission_tex_coord"] {
+            assert_eq!(base(instance(&project, &layer).unwrap(), &material, map_row), None, "{map_row} is a row only while its map has a texture");
+        }
+        let metallic = value(&project, "metallic");
+        write(&layer, &material, "metallic", metallic, 1.0).execute(&mut project);
+
+        let mut glass = material_feature(&project, &layer, &material, UiFeature::Glass, true).unwrap().expect("Glass adds");
+        glass.command.execute(&mut project);
+        assert_eq!(glass_mode(&project, &layer, &material), Some(FeatureSetting::ON));
+        assert_eq!(value(&project, "metallic"), 0.0, "glass on a metal lets light through");
+        assert_eq!(value(&project, "transmission"), 1.0);
+        glass.command.undo(&mut project);
+        assert_eq!(glass_mode(&project, &layer, &material), None);
+        assert_eq!(value(&project, "metallic"), 1.0, "undo puts the metal back");
+        assert_eq!(value(&project, "transmission"), 0.0);
+        glass.command.execute(&mut project);
+
+        write(&layer, &material, "transmission", 1.0, 0.7).execute(&mut project);
+        let mut removed = material_feature(&project, &layer, &material, UiFeature::Glass, false).unwrap().expect("Glass removes");
+        removed.command.execute(&mut project);
+        assert_eq!(glass_mode(&project, &layer, &material), Some(FeatureSetting::REMOVED));
+        assert_eq!(value(&project, "transmission"), 0.7, "remove keeps the values");
+        assert_eq!(value(&project, "metallic"), 0.0, "remove leaves Metallic alone");
+        assert!(material_feature(&project, &layer, &material, UiFeature::Glass, false).unwrap().is_none());
+
+        let mut again = material_feature(&project, &layer, &material, UiFeature::Glass, true).unwrap().expect("Glass adds again");
+        again.command.execute(&mut project);
+        assert_eq!(glass_mode(&project, &layer, &material), Some(FeatureSetting::ON));
+        assert_eq!(value(&project, "transmission"), 0.7, "adding again brings the values back");
+        again.command.undo(&mut project);
+        assert_eq!(glass_mode(&project, &layer, &material), Some(FeatureSetting::REMOVED));
+    }
+
+    /// Removing a cube takes its own Material with it in one step; a Material
+    /// another cube still draws with stays.
+    #[test]
+    fn remove_takes_a_material_only_the_removed_items_drew_with() {
+        let (mut project, layer, cube) = cube_scene();
+        let material = doc(&project, &layer).unwrap().effective_material(&cube).unwrap();
+        let mut removed = remove(&project, &layer, std::slice::from_ref(&cube)).unwrap();
+        removed.command.execute(&mut project);
+        assert!(doc(&project, &layer).unwrap().find(&material).is_none(), "a single-use Material leaves with its cube");
+        removed.command.undo(&mut project);
+        assert_eq!(doc(&project, &layer).unwrap().effective_material(&cube), Some(material.clone()), "undo restores both, bound");
+
+        let mut copied = duplicate(&project, &layer, std::slice::from_ref(&cube)).unwrap();
+        copied.command.execute(&mut project);
+        let copy = copied.select.expect("the copy is selected");
+        assert_eq!(doc(&project, &layer).unwrap().effective_material(&copy), Some(material.clone()), "a duplicate shares the Material");
+        remove(&project, &layer, std::slice::from_ref(&cube)).unwrap().command.execute(&mut project);
+        assert_eq!(doc(&project, &layer).unwrap().effective_material(&copy), Some(material), "a shared Material stays");
     }
 }
