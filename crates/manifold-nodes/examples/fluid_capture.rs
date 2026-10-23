@@ -97,6 +97,9 @@ struct CaptureOptions {
     /// On still frames, write the level set the mesher reads to `field/`, with
     /// the drawn (indexed) mesh beside it: see `dump_field`.
     dump_field: bool,
+    /// With `dump_field`: particle positions only, as u16 per axis across the
+    /// field box, and no drawn-mesh files, so every frame of a clip fits on disk.
+    dump_compact: bool,
     /// The preset meshes on the GPU (the Liquid Surface group): the fluid node
     /// publishes particle frames and its CPU mesh is off by design.
     gpu_surface: bool,
@@ -917,7 +920,7 @@ fn field_view(json: &str, preset: &PresetSettings, aspect: f32) -> CaptureResult
 /// drawn mesh (`node.surface_mesh_normals`'s `out` with the mesher's indices):
 /// position then normal for every slot up to the last referenced one, and the
 /// live triangles' indices.
-fn dump_field(runtime: &PresetRuntime, device: &GpuDevice, frame: u32, view: &FieldView, dir: &Path) -> CaptureResult<()> {
+fn dump_field(runtime: &PresetRuntime, device: &GpuDevice, frame: u32, view: &FieldView, dir: &Path, compact: bool) -> CaptureResult<()> {
     let arrays = runtime.dump_arrays_all();
     let find = |type_id: &str, port: &str| {
         arrays.iter().find(|array| array.type_id == type_id && array.port == port).ok_or_else(|| {
@@ -954,13 +957,29 @@ fn dump_field(runtime: &PresetRuntime, device: &GpuDevice, frame: u32, view: &Fi
     let sorted: Vec<[f32; 8]> = read_back(device, sorted_array.buffer, sorted_array.buffer.size() / 32);
     let blobs: Vec<[f32; 12]> = read_back(device, blob_array.buffer, blob_array.buffer.size() / 48);
     let mut surface_particles = Vec::new();
+    let mut positions_u16: Vec<u16> = Vec::new();
+    let mut particle_radius = 0.0f32;
+    let cell = (layout.cell_size / f64::from(refine)) as f32;
+    let extent: [f32; 3] = std::array::from_fn(|axis| (dims[axis] - 1) as f32 * cell);
     for (particle, blob) in sorted.iter().zip(&blobs) {
         if particle[3] > 0.0 {
-            surface_particles.extend_from_slice(&particle[..4]);
-            surface_particles.extend_from_slice(blob);
+            particle_radius = particle[3];
+            if compact {
+                for axis in 0..3 {
+                    let t = ((particle[axis] - origin[axis]) / extent[axis]).clamp(0.0, 1.0);
+                    positions_u16.push((t * 65535.0).round() as u16);
+                }
+            } else {
+                surface_particles.extend_from_slice(&particle[..4]);
+                surface_particles.extend_from_slice(blob);
+            }
         }
     }
-    fs::write(dir.join(format!("frame_{frame:06}_surface_particles.f32")), bytemuck::cast_slice(&surface_particles))?;
+    if compact {
+        fs::write(dir.join(format!("frame_{frame:06}_positions.u16")), bytemuck::cast_slice(&positions_u16))?;
+    } else {
+        fs::write(dir.join(format!("frame_{frame:06}_surface_particles.f32")), bytemuck::cast_slice(&surface_particles))?;
+    }
 
     let normals = find("node.surface_mesh_normals", "out")?;
     let index_array = find("node.volume_surface_mesh", "indices")?;
@@ -986,8 +1005,10 @@ fn dump_field(runtime: &PresetRuntime, device: &GpuDevice, frame: u32, view: &Fi
             out.extend_from_slice(&value.to_le_bytes());
         }
     }
-    fs::write(dir.join(format!("frame_{frame:06}_drawn_vertices.f32")), out)?;
-    fs::write(dir.join(format!("frame_{frame:06}_drawn_indices.u32")), bytemuck::cast_slice(&live))?;
+    if !compact {
+        fs::write(dir.join(format!("frame_{frame:06}_drawn_vertices.f32")), out)?;
+        fs::write(dir.join(format!("frame_{frame:06}_drawn_indices.u32")), bytemuck::cast_slice(&live))?;
+    }
     // Every vertex copy the surface chain holds, plus its index buffer.
     let mesh_allocated: u64 = arrays
         .iter()
@@ -1022,6 +1043,9 @@ fn dump_field(runtime: &PresetRuntime, device: &GpuDevice, frame: u32, view: &Fi
             "view": camera.view, "proj": camera.proj(view.aspect),
         },
         "light_direction": view.light_direction,
+        "particle_radius": particle_radius,
+        "particle_count": if compact { positions_u16.len() / 3 } else { surface_particles.len() / 16 },
+        "positions_u16": "x y z per particle, each across origin + [0, (dims - 1) * cell_size]",
     });
     fs::write(dir.join(format!("frame_{frame:06}.json")), serde_json::to_vec_pretty(&header)?)?;
     Ok(())
@@ -1205,6 +1229,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         cinematic: false,
         supersample: 1,
         dump_field: false,
+        dump_compact: false,
         gpu_surface: false,
         dump_mesh: false,
         look_metrics: false,
@@ -1239,6 +1264,10 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             "--gpu-surface" => options.gpu_surface = true,
             "--dump-mesh" => options.dump_mesh = true,
             "--dump-field" => options.dump_field = true,
+            "--dump-compact" => {
+                options.dump_field = true;
+                options.dump_compact = true;
+            }
             "--stills-at" => {
                 options.stills_at = value("--stills-at")?
                     .split(',')
@@ -1506,7 +1535,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             options.stills_at.contains(&frame)
         };
         if let (true, Some(view)) = (should_capture, field_view.as_ref()) {
-            dump_field(&offline_runtime, &device, frame, view, &options.output_dir.join("field"))?;
+            dump_field(&offline_runtime, &device, frame, view, &options.output_dir.join("field"), options.dump_compact)?;
         }
         if should_capture && options.dump_mesh {
             dump_surface_meshes(
