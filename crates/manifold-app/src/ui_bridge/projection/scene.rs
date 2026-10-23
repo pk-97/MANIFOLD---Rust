@@ -12,8 +12,8 @@ use manifold_core::scene_doc::{
     param_id, split_param_id,
 };
 use manifold_core::scene_schema::{
-    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, MODIFIER_HEADER_FIELDS, TURN_ON_COPIES, acts_on_copies, applicable_fields,
-    break_unavailable, choice_disabled, has_loop_camera, holds_copies, impulse_unavailable, is_on, item_disabled, on_off_key, waits_for_loop_camera,
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, MODIFIER_HEADER_FIELDS, acts_on_copies, applicable_fields, break_unavailable,
+    choice_disabled, copies_refused, has_loop_camera, impulse_unavailable, new_card_targets, is_on, item_disabled, on_off_key, waits_for_loop_camera,
 };
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
@@ -23,8 +23,14 @@ use manifold_ui::panels::scene_setup_panel::{
 };
 
 /// The panel's state for the selected layer. A layer `notices` lists as
-/// stopped offers Draw Again on its World.
-pub(crate) fn scene_state(project: &Project, layer: Option<&Layer>, notices: &crate::layer_notices::LayerNotices) -> SceneSetupState {
+/// stopped offers Draw Again on its World. `selected` is the panel's item
+/// selection, which a new Modifier card aims at.
+pub(crate) fn scene_state(
+    project: &Project,
+    layer: Option<&Layer>,
+    notices: &crate::layer_notices::LayerNotices,
+    selected: &[ItemId],
+) -> SceneSetupState {
     let Some(layer) = layer else {
         return SceneSetupState::NoSelection("Select a layer to set up its scene.".to_owned());
     };
@@ -36,14 +42,14 @@ pub(crate) fn scene_state(project: &Project, layer: Option<&Layer>, notices: &cr
         return SceneSetupState::NoScene { layer_id };
     };
     let stopped = notices.is_stopped(&layer_id);
-    let mut vm = scene_vm(project, layer_id, doc, inst);
+    let mut vm = scene_vm(project, layer_id, doc, inst, selected);
     for item in vm.items.iter_mut().filter(|item| item.kind == ItemKind::World) {
         item.draw_again = stopped;
     }
     SceneSetupState::Live(Box::new(vm))
 }
 
-fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetInstance) -> SceneSetupVm {
+fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetInstance, selected: &[ItemId]) -> SceneSetupVm {
     // The manifest ids each item owns, in manifest order.
     let mut owned: ahash::AHashMap<&str, Vec<String>> = ahash::AHashMap::new();
     for param in inst.params.iter() {
@@ -63,6 +69,9 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
     doc.walk(|item, ancestors| {
         items.push(item_vm(doc, inst, item, ancestors, &owned, &layers, &materials));
     });
+    // A copy card aims where a new card would; it is refused there when it
+    // would move nothing.
+    let copy_targets = new_card_targets(doc, selected);
     let add_entries = ADD_ENTRIES
         .iter()
         .map(|entry| AddEntryVm {
@@ -71,11 +80,14 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
             label: entry.label.to_owned(),
             top_level: manifold_core::scene_doc::can_hold(None, entry.kind),
             holders: ItemKind::ALL.into_iter().filter(|holder| manifold_core::scene_doc::can_hold(Some(*holder), entry.kind)).collect(),
-            disabled: entry.fields.and_then(|fields| manifold_core::scene_schema::add_refused(doc, &fields())).map(str::to_owned),
-            needs_copies: entry
+            disabled: entry
                 .fields
-                .is_some_and(|fields| matches!(fields(), ItemFields::Modifier(card) if acts_on_copies(card.modifier)))
-                .then(|| TURN_ON_COPIES.to_owned()),
+                .and_then(|fields| {
+                    let fields = fields();
+                    let moves_copies = matches!(&fields, ItemFields::Modifier(card) if acts_on_copies(card.modifier));
+                    manifold_core::scene_schema::add_refused(doc, &fields).or_else(|| copies_refused(doc, &copy_targets).filter(|_| moves_copies))
+                })
+                .map(str::to_owned),
         })
         .collect();
     SceneSetupVm { layer_id, items, add_entries }
@@ -137,7 +149,6 @@ fn item_vm(
         draw_again: false,
         add_loop_camera: is_scene_loop(item) && !has_loop_camera(doc),
         row_reasons,
-        holds_copies: holds_copies(item),
         body: item.fields.physics() == PhysicsSetting::Body,
         look: match &item.fields {
             ItemFields::Swarm(swarm) => match &swarm.draw_as {
@@ -411,7 +422,7 @@ mod tests {
         let inst = project.timeline.layers[index].gen_params_mut().expect("scene params");
         inst.install_scene_document(doc).expect("the scene compiles");
 
-        let SceneSetupState::Live(vm) = scene_state(&project, Some(&project.timeline.layers[index]), &Default::default()) else {
+        let SceneSetupState::Live(vm) = scene_state(&project, Some(&project.timeline.layers[index]), &Default::default(), &[]) else {
             panic!("the scene tab is live");
         };
         let block = vm.items.iter().find(|item| item.id.as_str() == "swarm").and_then(|item| item.material.as_ref());
@@ -432,7 +443,7 @@ mod tests {
         add.command.execute(&mut project);
         let card = add.select.expect("the add selects the card");
         let loop_card = |project: &Project| {
-            let SceneSetupState::Live(vm) = scene_state(project, Some(&project.timeline.layers[index]), &Default::default()) else {
+            let SceneSetupState::Live(vm) = scene_state(project, Some(&project.timeline.layers[index]), &Default::default(), &[]) else {
                 panic!("the scene tab is live");
             };
             vm.items.into_iter().find(|item| item.id == card).expect("the Scene Loop card")

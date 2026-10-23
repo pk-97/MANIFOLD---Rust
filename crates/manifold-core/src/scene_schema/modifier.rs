@@ -20,7 +20,7 @@ use super::fields::{
 };
 use super::{Exposure, PropertyRow, Reach, perform, row};
 use crate::scene_doc::{
-    DEFAULT_PIECES, Item, ItemFields, ItemId, ModifierFields, ModifierTargets, ModifierTexture, ModifierType, PhysicsSetting,
+    DEFAULT_PIECES, Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierTexture, ModifierType, PhysicsSetting,
     SceneDoc, Shape,
 };
 
@@ -347,7 +347,7 @@ pub fn shatter_parts(doc: &SceneDoc, shatter: &ItemId, body: &Item) -> Result<Ve
                 .collect();
         }
         let inside = item.id == body.id || ancestors.iter().any(|above| above.id == body.id);
-        if inside && item.kind() == crate::scene_doc::ItemKind::Object {
+        if inside && item.kind() == ItemKind::Object {
             if bending.iter().any(|targets| reaches(targets, item, ancestors)) {
                 bent = true;
             } else {
@@ -460,6 +460,17 @@ const PIECES: &[Choice] = &[
 pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
     matches!(&target.fields, ItemFields::Object(object) if object.shape == Shape::Ocean)
         .then_some("An Ocean is endless: it has no bounds for a modifier to bend in")
+}
+
+/// What a new card aims at: the Objects and Groups in `selection` a card can
+/// aim at, or the whole scene when none is selected.
+pub fn new_card_targets(doc: &SceneDoc, selection: &[ItemId]) -> ModifierTargets {
+    let aimed: Vec<ItemId> = selection
+        .iter()
+        .filter(|id| doc.find(id).is_some_and(|item| matches!(item.kind(), ItemKind::Object | ItemKind::Group) && modifier_refuses(item).is_none()))
+        .cloned()
+        .collect();
+    if aimed.is_empty() { ModifierTargets::Scene } else { ModifierTargets::Items(aimed) }
 }
 
 /// A Modifier's target picks: Objects and Groups; never an Ocean; Shatter

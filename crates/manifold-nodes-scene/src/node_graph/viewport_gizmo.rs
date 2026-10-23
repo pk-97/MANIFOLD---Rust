@@ -473,10 +473,12 @@ impl GizmoTarget {
 
     /// The lines of this shape's outline in `color`, appended to `out`.
     fn outline_lines(&self, color: [u8; 4], out: &mut Vec<WorldLine>) {
-        self.outline.for_each_edge(|a, b| out.push(WorldLine { a, b, color }));
+        // A box's edges meet at its corners; a curve's pieces join end to end.
+        let caps = matches!(self.outline, ShapeOutline::Box(_));
+        self.outline.for_each_edge(|a, b| out.push(WorldLine { a, b, color, caps }));
         self.outline.for_each_shell(|a, b, alpha| {
             let [r, g, b8, a8] = color;
-            out.push(WorldLine { a, b, color: [r, g, b8, (f32::from(a8) * alpha).round() as u8] });
+            out.push(WorldLine { a, b, color: [r, g, b8, (f32::from(a8) * alpha).round() as u8], caps: false });
         });
     }
 
@@ -786,7 +788,7 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
     }
     // What physics did carries no owner, so it never draws bright; the
     // declared outline over it does.
-    let mut shape = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4] }; PHYSICS_GIZMO_LINES];
+    let mut shape = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4], caps: false }; PHYSICS_GIZMO_LINES];
     for gizmo in chrome.physics {
         let count = physics_gizmo_lines(gizmo, &mut shape);
         out.extend(shape[..count].iter().map(|line| WorldLine { color: shown(line.color, false), ..*line }));
@@ -858,14 +860,14 @@ fn is_domain_box(target: &GizmoTarget, node: &NodeId) -> bool {
 pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget, len: f32, lines: &mut Vec<WorldLine>) {
     let origin = target.origin;
     if let Some(direction) = target.direction.and_then(normalized) {
-        lines.push(WorldLine { a: origin, b: offset(origin, direction, len * 1.4), color: DIRECTION_COLOR });
+        lines.push(WorldLine { a: origin, b: offset(origin, direction, len * 1.4), color: DIRECTION_COLOR, caps: false });
     }
     for handle in target.handles.iter().filter(|handle| handle.mode == mode) {
         let color = if handle.write.locked() { LOCKED_COLOR } else { handle.axis.color() };
         match mode {
             GizmoMode::Move => {
                 let tip = offset(origin, target.handle_direction(handle.axis), len);
-                lines.push(WorldLine { a: origin, b: tip, color });
+                lines.push(WorldLine { a: origin, b: tip, color, caps: false });
             }
             GizmoMode::Scale => {
                 let u = target.handle_direction(handle.axis);
@@ -873,14 +875,15 @@ pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget, len: f32, lines: &mut 
                 // A short tick at the tip tells scale from move.
                 let perp = perpendicular(u);
                 let tick = len * 0.12;
-                lines.push(WorldLine { a: origin, b: tip, color });
-                lines.push(WorldLine { a: offset(tip, perp, tick), b: offset(tip, perp, -tick), color });
+                lines.push(WorldLine { a: origin, b: tip, color, caps: false });
+                lines.push(WorldLine { a: offset(tip, perp, tick), b: offset(tip, perp, -tick), color, caps: false });
             }
             GizmoMode::Rotate => {
                 lines.extend(ring_lines(origin, handle.axis, len, color).map(|line| WorldLine {
                     a: target.world_point(line.a),
                     b: target.world_point(line.b),
                     color: line.color,
+                    caps: line.caps,
                 }));
             }
         }
@@ -918,7 +921,7 @@ fn ring_lines(origin: [f32; 3], axis: GizmoAxis, r: f32, color: [u8; 4]) -> impl
     (0..segments).map(move |i| {
         let t0 = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
         let t1 = ((i + 1) as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
-        WorldLine { a: point(t0), b: point(t1), color }
+        WorldLine { a: point(t0), b: point(t1), color, caps: false }
     })
 }
 

@@ -73,7 +73,7 @@ impl GizmoPass {
             let Some((a, b)) = clip_to_near(camera, line.a, line.b) else { continue };
             let [r, g, b8, a8] = line.color;
             self.scratch.extend_from_slice(&[
-                a[0], a[1], a[2], 0.0, b[0], b[1], b[2], 0.0,
+                a[0], a[1], a[2], if line.caps { 1.0 } else { 0.0 }, b[0], b[1], b[2], 0.0,
                 f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b8) / 255.0, f32::from(a8) / 255.0,
             ]);
         }

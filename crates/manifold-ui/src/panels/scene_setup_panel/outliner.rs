@@ -1,11 +1,11 @@
 //! The Scene tab tree (SCENE_DOCUMENT_DESIGN.md section 8, amended by
-//! SCENE_REFINEMENT_DESIGN.md ruling 4): World, then the cameras, one
-//! Lighting row for every light, then the Objects, the Forces and the
-//! Modifiers chain, each in its own section. The Camera row, the Lighting
-//! row and the three section headers each carry a + that adds what belongs
-//! there. Each row is the item's kind icon, its name, and an eye where the
-//! item has Visible. A Material is a row only when two or more items use it
-//! (ruling 1); a Body inside a Group is marked.
+//! SCENE_REFINEMENT_DESIGN.md ruling 4): six rows in one style, World,
+//! Camera, Lighting, Objects, Forces and Modifiers, each with what it holds
+//! one step in below it. Lighting is one row for every light. Every row but
+//! World carries a + at the right edge that adds what belongs there. An
+//! item's row is its kind icon, its name, and an eye where it has Visible.
+//! A Material is a row only when two or more items use it (ruling 1); a
+//! Body inside a Group is marked.
 
 use super::*;
 use crate::icons::scene_item_icon;
@@ -48,6 +48,17 @@ impl TreeSection {
             TreeSection::Objects => &["Object", "Group", "Swarm", "Water", "Water Source"],
             TreeSection::Forces => &["Force"],
             TreeSection::Modifiers => &["Modifier"],
+        }
+    }
+
+    /// The kind whose icon the section's row shows.
+    fn kind(self) -> ItemKind {
+        match self {
+            TreeSection::Camera => ItemKind::Camera,
+            TreeSection::Lighting => ItemKind::Light,
+            TreeSection::Objects => ItemKind::Object,
+            TreeSection::Forces => ItemKind::Force,
+            TreeSection::Modifiers => ItemKind::Modifier,
         }
     }
 
@@ -98,8 +109,10 @@ fn icon_style(selected: bool) -> UIStyle {
     }
 }
 
-fn mark_style() -> UIStyle {
-    UIStyle { text_color: color::TEXT_DIMMED_C32, font_size: color::FONT_CAPTION, text_align: TextAlign::Right, ..UIStyle::default() }
+/// The Body mark reads like the row's icon, so it stays clear on a
+/// selected row.
+fn mark_style(selected: bool) -> UIStyle {
+    UIStyle { text_align: TextAlign::Right, ..icon_style(selected) }
 }
 
 /// An item's Visible param id, when the kind has one.
@@ -132,26 +145,23 @@ impl ScenePanel {
         vm: &SceneSetupVm,
         selected: &[SceneSelection],
     ) -> f32 {
-        let rows = (inner_x, inner_w, 0.0);
+        // Six peers in one style, each with what it holds one step in below
+        // it and its + at the right edge (Blender's Outliner).
+        let child = (inner_x, inner_w, STEP_W);
         for item in vm.items.iter().filter(|item| item.depth == 0 && item.kind == ItemKind::World) {
-            cy = self.build_item_row(tree, rows, cy, vm, item, selected, None);
+            cy = self.build_item_row(tree, (inner_x, inner_w, 0.0), cy, vm, item, selected);
         }
-        // The Camera row's + sits on the first camera; with none, on a bare
-        // Camera row.
-        let mut cameras = vm.items.iter().filter(|item| item.depth == 0 && item.kind == ItemKind::Camera).peekable();
-        if cameras.peek().is_none() {
-            cy = self.build_bare_row(tree, (inner_x, inner_w), cy, ItemKind::Camera, TreeSection::Camera);
-        }
-        for (index, item) in cameras.enumerate() {
-            cy = self.build_item_row(tree, rows, cy, vm, item, selected, (index == 0).then_some(TreeSection::Camera));
+        cy = self.build_section_row(tree, (inner_x, inner_w), cy, TreeSection::Camera);
+        for item in vm.items.iter().filter(|item| item.depth == 0 && item.kind == ItemKind::Camera) {
+            cy = self.build_item_row(tree, child, cy, vm, item, selected);
         }
         cy = if vm.items.iter().any(|item| item.kind == ItemKind::Light) {
             self.build_lighting_row(tree, (inner_x, inner_w), cy, selected)
         } else {
-            self.build_bare_row(tree, (inner_x, inner_w), cy, ItemKind::Light, TreeSection::Lighting)
+            self.build_section_row(tree, (inner_x, inner_w), cy, TreeSection::Lighting)
         };
 
-        cy = self.build_section_header(tree, (inner_x, inner_w), cy, TreeSection::Objects);
+        cy = self.build_section_row(tree, (inner_x, inner_w), cy, TreeSection::Objects);
         let collapsed = self.collapsed_groups.get(&vm.layer_id).cloned().unwrap_or_default();
         // The depth at which a folded group hides what is under it.
         let mut hidden_below: Option<usize> = None;
@@ -169,16 +179,16 @@ impl ScenePanel {
             if pinned || matches!(item.kind, ItemKind::Light | ItemKind::Force | ItemKind::Modifier) || !has_tree_row(item) {
                 continue;
             }
-            let indent = item.depth as f32 * STEP_W;
-            cy = self.build_item_row(tree, (inner_x, inner_w, indent), cy, vm, item, selected, None);
+            let indent = (item.depth + 1) as f32 * STEP_W;
+            cy = self.build_item_row(tree, (inner_x, inner_w, indent), cy, vm, item, selected);
         }
         // Forces and Modifiers act on the scene, so they sit apart from it.
         // Modifiers are listed in the order they apply; dragging a card
         // reorders the chain.
         for (section, kind) in [(TreeSection::Forces, ItemKind::Force), (TreeSection::Modifiers, ItemKind::Modifier)] {
-            cy = self.build_section_header(tree, (inner_x, inner_w), cy, section);
+            cy = self.build_section_row(tree, (inner_x, inner_w), cy, section);
             for item in vm.items.iter().filter(|item| item.kind == kind) {
-                cy = self.build_item_row(tree, rows, cy, vm, item, selected, None);
+                cy = self.build_item_row(tree, child, cy, vm, item, selected);
                 if kind == ItemKind::Modifier
                     && let Some((row, _)) = self.outliner_row_ids.last()
                 {
@@ -190,12 +200,22 @@ impl ScenePanel {
         cy
     }
 
-    /// A section title with its + at the right end.
-    fn build_section_header(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), mut cy: f32, section: TreeSection) -> f32 {
-        cy += ROW_GAP;
+    /// A section's own row: its icon, its name and its +, lined up with the
+    /// World row.
+    fn build_section_row(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, section: TreeSection) -> f32 {
+        let icon = scene_item_icon(section.kind(), false).text();
+        tree.add_label(Some(self.content_parent), inner_x + STEP_W, cy, STEP_W, ROW_H, &icon, icon_style(false));
         let title = section.title();
-        let header = tree.add_label(Some(self.content_parent), inner_x, cy, (inner_w - STEP_W).max(0.0), ROW_H, title, label_style());
-        tree.set_name(header, format!("scene_tree.section.{}", title.to_lowercase()));
+        let label = tree.add_label(
+            Some(self.content_parent),
+            inner_x + STEP_W * 2.0,
+            cy,
+            (inner_w - STEP_W * 3.0).max(0.0),
+            ROW_H,
+            title,
+            outliner_row_style(false),
+        );
+        tree.set_name(label, format!("scene_tree.section.{}", title.to_lowercase()));
         self.build_add_button(tree, inner_x + inner_w - STEP_W, cy, section);
         cy + ROW_H
     }
@@ -209,24 +229,7 @@ impl ScenePanel {
         self.add_buttons.push((add, section));
     }
 
-    /// A Camera or Lighting row with nothing in it yet: its icon, its name
-    /// dimmed, and its +.
-    fn build_bare_row(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, kind: ItemKind, section: TreeSection) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x + STEP_W, cy, STEP_W, ROW_H, &scene_item_icon(kind, false).text(), icon_style(false));
-        let label = tree.add_label(
-            Some(self.content_parent),
-            inner_x + STEP_W * 2.0 + 4.0,
-            cy,
-            (inner_w - STEP_W * 3.0).max(0.0),
-            ROW_H,
-            section.title(),
-            label_style(),
-        );
-        tree.set_name(label, "scene_tree.empty_section");
-        self.build_add_button(tree, inner_x + inner_w - STEP_W, cy, section);
-        cy + ROW_H
-    }
-
+    /// The Lighting row: one row for every light, selectable like an item.
     fn build_lighting_row(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, selected: &[SceneSelection]) -> f32 {
         let is_selected = selected.contains(&SceneSelection::Lighting);
         // The chevron column stays empty, so Lighting lines up with every
@@ -249,11 +252,9 @@ impl ScenePanel {
         cy + ROW_H
     }
 
-    /// One selectable row: `[chevron | icon | name | mark | eye | +]`,
+    /// One selectable row: `[chevron | icon | name | mark | eye]`,
     /// indented by `indent`. A group with items inside carries a chevron that
-    /// folds them and never changes selection. `add` puts a section's + at
-    /// the row's end.
-    #[allow(clippy::too_many_arguments)]
+    /// folds them and never changes selection.
     fn build_item_row(
         &mut self,
         tree: &mut UITree,
@@ -262,7 +263,6 @@ impl ScenePanel {
         vm: &SceneSetupVm,
         item: &SceneItemVm,
         selected: &[SceneSelection],
-        add: Option<TreeSection>,
     ) -> f32 {
         let selection = SceneSelection::Item(item.id.clone());
         let is_selected = selected.contains(&selection);
@@ -294,16 +294,15 @@ impl ScenePanel {
         );
         tree.set_name(icon, "scene_tree.icon");
         let eye = visible_param(item);
-        let add_w = if add.is_some() { STEP_W } else { 0.0 };
         let eye_w = if eye.is_some() { STEP_W } else { 0.0 };
         // A Body inside a Group: the group's own Physics row reads off while
         // this part falls, so the part says what it is.
         let mark_w = if item.body && item.depth > 0 {
-            tree.text_width(BODY_MARK, color::FONT_CAPTION, crate::node::FontWeight::Regular) + 8.0
+            tree.text_width(BODY_MARK, color::FONT_LABEL, crate::node::FontWeight::Regular) + 8.0
         } else {
             0.0
         };
-        let right = inner_x + inner_w - add_w - eye_w;
+        let right = inner_x + inner_w - eye_w;
         let row = tree.add_button_keyed(
             Some(self.content_parent),
             x + STEP_W,
@@ -317,7 +316,7 @@ impl ScenePanel {
         tree.set_name(row, "scene_tree.item");
         self.outliner_row_ids.push((row, selection));
         if mark_w > 0.0 {
-            let mark = tree.add_label(Some(self.content_parent), right - mark_w, cy, mark_w - 4.0, ROW_H, BODY_MARK, mark_style());
+            let mark = tree.add_label(Some(self.content_parent), right - mark_w, cy, mark_w - 4.0, ROW_H, BODY_MARK, mark_style(is_selected));
             tree.set_name(mark, "scene_tree.body_mark");
         }
         if let Some(param) = eye {
@@ -326,9 +325,6 @@ impl ScenePanel {
             tree.set_name(eye_id, format!("scene_setup.object_eye.{}", item.id));
             self.outliner_eye_index.insert(param.clone(), self.outliner_eye_ids.len());
             self.outliner_eye_ids.push((eye_id, param, value));
-        }
-        if let Some(section) = add {
-            self.build_add_button(tree, inner_x + inner_w - STEP_W, cy, section);
         }
         cy + ROW_H
     }
@@ -344,7 +340,8 @@ impl ScenePanel {
             (None, None) => return,
         };
         let style = UIStyle { bg_color: color::SELECTED_LAYER_RING, corner_radius: 1.0, ..UIStyle::default() };
-        let line = tree.add_panel(Some(self.content_parent), inner_x + STEP_W, y - 1.0, (inner_w - STEP_W).max(0.0), 2.0, style);
+        // From the cards' icons to the right edge, clear of the + column.
+        let line = tree.add_panel(Some(self.content_parent), inner_x + STEP_W * 2.0, y - 1.0, (inner_w - STEP_W * 3.0).max(0.0), 2.0, style);
         tree.set_name(line, "scene_tree.drop_line");
     }
 }

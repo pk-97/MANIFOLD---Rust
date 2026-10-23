@@ -152,14 +152,12 @@ impl ScenePanel {
     ) {
         let item = block.item;
         let owned: ahash::AHashSet<&str> = item.parameter_ids.iter().map(String::as_str).collect();
-        // The item's mode switches, read from their base values (D12).
+        // The item's switches, read from their base values (D12): a mode
+        // switch's mode, or an on/off switch's 0 or 1.
         let modes: Vec<(Feature, u32)> = config.rows[..manifest_len]
             .iter()
             .filter(|row| owned.contains(row.id.as_ref()))
-            .filter_map(|row| {
-                let feature = row.spec.scene?.switch.filter(|feature| feature.has_modes())?;
-                Some((feature, row.value.base.round().max(0.0) as u32))
-            })
+            .filter_map(|row| Some((row.spec.scene?.switch?, row.value.base.round().max(0.0) as u32)))
             .collect();
         // (sort key, index into config.rows)
         let mut picked: Vec<((usize, u32), usize)> = Vec::new();
@@ -177,6 +175,12 @@ impl ScenePanel {
             };
             if let Some(feature) = unread
                 && config.rows[i].is_attached()
+            {
+                config.rows[i].spec.inactive_reason = Some(feature.off_reason().into());
+            }
+            // A row under a switch that is off stays, dimmed with the reason.
+            if let Some(Gate::Dim(feature) | Gate::Fold(feature)) = config.rows[i].spec.scene.and_then(|scene| scene.gate)
+                && modes.contains(&(feature, 0))
             {
                 config.rows[i].spec.inactive_reason = Some(feature.off_reason().into());
             }

@@ -17,6 +17,7 @@ struct Params {
     _pad: f32,
 };
 
+// `a.w` is 1 for a line with square ends (`WorldLine::caps`), 0 without.
 struct Line {
     a: vec4<f32>,
     b: vec4<f32>,
@@ -55,9 +56,10 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     }
     let normal = vec2<f32>(-dir.y, dir.x);
     // Two triangles: (a-, a+, b-) and (b-, a+, b+). The quad spans the
-    // segment exactly along it, so a polyline's segments meet without
+    // segment exactly along it, so a curve's pieces meet without
     // overlapping (an overlap would draw a faint line twice), and reaches a
-    // pixel past the edge across it.
+    // pixel past the edge across it. A capped line reaches half its width
+    // past each end too, so two box edges fill their shared corner.
     let at_b = corner == 2u || corner == 3u || corner == 5u;
     let plus = corner == 1u || corner == 4u || corner == 5u;
     var clip = ca;
@@ -71,7 +73,12 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
         side = 1.0;
     }
     let reach = p.half_width + FEATHER;
-    let moved = screen + normal * side * reach;
+    var along = -1.0;
+    if at_b {
+        along = 1.0;
+    }
+    let cap = line.a.w * p.half_width;
+    let moved = screen + normal * side * reach + dir * along * cap;
     let ndc = moved * 2.0 / p.target_size;
     var out: VsOut;
     out.pos = vec4<f32>(ndc * clip.w, clip.z, clip.w);

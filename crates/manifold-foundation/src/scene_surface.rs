@@ -184,6 +184,7 @@ pub enum Feature {
     SourceRole,
     /// The World's render mode: 0 Rendered, 1 Solid, 2 Wireframe, 3 Points.
     RenderMode,
+    RayTracing,
 }
 
 impl Feature {
@@ -202,6 +203,7 @@ impl Feature {
             Self::Background => "The background is off",
             Self::SourceRole => "This source role does not use it",
             Self::RenderMode => "This render mode does not use it",
+            Self::RayTracing => "Ray Tracing is off",
         }
     }
 }
@@ -267,6 +269,8 @@ impl Unit {
     }
 
     /// The unit as a narrow value box shows it, before it drops the unit.
+    /// A unit with no short form a performer would read (radius, beats,
+    /// size) drops straight to the bare number; its full name is on hover.
     pub fn short_suffix(self) -> &'static str {
         match self {
             Self::Metres => "m",
@@ -278,10 +282,10 @@ impl Unit {
             Self::MillionCells => "M",
             Self::Seconds => "s",
             Self::Nanometres => "nm",
-            Self::Beats => "b",
+            Self::Beats => "",
             Self::PerSecond => "/s",
-            Self::SizeMultiple => "×",
-            Self::Radius => "×r",
+            Self::SizeMultiple => "",
+            Self::Radius => "",
         }
     }
 }

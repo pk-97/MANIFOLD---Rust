@@ -57,11 +57,9 @@ pub struct AddEntryVm {
     pub top_level: bool,
     /// The kinds it can sit inside.
     pub holders: Vec<ItemKind>,
-    /// Why it cannot be added right now: drawn disabled with the reason.
+    /// Why it cannot be added right now, for the current selection: drawn
+    /// disabled with the reason.
     pub disabled: Option<String>,
-    /// A copy Modifier: offered only for targets that hold copies
-    /// ([`SceneItemVm::holds_copies`]); elsewhere disabled with this reason.
-    pub needs_copies: Option<String>,
 }
 
 /// The Material an item draws with, as its card shows it inline.
@@ -119,8 +117,6 @@ pub struct SceneItemVm {
     /// Why a manifest row cannot be used right now, by param id: drawn
     /// dimmed with the reason on hover.
     pub row_reasons: Vec<(String, String)>,
-    /// It, or something inside it, has Copies on.
-    pub holds_copies: bool,
     /// Its physics is Body: the tree marks it when it sits inside a Group.
     pub body: bool,
     /// A Swarm drawn as a scene item: that item and its name, linked from
