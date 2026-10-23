@@ -32,6 +32,7 @@ mod mesh;
 pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
 pub mod sdf;
 pub mod collision_shape;
+pub mod contact_mesh;
 use collision_shape::validate_position;
 mod cooked;
 pub use cooked::CookedSolid;

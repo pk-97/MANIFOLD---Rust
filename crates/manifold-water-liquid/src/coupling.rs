@@ -615,8 +615,8 @@ struct Bound {
 fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle, body: Option<&RigidBody>) -> Result<(Arc<PreparedFluidGeometry>, f32), String> {
     let exact = body.and_then(|body| match body.collider.as_deref() {
         Some(Solid::Mesh(mesh)) => Some(TriangleMesh {
-            vertices: mesh.vertices.iter().map(|v| std::array::from_fn(|axis| v[axis] * body.transform.scale[axis])).collect(),
-            triangles: mesh.triangles.clone(),
+            vertices: mesh.exact.vertices.iter().map(|v| std::array::from_fn(|axis| v[axis] * body.transform.scale[axis])).collect(),
+            triangles: mesh.exact.triangles.clone(),
         }),
         _ => None,
     });

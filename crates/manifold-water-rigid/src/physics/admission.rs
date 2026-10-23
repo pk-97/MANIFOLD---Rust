@@ -223,7 +223,7 @@ fn check(body: &RigidBody, passed: Option<&RigidBody>, prototype: bool) -> Resul
                 }
             }
             Solid::Mesh(mesh) => {
-                for vertex in &mesh.vertices {
+                for vertex in &mesh.contact.vertices {
                     validate_position(std::array::from_fn(|axis| vertex[axis] * scale[axis])).map_err(gate("scale_x"))?;
                 }
             }

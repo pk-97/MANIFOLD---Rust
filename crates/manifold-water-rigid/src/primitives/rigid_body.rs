@@ -74,7 +74,7 @@ fn copy_scale(scale: [f32; 3]) -> Transform {
 }
 
 /// The form the solver takes a body in: a Fixed body is a static collider,
-/// the exact mesh; anything that moves is convex hulls.
+/// its contact mesh; anything that moves is convex hulls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Form {
     Hulls,
@@ -192,7 +192,16 @@ impl ShapeWant {
         let key = ShapeKey::new(&shape, scale, None).map_err(|error| error.to_string())?;
         let solid = match self.form {
             Form::Hulls => Solid::Hulls(shape.body_hulls(scale).map_err(|error| error.to_string())?),
-            Form::Mesh => Solid::Mesh(shape.exact_mesh()),
+            Form::Mesh => {
+                let mesh = shape.collider_mesh(scale).map_err(|error| error.to_string())?;
+                eprintln!(
+                    "[physics] collider contact mesh: {} of {} triangles, at most {:.2} mm from the drawn surface",
+                    mesh.contact.triangles.len(),
+                    mesh.exact.triangles.len(),
+                    mesh.error * 1000.0,
+                );
+                Solid::Mesh(mesh)
+            }
         };
         Ok((key, solid))
     }
@@ -212,7 +221,7 @@ enum Geometry {
 manifold_node_engine::primitive! {
  name: RigidBodyNode,
  type_id: "node.rigid_body",
- purpose: "Describe a rigid body's starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Its collision shape comes from its mesh automatically (manifold_physics::collision_shape): a Fixed body is the exact mesh, a moving body convex hulls with detail chosen from its size and triangles. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only.",
+ purpose: "Describe a rigid body's starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Its collision shape comes from its mesh automatically (manifold_physics::collision_shape): a Fixed body is its mesh simplified to within 5 mm of the drawn surface, a moving body convex hulls with detail chosen from its size and triangles. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only.",
  inputs: {
   transform: Transform required,
   source: MeshSource optional,
@@ -261,7 +270,7 @@ ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamTy
 ParamDef { name: Cow::Borrowed("parts"), label: "Parts", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
  ],
  depth_rule: Terminal,
- composition_notes: "One description per body. All bodies that should collide feed the same Physics World. The shape comes from the mesh: wire the object's mesh source into source (one mesh, placed by source_transform) or mesh_k with part_k (a compound body of several meshes, each placed by its part transform, parent frames included); an unwired body reads its mesh file (path and selection), as a shatter piece does. A Fixed body is static and collides as the exact mesh; changing its authored transform teleports it. Moving and Animated bodies collide as convex hulls, detail chosen from size and triangle count, open surfaces given a 0.1% shell. While a new shape is prepared the body keeps its old one; a body with no shape yet stays out of the world until it has one, and the world keeps stepping. The transform's parent frame is folded into the body's world pose. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group. The world's instances carry each copy's pose and the X scale; copy_scale carries the rest of the per-axis scale for the draw (node.scene_object copy_scale, Group space). An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
+ composition_notes: "One description per body. All bodies that should collide feed the same Physics World. The shape comes from the mesh: wire the object's mesh source into source (one mesh, placed by source_transform) or mesh_k with part_k (a compound body of several meshes, each placed by its part transform, parent frames included); an unwired body reads its mesh file (path and selection), as a shatter piece does. A Fixed body is static and collides as its mesh simplified to within 5 mm of the drawn surface; changing its authored transform teleports it. Moving and Animated bodies collide as convex hulls, detail chosen from size and triangle count, open surfaces given a 0.1% shell. While a new shape is prepared the body keeps its old one; a body with no shape yet stays out of the world until it has one, and the world keeps stepping. The transform's parent frame is folded into the body's world pose. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group. The world's instances carry each copy's pose and the X scale; copy_scale carries the rest of the per-axis scale for the draw (node.scene_object copy_scale, Group space). An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Rigid Body", category: Atom },
  summary: "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",
@@ -306,11 +315,8 @@ impl RigidBodyNode {
     fn read_geometry(&mut self, ctx: &EffectNodeContext<'_, '_>, form: Form, scale: [f32; 3]) -> Result<Geometry, Cow<'static, str>> {
         let asked = &mut self.asked;
         asked.form = form;
-        // An exact mesh is installed at the exact scale; only hull detail
-        // follows the size.
-        if form == Form::Mesh {
-            asked.scale_steps = [0; 3];
-        } else if scale.iter().all(|s| s.is_finite() && *s > 0.0) {
+        // Hull detail and a Collider's contact mesh both follow the size.
+        if scale.iter().all(|s| s.is_finite() && *s > 0.0) {
             asked.scale_steps = scale.map(|s| (s.log2() * SCALE_STEPS_PER_OCTAVE).round() as i32);
         }
         asked.path.clear();
@@ -638,7 +644,7 @@ mod tests {
 
         rig.params.insert(Cow::Borrowed("motion"), ParamValue::Enum(0));
         let fixed = rig.settle().collider.expect("static shape");
-        assert!(matches!(*fixed, Solid::Mesh(_)), "a Fixed body is the exact mesh");
+        assert!(matches!(*fixed, Solid::Mesh(_)), "a Fixed body is a collider mesh");
     }
 
     /// A Group set to Body or Collider with no mesh inside, from the start or
