@@ -14,7 +14,9 @@
 //!
 //! Run with one output directory and optional `--preset`, `--width`, `--height`,
 //! `--frames`, `--fps`, `--offline-only`, `--max-seconds`, `--stills-every`,
-//! `--linear`, `--cinematic`, `--supersample` and `--gpu-surface` flags. `--gpu-surface`
+//! `--linear`, `--cinematic`, `--supersample`, `--hold-time` and `--gpu-surface` flags.
+//! `--hold-time` renders every offline frame at the last frame's time, as a stopped
+//! transport does, so nodes that move per frame rather than per second show. `--gpu-surface`
 //! is for presets meshed by the Liquid Surface group (e.g. WaterDamBreakGpu): each
 //! offline frame reads back the GPU mesh, fails on a non-finite vertex or an empty
 //! surface, and reports its live vertices as `vertex_count`. A preset with its own
@@ -98,6 +100,8 @@ struct CaptureOptions {
     /// Record the particle look metrics (GPU_MPM_SOLVER_DESIGN.md section 7
     /// (look gates) A1, A2, A5, A6) from each offline frame's particles.
     look_metrics: bool,
+    /// Every offline frame renders at the last frame's time (a stopped transport).
+    hold_time: bool,
     /// The Water a scene's capture measures, by item id; none for a preset
     /// with one liquid.
     water: Option<String>,
@@ -1028,6 +1032,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         gpu_surface: false,
         dump_mesh: false,
         look_metrics: false,
+        hold_time: false,
         water: None,
         solver: Solver::None,
         frame_node: String::new(),
@@ -1059,6 +1064,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             "--gpu-surface" => options.gpu_surface = true,
             "--dump-mesh" => options.dump_mesh = true,
             "--look-metrics" => options.look_metrics = true,
+            "--hold-time" => options.hold_time = true,
             "--water" => options.water = Some(value("--water")?),
             "--supersample" => {
                 options.supersample = parse_u32(&value("--supersample")?, "--supersample")?
@@ -1076,7 +1082,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     options.output_dir = output_dir.ok_or_else(|| {
         io::Error::other(
-            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface] [--look-metrics] [--dump-mesh] [--water ID]",
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface] [--look-metrics] [--hold-time] [--dump-mesh] [--water ID]",
         )
     })?;
     if options.width == 0
@@ -1252,7 +1258,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     });
     for frame in 1..=options.frames {
         ensure_wall_limit(overall_started, "offline pass", options.max_seconds)?;
-        let authored_time = f64::from(frame) * frame_dt;
+        let authored_time = if options.hold_time { f64::from(options.frames) * frame_dt } else { f64::from(frame) * frame_dt };
         let (timings, mut fluid) = render_output_frame(
             &mut offline_runtime,
             &offline_target,

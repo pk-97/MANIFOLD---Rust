@@ -6,7 +6,13 @@
 //! Each frame: fetch last frame's result where the render's `velocity` says
 //! this pixel was; keep each bilinear history tap only where its stored view
 //! depth matches the depth this surface had last frame (computed from both
-//! cameras, so a moving camera keeps its history); clip the kept history to
+//! cameras, so a moving camera keeps its history) and its stored world normal
+//! is within about 26 degrees of this pixel's (the ray-tracing accumulator's
+//! test; the normal comes from depth by XeGTAO's edge-aware reconstruction).
+//! The render's velocity is per object, so copies, particles and deforming
+//! surfaces reproject from the same pixel; the normal test drops history a
+//! surface that turned or changed shape no longer matches, where its depth
+//! alone still would. Clip the kept history to
 //! the current 3x3 neighbourhood; blend with a 1/n running mean capped at
 //! `frames`.
 //!
@@ -32,12 +38,17 @@ use manifold_node_engine::state_store::OwnerKey;
 use super::ssao_gtao::derive_view_scalars;
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
+const VIEW_NORMAL_COMMON: &str = include_str!("shaders/view_normal_common.wgsl");
 const SHADER: &str = include_str!("shaders/temporal_accumulate.wgsl");
+
+fn shader_source() -> String {
+    format!("{DEPTH_COMMON}\n{VIEW_NORMAL_COMMON}\n{SHADER}")
+}
 
 manifold_node_engine::primitive! {
     name: TemporalAccumulate,
     type_id: "node.temporal_accumulate",
-    purpose: "Reprojected temporal accumulation (Jimenez et al. 2016, GTAO section 5). Fetches last frame's result at uv + (-velocity.x, velocity.y)/2 (`velocity` is the render's NDC motion, now minus previous) with four bilinear taps; a tap is kept only when its stored view depth is within 2% plus the local depth slope of the depth this pixel's surface had from last frame's camera. Kept history is clipped to the current 3x3 neighbourhood's mean ± 1.25 standard deviations, then out = mix(history, in, 1/n) with n = min(history n + 1, `frames`). No usable history gives out = in. Resets on the first frame, a camera cut (Camera.shot), a seek or owner change, a size change and clear_state; never on a geometry change. `depth` is the render's raw reversed-Z depth.",
+    purpose: "Reprojected temporal accumulation (Jimenez et al. 2016, GTAO section 5). Fetches last frame's result at uv + (-velocity.x, velocity.y)/2 (`velocity` is the render's NDC motion, now minus previous) with four bilinear taps; a tap is kept only when its stored view depth is within 2% plus the local depth slope of the depth this pixel's surface had from last frame's camera, and its stored world normal (reconstructed from depth, XeGTAO's edge-aware normal) is within cos 0.9 of this pixel's. Kept history is clipped to the current 3x3 neighbourhood's mean ± 1.25 standard deviations, then out = mix(history, in, 1/n) with n = min(history n + 1, `frames`). No usable history gives out = in. Resets on the first frame, a camera cut (Camera.shot), a seek or owner change, a size change and clear_state; never on a geometry change. `depth` is the render's raw reversed-Z depth.",
     inputs: {
         in: Texture2D required,
         depth: Texture2D required,
@@ -77,6 +88,9 @@ manifold_node_engine::primitive! {
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     prev_depth: [f32; 4],
+    cam_right: [f32; 4],
+    cam_up: [f32; 4],
+    cam_fwd: [f32; 4],
     tan_half_fov: f32,
     aspect: f32,
     near: f32,
@@ -87,7 +101,8 @@ struct Uniforms {
     _pad1: f32,
 }
 
-/// Two ping-pong pairs: colour, and (view depth, frames accumulated).
+/// Two ping-pong pairs: colour, and (view depth, frames accumulated,
+/// octahedral world normal).
 struct HistoryTextures {
     width: u32,
     height: u32,
@@ -154,7 +169,7 @@ fn history_texture(device: &manifold_gpu::GpuDevice, width: u32, height: u32, la
 impl Primitive for TemporalAccumulate {
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         self.pipeline.get_or_insert_with(|| {
-            device.create_compute_pipeline(&format!("{DEPTH_COMMON}\n{SHADER}"), "cs_main", "node.temporal_accumulate")
+            device.create_compute_pipeline(&shader_source(), "cs_main", "node.temporal_accumulate")
         });
     }
 
@@ -182,8 +197,12 @@ impl Primitive for TemporalAccumulate {
         let camera = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far] = derive_view_scalars(&camera);
         let (cold, prev_depth) = self.history.begin_frame(ctx.owner_key, &ctx.time, &camera, (w, h));
+        let basis = |v: [f32; 3]| [v[0], v[1], v[2], 0.0];
         let uniforms = Uniforms {
             prev_depth,
+            cam_right: basis(camera.right),
+            cam_up: basis(camera.up),
+            cam_fwd: basis(camera.fwd),
             tan_half_fov: (fov_y * 0.5).tan(),
             aspect: w as f32 / h as f32,
             near,
@@ -302,7 +321,7 @@ mod gpu_tests {
     use manifold_gpu::{GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
-    use super::{DEPTH_COMMON, SHADER, Uniforms, history_texture};
+    use super::{Uniforms, history_texture, shader_source};
 
     const W: u32 = 8;
     const H: u32 = 8;
@@ -348,7 +367,7 @@ mod gpu_tests {
     impl Rig {
         fn new() -> Self {
             let device = manifold_gpu::testkit::test_device();
-            let pipeline = device.create_compute_pipeline(&format!("{DEPTH_COMMON}\n{SHADER}"), "cs_main", "temporal-accumulate");
+            let pipeline = device.create_compute_pipeline(&shader_source(), "cs_main", "temporal-accumulate");
             let velocity = upload(&device, |_, _| [0.0; 4]);
             let color = [0, 1].map(|_| history_texture(&device, W, H, "history-color"));
             let meta = [0, 1].map(|_| history_texture(&device, W, H, "history-meta"));
@@ -360,6 +379,9 @@ mod gpu_tests {
         fn step(&mut self, input: &GpuTexture, depth: &GpuTexture) -> Vec<f32> {
             let uniforms = Uniforms {
                 prev_depth: [0.0, 0.0, 1.0, 0.0],
+                cam_right: [1.0, 0.0, 0.0, 0.0],
+                cam_up: [0.0, 1.0, 0.0, 0.0],
+                cam_fwd: [0.0, 0.0, 1.0, 0.0],
                 tan_half_fov: 0.5,
                 aspect: 1.0,
                 near: 0.05,
@@ -430,6 +452,30 @@ mod gpu_tests {
                 } else if x > W / 2 {
                     assert!((v - 0.5).abs() < 0.12, "({x},{y}) unchanged surface keeps its average: {v}");
                 }
+            }
+        }
+    }
+
+    /// A wall that turns about 45 degrees around the middle of the picture:
+    /// the two middle columns keep their depth within the slope tolerance,
+    /// so only the normal test can tell the history belongs to a surface
+    /// facing another way. A deforming mesh or a spinning copy does this
+    /// under per-object velocity.
+    #[test]
+    fn a_surface_that_turns_in_place_drops_its_history() {
+        let mut rig = Rig::new();
+        let flat = upload(&rig.device, |_, _| [0.01; 4]);
+        let frames = [checker(&rig.device, 0), checker(&rig.device, 1)];
+        for i in 0..40 {
+            rig.step(&frames[i % 2], &flat);
+        }
+        let turned = upload(&rig.device, |x, _| [0.01 - 0.00114 * (x as f32 - 3.5); 4]);
+        let out = rig.step(&frames[0], &turned);
+        for y in 1..H - 1 {
+            for x in [W / 2 - 1, W / 2] {
+                let v = out[(y * W + x) as usize];
+                let input = if (x + y) % 2 == 0 { 0.2 } else { 0.8 };
+                assert!((v - input).abs() < 1e-3, "({x},{y}) a turned surface must restart from this frame: {v} vs {input}");
             }
         }
     }

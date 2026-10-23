@@ -16,9 +16,9 @@
 //     parallel to an edge.
 //   - The slice angle and the step offset come from XeGTAO's spatio-temporal
 //     noise: a Hilbert-curve index over a 64x64 tile walked by the R2
-//     sequence. With `noise_per_frame` on, `noise_frame` (288 per frame,
-//     from the frame time) moves the pattern every frame for a temporal
-//     filter to average. Off, the pattern holds still.
+//     sequence. With `noise_per_frame` on, `noise_frame` (288 per run of
+//     the node) moves the pattern every frame for a temporal filter to
+//     average. Off, the pattern holds still.
 //
 // The Hilbert index, the R2 noise and the falloff are ported from XeGTAO
 // (Intel, MIT license; see THIRD_PARTY_NOTICES.md).
@@ -185,20 +185,18 @@ fn body(
 
     let p_c = gtao_pos(depth, c, dims_i, tan_half_fov, aspect, near, far, hf, relief);
 
-    // Normal from ±1-texel central differences of the reconstructed positions.
-    let p_xp = gtao_pos(depth, c + vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
-    let p_xm = gtao_pos(depth, c - vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
-    let p_yp = gtao_pos(depth, c + vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
-    let p_ym = gtao_pos(depth, c - vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
-    let ddx = p_xp - p_xm;
-    let ddy = p_yp - p_ym;
-    var normal = cross(ddx, ddy);
-    let normal_len = length(normal);
-    if normal_len > 1e-8 {
-        normal = normal / normal_len;
-    } else {
-        normal = vec3<f32>(0.0, 0.0, -1.0);
+    // Edge-aware normal (view_normal_common.wgsl), so pixels beside a
+    // silhouette keep their own surface's normal. A height field has no view
+    // depth to weigh edges by, so all four corners count.
+    let p_l = gtao_pos(depth, c - vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_r = gtao_pos(depth, c + vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_t = gtao_pos(depth, c - vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_b = gtao_pos(depth, c + vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    var edges = vec4<f32>(1.0);
+    if hf < 0.5 {
+        edges = view_normal_edges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
     }
+    let normal = view_normal(edges, p_c, p_l, p_r, p_t, p_b);
 
     // Heightfield mode: fixed ortho view direction and a uv-unit radius.
     var view_vec = vec3<f32>(0.0, 0.0, -1.0);

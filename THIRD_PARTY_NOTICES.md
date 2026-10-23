@@ -116,7 +116,7 @@ SOFTWARE.
 
 Source: XeGTAO by Intel Corporation (github.com/GameTechDev/XeGTAO), MIT license.
 
-Ported from it: in `node.ssao_gtao` (`crates/manifold-nodes-image/src/node_graph/primitives/ssao_gtao.rs` and `shaders/ssao_gtao_body.wgsl`), from `XeGTAO.hlsli` and `XeGTAO.h`: the horizon falloff toward the open horizon over the outer 61.5% of the reach, the 1.457 radius multiplier, the 1.3-pixel minimum tap offset, and the spatio-temporal noise (the 64x64 Hilbert index walked by the R2 sequence, 288 indices per frame).
+Ported from it: in `node.ssao_gtao` (`crates/manifold-nodes-image/src/node_graph/primitives/ssao_gtao.rs` and `shaders/ssao_gtao_body.wgsl`), from `XeGTAO.hlsli` and `XeGTAO.h`: the horizon falloff toward the open horizon over the outer 61.5% of the reach, the 1.457 radius multiplier, the 1.3-pixel minimum tap offset, and the spatio-temporal noise (the 64x64 Hilbert index walked by the R2 sequence, 288 indices per frame). In `crates/manifold-nodes-image/src/node_graph/primitives/shaders/view_normal_common.wgsl`, used by `node.ssao_gtao` and `node.temporal_accumulate`, from `XeGTAO.hlsli`: the edge-aware view-space normal (`XeGTAO_CalculateEdges` and `XeGTAO_CalculateNormal`).
 
 ### License
 

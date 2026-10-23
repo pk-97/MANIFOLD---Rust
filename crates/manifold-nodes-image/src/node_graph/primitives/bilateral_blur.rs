@@ -1,33 +1,28 @@
 //! `node.bilateral_blur` — depth-guided (bilateral) separable blur pair
-//! between an AO atom and its mix (`docs/CINEMATIC_POST_DESIGN.md` D8). The
-//! observed defect this closes: `node.ssao_from_depth`'s 16 hash-rotated
-//! samples per pixel ship raw, wired straight into the compositing mix, with
-//! no smoothing pass — per-pixel noise by construction, and every production
-//! AO implementation (SSAO or GTAO) follows the sampler with an edge-aware
-//! blur. General-purpose by design (any texture + depth guide, not AO-only)
-//! per the section 2.5 audit (2026-07-13, 214 primitives surveyed) that found no
-//! edge-aware/bilateral blur in the catalog.
+//! between an AO atom and its mix (`docs/CINEMATIC_POST_DESIGN.md` D8): every
+//! production AO follows its sampler with an edge-aware blur. General-purpose
+//! (any texture with a depth guide); the section 2.5 audit of 2026-07-13
+//! found no edge-aware blur in the catalog.
 //!
-//! Fixed 9 taps at 1-texel spacing along `axis`, weighted by the SAME
-//! sigma~=2 gaussian constants every other 9-tap kernel in this codebase
-//! uses (`VBW_K9` / `SG_K9_*`) times a Gaussian falloff on the linearized-
-//! depth difference from the center texel: `weight_j = K9_j *
-//! exp(-(dz_j/depth_sigma)^2)`. Renormalized by the actual weight sum used.
-//! Alpha is a pure center pass-through — this atom never blurs an alpha
-//! channel it doesn't own.
+//! Fixed 9 taps at 1-texel spacing along `axis`, weighted by the sigma~=2
+//! gaussian constants every other 9-tap kernel here uses (`VBW_K9` /
+//! `SG_K9_*`) times a Gaussian falloff on depth: `weight_j = K9_j *
+//! exp(-(dz_j/depth_sigma)^2)`, renormalized by the weight sum. `dz_j` is tap
+//! j's view depth minus the depth the centre's surface has there: the
+//! centre's raw depth stepped along its gentler one-texel raw slope. Raw
+//! reversed-Z depth is affine in screen space on a plane, so ground seen at
+//! a grazing angle predicts its neighbours exactly and blurs in both axes; an
+//! absolute depth test rejected the rows of far ground and left horizontal
+//! streaks. Alpha is the centre's, passed through.
 //!
-//! `in` is Gather (stencil-fetch — the body samples it via `fetch_in(uv)`).
-//! `depth` is GatherTexel (raw [0,1] depth, integer `textureLoad` + manual
-//! ClampToEdge, no sampler — same convention as `node.ssao_from_depth`'s
-//! own depth reads, texel-exact so the CPU reference replicates it exactly).
-//! `camera` is consumed ENTIRELY via the two `near`/`far` derived uniforms
-//! (the D7/P0 mechanism `node.coc_from_depth` established) — never a GPU
-//! binding, which is what lets this atom fuse with a pointwise neighbour
-//! instead of being a permanent boundary.
+//! `in` is Gather (stencil fetch through `fetch_in(uv)`); `depth` is
+//! GatherTexel (raw [0,1] depth, integer `textureLoad`, manual ClampToEdge).
+//! `camera` reaches the kernel only through the `near`/`far` derived
+//! uniforms, so the atom can fuse with a pointwise neighbour.
 //!
-//! `depth_sigma` is a plain param (NOT a card, D8 — denoise is quality
-//! plumbing, not a performer knob). Pair an H pass with a V pass for a full
-//! 2D edge-aware blur (same axis-pair convention as `node.gaussian_blur`).
+//! `depth_sigma` is a plain param, not a card (D8: denoise is plumbing, not a
+//! performer knob). Pair an H pass with a V pass, as `node.gaussian_blur`
+//! does.
 
 use std::borrow::Cow;
 
@@ -63,7 +58,7 @@ struct BilateralBlurUniforms {
 manifold_node_engine::primitive! {
     name: BilateralBlur,
     type_id: "node.bilateral_blur",
-    purpose: "Depth-guided (bilateral) single-axis blur: fixed 9 taps at 1-texel spacing along `axis`, weight_j = K9_j * exp(-(dz_j/depth_sigma)^2) where K9_j are the same sigma~=2 gaussian constants used by every other 9-tap kernel in this codebase and dz_j is the linearized-depth difference from the center texel, renormalized by the weight sum actually used. Pair a Horizontal pass with a Vertical pass for a full 2D edge-aware blur that smooths noise (e.g. raw SSAO/GTAO occlusion) without bleeding across depth discontinuities (silhouette edges stay sharp). Alpha is a pure center pass-through. `camera` is read entirely via near/far derived uniforms for `linearize_depth` — never a GPU binding.",
+    purpose: "Depth-guided (bilateral) single-axis blur: fixed 9 taps at 1-texel spacing along `axis`, weight_j = K9_j * exp(-(dz_j/depth_sigma)^2) where K9_j are the same sigma~=2 gaussian constants used by every other 9-tap kernel in this codebase and dz_j is tap j's linearized depth minus the depth the center's surface has at tap j (the center's raw depth stepped j texels along its gentler one-texel raw slope, exact on any plane however steeply it recedes), renormalized by the weight sum actually used. Pair a Horizontal pass with a Vertical pass for a full 2D edge-aware blur that smooths noise (e.g. raw SSAO/GTAO occlusion) without bleeding across depth discontinuities (silhouette edges stay sharp). Alpha is a pure center pass-through. `camera` is read entirely via near/far derived uniforms for `linearize_depth` — never a GPU binding.",
     inputs: {
         in: Texture2D required,
         depth: Texture2D required,
@@ -91,7 +86,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Inherit,
-    composition_notes: "Pair an H pass (axis=Horizontal) with a V pass (axis=Vertical) for a 2D edge-aware blur — same axis-pair convention as node.gaussian_blur / node.variable_blur. `depth_sigma` is in the SAME world units `linearize_depth` returns (view-space meters, following the Camera's near/far) — smaller values hug depth edges tighter (less cross-edge bleed, noisier flat regions); larger values approach a plain 9-tap gaussian (D8's I7 invariant: on a perfectly uniform depth plane this atom is byte-identical to the plain K9 gaussian, since every dz_j collapses to 0 and every weight reduces to its K9_j term). `depth` expects render_scene's raw [0,1] `depth` output (not pre-linearized), same contract as node.coc_from_depth / node.ssao_from_depth.",
+    composition_notes: "Pair an H pass (axis=Horizontal) with a V pass (axis=Vertical) for a 2D edge-aware blur — same axis-pair convention as node.gaussian_blur / node.variable_blur. `depth_sigma` is in the SAME world units `linearize_depth` returns (view-space meters, following the Camera's near/far) — smaller values hug depth edges tighter (less cross-edge bleed, noisier flat regions); larger values approach a plain 9-tap gaussian (D8's I7 invariant: on any plane, uniform or receding, this atom equals the plain K9 gaussian, since every dz_j collapses to 0 and every weight reduces to its K9_j term). `depth` expects render_scene's raw [0,1] `depth` output (not pre-linearized), same contract as node.coc_from_depth / node.ssao_from_depth.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "Bilateral Blur", category: Atom },
     summary: "A depth-guided blur that smooths noise without bleeding across depth edges — the standard denoise pass after any per-pixel noisy sampler (ambient occlusion, dithered effects) that needs to stay sharp at silhouettes.",
@@ -201,13 +196,42 @@ mod tests {
         assert_eq!(near, 0.2);
         assert_eq!(far, 250.0);
     }
+
+    /// Ground 20 to 26 m out, receding 0.15 to 0.3 m per row, as far ground
+    /// does at a grazing angle. The vertical pass must blur it like the plain
+    /// gaussian; testing absolute depth against a 0.1 m sigma rejected the
+    /// rows and left horizontal streaks.
+    #[test]
+    fn receding_ground_blurs_across_rows() {
+        use super::cpu_reference::{bilateral_texel, Fixture};
+        const K9: [f32; 5] = [0.16501, 0.15019, 0.11325, 0.07076, 0.03664];
+        let (w, h) = (3i32, 32i32);
+        let depth: Vec<f32> = (0..w * h).map(|i| 0.0025 - (i / w) as f32 * 1.9e-5).collect();
+        let color: Vec<[f32; 4]> = (0..w * h).map(|i| {
+            let v = if (i / w) % 3 == 0 { 0.3 } else { 0.9 };
+            [v, v, v, 1.0]
+        }).collect();
+        let fx = Fixture { w, h, depth: &depth, color: &color };
+        let (near, far) = (0.05, 200.0);
+        for y in 8..h - 8 {
+            let got = bilateral_texel(&fx, 1, y, 1, 0.1, near, far)[0];
+            let (mut sum, mut wsum) = (0.0, 0.0);
+            for j in -4i32..=4 {
+                let k = K9[j.unsigned_abs() as usize];
+                sum += k * color[((y + j) * w + 1) as usize][0];
+                wsum += k;
+            }
+            let gaussian = sum / wsum;
+            assert!((got - gaussian).abs() < 1e-3, "row {y}: {got} vs plain gaussian {gaussian}");
+        }
+    }
 }
 
 /// **CPU reference** (I1-pattern, `docs/CINEMATIC_POST_DESIGN.md` I7's third
 /// named check: "the I1-pattern CPU-reference parity test") — a plain-Rust
 /// implementation of the committed D8 formula, independent of the WGSL body
 /// (not sharing source). Used by the GPU-vs-CPU parity gpu_test below.
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(test)]
 pub(crate) mod cpu_reference {
     use manifold_node_engine::scene::camera::linearize_depth;
 
@@ -255,7 +279,10 @@ pub(crate) mod cpu_reference {
         let (dxi, dyi) = if axis == 0 { (1, 0) } else { (0, 1) };
         let sigma = depth_sigma.max(1e-4);
         let inv_sigma = 1.0 / sigma;
-        let z_center = linearize_depth(fx.depth_at(cx, cy), near, far);
+        let raw_center = fx.depth_at(cx, cy);
+        let ahead = fx.depth_at(cx + dxi, cy + dyi) - raw_center;
+        let behind = raw_center - fx.depth_at(cx - dxi, cy - dyi);
+        let raw_slope = if ahead.abs() < behind.abs() { ahead } else { behind };
         let center = fx.color_at(cx, cy);
 
         let mut acc = [center[0] * K9[0], center[1] * K9[0], center[2] * K9[0]];
@@ -268,7 +295,8 @@ pub(crate) mod cpu_reference {
                 let cxx = cx + dxi * off;
                 let cyy = cy + dyi * off;
                 let zj = linearize_depth(fx.depth_at(cxx, cyy), near, far);
-                let dz = (zj - z_center) * inv_sigma;
+                let z_surface = linearize_depth((raw_center + raw_slope * off as f32).max(0.0), near, far);
+                let dz = (zj - z_surface) * inv_sigma;
                 let w = kj * (-(dz * dz)).exp();
                 let c = fx.color_at(cxx, cyy);
                 acc[0] += c[0] * w;
