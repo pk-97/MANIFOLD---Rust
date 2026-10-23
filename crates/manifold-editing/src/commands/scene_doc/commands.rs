@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 
 use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, SceneDoc, SceneEditError, split_param_id};
+use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, SceneDoc, SceneEditError};
 use manifold_core::{GraphTarget, LayerId};
 
-use super::{Before, apply, restore, scene_instance};
+use super::{Before, ParamSlice, apply, restore, scene_instance};
 use crate::command::Command;
 
 /// One applied document edit: what to restore, or why it was refused.
@@ -101,7 +101,8 @@ macro_rules! scene_command_common {
 
 /// Add an item of `kind` under `parent` at `index`, with id `id`. With a
 /// `source` it duplicates that item and its subtree instead: fresh ids, the
-/// copy's references pointing inside the copy, and every param value copied.
+/// copy's references pointing inside the copy, and every row copied with its
+/// value and modulators (`ParamSlice::paste_onto`).
 #[derive(Debug)]
 pub struct AddSceneItemCommand {
     layer: LayerId,
@@ -112,9 +113,9 @@ pub struct AddSceneItemCommand {
     id: ItemId,
     /// The item as first added, so a redo brings back the same ids.
     prepared: Option<(Item, BTreeMap<ItemId, ItemId>)>,
-    /// Param values written once the item is in: `(param id, value, base)`.
-    /// A paste carries its copied items' values this way.
-    values: Vec<(String, f32, f32)>,
+    /// Rows put onto their copies once the item is in, with the map from
+    /// each copied item to its copy. A paste carries its rows this way.
+    rows: Option<(ParamSlice, BTreeMap<ItemId, ItemId>)>,
     step: Step,
 }
 
@@ -125,13 +126,13 @@ impl AddSceneItemCommand {
     pub fn with_subtree(layer: LayerId, parent: Option<ItemId>, index: usize, item: Item) -> Self {
         let kind = item.kind();
         let id = item.id.clone();
-        Self { layer, kind, parent, index, source: None, id, prepared: Some((item, BTreeMap::new())), values: Vec::new(), step: Step::default() }
+        Self { layer, kind, parent, index, source: None, id, prepared: Some((item, BTreeMap::new())), rows: None, step: Step::default() }
     }
 
-    /// Also write these param values `(param id, value, base)` once the item
-    /// is in, in the same undo step.
-    pub fn with_values(mut self, values: Vec<(String, f32, f32)>) -> Self {
-        self.values = values;
+    /// Also put `rows` onto the copies `map` names once the item is in, in
+    /// the same undo step.
+    pub fn with_rows(mut self, rows: ParamSlice, map: BTreeMap<ItemId, ItemId>) -> Self {
+        self.rows = Some((rows, map));
         self
     }
 
@@ -143,7 +144,7 @@ impl AddSceneItemCommand {
         source: Option<ItemId>,
         id: ItemId,
     ) -> Self {
-        Self { layer, kind, parent, index, source, id, prepared: None, values: Vec::new(), step: Step::default() }
+        Self { layer, kind, parent, index, source, id, prepared: None, rows: None, step: Step::default() }
     }
 
     fn prepare(&self, doc: &SceneDoc) -> Result<(Item, BTreeMap<ItemId, ItemId>), SceneEditError> {
@@ -179,12 +180,20 @@ impl SceneEdit for AddSceneItemCommand {
         doc.insert(self.parent.as_ref(), self.index, item)
     }
 
-    // The new item's params leave with it on undo, so nothing is noted.
+    // The new item's params leave with their modulators on undo, so nothing
+    // is noted.
     fn after_install(&mut self, project: &mut Project) -> Vec<(String, f32, f32)> {
-        if let Some((_, map)) = &self.prepared {
-            copy_values(project, &self.layer, map);
+        let Ok(instance) = scene_instance(project, &self.layer) else {
+            return Vec::new();
+        };
+        if let Some((_, map)) = &self.prepared
+            && !map.is_empty()
+        {
+            ParamSlice::of_items(instance, |item| map.contains_key(item)).paste_onto(instance, map);
         }
-        write_values(project, &self.layer, &self.values);
+        if let Some((rows, map)) = &self.rows {
+            rows.paste_onto(instance, map);
+        }
         Vec::new()
     }
 }
@@ -195,41 +204,6 @@ impl Command for AddSceneItemCommand {
     }
 
     scene_command_common!();
-}
-
-/// A duplicate starts with its source's values.
-fn copy_values(project: &mut Project, layer: &LayerId, map: &BTreeMap<ItemId, ItemId>) {
-    let Ok(instance) = scene_instance(project, layer) else {
-        return;
-    };
-    let copies: Vec<(String, f32, f32)> = instance
-        .params
-        .iter()
-        .filter_map(|p| {
-            let (item, property) = split_param_id(p.id())?;
-            let copy = map.get(item)?;
-            Some((manifold_core::scene_doc::param_id(copy, property), p.value, p.base))
-        })
-        .collect();
-    for (id, value, base) in copies {
-        if let Some(p) = instance.params.get_mut(&id) {
-            p.value = value;
-            p.base = base;
-        }
-    }
-}
-
-/// Write `values` `(param id, value, base)` into the layer's params that hold them.
-fn write_values(project: &mut Project, layer: &LayerId, values: &[(String, f32, f32)]) {
-    let Ok(instance) = scene_instance(project, layer) else {
-        return;
-    };
-    for (id, value, base) in values {
-        if let Some(p) = instance.params.get_mut(id) {
-            p.value = *value;
-            p.base = *base;
-        }
-    }
 }
 
 /// Remove an item and its subtree. References to it fall back to their
