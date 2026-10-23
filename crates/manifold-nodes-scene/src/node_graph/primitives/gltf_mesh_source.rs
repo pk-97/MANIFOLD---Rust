@@ -692,15 +692,19 @@ impl Primitive for GltfMeshSource {
         if !self.uploaded {
             let n = self.cached_verts.len();
             if n > capacity as usize {
-                // Drawing a cut-off mesh would silently drop triangles.
-                let reason = format!("mesh has {n} vertices but its buffer holds {capacity}");
-                log::error!("node.gltf_mesh_source: {reason}");
-                ctx.error(reason.clone());
-                self.load_error = Some(reason);
-                self.cached_verts = Vec::new();
+                // Drawing a cut-off mesh would silently drop triangles. The
+                // parsed mesh is kept: once the file's facts arrive, the
+                // recompile sizes the buffer from them and the mesh draws.
+                if self.load_error.is_none() {
+                    let reason = format!("mesh has {n} vertices but its buffer holds {capacity}");
+                    log::error!("node.gltf_mesh_source: {reason}");
+                    ctx.error(reason.clone());
+                    self.load_error = Some(reason);
+                }
                 ctx.mark_outputs_pending();
                 return;
             }
+            self.load_error = None;
             let bytes = &self.cached_verts[..n];
             let len_bytes = (n * std::mem::size_of::<MeshVertex>()) as u64;
             let device = ctx.gpu_encoder().device;
@@ -1193,7 +1197,9 @@ mod gpu_tests {
     use manifold_gpu::testkit::TestDevice;
     use manifold_core::{Beats, Seconds};
 
-    const CAPACITY: u32 = 20_000;
+    // The node's own default Max Capacity, as a hand-built graph gets it. A
+    // buffer smaller than the mesh refuses it rather than cutting it short.
+    const CAPACITY: u32 = 200_000;
 
     fn frame_time() -> FrameTime {
         FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
@@ -1289,7 +1295,7 @@ mod gpu_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("gltf_mesh_source: parse never settled");
+        panic!("gltf_mesh_source: parse never settled ({:?})", prim.load_error);
     }
 
     fn make_buffer_backend(device: &TestDevice) -> (MetalBackend, ResourceId, Slot) {

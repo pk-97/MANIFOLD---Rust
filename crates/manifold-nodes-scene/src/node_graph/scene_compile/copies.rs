@@ -91,13 +91,15 @@ pub(crate) fn add_part(b: &mut Builder<'_>, body: u32, mesh: u32, transform: u32
 
 /// Make `object` draw `body`'s copies.
 pub(crate) fn draw_instances(b: &mut Builder<'_>, body: u32, object: u32, group_space: bool) {
-    if let Some(&emitter) = b.swarm_frames.get(&body) {
+    if let Some(&(emitter, live)) = b.swarm_frames.get(&body) {
         // A swarm's particles live in its emitter's frame.
         b.wire(body, "copies", object, "instances");
         b.wire(emitter, "transform", object, "parent_transform");
-        // Nested copies say how many of their copies are live.
+        // Only the live particles draw: Count, or the nest's live product.
         if b.nests.contains_key(&body) {
             b.wire(body, "count", object, "instance_count");
+        } else {
+            b.wire(live, "out", object, "instance_count");
         }
     } else {
         b.wire(body, "instances", object, "instances");

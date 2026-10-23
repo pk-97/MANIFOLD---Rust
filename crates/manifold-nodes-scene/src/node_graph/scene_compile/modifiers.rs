@@ -31,9 +31,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::physics_members::BODY_TYPE_ID;
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc, param_id};
+use manifold_core::scene_doc::{
+    Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, PhysicsSetting, SceneDoc, param_id,
+};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
-use manifold_core::scene_schema::{acts_on_copies, modifier_type};
+use manifold_core::scene_schema::{acts_on_copies, modifier_type, shatter_parts};
 use manifold_node_engine::load::expand::TargetPlacement;
 
 use super::builder::{Builder, Drawn, FramePlan, SCENE};
@@ -55,16 +57,16 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
     doc.walk(|item, ancestors| {
         lineage.insert(item.id.clone(), ancestors.iter().map(|above| above.id.clone()).collect());
     });
-    let mut shattered = BTreeSet::new();
+
     for item in doc.items.iter().filter(|item| item.kind() == ItemKind::Modifier) {
         let ItemFields::Modifier(card) = &item.fields else {
             continue;
         };
         match card.modifier {
-            // The corridor is the first instance stage (`scene_loop.rs`).
+            // The corridor has its own emitter (`scene_loop.rs`).
             ModifierType::SceneLoop => {}
             ModifierType::SceneMirror => super::scene_mirror::emit(b, item, card)?,
-            _ => emit(b, item, card, &lineage, &mut shattered)?,
+            _ => emit(b, item, card, &lineage)?,
         }
     }
     Ok(())
@@ -107,7 +109,6 @@ fn emit(
     item: &Item,
     card: &ModifierFields,
     lineage: &BTreeMap<ItemId, Vec<ItemId>>,
-    shattered: &mut BTreeSet<u32>,
 ) -> Result<(), String> {
     let entry = modifier_type(card.modifier);
     let lookup = |param: &str| entry.rows.iter().find(|row| row.property == param);
@@ -116,7 +117,7 @@ fn emit(
     let mut pieces = card.pieces.clamp(2, MAX_PIECES);
     if card.modifier == ModifierType::Shatter {
         for frame in &mut frames {
-            frame.members = shatterable(b, &frame.members, shattered);
+            frame.members = shatterable(b, &item.id, &frame.members, lineage);
             // Every material part of a body becomes at least one piece.
             for parts in bodies(b, &frame.members).values() {
                 pieces = pieces.max(*parts as u32);
@@ -229,24 +230,34 @@ fn body_of(b: &Builder<'_>, drawn: &Drawn) -> Option<u32> {
     }
 }
 
-/// The parts of `members` Shatter can break: posed by a Body no earlier
-/// Shatter card breaks, drawing an undeformed mesh (a file's, a built-in
-/// shape's or a curve solid's; the load pass cuts the pieces).
-fn shatterable(b: &Builder<'_>, members: &[Drawn], shattered: &mut BTreeSet<u32>) -> Vec<Drawn> {
-    let kept: Vec<Drawn> = members
+/// The parts of `members` the Shatter card `shatter` breaks: the parts
+/// [`shatter_parts`] keeps of the Body around each, which is what the
+/// Targets menu reads, posed by that body and drawing a mesh with a rest
+/// pose (the load pass cuts the pieces).
+fn shatterable(b: &Builder<'_>, shatter: &ItemId, members: &[Drawn], lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Vec<Drawn> {
+    let doc = b.doc;
+    let mut breaks: BTreeMap<&ItemId, Vec<ItemId>> = BTreeMap::new();
+    members
         .iter()
-        .filter(|drawn| !b.deformed.contains(&drawn.item))
-        .filter(|drawn| body_of(b, drawn).is_some_and(|body| !shattered.contains(&body)))
+        .filter(|drawn| {
+            let Some(body) = body_item(doc, &drawn.item, lineage) else {
+                return false;
+            };
+            let parts = breaks.entry(&body.id).or_insert_with(|| shatter_parts(doc, shatter, body).unwrap_or_default());
+            parts.contains(&drawn.item) && body_of(b, drawn).is_some()
+        })
         .cloned()
-        .collect();
-    // A body whose parts outnumber the most pieces stays whole.
-    let counts = bodies(b, &kept);
-    let kept: Vec<Drawn> = kept
-        .into_iter()
-        .filter(|drawn| body_of(b, drawn).is_some_and(|body| counts.get(&body).is_some_and(|parts| *parts <= MAX_PIECES as usize)))
-        .collect();
-    shattered.extend(kept.iter().filter_map(|drawn| body_of(b, drawn)));
-    kept
+        .collect()
+}
+
+/// The Body item `item` belongs to: itself or the group around it whose
+/// Physics is Body.
+fn body_item<'d>(doc: &'d SceneDoc, item: &ItemId, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Option<&'d Item> {
+    let above = lineage.get(item).map_or(&[][..], Vec::as_slice);
+    std::iter::once(item)
+        .chain(above.iter().rev())
+        .filter_map(|id| doc.find(id))
+        .find(|found| found.fields.physics() == PhysicsSetting::Body)
 }
 
 /// How many parts of `members` each body poses.

@@ -80,8 +80,10 @@ impl ModelStore {
 }
 
 /// Put `path`'s facts on every scene document that names the file and lacks
-/// them, recompiling each; with `layer`, on that layer's document even
-/// before it names the file, so an import about to add it compiles once.
+/// these facts, recompiling each: a fresh read (a re-import, a Model File
+/// swap, a project open) replaces an older one. With `layer`, on that
+/// layer's document even before it names the file, so an import about to
+/// add it compiles once.
 /// Both threads run it, as one project write.
 pub(crate) fn attach(project: &mut Project, layer: Option<&LayerId>, path: &str, facts: &ModelFacts) {
     for host in &mut project.timeline.layers {
@@ -89,7 +91,7 @@ pub(crate) fn attach(project: &mut Project, layer: Option<&LayerId>, path: &str,
         let Some(inst) = host.gen_params_mut() else {
             continue;
         };
-        let Some(doc) = inst.scene.as_ref().filter(|doc| !doc.models.contains(path)) else {
+        let Some(doc) = inst.scene.as_ref().filter(|doc| doc.models.get(path) != Some(facts)) else {
             continue;
         };
         let mut names = false;
@@ -112,7 +114,7 @@ pub(crate) fn attach(project: &mut Project, layer: Option<&LayerId>, path: &str,
 pub(crate) fn read_on_worker(paths: Vec<String>, tx: crossbeam_channel::Sender<crate::import_worker::ImportProgress>) {
     let spawned = std::thread::Builder::new().name("manifold-model-facts".into()).spawn(move || {
         for path in paths {
-            let read = manifold_nodes_scene::node_graph::gltf_import::read_facts(std::path::Path::new(&path));
+            let read = manifold_nodes_scene::node_graph::gltf_import::read_file_facts(std::path::Path::new(&path));
             if tx.send(crate::import_worker::ImportProgress::Facts { path, read }).is_err() {
                 return;
             }
@@ -167,6 +169,12 @@ mod tests {
         assert_eq!(sweep.attach, [("a.glb".to_owned(), facts.clone())]);
         attach(&mut project, None, "a.glb", &facts);
         assert!(doc_has(&project, "a.glb"));
+
+        // A re-import reads the file again, and that read replaces the old.
+        let fresh = ModelFacts::new(());
+        attach(&mut project, None, "a.glb", &fresh);
+        let doc = project.timeline.layers[0].gen_params().and_then(|inst| inst.scene.as_ref()).expect("a scene");
+        assert_eq!(doc.models.get("a.glb"), Some(&fresh), "the fresh read wins");
     }
 
     /// An import's facts go on its layer before the file is added, so the

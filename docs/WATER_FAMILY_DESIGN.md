@@ -231,7 +231,7 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
   `water_family_visibility_round_trip`, `no_bespoke_row_infra`; negative scan.
   `scripts/run_ui_flows.py --touched` accounts for every selected flow.
 - **Demo/gesture:** L3,
-  `cargo xtask ui-snap scene-setup --script scripts/ui-flows/water-family-preset.json`:
+  `cargo xtask ui-snap scene-setup --script water-family-preset.json` (deleted):
   load Dam Break, Add Water, undo/redo, select Water then Foam, edit Size;
   assert ownership, bound values and parent/child visibility. Save/reload,
   modulate Amount and Size, and assert distinct targets. PNG for Peter.
@@ -252,7 +252,7 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
   fluid-role detachment, external source survival, atomic delete/undo/redo,
   absent Duplicate and rename/binding persistence after save/reload.
 - **Demo/gesture:** L3,
-  `cargo xtask ui-snap scene-setup --script scripts/ui-flows/water-family-controls.json`:
+  `cargo xtask ui-snap scene-setup --script water-family-controls.json` (deleted):
   Hide Spray, hide/show Water, rename both, undo, delete Water, undo;
   assert child choice and restored family IDs/bindings. PNG for Peter.
 - **Scope/forbidden:** focused lifecycle/flow and mapped proofs. No child graph

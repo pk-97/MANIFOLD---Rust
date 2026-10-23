@@ -39,10 +39,15 @@ pub struct SceneDoc {
     /// What its model files say, read on the import worker; never saved.
     #[serde(skip)]
     pub models: SceneModels,
+    /// The cut number the next Camera gets ([`CameraFields::cut`]). It only
+    /// grows, so a deleted camera's number is never handed out again.
+    #[serde(default)]
+    pub next_cut: u32,
 }
 
 /// One item: a stable id, a display name, its kind's structural fields, and
-/// the items under it.
+/// the items under it. The name is display only: the compiler never reads
+/// it, so a rename compiles to the same graph and restarts nothing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Item {
@@ -326,6 +331,12 @@ pub struct CameraFields {
     /// aims at an object; its Target X/Y/Z then offset from that item's
     /// origin. `None` aims at the Target X/Y/Z point.
     pub target: Option<ItemId>,
+    /// The number the World's Camera row cuts to this camera with (ruling
+    /// 11). Given once when the camera enters the scene
+    /// ([`SceneDoc::insert`]), from [`SceneDoc::next_cut`]; a reorder, move or
+    /// rename keeps it and a field set never changes it. Recorded cuts store
+    /// this number, so they keep showing this camera.
+    pub cut: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -706,8 +717,9 @@ impl Default for WorldFields {
     }
 }
 
-/// The World's Camera row: the live cut, the index of the rendering camera
-/// in [`SceneDoc::cameras`] order (ruling 11).
+/// The World's Camera row: the live cut, the [`CameraFields::cut`] number
+/// of the rendering camera (ruling 11). A number no camera holds shows the
+/// first camera ([`SceneDoc::picked_camera`]).
 pub const CAMERA_PICK: &str = "camera";
 
 /// A live property's param id: `<item id>.<property>` (ruling 7). Renaming

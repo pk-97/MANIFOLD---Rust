@@ -487,6 +487,11 @@ fn param_surface(
         rows[pi].audio = audio_row_state(am, is_fire);
     }
 
+    if kind == PresetKind::Generator
+        && let Some(doc) = inst.scene.as_ref()
+    {
+        super::scene_card::name_cuts(&mut rows, doc);
+    }
     if let Some(doc) = scene_doc {
         super::scene_card::scene_card_rows(&mut rows, inst, doc);
     }

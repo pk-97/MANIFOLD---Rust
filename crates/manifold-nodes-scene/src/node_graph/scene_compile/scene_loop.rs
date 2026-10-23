@@ -10,40 +10,49 @@
 //! Spacing, Home, Near and Far drive all of them, so camera travel per loop
 //! is always a whole number of patterns and the wrap is pure (corridor D3).
 //!
-//! The corridor is the first instance stage, before the chain's own: it
-//! replaces each object's single pose with the cells, and every later
-//! instance modifier (Spatial Echoes, Scene Mirror) builds on the cells. An
-//! object whose instances something else already places (Copies, a Swarm's
-//! particles) stays out of the corridor: tiling those needs every copy at
-//! every cell, which no node does yet.
+//! For an object drawn once, the corridor is the first instance stage, before
+//! the chain's own: it replaces the single pose with the cells, and every
+//! later instance modifier (Spatial Echoes, Scene Mirror) builds on the cells.
+//! An object that already draws many copies (Copies, a Swarm's particles)
+//! takes the `SceneLoopCopies` recipe instead: `node.nest_copies` puts all its
+//! live copies in every cell. That stage comes last in its chain, so the Copy
+//! cards, Spatial Echoes and Scene Mirror shape one tile's copies and every
+//! tile is the same; a Copy card after the tiling would vary the tiles and the
+//! wrap would jump.
 
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::ParamSpecDef;
+use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef};
 use manifold_core::param_lookup::NodeParamMetadata;
-use manifold_core::scene_doc::{CameraRig, ItemFields, param_id};
+use manifold_core::scene_doc::{CameraRig, ItemFields, ItemId, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
 use manifold_core::scene_schema::{self, Exposure, LOOP_CAMERA_ROWS, PropertyRow, modifier_type};
 
 use super::builder::{Builder, SCENE, card_spec, number, rest_box};
 use super::camera::LOOP_BEATS;
-use super::forces::{bindings, node, recipe_card};
+use super::forces::{CardParam, bindings, node, recipe_card};
 
 /// The most objects one instance targets (`frames::selected_objects`).
 const TARGETS_PER_INSTANCE: usize = 256;
+
+/// The stock recipe that tiles an object drawing many copies.
+const COPIES_RECIPE: &str = "SceneLoopCopies";
 
 /// A cell's size with nothing drawn to measure: the recipe's own.
 const UNMEASURED_CELL: f32 = 10.0;
 
 /// The corridor's scale, from the scene's rest-pose box: a cell is twice the
 /// scene's depth along the travel axis (Z), one depth of scene and one of
-/// open air (SCENE_LOOP_DESIGN.md D4, the gap rule).
+/// open air (SCENE_LOOP_DESIGN.md D4, the gap rule). The box holds every
+/// drawn mesh and every swarm's spread ([`super::swarm::SPREAD`]), so a
+/// swarm's tiles start apart.
 struct Corridor {
     cell: f32,
 }
 
 impl Corridor {
     fn measure(b: &Builder<'_>) -> Self {
-        let depth = rest_box(b.drawn.iter().map(|drawn| &drawn.rest)).map(|(lo, hi)| hi[2] - lo[2]);
+        let swarms = b.swarms.iter().map(|_| &super::swarm::SPREAD);
+        let depth = rest_box(b.drawn.iter().map(|drawn| &drawn.rest).chain(swarms)).map(|(lo, hi)| hi[2] - lo[2]);
         let cell = depth.filter(|depth| *depth > 0.0).map_or(UNMEASURED_CELL, |depth| 2.0 * depth);
         Self { cell }
     }
@@ -111,10 +120,40 @@ pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
     if !card.on {
         return Ok(());
     }
-    let objects = tiled_objects(b);
+    let objects = tiled_objects(b, false);
+    push_instances(b, item.id.as_str(), "loop", &objects, &graph, &specs);
+    Ok(())
+}
+
+/// Tile the objects that draw many copies, once every Modifier card has
+/// shaped them (the module doc says why last): every live copy in every cell.
+pub(crate) fn emit_copies(b: &mut Builder<'_>) -> Result<(), String> {
+    let Some(item) = scene_schema::scene_loop(b.doc) else {
+        return Ok(());
+    };
+    let ItemFields::Modifier(card) = &item.fields else {
+        return Ok(());
+    };
+    let objects = tiled_objects(b, true);
+    if !card.on || objects.is_empty() {
+        return Ok(());
+    }
+    let corridor = Corridor::measure(b);
+    let entry = modifier_type(card.modifier);
+    let lookup = |param: &str| entry.rows.iter().find(|row| row.property == param);
+    let host_id = |param: &str| param_id(&item.id, param);
+    // The same card params as the corridor `emit` declared drive this one.
+    let (graph, specs) = recipe_card(COPIES_RECIPE, &lookup, &host_id, &[("cell_size", corridor.cell)])?;
+    push_instances(b, item.id.as_str(), "loop_copies", &objects, &graph, &specs);
+    Ok(())
+}
+
+/// One instance of `graph` per [`TARGETS_PER_INSTANCE`] objects, driven by
+/// the card's params.
+fn push_instances(b: &mut Builder<'_>, owner: &str, role: &str, objects: &[NodeId], graph: &EffectGraphDef, specs: &[CardParam]) {
     for (chunk, part) in objects.chunks(TARGETS_PER_INSTANCE).enumerate() {
-        let suffix = if chunk == 0 { "loop".to_owned() } else { format!("loop:{chunk}") };
-        let id = node(item.id.as_str(), &suffix);
+        let suffix = if chunk == 0 { role.to_owned() } else { format!("{role}:{chunk}") };
+        let id = node(owner, &suffix);
         let instance = SceneModifierInstanceDef {
             id: id.clone(),
             scene: node(SCENE, "render"),
@@ -123,9 +162,8 @@ pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
             legacy_math_view_carrier: None,
             graph: Box::new(graph.clone()),
         };
-        b.push_modifier(instance, Vec::new(), bindings(&specs, &id), None);
+        b.push_modifier(instance, Vec::new(), bindings(specs, &id), None);
     }
-    Ok(())
 }
 
 /// The card param of a Scene Loop row that reaches the Loop cameras only.
@@ -150,13 +188,20 @@ fn camera_spec(
     Ok(spec)
 }
 
-/// Every drawn object the corridor tiles: each scene object nothing else
-/// already places copies of.
-fn tiled_objects(b: &mut Builder<'_>) -> Vec<NodeId> {
-    let objects = b.objects.clone();
+/// The drawn objects the corridor tiles: those drawn once, or (`copies`)
+/// those that draw many copies of an Object, Group or Swarm with a live
+/// count. A Water's particle draws (foam, spray, bubbles, Physics View dots)
+/// stay out: tiling a whole particle budget in every cell is not the loop.
+fn tiled_objects(b: &mut Builder<'_>, copies: bool) -> Vec<NodeId> {
+    let objects: Vec<(u32, ItemId)> = b.objects.iter().copied().zip(b.object_items.iter().cloned()).collect();
     let mut tiled = Vec::with_capacity(objects.len());
-    for object in objects {
-        if b.node_type(object) != Some("node.scene_object") || b.input(object, "instances").is_some() {
+    for (object, item) in objects {
+        if b.node_type(object) != Some("node.scene_object") || b.input(object, "instances").is_some() != copies {
+            continue;
+        }
+        let water = matches!(b.doc.find(&item).map(|item| &item.fields), Some(ItemFields::Water(_)));
+        // Without a live count the stage would nest the whole buffer.
+        if copies && (water || b.input(object, "instance_count").is_none()) {
             continue;
         }
         if let Some(id) = b.node_id_of(object) {

@@ -247,7 +247,7 @@ pub static FORCE_FIELDS: [FieldRow; 2] = [
         id: "targets",
         label: "Targets",
         section: ControlGroup::Force,
-        control: FieldControl::ItemSet { items: is_force_target, all: "Everything with physics", refused: |_, _| None },
+        control: FieldControl::ItemSet { items: is_force_target, all: "Everything with physics", refused: |_, _, _| None },
         applies: always,
         disabled: enabled,
         read: |fields| match fields {

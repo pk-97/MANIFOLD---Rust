@@ -24,7 +24,8 @@ const LAYERS: &[Layer] = &[
     Layer {
         package: "manifold-nodes",
         normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-physics", "manifold-nodes-scene", "manifold-nodes-water", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-whitewater"],
-        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-surface", "manifold-water-whitewater"],
+        // manifold-editing: the scene document crash test drives editing commands through the compiler.
+        dev: &["manifold-editing", "manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-surface", "manifold-water-whitewater"],
     },
     Layer {
         package: "manifold-app",

@@ -48,6 +48,7 @@ struct Coupled {
     source: Source,
     /// The largest face of the body's local hull box.
     face_area: f32,
+    /// The water's slip friction along this body ([`set_friction`]).
     friction: f32,
     /// The world's shape revision of this body the geometry was built from;
     /// an in-place reshape bumps it and the geometry is built again.
@@ -272,7 +273,7 @@ impl LiquidRigidOwner {
             capacity,
             rebind: false,
         };
-        owner.update_friction(inputs);
+        set_friction(&mut owner.bodies, inputs);
         let world = owner.rigid.native_world().expect("prepared above");
         capture_rows(world, &owner.bodies, &mut owner.rows, &mut owner.contacts)?;
         Ok(owner)
@@ -460,7 +461,7 @@ impl LiquidRigidOwner {
         self.walled.clone_from(inputs);
         self.walls.install(&mut self.walled);
         self.rigid.advance_worker(&self.walled, self.completed_time, 0, &mut Uncoupled)?;
-        self.update_friction(inputs);
+        set_friction(&mut self.bodies, inputs);
         let world = self.rigid.native_world().ok_or("Liquid coupling: reanchor lost the rigid world")?;
         self.layout.capture(world, &mut self.frame)?;
         capture_rows(world, &self.bodies, &mut self.rows, &mut self.contacts)
@@ -503,13 +504,9 @@ impl LiquidRigidOwner {
         self.step(inputs, pending)
     }
 
-    fn update_friction(&mut self, inputs: &RigidSceneInputs) {
-        set_friction(&mut self.bodies, inputs);
-    }
-
     /// Step Box3D over tick `completed` with the decoded impulses.
     fn step(&mut self, inputs: &RigidSceneInputs, pending: PendingTick) -> Result<(), String> {
-        self.update_friction(inputs);
+        set_friction(&mut self.bodies, inputs);
         let expected = TickStamp { epoch: self.epoch, tick: self.completed };
         let mut coupling = LiquidCoupling {
             expected,
@@ -536,13 +533,16 @@ impl LiquidRigidOwner {
     }
 }
 
+/// Set each body's water slip friction. Water slides freely along a fixed
+/// Collider, as FLIP Fluids obstacles do (BUG-elwvu.31 (Collider water
+/// slip)); a moving Body keeps its own Friction for the water.
 fn set_friction(bodies: &mut [Coupled], inputs: &RigidSceneInputs) {
     for body in bodies {
         let source = match body.source {
-            Source::Body(slot) => inputs.bodies[slot].as_ref(),
-            Source::Group(group) => inputs.groups[group].as_ref(),
+            Source::Body(slot) => inputs.bodies.get(slot).and_then(Option::as_ref),
+            Source::Group(group) => inputs.groups.get(group).and_then(Option::as_ref),
         };
-        body.friction = source.map_or(0.0, |body| body.friction.clamp(0.0, 1.0));
+        body.friction = source.filter(|body| body.kind != 0).map_or(0.0, |body| body.friction.clamp(0.0, 1.0));
     }
 }
 
@@ -643,7 +643,7 @@ fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle, body: Option<&RigidBo
     let face = (size[0] * size[1]).max(size[1] * size[2]).max(size[0] * size[2]);
     // A static collider never moves, so each water crops its lattice to its domain.
     let geometry = if fixed { PreparedFluidGeometry::fixed(meshes) } else { PreparedFluidGeometry::new(meshes) };
-    Ok((Arc::new(geometry), face))
+    Ok((Arc::new(geometry.of_body(handle)), face))
 }
 
 /// Each coupled body's state as a row: its centre of mass, 1/m, velocities,

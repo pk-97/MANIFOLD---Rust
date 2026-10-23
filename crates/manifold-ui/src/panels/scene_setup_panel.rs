@@ -950,7 +950,7 @@ impl ScenePanel {
             }
             UIEvent::DragEnd { pos, .. } if self.tree_drag.is_some() => {
                 let item = self.tree_drag.take().expect("a tree drag");
-                (true, self.tree_drop(tree, &item, pos.y).into_iter().collect())
+                (true, self.tree_drop(tree, &item, *pos).into_iter().collect())
             }
             UIEvent::Drag { pos, modifiers, .. } => {
                 if let SceneSetupState::Live(vm) = &self.state {
@@ -1023,12 +1023,16 @@ impl ScenePanel {
         })
     }
 
-    /// Where a tree row dropped at height `y` goes: into a Group when it
-    /// lands on the middle of the Group's row, else before or after the row
-    /// it lands on, as that row's sibling; below the last row, the end of
-    /// the top level.
-    fn tree_drop(&self, tree: &UITree, item: &ItemId, y: f32) -> Option<PanelAction> {
+    /// Where a tree row dropped at `pos` goes: into a Group when it lands on
+    /// the middle of the Group's row, else before or after the row it lands
+    /// on, as that row's sibling; below the last row, the end of the top
+    /// level. A drop outside the panel cancels.
+    fn tree_drop(&self, tree: &UITree, item: &ItemId, pos: crate::node::Vec2) -> Option<PanelAction> {
         let vm = self.state.as_live()?;
+        if !self.point_in_panel(pos) {
+            return None;
+        }
+        let y = pos.y;
         let rows: Vec<(Rect, &ItemId)> = self
             .outliner_row_ids
             .iter()
@@ -1037,8 +1041,7 @@ impl ScenePanel {
                 SceneSelection::Lighting => None,
             })
             .collect();
-        let hit = rows.iter().find(|(bounds, _)| y >= bounds.y && y < bounds.y + bounds.height);
-        let (parent, before) = match hit {
+        let (parent, before) = match rows.iter().find(|(bounds, _)| bounds.contains(pos)) {
             None => {
                 let (last, _) = rows.last()?;
                 if y < last.y + last.height {

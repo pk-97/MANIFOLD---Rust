@@ -30,17 +30,15 @@ use manifold_core::project::Project;
 use manifold_core::scene_doc::{ItemFields, ItemId, SceneDoc, SceneEditError, split_param_id};
 use manifold_core::LayerId;
 
-use crate::commands::graph::{prune_by_param_id, prune_instance_params};
+use crate::commands::graph::prune_instance_params;
 
 /// What a document edit changed, so undo puts back exactly that: the
-/// document, every param (with its modulators) the edit removed or reset,
-/// and the Camera row's pick where the edit moved it. A value written since,
-/// outside undo, stays as it is.
+/// document and every param (with its modulators) the edit removed or reset.
+/// A value written since, outside undo, stays as it is.
 #[derive(Debug)]
 pub(crate) struct Before {
     doc: SceneDoc,
     removed: ParamSlice,
-    pick: Option<(String, f32)>,
     /// Params the edit wrote once installed (a moved item kept in place),
     /// with their value and base before, in write order.
     written: Vec<(String, f32, f32)>,
@@ -127,12 +125,12 @@ pub(crate) fn apply(
 ) -> Result<Before, String> {
     let instance = scene_instance(project, layer)?;
     let doc = instance.scene.clone().expect("scene layer");
-    let shown = shown_camera(&doc, instance);
     let mut edited = doc.clone();
     let values = |id: &str| instance.params.contains(id).then(|| instance.get_base_param(id));
     edit(&mut edited, &values).map_err(|error| error.to_string())?;
     // A swapped Modifier card's rows start at the new type's defaults
-    // (section 7.19), even where the two types share a property name.
+    // (section 7.19), even where the two types share a property name. A row
+    // both types share keeps its mappings and modulators.
     let swapped = swapped_cards(&doc, &edited);
     let old_ids: Vec<String> = instance.params.iter().map(|p| p.id().to_owned()).collect();
     let reset: Vec<String> = old_ids
@@ -145,21 +143,23 @@ pub(crate) fn apply(
     let gone: Vec<String> = old_ids.into_iter().filter(|id| instance.params.get(id).is_none()).collect();
     prune_instance_params(instance, &gone);
     if !reset.is_empty() {
-        prune_instance_params(instance, &reset);
+        for id in &reset {
+            instance.params.remove(id);
+        }
         instance.refresh_manifest_from_graph();
     }
-    let changed: Vec<String> = gone.into_iter().chain(reset).collect();
-    held = ParamSlice::capture_kept(held, &changed);
-    let pick = keep_showing(instance, shown);
-    Ok(Before { doc, removed: held, pick, written: Vec::new() })
+    held = ParamSlice::capture_kept(held, &gone, &reset);
+    Ok(Before { doc, removed: held, written: Vec::new() })
 }
 
 impl ParamSlice {
-    /// Only the part of `slice` aimed at `ids`.
-    fn capture_kept(slice: Self, ids: &[String]) -> Self {
-        let wanted = |id: &str| ids.iter().any(|want| want == id);
+    /// Only the part of `slice` an undo puts back: the params `gone` and
+    /// `reset` name, and the modulators of the `gone` ones (a reset row kept
+    /// its modulators).
+    fn capture_kept(slice: Self, gone: &[String], reset: &[String]) -> Self {
+        let wanted = |id: &str| gone.iter().any(|want| want == id);
         Self {
-            params: slice.params.into_iter().filter(|p| wanted(p.id())).collect(),
+            params: slice.params.into_iter().filter(|p| wanted(p.id()) || reset.iter().any(|want| want == p.id())).collect(),
             drivers: slice.drivers.into_iter().filter(|d| wanted(&d.param_id)).collect(),
             envelopes: slice.envelopes.into_iter().filter(|e| wanted(&e.param_id)).collect(),
             ableton_mappings: slice.ableton_mappings.into_iter().filter(|m| wanted(&m.param_id)).collect(),
@@ -184,37 +184,14 @@ fn swapped_cards(before: &SceneDoc, after: &SceneDoc) -> Vec<ItemId> {
         .collect()
 }
 
-/// The camera the World's Camera row shows.
-fn shown_camera(doc: &SceneDoc, instance: &PresetInstance) -> Option<ItemId> {
-    let id = doc.camera_pick_param()?;
-    let pick = instance.params.contains(&id).then(|| instance.get_base_param(&id))?;
-    doc.picked_camera(pick).cloned()
-}
-
-/// The Camera row picks by position among the cameras, so an edit that adds,
-/// removes or moves one would cut to another camera. Point the row back at
-/// the camera it showed, or at the first camera when that one is gone, in
-/// the same undo step. Returns the row's id and its value before, when moved.
-fn keep_showing(instance: &mut PresetInstance, shown: Option<ItemId>) -> Option<(String, f32)> {
-    let doc = instance.scene.as_ref()?;
-    let id = doc.camera_pick_param().filter(|id| instance.params.contains(id))?;
-    let index = shown.and_then(|camera| doc.cameras().iter().position(|&c| *c == camera)).unwrap_or(0) as f32;
-    let was = instance.get_base_param(&id);
-    (was != index && instance.set_base_param(&id, index)).then_some((id, was))
-}
-
-/// Put back what [`apply`] changed: the document, the params it removed or
-/// reset with their modulators, and the Camera row. Params the edit added
+/// Put back what [`apply`] changed: the document and the params it removed
+/// (with their modulators) or reset. Params the edit added
 /// leave with their modulators; every other value stays as it is now.
 pub(crate) fn restore(project: &mut Project, layer: &LayerId, before: Before) {
     let Ok(instance) = scene_instance(project, layer) else {
         return;
     };
     let ids: Vec<String> = instance.params.iter().map(|p| p.id().to_owned()).collect();
-    // A reset param comes back with its own modulators, not the ones the new
-    // type's row gathered.
-    let reset: Vec<&str> = before.removed.params.iter().map(Param::id).filter(|id| ids.iter().any(|now| now == id)).collect();
-    drop_modulators(instance, &reset);
     let mut doc = before.doc;
     if let Some(current) = &instance.scene {
         doc.models.keep_from(&current.models);
@@ -225,23 +202,10 @@ pub(crate) fn restore(project: &mut Project, layer: &LayerId, before: Before) {
     let added: Vec<String> = ids.into_iter().filter(|id| instance.params.get(id).is_none()).collect();
     prune_instance_params(instance, &added);
     before.removed.restore(instance);
-    if let Some((id, was)) = before.pick {
-        instance.set_base_param(&id, was);
-    }
     for (id, value, base) in before.written.into_iter().rev() {
         if let Some(param) = instance.params.get_mut(&id) {
             param.value = value;
             param.base = base;
         }
     }
-}
-
-/// Drop the modulators aimed at `ids`, keeping the params.
-fn drop_modulators(instance: &mut PresetInstance, ids: &[&str]) {
-    let ids: std::collections::BTreeSet<&str> = ids.iter().copied().collect();
-    prune_by_param_id(&mut instance.drivers, &ids, |d| &d.param_id);
-    prune_by_param_id(&mut instance.envelopes, &ids, |e| &e.param_id);
-    prune_by_param_id(&mut instance.ableton_mappings, &ids, |m| &m.param_id);
-    prune_by_param_id(&mut instance.audio_mods, &ids, |a| &a.param_id);
-    prune_by_param_id(&mut instance.automation_lanes, &ids, |l| &l.param_id);
 }

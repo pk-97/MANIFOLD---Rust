@@ -72,7 +72,7 @@ const fn frame(property: &'static str, param: &'static str) -> PropertyRow {
     row(property, FRAME, Source, Exposure::Automatic(EMIT_FRAME)).param(param)
 }
 
-pub static SWARM_ROWS: [PropertyRow; 75] = [
+pub static SWARM_ROWS: [PropertyRow; 76] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -152,6 +152,7 @@ pub static SWARM_ROWS: [PropertyRow; 75] = [
     follows("world_air_resistance", "the World's Air Resistance"),
     follows("world_speed", "the World's Speed"),
     follows("world_reset", "the World's Reset"),
+    follows("live_count", "the swarm's Count: how many of its copies are drawn"),
 ];
 
 const EMITTERS: &[Choice] = &[Choice { key: "box", label: "Box volume" }, Choice { key: "sphere", label: "Sphere" }];

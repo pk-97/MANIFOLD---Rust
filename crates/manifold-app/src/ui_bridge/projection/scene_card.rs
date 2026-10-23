@@ -93,6 +93,16 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
     }
 }
 
+/// Name the World Camera row's values after the cameras holding those cut
+/// numbers. The compiled row carries no names, so a rename reaches the row
+/// here without recompiling the scene.
+pub(super) fn name_cuts(rows: &mut [ParamRow], doc: &SceneDoc) {
+    let Some(id) = doc.camera_pick_param() else { return };
+    if let Some(row) = rows.iter_mut().find(|row| row.id.as_ref() == id) {
+        row.spec.value_labels = Some(doc.cut_labels());
+    }
+}
+
 /// Lighting starts folded past this many light rows (D11 (lights)).
 const LIGHT_ROWS_BEFORE_FOLD: usize = 8;
 

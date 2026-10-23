@@ -639,6 +639,8 @@ const NON_STANDALONE: &[&str] = &[
     // The whitewater emitter packer, proven above.
     "node.whitewater_influence",
     "node.turbulence_emission_count",
+    // CPU-only piece cutter: the piece is written to shared memory, no GPU kernel or uniforms.
+    "node.mesh_fragment",
 ];
 
 fn coverage_errors(uncovered: &[String]) -> Vec<String> {

@@ -231,7 +231,7 @@ mod tests {
         let camera = project.scene_of(&a).unwrap().cameras()[0].clone();
         let mut doc = project.scene_of(&a).unwrap().clone();
         doc.find_mut(&camera).unwrap().fields =
-            ItemFields::Camera(CameraFields { rig: CameraRig::LookAt, target: Some(ItemId::new(BASE_CUBE)) });
+            ItemFields::Camera(CameraFields { rig: CameraRig::LookAt, target: Some(ItemId::new(BASE_CUBE)), ..CameraFields::default() });
         instance(&mut project, &a).install_scene_document(doc).unwrap();
         let target_of = |project: &Project, id: &ItemId| match &project.scene_of(&b).unwrap().find(id).unwrap().fields {
             ItemFields::Camera(fields) => fields.target.clone(),

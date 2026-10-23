@@ -85,6 +85,10 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
     assert!(fx.set_base_param(radius, 9.0));
     let post = fx.graph.as_ref().unwrap().wires.clone();
     doc.insert(None, 0, Item::new(ItemId::new("lamp"), "Lamp", ItemFields::default_for(ItemKind::Light))).unwrap();
+    // A second camera, then the first one gone: the cut numbers and the
+    // numbers already handed out come back with the document.
+    doc.insert(None, 0, Item::new(ItemId::new("closeup"), "Closeup", ItemFields::default_for(ItemKind::Camera))).unwrap();
+    doc.remove(&ItemId::new("camera")).unwrap();
     fx.install_scene_document(doc.clone()).unwrap();
     assert_eq!(fx.graph.as_ref().unwrap().wires, post, "a recompile rewired the user's post-processing");
     assert_eq!(fx.get_base_param(radius), 9.0, "a recompile dropped the blur's card control");
@@ -105,6 +109,12 @@ fn a_saved_scene_loads_back_as_the_same_scene() {
 
     let fx = loaded.timeline.layers[0].gen_params().unwrap();
     assert_eq!(fx.scene.as_ref(), Some(&doc), "the document comes back");
+    let cut = |doc: &SceneDoc| match doc.find(&ItemId::new("closeup")).map(|item| &item.fields) {
+        Some(ItemFields::Camera(camera)) => Some(camera.cut),
+        _ => None,
+    };
+    let loaded_doc = fx.scene.as_ref().unwrap();
+    assert_eq!((cut(loaded_doc), loaded_doc.next_cut), (Some(1), 2), "the closeup keeps cut 1 and the deleted camera's 0 stays spent");
     assert!(graph.is_some() && fx.graph == graph, "and compiles to the same graph, post-processing included");
     PresetRuntime::from_def_for_render(fx.graph.clone().unwrap(), &PrimitiveRegistry::with_builtin(), Some(&fx.params), false)
         .expect("the loaded layer graph builds, Scene node and post-processing together");
@@ -295,6 +305,20 @@ fn shown(runtime: &mut PresetRuntime, seconds: f64) -> Camera {
     SHOWN.get().expect("the camera switch hands the render a camera")
 }
 
+/// The layer's graph running with a probe on the camera switch's output.
+fn cut_runtime(fx: &PresetInstance) -> PresetRuntime {
+    let mut def = flat(fx);
+    let switch = def.nodes.iter().find(|n| n.node_id.as_str() == "world:camera_switch").expect("the cut").id;
+    let probe = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
+    def.nodes.push(serde_json::from_value(serde_json::json!({"id": probe, "nodeId": "probe", "typeId": "test.scene_camera"})).unwrap());
+    def.wires.push(EffectGraphWire { from_node: switch, from_port: "out".into(), to_node: probe, to_port: "camera".into() });
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.scene_camera", || Box::new(CameraProbe(EffectNodeType::new("test.scene_camera"))));
+    let mut runtime = PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).unwrap();
+    runtime.apply_param_values(&fx.params);
+    runtime
+}
+
 /// Promise 9 (SCENE_DOCUMENT_DESIGN.md section 10 (Testing)): a knob, MIDI or
 /// OSC change is a param write that reaches the item on the next frame, and a
 /// camera cut lands on its frame, both on the running graph with no rebuild.
@@ -305,15 +329,7 @@ fn a_param_write_reaches_the_next_frame_and_a_cut_lands_on_its_frame() {
     let mut layer = scene_layer(doc);
     let fx = layer.gen_params_mut().unwrap();
     let graph = fx.graph.clone();
-    let mut def = flat(fx);
-    let switch = def.nodes.iter().find(|n| n.node_id.as_str() == "world:camera_switch").expect("the cut").id;
-    let probe = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
-    def.nodes.push(serde_json::from_value(serde_json::json!({"id": probe, "nodeId": "probe", "typeId": "test.scene_camera"})).unwrap());
-    def.wires.push(EffectGraphWire { from_node: switch, from_port: "out".into(), to_node: probe, to_port: "camera".into() });
-    let mut registry = PrimitiveRegistry::with_builtin();
-    registry.register("test.scene_camera", || Box::new(CameraProbe(EffectNodeType::new("test.scene_camera"))));
-    let mut runtime = PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).unwrap();
-    runtime.apply_param_values(&fx.params);
+    let mut runtime = cut_runtime(fx);
     let frame = 1.0 / 30.0;
     let wide = shown(&mut runtime, 0.0);
 
@@ -354,7 +370,7 @@ mod every_param_has_a_row {
     use manifold_nodes_scene::node_graph::node_param_source::declared_params_for_node;
     use manifold_nodes_scene::node_graph::scene_compile::compile;
 
-    fn doc_with_every_kind() -> SceneDoc {
+    pub(super) fn doc_with_every_kind() -> SceneDoc {
         let mut doc = SceneDoc::base();
         let mut water = None;
         for (k, entry) in ADD_ENTRIES.iter().enumerate() {
@@ -843,6 +859,203 @@ fn shatter_breaks_a_built_in_cube() {
     for cut in &cuts {
         let feeds = |port: &str| prepared.def.wires.iter().filter(|w| w.from_node == cut.id && w.from_port == port).count();
         assert_eq!((feeds("vertices"), feeds("source")), (1, 1), "the piece draws it and its body collides with it");
+    }
+    prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
+}
+
+/// A project with one scene layer holding `doc`, its layer id fixed.
+fn project_with(doc: SceneDoc) -> Project {
+    let mut layer = scene_layer(doc);
+    layer.layer_id = manifold_core::LayerId::new("scene");
+    let mut project = Project::default();
+    project.timeline.layers.push(layer);
+    project
+}
+
+fn run(project: &mut Project, mut command: impl manifold_editing::command::Command) {
+    command.execute(project);
+    assert!(command.was_applied(), "{} was refused: {:?}", command.description(), command.rejection_reason());
+}
+
+/// A name and a place among siblings are display only: renaming an item of
+/// every kind and reversing every sibling list (the modifier chain aside,
+/// whose order is its meaning) compiles to the same graph and manifest, so
+/// the structure version holds and nothing restarts (GPU water restarts on a
+/// structure version change). A camera's place is not its cut number either.
+#[test]
+fn renaming_or_reordering_items_recompiles_nothing() {
+    use manifold_editing::commands::scene_doc::{RenameSceneItemCommand, ReparentSceneItemCommand};
+    let doc = every_param_has_a_row::doc_with_every_kind();
+    let mut project = project_with(doc.clone());
+    let layer = project.timeline.layers[0].layer_id.clone();
+    let fx = project.timeline.layers[0].gen_params().unwrap();
+    let graph = serde_json::to_string(&fx.graph).unwrap();
+    let manifest = format!("{:?}", fx.params.iter().map(|p| &p.spec).collect::<Vec<_>>());
+    let version = fx.graph_structure_version;
+
+    // One item of every kind.
+    let mut kinds = Vec::new();
+    let mut picked = Vec::new();
+    doc.walk(|item, _| {
+        if !kinds.contains(&item.kind()) {
+            kinds.push(item.kind());
+            picked.push(item.id.clone());
+        }
+    });
+    assert_eq!(kinds.len(), 11, "the scene holds every kind: {kinds:?}");
+    for id in picked {
+        run(&mut project, RenameSceneItemCommand::new(layer.clone(), id.clone(), format!("renamed {id}")));
+    }
+    // Reverse every sibling list: each item in turn to the front of its parent.
+    let mut moves = Vec::new();
+    let top = doc.items.iter().map(|item| (None, item));
+    let inner = doc.ids().into_iter().filter_map(|id| doc.find(&id)).flat_map(|parent| {
+        parent.children.iter().map(move |child| (Some(parent.id.clone()), child))
+    });
+    for (parent, item) in top.chain(inner.collect::<Vec<_>>()) {
+        if item.kind() != ItemKind::Modifier {
+            moves.push((item.id.clone(), parent));
+        }
+    }
+    for (id, parent) in moves {
+        run(&mut project, ReparentSceneItemCommand::new(layer.clone(), id, parent, 0));
+    }
+
+    let fx = project.timeline.layers[0].gen_params().unwrap();
+    let edited = fx.scene.as_ref().unwrap();
+    assert!(edited.find(&doc.cameras()[0].clone()).is_some_and(|item| item.name.starts_with("renamed")), "the renames landed");
+    assert_ne!(edited.cameras(), doc.cameras(), "the cameras moved");
+    assert_ne!(edited.ids(), doc.ids(), "the items moved");
+    let chain = |doc: &SceneDoc| doc.items.iter().filter(|item| item.kind() == ItemKind::Modifier).map(|item| item.id.clone()).collect::<Vec<_>>();
+    assert_eq!(chain(edited), chain(&doc), "the modifier chain kept its order");
+    assert_eq!(serde_json::to_string(&fx.graph).unwrap(), graph, "a rename or a reorder changed the compiled graph");
+    assert_eq!(format!("{:?}", fx.params.iter().map(|p| &p.spec).collect::<Vec<_>>()), manifest, "and the manifest");
+    assert_eq!(fx.graph_structure_version, version, "and bumped the structure version, which restarts water");
+}
+
+/// A recorded cut names a camera by its cut number, not its place: after a
+/// duplicate, an add and a reorder in front of it, the base value and the
+/// automation point still cut to the same camera, on the running graph.
+#[test]
+fn a_recorded_cut_keeps_its_camera_through_duplicate_add_and_reorder() {
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+    use manifold_editing::commands::scene_doc::{AddSceneItemCommand, ReparentSceneItemCommand};
+    let mut doc = SceneDoc::base();
+    doc.insert(None, 1, Item::new(ItemId::new("closeup"), "Closeup", ItemFields::default_for(ItemKind::Camera))).unwrap();
+    let mut project = project_with(doc);
+    let layer = project.timeline.layers[0].layer_id.clone();
+    let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+    assert!(fx.set_base_param("closeup.distance", 3.0));
+    assert!(fx.set_base_param("world.camera", 1.0), "cut to the closeup");
+    let point = AutomationPoint { beat: Beats(4.0), value: 1.0, shape: SegmentShape::Hold };
+    fx.automation_lanes = Some(vec![AutomationLane { param_id: "world.camera".into(), enabled: true, points: vec![point] }]);
+
+    // Duplicate the first camera (the copy lands right after it), add one at
+    // the top, and move the closeup to the end.
+    let camera = ItemId::new("camera");
+    run(&mut project, AddSceneItemCommand::new(layer.clone(), ItemKind::Camera, None, 1, Some(camera), ItemId::new("copy")));
+    run(&mut project, AddSceneItemCommand::new(layer.clone(), ItemKind::Camera, None, 0, None, ItemId::new("added")));
+    run(&mut project, ReparentSceneItemCommand::new(layer.clone(), ItemId::new("closeup"), None, usize::MAX));
+
+    let fx = project.timeline.layers[0].gen_params().unwrap();
+    let doc = fx.scene.as_ref().unwrap();
+    let cuts: Vec<(u32, &str)> = doc.cuts().into_iter().map(|(cut, id)| (cut, id.as_str())).collect();
+    assert_eq!(cuts, [(0, "camera"), (1, "closeup"), (2, "copy"), (3, "added")], "new cameras take new numbers");
+    assert_eq!(fx.get_base_param("world.camera"), 1.0, "the base value was rewritten");
+    assert_eq!(fx.automation_lanes.as_ref().unwrap()[0].points, [point], "the recorded point was rewritten");
+    assert_eq!(doc.picked_camera(1.0).map(ItemId::as_str), Some("closeup"));
+
+    let look_y = fx.get_base_param("closeup.look_y");
+    let shown_camera = shown(&mut cut_runtime(fx), 0.0);
+    let [x, y, z] = shown_camera.pos;
+    let distance = (x * x + (y - look_y) * (y - look_y) + z * z).sqrt();
+    assert!((distance - 3.0).abs() < 1e-4, "the cut no longer shows the closeup: {shown_camera:?}");
+
+    // Deleting the cameras on the top numbers shrinks the row to the live
+    // cameras, and a value recorded on a deleted number shows the first
+    // camera, not the last.
+    let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+    let mut doc = fx.scene.clone().unwrap();
+    doc.remove(&ItemId::new("added")).unwrap();
+    doc.remove(&ItemId::new("copy")).unwrap();
+    fx.install_scene_document(doc).unwrap();
+    let row = fx.params.get("world.camera").unwrap();
+    assert_eq!(row.spec.max, 1.0, "the Camera row still spans the deleted cameras' numbers");
+    assert_eq!(row.driven_value(3.0), 3.0, "a recorded deleted number is pulled onto the last camera");
+    assert!(fx.set_base_param("world.camera", 0.0));
+    let first = shown(&mut cut_runtime(fx), 0.0);
+    assert!(fx.set_base_param("world.camera", 3.0));
+    let deleted = shown(&mut cut_runtime(fx), 0.0);
+    assert_eq!(deleted.pos, first.pos, "a deleted camera's number no longer shows the first camera");
+}
+
+/// Scene Loop tiles objects that draw many copies: a cube with Copies and a
+/// swarm's particles get every live copy in every corridor cell
+/// (node.nest_copies over the cells), after Scene Mirror shaped one tile, and
+/// the draw reads the live product as its count.
+#[test]
+fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        object.copies = true;
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("swarm"), "Swarm", ItemFields::default_for(ItemKind::Swarm))).unwrap();
+    for (k, (id, modifier)) in [("loop", ModifierType::SceneLoop), ("mirror", ModifierType::SceneMirror)].into_iter().enumerate() {
+        let mut card = ItemFields::default_for(ItemKind::Modifier);
+        if let ItemFields::Modifier(fields) = &mut card {
+            *fields = ModifierFields { modifier, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+        }
+        doc.insert(None, end + 1 + k, Item::new(ItemId::new(id), id, card)).unwrap();
+    }
+    // The default cell holds what is drawn: the swarm's 6 m spread, so its
+    // tiles start apart (twice its depth, one of swarm and one of air).
+    let spacing = |doc: SceneDoc| values(scene_layer(doc).gen_params().unwrap()).into_iter().find(|(id, ..)| id == "loop.cell_size").unwrap().2;
+    assert!((spacing(doc.clone()) - 12.0).abs() < 1e-4, "the swarm's spread sizes the cell");
+    let mut no_swarm = doc.clone();
+    no_swarm.remove(&ItemId::new("swarm")).unwrap();
+    // A Copies row at its defaults lies across the travel axis: one cube deep.
+    assert!((spacing(no_swarm) - 2.0).abs() < 1e-4, "the copies' row sizes the cell");
+    // A Water's particle draws (foam, spray, bubbles, Physics View dots)
+    // have no live count and stay out of the corridor.
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("water"), "Water", ItemFields::default_for(ItemKind::Water))).unwrap();
+    let layer = scene_layer(doc);
+    let def = layer.gen_params().unwrap().graph.clone().unwrap();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
+    let prepared = prepare_scene_modifiers(&def, &registry).unwrap();
+    let graph = manifold_core::flatten::flatten_groups(&prepared.def).unwrap();
+    let node = |id: u32| graph.nodes.iter().find(|n| n.id == id).unwrap();
+    let source = |to: u32, port: &str| {
+        let wire = graph.wires.iter().find(|w| w.to_node == to && w.to_port == port).unwrap_or_else(|| panic!("{} has no {port}", node(to).node_id));
+        (node(wire.from_node), wire.from_port.as_str())
+    };
+    let drawn: Vec<&EffectGraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.scene_object" && (n.node_id.as_str().contains("cube:") || n.node_id.as_str().contains("swarm:")))
+        .collect();
+    assert_eq!(drawn.len(), 2, "the copied cube and the swarm draw");
+    let nests = graph.nodes.iter().filter(|n| n.type_id == "node.nest_copies").count();
+    assert_eq!(nests, 2, "only the copied cube and the swarm are tiled, not the water's particles");
+    for object in drawn {
+        let (switch, _) = source(object.id, "instances");
+        let (nest, port) = source(switch.id, "in_1");
+        assert_eq!((nest.type_id.as_str(), port), ("node.nest_copies", "copies"), "{}: the tiles carry the copies", object.node_id);
+        assert_eq!(source(nest.id, "outer").0.type_id, "node.scene_array", "one copy set per corridor cell");
+        assert_eq!(source(nest.id, "inner").0.type_id, "node.reflect_array", "the mirror shaped one tile before the tiling");
+        let (count, _) = source(object.id, "instance_count");
+        assert_eq!(source(count.id, "in_1"), (nest, "count"), "{}: the draw reads the live product", object.node_id);
+        // Before the tiling, the tile's count is the live copies: Copies
+        // Count for the cube, the swarm's Count for its particles.
+        let (mirror_count, _) = source(nest.id, "inner_count");
+        let (live, port) = source(mirror_count.id, "a");
+        let want = if object.node_id.as_str().contains("swarm:") { ("node.value", "out") } else { ("node.rigid_body", "active_count") };
+        assert_eq!((live.type_id.as_str(), port), want, "{}: the live count", object.node_id);
     }
     prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
 }
