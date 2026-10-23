@@ -23,7 +23,7 @@ GPU_DEFAULT_CPU_ONLY = {
 NEXTTEST_GPU_FILTER = '''
     package(manifold-gpu)
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
-  | (binary_id(manifold-nodes::main) & test(/^contracts::node_graph::(catalog_tests::gltf_import::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::every_bundled_preset_validates_clean)$/))
+  | (binary_id(manifold-nodes::main) & test(/^contracts::node_graph::catalog_tests::validate::every_bundled_preset_validates_clean$/))
   | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
   | (binary_id(manifold-ui-paint::main) & test(/^contracts::(ableton_picker_scroll_proof|dropdown_clip_proof|text_clip_to_node_bounds|ui_cell_arc_repro)::/))
   | (binary_id(manifold-nodes::main) & test(/^scene_loop_probe::/))
@@ -128,7 +128,7 @@ BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights", "volume_surface_mesh::
 # CS-rigid and CS-liquid GPU suites (WATER_CRATES_DESIGN.md section 6.3). Every
 # solver implements the liquid seam, so a liquid edit is the broad water run.
 # physics_impulses runs only under gpu-proofs, so it is a GPU row, not a CPU ownership row.
-CS_RIGID_GPU_FILTERS = ["liquid_conformance::liquid_coupled_", "physics_boxes::", "physics_solids::",
+CS_RIGID_GPU_FILTERS = ["liquid_conformance::liquid_coupled_", "physics_solids::",
                         "catalog_tests::physics_impulses::"]
 WATER_BROAD_FILTERS = [
     "liquid_conformance::", "contracts::water::", "face_grid_tests::", "matter_scene::",
@@ -583,7 +583,7 @@ PREFIX_ROWS += [
     (RIGID_SRC, ".rs", CATALOG_PACKAGE,
      ["contracts::node_graph::catalog_tests::physics_sampling",
       "contracts::node_graph::catalog_tests::physics_host_modulation",
-      "contracts::node_graph::catalog_tests::wind_gust_replay", "physics_scene"], []),
+      "contracts::node_graph::catalog_tests::wind_gust_replay"], []),
 ]
 
 # The GPU MPM leaf's CPU contract: the default-build tests that construct Matter nodes.
@@ -631,15 +631,6 @@ CATALOG_TEST_ROWS = [
     ("crates/manifold-compositor/src/preset_thumbnail", "preset_thumbnail", True),
     ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_tests", False),
     ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_warmup_tests", False),
-    ("crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade", "loop_upgrade", True),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_import", True),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_card_precedence", True),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_upgrade", True),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_upgrade_project", True),
-    ("crates/manifold-nodes-scene/src/node_graph/gltf_load", "gltf_import", True),
-    ("crates/manifold-nodes-scene/src/node_graph/scene_vm", "scene_vm", True),
-    ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "scene_exposure", True),
-    ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "fluid_objects", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/gltf_animation_source", "gltf_animation_source", True),
     (SURF_SRC + "primitives/surface_mesh_normals", "surface_mesh_normals", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/copy_positions", "copy_positions", False),
@@ -658,7 +649,7 @@ CATALOG_TEST_ROWS = [
     (LIQUID_SRC + "primitives/particle_publication", "particle_publication_gpu_tests", False),
 ]
 APP_CATALOG_MODULES = {"layer_compositor", "preset_thumbnail", "generator_renderer_tests",
-                       "generator_renderer_warmup_tests", "fluid_objects", "bokeh_gather"}
+                       "generator_renderer_warmup_tests", "bokeh_gather"}
 PREFIX_ROWS += [(prefix, ".rs", "manifold-app" if module in APP_CATALOG_MODULES else CATALOG_PACKAGE,
                  ["contracts::node_graph::catalog_tests::" + module] if module in APP_CATALOG_MODULES
                  else ["contracts::node_graph::catalog_tests::" + module], [])

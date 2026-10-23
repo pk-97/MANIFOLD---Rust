@@ -277,7 +277,6 @@ PYCOUNT
 * `crates/manifold-nodes/src/engine_contract_tests/runtime_amount_zero_passthrough_tests.rs:117`
 * `crates/manifold-nodes/src/node_graph/catalog_tests/runtime_bool_convert_heal.rs:38`
 * `crates/manifold-compositor/src/preset_thumbnail.rs:471`
-* `crates/manifold-nodes/tests/fragment_cut_scene.rs:143,210,272`
 * `crates/manifold-nodes/tests/gpu_proofs/film_grain_decorrelation.rs:116`
 
 ### `from_render_def`
@@ -322,8 +321,6 @@ Whole-workspace lexical census, using the same script above with the following a
 ### `from_def` — 3 declarations, 92 call lines
 
 * `crates/manifold-app/src/content_thread.rs:1554,1578,1629`
-* `crates/manifold-app/src/scene_modifier_edit.rs:731`
-* `crates/manifold-app/src/scene_modifier_performance.rs:313`
 * `crates/manifold-app/src/ui_bridge/inspector.rs:72`
 * `crates/manifold-app/src/ui_bridge/project.rs:697,1478,1743,1802,1870`
 * `crates/manifold-app/src/ui_bridge/projection/cards.rs:1073`
@@ -341,8 +338,6 @@ Whole-workspace lexical census, using the same script above with the following a
 * `crates/manifold-nodes/src/node_graph/catalog_tests/runtime_generator_runtime.rs:389,667,814`
 * `crates/manifold-nodes/tests/card_binding_shadow_corpus.rs:71`
 * `crates/manifold-nodes/tests/mosh_presets.rs:182`
-* `crates/manifold-nodes/tests/photoscan_modifier_plans.rs:83,106`
-* `crates/manifold-nodes/tests/scene_modifier_file_authoring.rs:379`
 * `crates/manifold-nodes/tests/scene_modifier_inv_gate.rs:80,120`
 * `crates/manifold-nodes/tests/scene_setup_round_trip.rs:109,140,243`
 * `crates/manifold-nodes/tests/wave_pilot_presets.rs:213`
@@ -365,25 +360,16 @@ Whole-workspace lexical census, using the same script above with the following a
 
 ### `prepare_scene_modifiers` — 1 declarations, 41 call lines
 
-* `crates/manifold-app/src/scene_modifier_journey/periodic.rs:63`
-* `crates/manifold-app/src/scene_modifier_journey.rs:231`
 * `crates/manifold-nodes/src/bin/check_presets.rs:254`
 * `crates/manifold-node-engine/src/freeze/fusion_report.rs:78`
 * `crates/manifold-node-engine/src/load/graph_loader.rs:712`
 * `crates/manifold-node-engine/src/load/loaded_preset_view.rs:144`
 * `crates/manifold-nodes/src/node_graph/catalog_tests/expand_compiler_tests.rs:152,261,281,375,610`
 * `crates/manifold-node-engine/src/load/expand/compiler.rs:135,140`
-* `crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/sources.rs:621,622`
-* `crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration.rs:38`
 * `crates/manifold-node-engine/src/runtime/modifier_runtime.rs:79`
 * `crates/manifold-nodes/src/node_graph/catalog_tests/runtime_modifier_events.rs:183,396`
-* `crates/manifold-nodes/tests/fragment_cut_scene.rs:33,142,206,259,267`
-* `crates/manifold-nodes/tests/photoscan_modifier_plans.rs:75,103`
-* `crates/manifold-nodes/tests/scene_loop_e2e_import.rs:45`
 * `crates/manifold-nodes/tests/scene_loop_roundtrip_gate.rs:66,113,125,127`
-* `crates/manifold-nodes/tests/scene_modifier_file_authoring.rs:269`
 * `crates/manifold-nodes/tests/scene_modifier_inv_gate.rs:65,87,127`
-* `crates/manifold-nodes/tests/scene_modifier_stock.rs:188,244,338,396,406,422,470`
 
 ### `prepare_scene_modifier_math_view` — 1 declarations, 5 call lines
 

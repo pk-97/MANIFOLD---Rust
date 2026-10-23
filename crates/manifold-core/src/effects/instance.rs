@@ -130,6 +130,12 @@ pub struct PresetInstance {
     /// default (D11 (lights): Lighting past eight lights) needs this; a title
     /// in neither list takes its default.
     pub unfolded_sections: Vec<String>,
+    /// A scene layer's document, the source of truth its `graph` is compiled
+    /// from (SCENE_DOCUMENT_DESIGN.md section 7.1 (The scene document)).
+    /// `Some` only on a scene layer's generator. The compiled scene lives in
+    /// the graph's sealed Scene node (`crate::scene_node`) and is never saved;
+    /// its manifest is the (kind, property) table's, read verbatim.
+    pub scene: Option<crate::scene_doc::SceneDoc>,
 }
 
 
@@ -159,7 +165,10 @@ impl PresetInstance {
         if crate::has_items(&self.automation_lanes) {
             field_count += 1;
         }
-        if self.graph.is_some() {
+        if self.graph.is_some() || self.scene.is_some() {
+            field_count += 1;
+        }
+        if self.scene.is_some() && self.graph.is_some() {
             field_count += 1;
         }
         if !self.folded_sections.is_empty() {
@@ -177,7 +186,7 @@ impl PresetInstance {
                 manifest: &self.params,
                 base_tracked: self.base_tracked,
                 effect_type: &self.effect_type,
-                graph: self.graph.as_ref(),
+                graph: self.saved_graph(),
             },
         )?;
         if let Some(d) = crate::items(&self.drivers) {
@@ -195,7 +204,12 @@ impl PresetInstance {
         if let Some(a) = crate::items(&self.automation_lanes) {
             s.serialize_field("automationLanes", a)?;
         }
-        if let Some(g) = &self.graph {
+        if let Some(scene) = &self.scene {
+            s.serialize_field("scene", scene)?;
+            if let Some(graph) = self.saved_scene_graph() {
+                s.serialize_field("graph", &graph)?;
+            }
+        } else if let Some(g) = &self.graph {
             // `params` on the wrapper is derived from the live manifest
             // (D12) — see `GraphWithDerivedParams`.
             s.serialize_field(
@@ -281,6 +295,7 @@ impl PresetInstance {
             graph_structure_version: 0,
             folded_sections: Vec::new(),
             unfolded_sections: Vec::new(),
+            scene: None,
         }
     }
 
@@ -308,6 +323,7 @@ impl PresetInstance {
             graph_structure_version: 0,
             folded_sections: Vec::new(),
             unfolded_sections: Vec::new(),
+            scene: None,
         };
         s.init_defaults();
         s
@@ -327,11 +343,15 @@ impl PresetInstance {
     /// a pass resolves a real template, the stash is cleared; this is the
     /// common case (one load, one reconcile).
     pub(crate) fn reconcile_manifest(&mut self) {
+        let compiled = self.compile_scene_for_load();
         let Some(wire) = self.pending_wire.clone() else {
+            if compiled {
+                self.refresh_manifest_from_graph();
+            }
             return;
         };
         let (params, base_tracked) =
-            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), ManifestPass::Reconcile);
+            build_param_manifest(self.is_generator(), self.scene.is_some(), &self.effect_type, &self.graph, Some(wire), ManifestPass::Reconcile);
         normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
@@ -372,7 +392,7 @@ impl PresetInstance {
             .map(|p| (p.id().to_string(), ParamEntryWire::from_param(p, self.base_tracked, false)))
             .collect();
         let (params, base_tracked) =
-            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), ManifestPass::Refresh);
+            build_param_manifest(self.is_generator(), self.scene.is_some(), &self.effect_type, &self.graph, Some(wire), ManifestPass::Refresh);
         normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
@@ -388,7 +408,8 @@ impl PresetInstance {
     /// time when it can't find a `LoadedPresetView` for the effect type and
     /// falls back to source passthrough (`preset_runtime.rs`).
     pub fn template_unresolved(&self) -> bool {
-        !template_known_for(self.is_generator(), &self.effect_type, &self.graph)
+        (self.scene.is_some() && !self.scene_compiled())
+            || !template_known_for(self.is_generator(), &self.effect_type, &self.graph)
     }
 
     /// `true` when this instance's manifest was built against an incomplete
@@ -1450,6 +1471,14 @@ impl PresetInstance {
             let entries = specs.into_iter().map(crate::params::Param::bundled).collect();
             self.params = crate::params::ParamManifest::from_params(entries);
             self.base_tracked = true;
+            // A scene layer starts from the base scene; any other type has no
+            // document (SCENE_DOCUMENT_DESIGN.md section 7.5).
+            self.scene = None;
+            if self.effect_type == PresetTypeId::SCENE
+                && let Err(error) = self.install_scene_document(crate::scene_doc::SceneDoc::base())
+            {
+                eprintln!("[manifold-core] the base scene did not compile: {error}");
+            }
         }
     }
 

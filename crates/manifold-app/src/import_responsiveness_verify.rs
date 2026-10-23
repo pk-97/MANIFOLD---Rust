@@ -64,16 +64,14 @@ fn corrupt_glb_fails_through_worker_as_failed_event() {
         .expect("write corrupt fixture");
 
     let (tx, rx) = crossbeam_channel::unbounded::<ImportProgress>();
-    let device = Arc::new(manifold_gpu::GpuDevice::new_queued("import_responsiveness_verify"));
     let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let req = ImportRequest {
         path: bad_path.clone(),
-        drop_beat: 0.0,
-        layer_under_cursor: None,
+        target: crate::import_worker::ImportTarget::Drop { beat: 0.0, under: None },
         blender_path_pref: String::new(),
     };
 
-    import_worker::run_import_worker(req, device, repo_root, tx);
+    import_worker::run_import_worker(req, repo_root, tx);
 
     // The worker sends `Stage { Parsing }` before it ever tries the parse
     // that fails — drain past it (D3's committed shape: zero or more Stage

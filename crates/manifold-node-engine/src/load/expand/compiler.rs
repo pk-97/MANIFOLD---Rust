@@ -7,7 +7,7 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
 use manifold_core::scene_modifier_preset::{
-    SceneContextValue, SceneEndpoint, SceneModifierInstanceDef, SceneNodeRef, SceneStageScope,
+    SceneContextValue, SceneEndpoint, SceneModifierInstanceDef, SceneStageScope,
     SceneStageSource, is_force_recipe, validate_scene_modifier_schema,
 };
 use sha2::{Digest, Sha256};
@@ -19,23 +19,26 @@ use manifold_core::scene_index::FlatSceneIndex;
 
 use {super::SceneModifierExpandError, super::bindings, super::frames, super::namespace, crate::load::expand::routes, super::routes::PreparedSceneModifierGraph};
 
+/// The key of a context value node: one per (instance, target, value), with
+/// the target only for a per-object value.
+fn context_key(instance: &str, target: Option<&NodeId>, value: SceneContextValue) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&(instance, target, value))
+}
+
 manifold_core::testkit_visible! {
 #[doc(hidden)]
 pub(crate) type PortAddress = (u32, String);
 }
 manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub(crate) type EndpointKey = (SceneNodeRef, String);
+pub(crate) type EndpointKey = (NodeId, String);
 }
-type CloneKey = (u32, Option<SceneNodeRef>);
+type CloneKey = (u32, Option<NodeId>);
 type LeafMap = BTreeMap<String, Vec<NodeId>>;
 manifold_core::testkit_visible! {
 /// Stable identity of a node Math View generates for one sampled object.
-pub(crate) fn math_resource_node_id(modifier: &NodeId, target: &SceneNodeRef, role: &str) -> NodeId {
-    let mut parts = vec!["math_view", modifier.as_str(), role];
-    parts.extend(target.scope.iter().map(NodeId::as_str));
-    parts.push(target.node.as_str());
-    namespace::namespace_node_id(&parts)
+pub(crate) fn math_resource_node_id(modifier: &NodeId, target: &NodeId, role: &str) -> NodeId {
+    namespace::namespace_node_id(&["math_view", modifier.as_str(), role, target.as_str()])
 }
 }
 pub(crate) mod shatter;
@@ -55,6 +58,7 @@ fn endpoint_port(endpoint: SceneEndpoint) -> &'static str {
         SceneEndpoint::Atmosphere => "atmosphere",
         SceneEndpoint::Transform => "transform",
         SceneEndpoint::Instances => "instances",
+        SceneEndpoint::InstanceCount => "instance_count",
         SceneEndpoint::Vertices => "vertices",
         SceneEndpoint::Acceleration => "acceleration",
     }
@@ -91,7 +95,7 @@ pub fn validate_modifier_runtime(
             continue;
         }
         graph
-            .instance_by_node_id(&instance.scene.node)
+            .instance_by_node_id(&instance.scene)
             .and_then(|id| graph.get_node(id))
             .ok_or_else(|| invalid(instance.id.to_string(), "prepared scene target is absent"))?;
     }
@@ -150,28 +154,8 @@ fn prepare_scene_modifiers_impl(
     owner: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Result<PreparedSceneModifierGraph, SceneModifierExpandError> {
-    // Capacity is split (BUG-ty86): stage-carrying modifiers expand per-stage
-    // vertex buffers and keep the historic 16 limit; stage-less Math View
-    // instances are bounded by their own surveyed budget (see
-    // `scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS`), so a full legacy
-    // migration of 16 carriers (16 stripped carriers + 16 views) prepares.
-    let stage_carrying = manifold_core::scene_modifier_preset::force_slots_used(&owner.scene_modifiers);
-    if stage_carrying > manifold_core::scene_modifier_preset::MAX_STAGE_CARRYING_MODIFIERS {
-        return Err(SceneModifierExpandError::CapacityExceeded {
-            path: "sceneModifiers".into(),
-            detail: "an owner supports at most 16 stage-carrying modifiers".into(),
-        });
-    }
-    let view_count = owner.scene_modifiers.len() - stage_carrying;
-    if view_count > manifold_core::scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS {
-        return Err(SceneModifierExpandError::CapacityExceeded {
-            path: "sceneModifiers".into(),
-            detail: format!(
-                "an owner supports at most {} Math View modifiers",
-                manifold_core::scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS
-            ),
-        });
-    }
+    // No count caps a scene's modifiers (ruling 23): each one's buffers are
+    // sized with it, and the owner's memory budget is the only limit.
     validate_scene_modifier_schema(owner)?;
     if owner
         .preset_metadata
@@ -437,12 +421,12 @@ pub(crate) struct Builder<'a> {
     current: BTreeMap<EndpointKey, Option<PortAddress>>,
     reference: BTreeMap<EndpointKey, Option<PortAddress>>,
     written: BTreeSet<EndpointKey>,
-    camera_anchors: BTreeMap<SceneNodeRef, EndpointKey>,
+    camera_anchors: BTreeMap<NodeId, EndpointKey>,
     contexts: BTreeMap<String, PortAddress>,
     event_routes: Vec<super::SceneModifierEventRoute>,
     /// Per Math View in chain order: the objects it samples and the real
     /// chain state captured at its position.
-    math_captures: Vec<(NodeId, Vec<(SceneNodeRef, MathViewCapture)>)>,
+    math_captures: Vec<(NodeId, Vec<(NodeId, MathViewCapture)>)>,
 }
 }
 
@@ -588,8 +572,8 @@ impl Builder<'_> {
     fn capture_math_view(
         &mut self,
         instance: &SceneModifierInstanceDef,
-        targets: &[SceneNodeRef],
-    ) -> Vec<(SceneNodeRef, MathViewCapture)> {
+        targets: &[NodeId],
+    ) -> Vec<(NodeId, MathViewCapture)> {
         let mut captures = Vec::new();
         for target in targets {
             let key = match self.attachment_key(instance, Some(target), SceneEndpoint::Vertices) {
@@ -686,7 +670,7 @@ impl Builder<'_> {
     fn finish_math_view(
         &mut self,
         modifier: &SceneModifierInstanceDef,
-        objects: Vec<(SceneNodeRef, MathViewCapture)>,
+        objects: Vec<(NodeId, MathViewCapture)>,
         leaf_maps: &BTreeMap<String, LeafMap>,
         input: &PortAddress,
     ) -> Result<Option<PortAddress>, SceneModifierExpandError> {
@@ -730,12 +714,7 @@ impl Builder<'_> {
         let view = modifier.id.as_str();
         let mut diagrams = Vec::with_capacity(resolved.len());
         for (index, (target, capture, transform)) in resolved.into_iter().enumerate() {
-            let parts = |role: &'static str| {
-                let mut parts = vec!["math_view", view, role];
-                parts.extend(target.scope.iter().map(NodeId::as_str));
-                parts.push(target.node.as_str());
-                parts
-            };
+            let parts = |role: &'static str| vec!["math_view", view, role, target.as_str()];
             let current_samples = self.add_math_node(
                 &parts("current_samples"),
                 "node.sample_mesh_triangles",
@@ -1056,6 +1035,13 @@ impl Builder<'_> {
                 );
                 self.constant_node(identity_key, "node.arrange_copies", params, "instances")?
             }
+            // An object with no count draws its whole instance buffer: every
+            // slot is live, so the stages read the largest count and the
+            // object keeps drawing without one (see the stage outputs).
+            SceneEndpoint::InstanceCount => {
+                params.insert("value".into(), SerializedParamValue::Float { value: f32::MAX });
+                self.constant_node(identity_key, "node.value", params, "out")?
+            }
             SceneEndpoint::Acceleration => {
                 for component in ["x", "y", "z"] {
                     params.insert(component.into(), SerializedParamValue::Float { value: 0.0 });
@@ -1082,8 +1068,8 @@ impl Builder<'_> {
         &mut self,
         owner: &EffectGraphDef,
         instance: &SceneModifierInstanceDef,
-        target: Option<&SceneNodeRef>,
-        targets: &[SceneNodeRef],
+        target: Option<&NodeId>,
+        targets: &[NodeId],
         value: SceneContextValue,
     ) -> Result<PortAddress, SceneModifierExpandError> {
         if matches!(
@@ -1182,12 +1168,24 @@ impl Builder<'_> {
                 "per-object context is unavailable in a shared Scene stage",
             ));
         }
-        let key = serde_json::to_string(&(
-            instance.id.as_str(),
-            if per_object { target } else { None },
-            value,
-        ))
-        .map_err(|error| invalid(instance.id.to_string(), error.to_string()))?;
+        // A part that moves inside a shared frame reads its offset live.
+        let axis = match value {
+            SceneContextValue::SourceOffsetX => Some("pos_x"),
+            SceneContextValue::SourceOffsetY => Some("pos_y"),
+            SceneContextValue::SourceOffsetZ => Some("pos_z"),
+            _ => None,
+        };
+        if let Some(axis) = axis
+            && let Some(live) = instance
+                .mesh_frames
+                .iter()
+                .find(|frame| Some(&frame.target) == target)
+                .and_then(|frame| frame.live_offset.as_ref())
+        {
+            return Ok((self.index.node(live)?.id, axis.into()));
+        }
+        let key = context_key(instance.id.as_str(), if per_object { target } else { None }, value)
+            .map_err(|error| invalid(instance.id.to_string(), error.to_string()))?;
         if let Some(address) = self.contexts.get(&key) {
             return Ok(address.clone());
         }
@@ -1290,7 +1288,7 @@ manifold_core::testkit_visible! {
     pub(crate) fn attachment_key(
         &mut self,
         instance: &SceneModifierInstanceDef,
-        target: Option<&SceneNodeRef>,
+        target: Option<&NodeId>,
         endpoint: SceneEndpoint,
     ) -> Result<EndpointKey, SceneModifierExpandError> {
         let reference = match endpoint_scope(endpoint) {
@@ -1410,7 +1408,7 @@ manifold_core::testkit_visible! {
         &mut self,
         owner: &EffectGraphDef,
         instance: &SceneModifierInstanceDef,
-        targets: &[SceneNodeRef],
+        targets: &[NodeId],
     ) -> Result<LeafMap, SceneModifierExpandError> {
         let local = bindings::seed_local_defaults(&instance.graph, &|_| false)?;
         let recipe = local
@@ -1516,7 +1514,7 @@ manifold_core::testkit_visible! {
                     }
                 }
             }
-            let selected: Vec<Option<&SceneNodeRef>> = if each {
+            let selected: Vec<Option<&NodeId>> = if each {
                 targets.iter().map(Some).collect()
             } else {
                 vec![None]
@@ -1528,8 +1526,7 @@ manifold_core::testkit_visible! {
                     if each { "object" } else { "shared" },
                 ];
                 if let Some(target) = target {
-                    parts.extend(target.scope.iter().map(NodeId::as_str));
-                    parts.push(target.node.as_str());
+                    parts.push(target.as_str());
                 }
                 let (copy, map) = namespace::clone_template_node(node, &parts, &mut self.next_id)?;
                 copies.insert((node.id, target.cloned()), copy.id);
@@ -1561,7 +1558,7 @@ manifold_core::testkit_visible! {
                     "ordinary stage wires must follow recipe order",
                 ));
             }
-            let selected: Vec<Option<&SceneNodeRef>> = if to_each {
+            let selected: Vec<Option<&NodeId>> = if to_each {
                 targets.iter().map(Some).collect()
             } else {
                 vec![None]
@@ -1600,7 +1597,7 @@ manifold_core::testkit_visible! {
                 .iter()
                 .find(|node| node.node_id == stage.group)
                 .expect("stage resolved above");
-            let selected: Vec<Option<&SceneNodeRef>> = if stage.scope == SceneStageScope::EachObject
+            let selected: Vec<Option<&NodeId>> = if stage.scope == SceneStageScope::EachObject
             {
                 targets.iter().map(Some).collect()
             } else {
@@ -1686,6 +1683,13 @@ manifold_core::testkit_visible! {
                 }
                 for output in &stage.outputs {
                     let key = self.attachment_key(instance, target, output.endpoint)?;
+                    // An object that draws its whole buffer keeps drawing it: a
+                    // count only travels where the host gave the object one.
+                    if output.endpoint == SceneEndpoint::InstanceCount
+                        && self.index.input(&key.0, key.1.as_str())?.is_none()
+                    {
+                        continue;
+                    }
                     let consumes_previous = stage.inputs.iter().any(|input| matches!(input.source, SceneStageSource::Previous { endpoint } if endpoint == output.endpoint));
                     if !consumes_previous
                         && matches!(

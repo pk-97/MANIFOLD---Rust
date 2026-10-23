@@ -112,7 +112,7 @@ fn rt_object_geom<'a>(
     tri_count: u32,
     cast_shadows: bool,
 ) -> RtObjectGeometry<'a> {
-    RtObjectGeometry { material_attributes: Default::default(),
+    RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
         vertex_buffer: vbuf,
         vertex_stride: std::mem::size_of::<PosVertex>() as u32,
         vertex_offset: 0,
@@ -405,7 +405,7 @@ fn emissive_table_truncates_at_cap() {
     let stride = std::mem::size_of::<PosVertex>() as u32;
     let mut objects: Vec<RtObjectGeometry> = Vec::with_capacity(n_quads);
     for i in 0..n_quads {
-        objects.push(RtObjectGeometry { material_attributes: Default::default(),
+        objects.push(RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
             vertex_buffer: &buf,
             vertex_stride: stride,
             vertex_offset: (i * 4 * stride as usize) as u32,

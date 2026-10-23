@@ -11,7 +11,7 @@
 
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -122,7 +122,7 @@ fn build_helmet_harness(
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/DamagedHelmet.glb");
     assert!(glb.exists(), "fixture missing: {glb:?}");
-    let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
+    let (def, report) = compile_model_scene(&glb).expect("import must succeed");
     eprintln!("[bug326-gate] import report: {report:?}");
 
     // The card manifest is the only route that reaches the RT block — the

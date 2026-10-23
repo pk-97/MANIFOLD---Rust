@@ -33,13 +33,10 @@ pub fn sync_driver_readouts(ui: &mut UIRoot, project: &Project, active_layer: Op
             }
         }
     }
-    if let Some(gp) = layer.and_then(|l| l.gen_params()) {
-        if let Some(card) = ui.inspector.gen_params_mut() {
-            card.sync_driver_frame_rates(tree, &mut |id| driver_frame_rate(gp, id, timing));
-        }
-        for card in ui.inspector.modifier_cards_mut() {
-            card.sync_driver_frame_rates(tree, &mut |id| driver_frame_rate(gp, id, timing));
-        }
+    if let Some(gp) = layer.and_then(|l| l.gen_params())
+        && let Some(card) = ui.inspector.gen_params_mut()
+    {
+        card.sync_driver_frame_rates(tree, &mut |id| driver_frame_rate(gp, id, timing));
     }
     if let Some((_, scene_layer)) = ui.scene_setup_panel.live_layer_id()
         .and_then(|id| project.timeline.find_layer_by_id(id))

@@ -41,7 +41,7 @@ pub struct MarkerId(Arc<str>);
 /// the identity that param bindings target, so a card slider keeps driving its
 /// inner node no matter how the graph is reorganized. The node's `handle` is a
 /// display/search name with no addressing role. See `docs/NODE_ID_TARGETING.md`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId(Arc<str>);
 
@@ -62,6 +62,14 @@ pub struct AudioSendId(Arc<str>);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SceneId(Arc<str>);
+
+/// Scene item identifier (SCENE_DOCUMENT_DESIGN.md section 7.2 (Identity and
+/// the five commands)): minted once when an item is added and stable through
+/// rename and reparent, so a param id `<item id>.<property>` never changes.
+/// Never a path. Contains no `.`, so a param id splits at its first dot.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ItemId(Arc<str>);
 
 // ── Macro for shared impls ──
 
@@ -170,6 +178,7 @@ impl_id_type!(MarkerId);
 impl_id_type!(NodeId);
 impl_id_type!(AudioSendId);
 impl_id_type!(SceneId);
+impl_id_type!(ItemId);
 
 #[cfg(test)]
 mod tests {

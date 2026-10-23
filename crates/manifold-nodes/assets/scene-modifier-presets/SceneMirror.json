@@ -1,0 +1,231 @@
+{
+  "version": 3,
+  "name": "Scene Mirror",
+  "presetMetadata": {
+    "id": "SceneMirror",
+    "displayName": "Scene Mirror",
+    "category": "Geometry",
+    "oscPrefix": "scene_mirror",
+    "available": true,
+    "params": [
+      {
+        "id": "axis",
+        "name": "Axis",
+        "min": 0.0,
+        "max": 5.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": true,
+        "valueLabels": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
+      },
+      {
+        "id": "plane_offset",
+        "name": "Plane Offset",
+        "min": -1000.0,
+        "max": 1000.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      }
+    ],
+    "bindings": [
+      {
+        "id": "axis",
+        "label": "Axis",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mirror_reflect",
+          "param": "axis"
+        },
+        "convert": {"type": "EnumRound"}
+      },
+      {
+        "id": "plane_offset",
+        "label": "Plane Offset",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mirror_reflect",
+          "param": "plane_offset"
+        }
+      },
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mirror_reflect",
+          "param": "enabled"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "preparationParams": [],
+      "stages": [
+        {
+          "group": "mirror_stage",
+          "scope": "eachObject",
+          "inputs": [
+            {
+              "port": "instances",
+              "source": {
+                "previous": {
+                  "endpoint": "instances"
+                }
+              }
+            },
+            {
+              "port": "instanceCount",
+              "source": {
+                "previous": {
+                  "endpoint": "instanceCount"
+                }
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "port": "instances",
+              "endpoint": "instances"
+            },
+            {
+              "port": "instanceCount",
+              "endpoint": "instanceCount"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "mirror_stage",
+      "typeId": "group",
+      "handle": "SceneMirrorStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "instanceCount",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "instanceCount",
+              "portType": "Scalar(F32)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_instances",
+            "typeId": "system.group_input",
+            "handle": "instances"
+          },
+          {
+            "id": 2,
+            "nodeId": "mirror_reflect",
+            "typeId": "node.reflect_array",
+            "handle": "mirror_reflect",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 2
+              },
+              "plane_offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "enabled": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "nodeId": "mirror_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          },
+          {
+            "id": 4,
+            "nodeId": "group_instance_count",
+            "typeId": "system.group_input",
+            "handle": "instanceCount"
+          },
+          {
+            "id": 5,
+            "nodeId": "mirror_count",
+            "typeId": "node.math",
+            "handle": "mirror_count",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              },
+              "b": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "instances",
+            "toNode": 2,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "instances"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "instanceCount",
+            "toNode": 2,
+            "toPort": "live_count"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "instanceCount",
+            "toNode": 5,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "instanceCount"
+          }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

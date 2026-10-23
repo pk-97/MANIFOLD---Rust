@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamConvert;
 use crate::id::NodeId;
-use crate::scene_modifier_preset::{SceneModifierInstanceDef, SceneNodeRef, SceneNodeRefExt};
+use crate::scene_modifier_preset::SceneModifierInstanceDef;
 
 /// Schema version for graph-topology-only documents (no preset
 /// metadata). Default for per-instance graph overrides and the 25
@@ -306,19 +306,55 @@ pub fn render_scene_count(nodes: &[EffectGraphNode]) -> usize {
         .sum()
 }
 
-/// Find a stable node id anywhere in a graph node tree. Groups without a
-/// node id are not searched: a scope path cannot address them.
+/// Find a stable node id anywhere in a graph node tree. Stable ids are
+/// unique across a whole document, so the id alone addresses the node.
 pub fn find_node<'a>(nodes: &'a [EffectGraphNode], node_id: &str) -> Option<&'a EffectGraphNode> {
-    let wanted = NodeId::new(node_id);
-    let reference = SceneNodeRef::locate_nodes(nodes, &wanted)?;
-    reference.resolve_nodes(nodes)
+    if node_id.is_empty() {
+        return None;
+    }
+    nodes.iter().find_map(|node| {
+        if node.node_id.as_str() == node_id {
+            return Some(node);
+        }
+        node.group.as_deref().and_then(|group| find_node(&group.nodes, node_id))
+    })
 }
 
 /// Mutable [`find_node`].
 pub fn find_node_mut<'a>(nodes: &'a mut [EffectGraphNode], node_id: &str) -> Option<&'a mut EffectGraphNode> {
-    let wanted = NodeId::new(node_id);
-    let reference = SceneNodeRef::locate_nodes(nodes, &wanted)?;
-    reference.resolve_nodes_mut(nodes)
+    if node_id.is_empty() {
+        return None;
+    }
+    for node in nodes {
+        if node.node_id.as_str() == node_id {
+            return Some(node);
+        }
+        if let Some(found) = node.group.as_deref_mut().and_then(|group| find_node_mut(&mut group.nodes, node_id)) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The group ids enclosing the first leaf with this stable id, outermost
+/// first; `None` when no leaf carries the id.
+pub fn leaf_scope(nodes: &[EffectGraphNode], leaf: &NodeId) -> Option<Vec<NodeId>> {
+    if leaf.is_empty() {
+        return None;
+    }
+    for node in nodes {
+        match node.group.as_deref() {
+            None if node.node_id == *leaf => return Some(Vec::new()),
+            Some(group) => {
+                if let Some(mut inner) = leaf_scope(&group.nodes, leaf) {
+                    inner.insert(0, node.node_id.clone());
+                    return Some(inner);
+                }
+            }
+            None => {}
+        }
+    }
+    None
 }
 
 /// Tagged-enum wire form of the renderer's `ParamValue`. Tagged because
@@ -759,7 +795,7 @@ pub struct BindingDef {
     pub offset: f32,
     /// `true` when `default_value` is a MIRROR of the target node's param
     /// taken at stamp time, not a resting value anyone chose. Only
-    /// [`crate::scene_exposure::stamp_scene_node_exposures_into`] sets it:
+    /// the old exposure stamping sets it:
     /// a GLB import stamps a card over whatever the importer placed, so the
     /// "default" is just a snapshot of the node.
     ///

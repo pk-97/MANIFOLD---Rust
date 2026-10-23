@@ -193,8 +193,8 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
     use manifold_core::effect_graph_def::EffectGraphDef;
     let registry = PrimitiveRegistry::with_builtin();
     for text in [
-        include_str!("../../../../assets/generator-presets/WaterDamBreakGpuFlip.json"),
-        include_str!("../../../../assets/generator-presets/WaterDamBreakParticles.json"),
+        include_str!("../../../fixtures/presets/WaterDamBreakGpuFlip.json"),
+        include_str!("../../../fixtures/presets/WaterDamBreakParticles.json"),
     ] {
         let def: EffectGraphDef = serde_json::from_str(text).unwrap();
         let report = fusion_report(&def, &registry);

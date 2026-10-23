@@ -8,11 +8,11 @@ use std::path::Path;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_core::scene_modifier_preset::{
-    SceneNodeRef, SceneTargetSelection, validate_scene_modifier_schema,
+    SceneTargetSelection, validate_scene_modifier_schema,
 };
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 
 pub const MUSHROOM_FIXTURE: &str = concat!(
@@ -20,9 +20,10 @@ pub const MUSHROOM_FIXTURE: &str = concat!(
     "/../../tests/fixtures/gltf/cc0___mushroom.glb"
 );
 
-/// The imported mushroom scene every recipe is qualified against.
+/// The scene every recipe is qualified against: the imported mushroom in
+/// the base scene.
 pub fn mushroom_host() -> Result<EffectGraphDef, String> {
-    assemble_import_graph(Path::new(MUSHROOM_FIXTURE))
+    compile_model_scene(Path::new(MUSHROOM_FIXTURE))
         .map(|(def, _)| def)
         .map_err(|error| format!("mushroom validation fixture failed: {error}"))
 }
@@ -47,10 +48,7 @@ pub fn qualify_scene_modifier(
         (
             &shatter_host,
             SceneTargetSelection::Explicit {
-                objects: vec![SceneNodeRef {
-                    scope: Vec::new(),
-                    node: NodeId::new("physics_demo_114"),
-                }],
+                objects: vec![NodeId::new("physics_demo_114")],
             },
         )
     } else {
@@ -65,20 +63,12 @@ pub fn qualify_scene_modifier(
         host,
         recipe,
         format!("check:{label}").into(),
-        SceneNodeRef {
-            scope: Vec::new(),
-            node: scene_node.node_id.clone(),
-        },
+        scene_node.node_id.clone(),
         targets,
     )
     .map_err(|error| error.to_string())?;
-    let candidate = manifold_core::scene_modifier_edit::insert_scene_modifier(
-        host,
-        host.scene_modifiers.len(),
-        instance,
-    )
-    .map_err(|error| error.to_string())?;
-    prepare_scene_modifiers(&candidate.graph, registry).map_err(|error| error.to_string())?;
+    let candidate = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(host, instance)?;
+    prepare_scene_modifiers(&candidate, registry).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -101,7 +91,7 @@ fn prepare_shatter_host(mushroom_host: &EffectGraphDef) -> Result<EffectGraphDef
         .ok_or_else(|| "mushroom fixture has no nested node.gltf_mesh_source".to_string())?;
     let mut host: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/assets/generator-presets/PhysicsSolids.json"
+        "/tests/fixtures/presets/PhysicsSolids.json"
     )))
     .map_err(|error| format!("PhysicsSolids fixture failed to parse: {error}"))?;
     let mesh = host

@@ -30,7 +30,7 @@ fn liquid_prepare_pipelines_is_idempotent() {
         // Each preset must populate its own cold live cache.
         manifold_gpu::testkit::load_disk_shader_caches(&device);
         assert_eq!(cache_len(&device), (0, 0), "{file}: install starts cold");
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/presets").join(file);
         let json = std::fs::read_to_string(path).expect("preset reads");
         let install = || {
             PresetRuntime::from_json_str_with_device(&json, &registry, device.clone(), 64, 64, GpuTextureFormat::Rgba16Float, None)

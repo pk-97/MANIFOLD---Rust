@@ -197,6 +197,7 @@ mod tests {
                 fluid: NodeId::new("fluid"),
                 rigid: NodeId::new("world"),
                 colliders: RigidImpulseTargets::body(0).unwrap().union(RigidImpulseTargets::group(0).unwrap()),
+                observers: Vec::new(),
             }]
         );
     }
@@ -227,6 +228,7 @@ mod tests {
                 fluid: NodeId::new("matter"),
                 rigid: NodeId::new("world"),
                 colliders: RigidImpulseTargets::body(0).unwrap(),
+                observers: Vec::new(),
             }]
         );
     }
@@ -302,22 +304,6 @@ mod tests {
                 .union(RigidImpulseTargets::body(1).unwrap())
                 .union(RigidImpulseTargets::group(0).unwrap())
         );
-    }
-
-    #[test]
-    fn multiple_fluid_domains_with_one_rigid_world_are_ambiguous() {
-        let mut builder = GraphBuilder::new();
-        builder.scene(
-            "scene",
-            &[
-                ("fluid_a", "world", &[0], false),
-                ("fluid_b", "world", &[1], false),
-            ],
-        );
-        assert!(matches!(
-            prepare(builder),
-            Err(SceneModifierExpandError::AmbiguousScene { .. })
-        ));
     }
 
     #[test]

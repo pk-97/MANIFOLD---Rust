@@ -28,8 +28,8 @@ struct Vertex {
     color: vec4<f32>,
 };
 
-// 192 bytes: the light's view-projection, this object's model matrix, and
-// appearance, alpha coverage, and base-colour UV metadata.
+// 256 bytes: the light's view-projection, this object's model matrix,
+// appearance, alpha coverage, base-colour UV metadata and the inner matrix.
 // Bound per (caster, object) draw via GpuBinding::Bytes at @binding(0).
 struct ShadowUniforms {
     light_view_proj: mat4x4<f32>,
@@ -39,6 +39,9 @@ struct ShadowUniforms {
     alpha: vec4<f32>,
     uv_m: vec4<f32>,
     uv_t: vec4<f32>,
+    // The instance space: world = model · T_instance · instance_inner,
+    // as render_scene.wgsl's scene_vs_body.
+    instance_inner: mat4x4<f32>,
 };
 
 struct Instance {
@@ -99,7 +102,8 @@ fn vs_main(
     let marker = u32(inst.rot_pad.w + 0.5);
     let mirror = vec3<f32>(select(1.0, -1.0, marker == 1u),
         select(1.0, -1.0, marker == 2u), select(1.0, -1.0, marker == 3u));
-    let inst_pos = rot * (v.position * mirror * inst.pos_scale.w) + inst.pos_scale.xyz;
+    let local_pos = (su.instance_inner * vec4<f32>(v.position, 1.0)).xyz;
+    let inst_pos = rot * (local_pos * mirror * inst.pos_scale.w) + inst.pos_scale.xyz;
     let world = su.model * vec4<f32>(inst_pos, 1.0);
     var out: ShadowVsOut;
     out.clip_pos = su.light_view_proj * world;
@@ -142,4 +146,21 @@ fn fs_mask(in: ShadowVsOut) -> @location(0) vec4<f32> {
         discard;
     }
     return vec4<f32>(1.0);
+}
+
+// The item-id buffer (SCENE_DOCUMENT_DESIGN.md section 7.14): the same
+// geometry and coverage discards through the pick camera, writing the draw's
+// render slot plus one (appearance.z), so 0 is nothing drawn. Editing chrome
+// only; never part of the output picture.
+@fragment
+fn fs_id(in: ShadowVsOut) -> @location(0) vec4<f32> {
+    if su.alpha.x == 1.0 {
+        var alpha = su.alpha.z * in.vertex_alpha;
+        if su.alpha.w > 0.5 { alpha *= textureSample(base_color_map, base_color_sampler, in.uv).a; }
+        if alpha < su.alpha.y { discard; }
+    }
+    if su.appearance.x * in.appearance_weight <= 0.0 {
+        discard;
+    }
+    return vec4<f32>(su.appearance.z, 0.0, 0.0, 1.0);
 }

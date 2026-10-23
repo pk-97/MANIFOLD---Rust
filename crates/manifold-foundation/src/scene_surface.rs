@@ -51,6 +51,7 @@ pub enum CardBand {
     Camera,
     Scene,
     Forces,
+    Modifiers,
     Lighting,
     Look,
 }
@@ -62,25 +63,39 @@ pub enum ControlGroup {
     Lens,
     DepthOfField,
     MotionBlur,
+    Shake,
     Light,
     Shadows,
     ShadowsAdvanced,
+    /// An Object's shape and its mesh file.
+    Shape,
     Transform,
     Material,
+    Look,
+    Modifier,
+    /// A modifier's mask: the region it acts in, in its target's radius units.
+    Mask,
+    /// The physics setting and its rows (titled Physics).
     Body,
     Copies,
+    /// A Water's domain box and its Resolution.
+    Domain,
     Simulation,
+    /// A Water's surface dials.
+    Surface,
     Whitewater,
     WhitewaterAdvanced,
     Source,
-    Look,
-    Modifier,
     Force,
     PhysicsWorld,
     Environment,
     Fog,
     RayTracing,
     RenderMode,
+    /// The colours and point size the render modes draw in.
+    Shading,
+    AmbientOcclusion,
+    Animation,
 }
 
 impl ControlGroup {
@@ -93,25 +108,33 @@ impl ControlGroup {
             Self::Lens => "Lens",
             Self::DepthOfField => "Depth of Field",
             Self::MotionBlur => "Motion Blur",
+            Self::Shake => "Shake",
             Self::Light => "Light",
             Self::Shadows => "Shadows",
             Self::ShadowsAdvanced => "Advanced · Shadows",
+            Self::Shape => "Shape",
             Self::Transform => "Transform",
             Self::Material => "Material",
-            Self::Body => "Body",
+            Self::Body => "Physics",
             Self::Copies => "Copies",
+            Self::Domain => "Domain",
             Self::Simulation => "Simulation",
+            Self::Surface => "Surface",
             Self::Whitewater => "Whitewater",
             Self::WhitewaterAdvanced => "Advanced · Whitewater",
             Self::Source => "Source",
             Self::Look => "Look",
             Self::Modifier => "Modifier",
+            Self::Mask => "Mask",
             Self::Force => "Force",
             Self::PhysicsWorld => "Physics",
             Self::Environment => "Environment",
             Self::Fog => "Fog",
             Self::RayTracing => "Ray Tracing",
             Self::RenderMode => "Render Mode",
+            Self::Shading => "Shading",
+            Self::AmbientOcclusion => "Ambient Occlusion",
+            Self::Animation => "Animation",
         }
     }
 }
@@ -124,6 +147,7 @@ impl CardBand {
             Self::Camera => "Camera",
             Self::Scene => "Scene",
             Self::Forces => "Forces",
+            Self::Modifiers => "Modifiers",
             Self::Lighting => "Lighting",
             Self::Look => "Look",
         }
@@ -158,12 +182,14 @@ pub enum Feature {
     /// A fluid source's role: 0 Initial Fill, 1 Inflow, 2 Outflow, 3
     /// Collider.
     SourceRole,
+    /// The World's render mode: 0 Rendered, 1 Solid, 2 Wireframe, 3 Points.
+    RenderMode,
 }
 
 impl Feature {
     /// Whether the switch picks a mode rather than turning the feature on.
     pub fn has_modes(self) -> bool {
-        matches!(self, Self::LightType | Self::EnvironmentMode | Self::Background | Self::SourceRole)
+        matches!(self, Self::LightType | Self::EnvironmentMode | Self::Background | Self::SourceRole | Self::RenderMode)
     }
 
     /// Why a row gated on this feature does nothing right now.
@@ -175,6 +201,7 @@ impl Feature {
             Self::EnvironmentMode => "This environment mode does not use it",
             Self::Background => "The background is off",
             Self::SourceRole => "This source role does not use it",
+            Self::RenderMode => "This render mode does not use it",
         }
     }
 }
@@ -216,6 +243,8 @@ pub enum Unit {
     PerSecond,
     /// A multiple of the copy's own size: a copy group's spacing.
     SizeMultiple,
+    /// A multiple of a modifier target's radius: a mask's centre and size.
+    Radius,
 }
 
 impl Unit {
@@ -233,119 +262,87 @@ impl Unit {
             Self::Beats => " beats",
             Self::PerSecond => " /s",
             Self::SizeMultiple => "× size",
+            Self::Radius => " × radius",
         }
     }
 }
 
+/// The eleven kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer
+/// plane is an Object; Copies is a section; an import is a Group whose Source
+/// is a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ObjectKind {
-    Mesh,
-    Plane,
-    Water,
-    Model,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind", content = "object")]
-pub enum SceneItemKind {
+pub enum ItemKind {
+    Group,
+    Object,
     Camera,
     Light,
-    Object(ObjectKind),
+    Material,
+    Water,
+    WaterSource,
+    Swarm,
     Force,
-    Physics,
+    Modifier,
     World,
-    /// A placed fluid source, listed under the water it feeds.
-    Source(SourceRole),
 }
 
-/// What a placed fluid source does to its water.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SourceRole {
-    /// The box of water the liquid starts with and resets to.
-    InitialFill,
-    Inflow,
-    Drain,
-    Collider,
+impl ItemKind {
+    pub const ALL: [ItemKind; 11] = [
+        ItemKind::Group,
+        ItemKind::Object,
+        ItemKind::Camera,
+        ItemKind::Light,
+        ItemKind::Material,
+        ItemKind::Water,
+        ItemKind::WaterSource,
+        ItemKind::Swarm,
+        ItemKind::Force,
+        ItemKind::Modifier,
+        ItemKind::World,
+    ];
+
+    /// The name a new item of this kind takes.
+    pub fn default_name(self) -> &'static str {
+        match self {
+            ItemKind::Group => "Group",
+            ItemKind::Object => "Object",
+            ItemKind::Camera => "Camera",
+            ItemKind::Light => "Light",
+            ItemKind::Material => "Material",
+            ItemKind::Water => "Water",
+            ItemKind::WaterSource => "Water Source",
+            ItemKind::Swarm => "Swarm",
+            ItemKind::Force => "Force",
+            ItemKind::Modifier => "Modifier",
+            ItemKind::World => "World",
+        }
+    }
 }
 
-/// Where a scene object row sits (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section
-/// 5.2 (One scene-object model)).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum SceneObjectRowKind {
-    /// An ordinary object, a placed fluid source, or a part of an imported
-    /// model.
-    #[default]
-    Object,
-    /// The row that owns a simulation or a shared body for its children:
-    /// Water's real object, or an imported model's group.
-    PhysicsParent,
-    /// One of Water's looks (Foam, Spray, Bubbles, Physics View's dots): it
-    /// owns its material, Size and visibility only.
-    LookChild,
+/// What a pick on a structural field row sets (SCENE_DOCUMENT_DESIGN.md
+/// section 8): the UI sends it, the app turns it into the field's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldPick {
+    /// A key of a closed set.
+    Choice(String),
+    /// One item, or none.
+    Item(Option<crate::ItemId>),
+    /// Add the item to the set, or take it out when it is in.
+    Toggle(crate::ItemId),
+    /// Every item: the set is emptied.
+    All,
+    /// A layer's output.
+    Layer(crate::LayerId),
+    /// A picked file.
+    File(String),
 }
 
-/// What a scene object row's commands accept. The tree, the header, the
-/// shortcuts and the commands read the same facts, so a shortcut cannot do
-/// what a hidden button would.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct SceneObjectCapabilities {
-    pub rename: bool,
-    /// The header's Hide action (a look child's own eye).
-    pub hide: bool,
-    pub delete: bool,
-    pub duplicate: bool,
-    /// The row has its own placement transform.
-    pub transform: bool,
-    pub enable_physics: bool,
-    /// The row can become a copy group (Make Copies): an ordinary
-    /// single-mesh object. False on Water, a look, a part of a compound
-    /// import and a row that already is a copy group.
-    pub make_copies: bool,
-    /// The row can feed a liquid as a fluid role.
-    pub fluid_role: bool,
-    /// The row takes mesh modifiers.
-    pub modifiers: bool,
-}
-
-/// The most individually wired bodies one Physics World takes. Its `bodies`
-/// count sizes its body and pose ports up to this. Core asserts at compile
-/// time that the runtime hit mask (`RigidImpulseTargets::BODY_CAPACITY`)
-/// holds exactly this many.
-pub const PHYSICS_WORLD_MAX_BODIES: u32 = 256;
-
-/// The most material parts one compound rigid body takes, one per `part_k`
-/// port. The rigid body's port table is declared at this length, so the two
-/// cannot drift.
-pub const RIGID_BODY_MAX_PARTS: u32 = 64;
-
-/// The most copy groups one Physics World takes; its `copy_groups` count
-/// sizes its copy-group ports up to this.
-pub const PHYSICS_WORLD_MAX_COPY_GROUPS: u32 = 32;
-
-/// A Physics World's `bodies` when none is saved, which is every world
-/// saved before the count existed.
+/// A Physics World's `bodies` when none is saved. The count grows with
+/// the bodies wired in; it is no limit.
 pub const PHYSICS_WORLD_DEFAULT_BODIES: u32 = 64;
 
 /// A Physics World's `copy_groups` when none is saved.
 pub const PHYSICS_WORLD_DEFAULT_COPY_GROUPS: u32 = 1;
-
-/// What the one Add menu inserts into a scene through a template.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SceneTemplateKind {
-    Object,
-    Plane,
-    Light,
-    Water,
-    /// A swarm of GPU instances pushed by the scene's forces.
-    Swarm,
-    /// The placed fluid sources, inserted inside their water.
-    InitialFill,
-    Inflow,
-    Drain,
-    Collider,
-}
 
 /// A user's card pin on one control. `None` on the control follows its role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -468,36 +465,6 @@ pub struct SceneShapeDecl {
     /// reads as one scale).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub uniform_scale: bool,
-}
-
-
-/// The one address of a scene thing: the group path to it, then its stable
-/// node id. UI selections, gizmo owners, scene actions, commands and saved
-/// scene-modifier targets all name a scene node this way. A document id or a
-/// render-slot number is only resolved from it, on the content thread, when
-/// an edit runs against the live graph.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SceneNodeRef {
-    #[serde(default)]
-    pub scope: Vec<crate::NodeId>,
-    pub node: crate::NodeId,
-}
-
-impl Ord for SceneNodeRef {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.scope
-            .iter()
-            .map(crate::NodeId::as_str)
-            .cmp(other.scope.iter().map(crate::NodeId::as_str))
-            .then_with(|| self.node.as_str().cmp(other.node.as_str()))
-    }
-}
-
-impl PartialOrd for SceneNodeRef {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 #[cfg(test)]

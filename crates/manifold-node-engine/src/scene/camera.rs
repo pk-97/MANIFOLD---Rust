@@ -106,6 +106,11 @@ pub struct Camera {
     /// correspondence. Ordinary cameras use None. Periodic-world sources
     /// declare their complete travel period.
     pub world_period: Option<[f32; 3]>,
+    /// Which shot this camera is: a camera switch folds in the input it
+    /// picked, so a cut changes it and the renderer resets temporal history
+    /// (motion vectors, TAA, RT reprojection) on that frame. 0 for a camera
+    /// no switch picked.
+    pub shot: u64,
 }
 
 impl Camera {
@@ -150,6 +155,7 @@ impl Camera {
             view,
             lens: LensParams::PINHOLE,
             world_period: None,
+            shot: 0,
         }
     }
 
@@ -219,6 +225,7 @@ impl Camera {
             view,
             lens: LensParams::PINHOLE,
             world_period: None,
+            shot: 0,
         }
     }
 
@@ -284,6 +291,7 @@ impl Camera {
             view,
             lens: LensParams::PINHOLE,
             world_period: None,
+            shot: 0,
         }
     }
 
@@ -313,7 +321,25 @@ impl Camera {
             view,
             lens: LensParams::PINHOLE,
             world_period: None,
+            shot: 0,
         }
+    }
+
+    /// This camera placed inside the frame `parent` (a group's world matrix):
+    /// its position and aim move with the frame, its up follows the frame's
+    /// turn. An identity frame returns the camera unchanged.
+    pub fn placed_in(self, parent: &[[f32; 4]; 4]) -> Self {
+        use super::transform::{IDENTITY_MAT4, transform_direction, transform_point};
+        if *parent == IDENTITY_MAT4 {
+            return self;
+        }
+        let pos = transform_point(parent, self.pos);
+        let fwd = normalize3(transform_direction(parent, self.fwd));
+        let up_hint = normalize3(transform_direction(parent, self.up));
+        let right = normalize3(cross3(fwd, up_hint));
+        let up = normalize3(cross3(right, fwd));
+        let target = [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]];
+        Self { pos, fwd, right, up, view: look_at_rh(pos, target, up), ..self }
     }
 
     /// Rotate the basis by camera-local Euler angles (radians), applied in
@@ -366,6 +392,22 @@ impl Camera {
             ],
             self.up,
         );
+    }
+
+    /// Move the camera along its own axes, then turn it about them: a
+    /// handheld wobble about where the camera stands. `offset` is (right, up,
+    /// back), the camera's local X, Y and Z; `turn` is (pitch, yaw, roll) in
+    /// radians, as [`Self::rotate_local`] applies them. Zero offset and turn
+    /// leave the camera exactly as it was.
+    pub fn nudge_local(&mut self, offset: [f32; 3], turn: [f32; 3]) {
+        if offset != [0.0; 3] {
+            for axis in 0..3 {
+                self.pos[axis] += self.right[axis] * offset[0] + self.up[axis] * offset[1] - self.fwd[axis] * offset[2];
+            }
+            let target = [self.pos[0] + self.fwd[0], self.pos[1] + self.fwd[1], self.pos[2] + self.fwd[2]];
+            self.view = look_at_rh(self.pos, target, self.up);
+        }
+        self.rotate_local(turn[1], turn[0], turn[2]);
     }
 
     /// Reversed-Z projection: near maps to 1, far/background to 0.

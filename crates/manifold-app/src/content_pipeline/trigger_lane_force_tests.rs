@@ -12,7 +12,7 @@ use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::layer::Layer;
 use manifold_core::params::ClipTriggerSource;
 use manifold_core::project::Project;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::{
     Beats, Bpm, GraphTarget, LayerId, NodeId, PlaybackState, PresetTypeId, Seconds,
 };
@@ -30,11 +30,8 @@ const WIDTH: u32 = 32;
 const HEIGHT: u32 = 32;
 const DATA_VERSION: u64 = 1;
 
-fn reference(id: &str) -> SceneNodeRef {
-    SceneNodeRef {
-        scope: Vec::new(),
-        node: NodeId::new(id),
-    }
+fn reference(id: &str) -> NodeId {
+    NodeId::new(id)
 }
 
 fn scene_fixture() -> EffectGraphDef {
@@ -60,6 +57,8 @@ fn scene_fixture() -> EffectGraphDef {
             {"fromNode":10,"fromPort":"out","toNode":8,"toPort":"camera"},
             {"fromNode":1,"fromPort":"transform","toNode":3,"toPort":"transform"},
             {"fromNode":2,"fromPort":"transform","toNode":4,"toPort":"transform"},
+            {"fromNode":11,"fromPort":"source","toNode":3,"toPort":"source"},
+            {"fromNode":11,"fromPort":"source","toNode":4,"toPort":"source"},
             {"fromNode":3,"fromPort":"body","toNode":5,"toPort":"body_0"},
             {"fromNode":4,"fromPort":"body","toNode":5,"toPort":"body_1"},
             {"fromNode":5,"fromPort":"pose_0","toNode":6,"toPort":"transform"},
@@ -127,13 +126,8 @@ fn insert_uniform_force(mut owner: EffectGraphDef, id: &str, target: &str) -> Ef
             },
         )
         .expect("prepare UniformForce through production authoring seam");
-    owner = manifold_core::scene_modifier_edit::insert_scene_modifier(
-        &owner,
-        owner.scene_modifiers.len(),
-        instance,
-    )
-    .expect("insert UniformForce through production graph edit")
-    .graph;
+    owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, instance)
+    .expect("insert UniformForce through production graph edit");
     owner
 }
 
@@ -690,27 +684,23 @@ fn scene_impulse_fired_before_its_scene_renders_lands_once_after() {
     assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (1, 0, 0), "{diagnostics:?}");
 }
 
-/// One refused Fire holds nothing back: a full history refuses the newest
-/// hit, every admitted hit lands once, and the next Fire after the receipts
-/// drain lands too.
+/// A burst of Fires past the hit history grows it: nothing is refused,
+/// every hit lands once, and the next Fire lands too.
 #[test]
-fn scene_impulse_refusal_never_blocks_the_next_fire() {
+fn a_burst_of_scene_impulses_past_the_history_lands_whole() {
     let mut scene = DirectFire::new();
     scene.render(false);
-    for _ in 0..256 {
+    for _ in 0..300 {
         assert_eq!(scene.fire(), Ok(true));
     }
-    let refusal = scene.fire().unwrap_err();
-    assert!(refusal.contains("refused"), "{refusal}");
     scene.render(false);
     scene.render(false);
-    assert_eq!(scene.diagnostics().started, 256);
+    assert_eq!(scene.diagnostics().started, 300);
     assert_eq!(scene.fire(), Ok(true));
     scene.render(false);
     scene.render(false);
     let diagnostics = scene.diagnostics();
-    assert_eq!((diagnostics.started, diagnostics.refused), (257, 1), "{diagnostics:?}");
-    assert_eq!(diagnostics.last_refusal.as_deref(), Some(refusal.as_str()));
+    assert_eq!((diagnostics.started, diagnostics.refused), (301, 0), "{diagnostics:?}");
 }
 
 /// A Fire waiting for a scene that then stops playing (the playhead left its

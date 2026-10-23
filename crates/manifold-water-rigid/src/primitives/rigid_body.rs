@@ -1,14 +1,13 @@
-use manifold_node_engine::mesh::{InstanceTransform, PLATONIC_SHAPES};
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use crate::physics::{ColliderGeometry, CopySpawn, MAX_COPIES, RigidBody};
+use crate::physics::{CopySpawn, MAX_COPIES, RigidBody, Solid};
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
-use crate::physics_mesh::{transform_vertices, validate_transform};
-use crate::physics_mesh::{PART_PORTS, load_compound_materials, parse_compound_materials};
-use crate::physics_mesh::prepare_colliders;
+use crate::physics_mesh::{PartPorts, is_part_mesh, transform_vertices, validate_transform};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::transform::Transform;
+use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Transform, rotation_to_render_scene_euler};
+use manifold_physics::collision_shape::{CollisionShape, SCALE_STEPS_PER_OCTAVE, ShapeKey};
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 
@@ -17,6 +16,7 @@ const IDENTITY_TRANSFORM: Transform = Transform {
     rot_euler: [0.0; 3],
     scale: [1.0; 3],
     billboard: false,
+    parent: IDENTITY_MAT4,
 };
 
 /// The box spawner a Physics World reads when this body is its `copies`
@@ -46,132 +46,169 @@ fn read_spawn(ctx: &EffectNodeContext<'_, '_>) -> CopySpawn {
     }
 }
 
-fn same_mesh_source(left: Option<&MeshSource>, right: Option<&MeshSource>) -> bool {
-    match (left, right) {
-        (None, None) => true,
-        (Some(MeshSource::Cube { size: left }), Some(MeshSource::Cube { size: right })) => {
-            left.to_bits() == right.to_bits()
+/// `transform` with its parent frame folded in: the world pose and scale
+/// the solver takes. A shear the parent chain makes is dropped.
+pub(crate) fn flatten(transform: Transform) -> Transform {
+    if transform.parent == IDENTITY_MAT4 {
+        return transform;
+    }
+    let m = transform.world();
+    let scale: [f32; 3] = std::array::from_fn(|col| (0..3).map(|row| m[col][row] * m[col][row]).sum::<f32>().sqrt());
+    let rotation: [[f32; 3]; 3] =
+        std::array::from_fn(|row| std::array::from_fn(|col| if scale[col] > 0.0 { m[col][row] / scale[col] } else { 0.0 }));
+    Transform {
+        pos: [m[3][0], m[3][1], m[3][2]],
+        rot_euler: rotation_to_render_scene_euler(rotation),
+        scale,
+        billboard: transform.billboard,
+        parent: IDENTITY_MAT4,
+    }
+}
+
+/// The form the solver takes a body in: a Fixed body is a static collider,
+/// the exact mesh; anything that moves is convex hulls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Form {
+    Hulls,
+    Mesh,
+}
+
+/// What a body's collision shape is made from. Equal wants give equal
+/// shapes, so a want that has not changed never rebuilds one.
+#[derive(Clone, Debug)]
+struct ShapeWant {
+    /// Wired meshes, each placed by its part transform: `mesh_k` with
+    /// `part_k`, or the single `source` with `source_transform` in slot 0.
+    parts: Vec<Option<(MeshSource, Transform)>>,
+    /// An unwired body's mesh file and selection (a shatter piece).
+    path: String,
+    selection: Option<MeshSelection>,
+    form: Form,
+    /// The scale in eighth-octave steps: hull detail follows the body's size.
+    scale_steps: [i32; 3],
+}
+
+impl Default for ShapeWant {
+    fn default() -> Self {
+        Self {
+            parts: Vec::new(),
+            path: String::new(),
+            selection: None,
+            form: Form::Hulls,
+            scale_steps: [0; 3],
         }
-        (
-            Some(MeshSource::Platonic {
-                shape: left_shape,
-                radius: left_radius,
-            }),
-            Some(MeshSource::Platonic {
-                shape: right_shape,
-                radius: right_radius,
-            }),
-        ) => left_shape == right_shape && left_radius.to_bits() == right_radius.to_bits(),
-        (
-            Some(MeshSource::Gltf {
-                path: left_path,
-                selection: left_selection,
-            }),
-            Some(MeshSource::Gltf {
-                path: right_path,
-                selection: right_selection,
-            }),
-        ) => left_path == right_path && same_selection(left_selection, right_selection),
-        _ => false,
     }
 }
 
-fn same_selection(left: &MeshSelection, right: &MeshSelection) -> bool {
-    left.mesh == right.mesh
-        && left.primitive == right.primitive
-        && left.material == right.material
-        && left.fit == right.fit
-        && left.recenter == right.recenter
-        && left
-            .translate
-            .iter()
-            .zip(right.translate.iter())
-            .all(|(left, right)| left.to_bits() == right.to_bits())
-        && left.fragment_count == right.fragment_count
-        && left.fragment_index == right.fragment_index
-        && left.collider_parts == right.collider_parts
+/// Wants compare bit for bit, so a NaN input stays one unchanged want and is
+/// refused once instead of rebuilding every frame.
+impl PartialEq for ShapeWant {
+    fn eq(&self, other: &Self) -> bool {
+        let same_part = |a: &Option<(MeshSource, Transform)>, b: &Option<(MeshSource, Transform)>| match (a, b) {
+            (None, None) => true,
+            (Some((source_a, transform_a)), Some((source_b, transform_b))) => {
+                same_source(source_a, source_b) && transform_bits(transform_a) == transform_bits(transform_b)
+            }
+            _ => false,
+        };
+        let same_selection = match (&self.selection, &other.selection) {
+            (None, None) => true,
+            (Some(a), Some(b)) => same_selection(a, b),
+            _ => false,
+        };
+        self.form == other.form
+            && self.scale_steps == other.scale_steps
+            && self.path == other.path
+            && same_selection
+            && self.parts.len() == other.parts.len()
+            && self.parts.iter().zip(other.parts.iter()).all(|(a, b)| same_part(a, b))
+    }
 }
 
-fn same_optional_selection(left: Option<MeshSelection>, right: Option<MeshSelection>) -> bool {
-    match (left, right) {
-        (None, None) => true,
-        (Some(left), Some(right)) => same_selection(&left, &right),
-        _ => false,
+fn same_source(a: &MeshSource, b: &MeshSource) -> bool {
+    match (a, b) {
+        (MeshSource::Cube { size: a }, MeshSource::Cube { size: b }) => a.to_bits() == b.to_bits(),
+        (MeshSource::Platonic { shape: shape_a, radius: a }, MeshSource::Platonic { shape: shape_b, radius: b }) => {
+            shape_a == shape_b && a.to_bits() == b.to_bits()
+        }
+        (MeshSource::Plane { width: wa, height: ha }, MeshSource::Plane { width: wb, height: hb }) => {
+            wa.to_bits() == wb.to_bits() && ha.to_bits() == hb.to_bits()
+        }
+        (MeshSource::Gltf { path: path_a, node_path: node_a, selection: a }, MeshSource::Gltf { path: path_b, node_path: node_b, selection: b }) => {
+            path_a == path_b && node_a == node_b && same_selection(a, b)
+        }
+        _ => a == b,
     }
+}
+
+fn same_selection(a: &MeshSelection, b: &MeshSelection) -> bool {
+    let unplaced = |selection: &MeshSelection| MeshSelection { translate: [0.0; 3], ..*selection };
+    a.translate.map(f32::to_bits) == b.translate.map(f32::to_bits) && unplaced(a) == unplaced(b)
+}
+
+type TransformBits = ([[u32; 3]; 3], bool, [[u32; 4]; 4]);
+
+fn transform_bits(transform: &Transform) -> TransformBits {
+    (
+        [transform.pos, transform.rot_euler, transform.scale].map(|v| v.map(f32::to_bits)),
+        transform.billboard,
+        transform.parent.map(|column| column.map(f32::to_bits)),
+    )
+}
+
+impl ShapeWant {
+    fn is_empty(&self) -> bool {
+        self.parts.iter().all(Option::is_none) && self.path.is_empty()
+    }
+
+    /// The scale the steps stand for.
+    fn scale(&self) -> [f32; 3] {
+        self.scale_steps.map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2())
+    }
+
+    /// Load every part, place it, and make the solid this want asks for.
+    /// Runs on a worker thread.
+    fn build(&self) -> Result<(ShapeKey, Solid), String> {
+        let mut lists: Vec<Vec<[f32; 3]>> = Vec::new();
+        for (source, transform) in self.parts.iter().flatten() {
+            let mut vertices = source.load_vertices()?;
+            transform_vertices(&mut vertices, *transform)?;
+            lists.push(positions(&vertices));
+        }
+        if let Some(selection) = self.selection.filter(|_| !self.path.is_empty()) {
+            let vertices = selection.load(std::path::Path::new(&self.path))?;
+            lists.push(positions(&vertices));
+        }
+        let shape = CollisionShape::from_triangle_lists(lists.iter().map(Vec::as_slice)).map_err(|error| error.to_string())?;
+        let scale = self.scale();
+        let key = ShapeKey::new(&shape, scale, None).map_err(|error| error.to_string())?;
+        let solid = match self.form {
+            Form::Hulls => Solid::Hulls(shape.body_hulls(scale).map_err(|error| error.to_string())?),
+            Form::Mesh => Solid::Mesh(shape.exact_mesh()),
+        };
+        Ok((key, solid))
+    }
+}
+
+fn positions(vertices: &[MeshVertex]) -> Vec<[f32; 3]> {
+    vertices.iter().map(|vertex| vertex.position).collect()
+}
+
+/// Whether reading this frame's geometry found every wired mesh ready.
+enum Geometry {
+    Ready,
+    /// A wired mesh is still loading: the body keeps the shape it has.
+    Loading,
 }
 
 manifold_node_engine::primitive! {
  name: RigidBodyNode,
  type_id: "node.rigid_body",
- purpose: "Describe a rigid body's shape, starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
+ purpose: "Describe a rigid body's starting transform, motion type, mass in kg and contact properties; the mass is the card value whatever the body's size. Its collision shape comes from its mesh automatically (manifold_physics::collision_shape): a Fixed body is the exact mesh, a moving body convex hulls with detail chosen from its size and triangles. Wire body into a shared Physics World; the body's pose (or instances and active_count for a copy group) carries what the world solved to the object that draws it, and acceleration takes a force field that pushes this body only.",
  inputs: {
   transform: Transform required,
   source: MeshSource optional,
   source_transform: Transform optional,
-  part_0: Transform optional,
-  part_1: Transform optional,
-  part_2: Transform optional,
-  part_3: Transform optional,
-  part_4: Transform optional,
-  part_5: Transform optional,
-  part_6: Transform optional,
-  part_7: Transform optional,
-  part_8: Transform optional,
-  part_9: Transform optional,
-  part_10: Transform optional,
-  part_11: Transform optional,
-  part_12: Transform optional,
-  part_13: Transform optional,
-  part_14: Transform optional,
-  part_15: Transform optional,
-  part_16: Transform optional,
-  part_17: Transform optional,
-  part_18: Transform optional,
-  part_19: Transform optional,
-  part_20: Transform optional,
-  part_21: Transform optional,
-  part_22: Transform optional,
-  part_23: Transform optional,
-  part_24: Transform optional,
-  part_25: Transform optional,
-  part_26: Transform optional,
-  part_27: Transform optional,
-  part_28: Transform optional,
-  part_29: Transform optional,
-  part_30: Transform optional,
-  part_31: Transform optional,
-  part_32: Transform optional,
-  part_33: Transform optional,
-  part_34: Transform optional,
-  part_35: Transform optional,
-  part_36: Transform optional,
-  part_37: Transform optional,
-  part_38: Transform optional,
-  part_39: Transform optional,
-  part_40: Transform optional,
-  part_41: Transform optional,
-  part_42: Transform optional,
-  part_43: Transform optional,
-  part_44: Transform optional,
-  part_45: Transform optional,
-  part_46: Transform optional,
-  part_47: Transform optional,
-  part_48: Transform optional,
-  part_49: Transform optional,
-  part_50: Transform optional,
-  part_51: Transform optional,
-  part_52: Transform optional,
-  part_53: Transform optional,
-  part_54: Transform optional,
-  part_55: Transform optional,
-  part_56: Transform optional,
-  part_57: Transform optional,
-  part_58: Transform optional,
-  part_59: Transform optional,
-  part_60: Transform optional,
-  part_61: Transform optional,
-  part_62: Transform optional,
-  part_63: Transform optional,
   mass: ScalarF32 optional,
   friction: ScalarF32 optional,
   bounce: ScalarF32 optional,
@@ -185,10 +222,9 @@ manifold_node_engine::primitive! {
   copy_turn_z: ScalarF32 optional,
   acceleration: VectorField optional,
  },
- outputs: { body: RigidBody, shape: ScalarF32, pose: Transform, instances: Array(InstanceTransform), active_count: ScalarF32, },
+ outputs: { body: RigidBody, pose: Transform, instances: Array(InstanceTransform), active_count: ScalarF32, },
 params: [
 ParamDef { name: Cow::Borrowed("enabled"), label: "Enabled", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
-ParamDef { name: Cow::Borrowed("shape"), label: "Shape", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 4.0)), enum_values: PLATONIC_SHAPES },
 ParamDef { name: Cow::Borrowed("motion"), label: "Body Type", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 2.0)), enum_values: &["Fixed", "Moving", "Animated"] },
 ParamDef { name: Cow::Borrowed("mass"), label: "Mass", ty: ParamType::Float, default: ParamValue::Float(crate::physics::DEFAULT_MASS_KG), range: Some((0.1, 100_000.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("friction"), label: "Friction", ty: ParamType::Float, default: ParamValue::Float(0.5), range: Some((0.0, 1.0)), enum_values: &[] },
@@ -204,21 +240,20 @@ ParamDef { name: Cow::Borrowed("recenter"), label: "Recenter", ty: ParamType::Bo
 ParamDef { name: Cow::Borrowed("translate_x"), label: "Source Offset X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("translate_y"), label: "Source Offset Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("translate_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
-ParamDef { name: Cow::Borrowed("fragment_count"), label: "Pieces", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0,64.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("fragment_index"), label: "Piece", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0,63.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("fragment_parent"), label: "Fragment Parent", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0,63.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("collider_parts"), label: "Collider Detail", ty: ParamType::Int, default: ParamValue::Float(32.0), range: Some((1.0,64.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("compound_materials"), label: "Compound Materials", ty: ParamType::Table, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+ParamDef { name: Cow::Borrowed("fragment_count"), label: "Pieces", ty: ParamType::Int, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
+ParamDef { name: Cow::Borrowed("fragment_index"), label: "Piece", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+ParamDef { name: Cow::Borrowed("fragment_parent"), label: "Fragment Parent", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_count"), label: "Count", ty: ParamType::Int, default: ParamValue::Float(100.0), range: Some((0.0, MAX_COPIES as f32)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_size_spacing"), label: "Spacing", ty: ParamType::Float, default: ParamValue::Float(manifold_core::copies_body::SIZE_SPACING_DEFAULT), range: Some(manifold_core::copies_body::SIZE_SPACING_RANGE), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_columns"), label: "Columns", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, 64.0)), enum_values: &[] },
-ParamDef { name: Cow::Borrowed("copy_layout"), label: "Layout", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &manifold_core::copies_body::COPY_LAYOUT_LABELS },
+ParamDef { name: Cow::Borrowed("copy_layout"), label: "Layout", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, (manifold_core::copies_body::COPY_LAYOUT_LABELS.len() - 1) as f32)), enum_values: &manifold_core::copies_body::COPY_LAYOUT_LABELS },
 ParamDef { name: Cow::Borrowed("copy_turn_x"), label: "Copy Turn X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_turn_y"), label: "Copy Turn Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("parts"), label: "Parts", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
  ],
  depth_rule: Terminal,
- composition_notes: "One description per body. All bodies that should collide feed the same Physics World. Dynamic bodies respond to gravity. Fixed bodies are static: changing their authored transform teleports them and does not sweep through contacts. Choose Animated for any driven moving or spinning collider; its target moves through the solver with velocity. Scale or shape changes rebuild the world. Primitive mesh radius must be 1. Imported sources copy the mesh selection/fit/offset and prepare convex parts once during warmup, with a 0.1% thickness for open surfaces. Rendering remains unchanged. Transform scale applies equally to mesh and collider. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group with uniform scale. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
+ composition_notes: "One description per body. All bodies that should collide feed the same Physics World. The shape comes from the mesh: wire the object's mesh source into source (one mesh, placed by source_transform) or mesh_k with part_k (a compound body of several meshes, each placed by its part transform, parent frames included); an unwired body reads its mesh file (path and selection), as a shatter piece does. A Fixed body is static and collides as the exact mesh; changing its authored transform teleports it. Moving and Animated bodies collide as convex hulls, detail chosen from size and triangle count, open surfaces given a 0.1% shell. While a new shape is prepared the body keeps its old one; a body with no shape yet stays out of the world until it has one, and the world keeps stepping. The transform's parent frame is folded into the body's world pose. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group with uniform scale. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Rigid Body", category: Atom },
  summary: "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",
@@ -226,19 +261,165 @@ ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamTy
  aliases: ["physics body", "rigid body", "collider"],
  boundary_reason: NonGpu,
  extra_fields: {
-    collider_source: Option<MeshSource> = None,
-    collider_path: String = String::new(),
-    collider_selection: Option<MeshSelection> = None,
-    collider: Option<Arc<ColliderGeometry>> = None,
-    pending_collider: Option<mpsc::Receiver<Result<ColliderGeometry, String>>> = None,
-    collider_error: Option<String> = None,
-    collider_source_transform: Transform = Transform::default(),
-    collider_materials: [Option<i32>; 64] = [None; 64],
-    collider_part_transforms: [Transform; 64] = [Transform { pos: [0.0; 3], rot_euler: [0.0; 3], scale: [1.0; 3], billboard: false }; 64],
-    source_pending: bool = false,
+    // What the current shape is for, and what this frame asks for.
+    want: ShapeWant = ShapeWant::default(),
+    asked: ShapeWant = ShapeWant::default(),
+    // The last shape made: the body's shape, and its stand-in while a new
+    // one is built.
+    shape: Option<Arc<Solid>> = None,
+    shape_key: Option<(ShapeKey, Form)> = None,
+    building: Option<(ShapeWant, mpsc::Receiver<Result<(ShapeKey, Solid), String>>)> = None,
+    // Why the shape for `want` could not be made.
+    refused: Option<Arc<str>> = None,
+    // A wired mesh is still loading.
+    loading: bool = false,
+    // This node's body, the same for the node's life: a recompile that
+    // carries the node keeps it, so the world follows the body to its new
+    // port (`RigidBody::identity`).
+    identity: u64 = next_identity(),
+    // A mesh has reached this node since it was built. Until one has, an
+    // empty ask means the wired mesh has not arrived (the first replay after
+    // a structural edit runs before the mesh's producer), not that the body
+    // has none.
+    mesh_seen: bool = false,
+    // The part inputs, one pair per part: the `parts` param sizes them.
+    part_ports: PartPorts = PartPorts::default(),
  },
 }
+
+/// A fresh body identity: never 0, never repeated in this run.
+fn next_identity() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl RigidBodyNode {
+    /// Fill `self.asked` with what this frame's inputs ask for.
+    fn read_geometry(&mut self, ctx: &EffectNodeContext<'_, '_>, form: Form, scale: [f32; 3]) -> Result<Geometry, Cow<'static, str>> {
+        let asked = &mut self.asked;
+        asked.form = form;
+        // An exact mesh is installed at the exact scale; only hull detail
+        // follows the size.
+        if form == Form::Mesh {
+            asked.scale_steps = [0; 3];
+        } else if scale.iter().all(|s| s.is_finite() && *s > 0.0) {
+            asked.scale_steps = scale.map(|s| (s.log2() * SCALE_STEPS_PER_OCTAVE).round() as i32);
+        }
+        asked.path.clear();
+        asked.selection = None;
+        let ports = &self.part_ports;
+        let wired_parts = (0..ports.count()).any(|index| ctx.inputs.slot(ports.ports(index).0).is_some());
+        // A part still loading keeps its last mesh, so the slots carry over.
+        asked.parts.resize(if wired_parts { ports.count() } else { 1 }, None);
+        let mut loading = false;
+        for (index, part) in asked.parts.iter_mut().enumerate() {
+            let (port, transform_port) = if wired_parts { ports.ports(index) } else { ("source", "source_transform") };
+            let Some(slot) = ctx.inputs.slot(port) else {
+                *part = None;
+                continue;
+            };
+            let source = ctx.inputs.slot_content_ready(slot).then(|| ctx.inputs.mesh_source_slot(slot)).flatten();
+            let Some(source) = source else {
+                loading = true;
+                continue;
+            };
+            let transform = ctx.inputs.transform(transform_port).unwrap_or(IDENTITY_TRANSFORM);
+            validate_transform(transform).map_err(|error| Cow::Owned(format!("mesh part {index}: {error}")))?;
+            *part = Some((source, transform));
+        }
+        if !wired_parts && ctx.inputs.slot("source").is_none()
+            && let Some(ParamValue::String(path)) = ctx.params.get("path")
+        {
+            asked.path.push_str(path);
+            asked.selection = Some(MeshSelection::from_context(ctx));
+        }
+        // Nothing wired and no file: a Group with no mesh inside, set up
+        // before its first part or after its last one left. It is refused
+        // at once, never held as loading.
+        if !loading && asked.is_empty() && !asked.parts.iter().enumerate().any(|(index, _)| {
+            let port = if wired_parts { ports.ports(index).0 } else { "source" };
+            ctx.inputs.slot(port).is_some()
+        }) {
+            return Err(Cow::Borrowed("this group has no mesh to collide with"));
+        }
+        self.mesh_seen |= !asked.is_empty();
+        Ok(if loading || !self.mesh_seen { Geometry::Loading } else { Geometry::Ready })
+    }
+
+    /// Start building the asked-for shape when it differs from the current
+    /// one, and take a finished build. With `wait` (offline) it blocks until
+    /// the asked-for shape is made, so an export never steps the world while
+    /// a body's shape builds and the tick a body joins never depends on how
+    /// fast the build thread ran (as the water waits for its lattices).
+    fn prepare(&mut self, wait: bool) {
+        loop {
+            if !self.take_build(wait) {
+                return;
+            }
+            if self.asked == self.want && (self.shape_key.is_some() || self.refused.is_some()) {
+                return;
+            }
+            self.want.clone_from(&self.asked);
+            self.refused = None;
+            if self.want.is_empty() {
+                return;
+            }
+            let want = self.want.clone();
+            let (sender, receiver) = mpsc::channel();
+            let spawned = std::thread::Builder::new().name("collision-shape".into()).spawn(move || {
+                // Always settle, so a build that panicked is a refusal, not a wait.
+                let built = std::panic::catch_unwind(|| want.build())
+                    .unwrap_or_else(|_| Err("the collision shape build panicked".into()));
+                let _ = sender.send(built);
+            });
+            match spawned {
+                Ok(_) => self.building = Some((self.want.clone(), receiver)),
+                Err(error) => self.refused = Some(Arc::from(format!("the collision shape build could not start: {error}"))),
+            }
+            if !wait {
+                return;
+            }
+        }
+    }
+
+    /// Take the build in flight once it has settled, blocking for it with
+    /// `wait`. False while it is still running.
+    fn take_build(&mut self, wait: bool) -> bool {
+        let Some((built_for, receiver)) = &self.building else { return true };
+        let result = if wait {
+            receiver.recv().unwrap_or_else(|_| Err("the collision shape build stopped".into()))
+        } else {
+            match receiver.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => return false,
+                result => result.unwrap_or_else(|_| Err("the collision shape build stopped".into())),
+            }
+        };
+        if *built_for == self.want {
+            match result {
+                Ok((key, solid)) => {
+                    if self.shape_key != Some((key, built_for.form)) {
+                        self.shape = Some(Arc::new(solid));
+                        self.shape_key = Some((key, built_for.form));
+                    }
+                    self.refused = None;
+                }
+                Err(error) => self.refused = Some(Arc::from(error)),
+            }
+        }
+        self.building = None;
+        true
+    }
+}
+
 impl Primitive for RigidBodyNode {
+    fn reconfigure(&mut self, params: &ParamValues) {
+        self.part_ports.configure(<Self as manifold_node_engine::primitive::PrimitiveSpec>::INPUTS, params);
+    }
+
+    fn live_inputs(&self) -> Option<&[manifold_node_engine::ports::NodeInput]> {
+        self.part_ports.inputs()
+    }
+
     fn source_asset_paths(&self) -> &'static [&'static str] {
         &["path"]
     }
@@ -253,17 +434,16 @@ impl Primitive for RigidBodyNode {
     }
 
     fn warmup_pending(&self) -> bool {
-        self.source_pending || self.pending_collider.is_some()
+        self.building.is_some() || self.loading
     }
 
-    // A disabled body ignores its pending source, and an enabled one drops
-    // its collider while the source reloads.
+    // A body whose mesh is still loading keeps its last shape.
     fn runs_with_pending_inputs(&self) -> bool {
         true
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.inputs.any_pending_except(|port| port == "source") {
+        if ctx.inputs.any_pending_except(|port| port == "source" || is_part_mesh(port)) {
             ctx.mark_outputs_pending();
             return;
         }
@@ -271,10 +451,7 @@ impl Primitive for RigidBodyNode {
             ctx.error("Rigid Body needs a starting transform");
             return;
         };
-        let requested_source_transform = ctx
-            .inputs
-            .transform("source_transform")
-            .unwrap_or(IDENTITY_TRANSFORM);
+        let transform = flatten(transform);
         let enabled = !matches!(ctx.params.get("enabled"), Some(ParamValue::Bool(false)));
         let release_count = ctx.scalar_or_param("release_count", 0.0);
         let fragment_parent = match ctx.params.get("fragment_parent") {
@@ -283,262 +460,43 @@ impl Primitive for RigidBodyNode {
             }
             _ => None,
         };
-        let selector = |name: &str| match ctx.params.get(name) {
+        let kind = match ctx.params.get("motion") {
             Some(ParamValue::Enum(v)) => *v,
             Some(ParamValue::Float(v)) => v.round() as u32,
             _ => 1,
         };
-        // Disabled bodies emit immediately, so imported collider preparation
-        // cannot hold the physics world pending.
-        if !enabled {
-            self.source_pending = false;
-            self.pending_collider = None;
-            self.collider_source = None;
-            self.collider_path.clear();
-            self.collider_selection = None;
-            self.collider = None;
-            self.collider_error = None;
-            self.collider_source_transform = IDENTITY_TRANSFORM;
-            self.collider_materials = [None; 64];
-            self.collider_part_transforms = [IDENTITY_TRANSFORM; 64];
-            let body = RigidBody {
-                transform,
-                enabled,
-                release_count,
-                fragment_parent,
-                shape: selector("shape"),
-                kind: selector("motion"),
-                mass: ctx.scalar_or_param("mass", crate::physics::DEFAULT_MASS_KG),
-                friction: ctx.scalar_or_param("friction", 0.5),
-                bounce: ctx.scalar_or_param("bounce", 0.15),
-                collider: self.collider.clone(),
-                wall: false,
-                spawn: read_spawn(ctx),
-            };
-            let shape = body.shape;
-            ctx.outputs.set_cpu_value("body", body);
-            ctx.outputs
-                .set_scalar("shape", ParamValue::Float(shape as f32));
-            return;
-        }
-        let source_slot = ctx.inputs.slot("source");
-        let wired_source = match source_slot {
-            None => None,
-            Some(slot) if !ctx.inputs.slot_content_ready(slot) => {
-                self.source_pending = true;
-                self.pending_collider = None;
-                self.collider_source = None;
-                self.collider_path.clear();
-                self.collider_selection = None;
-                self.collider = None;
-                self.collider_error = None;
-                self.collider_source_transform = IDENTITY_TRANSFORM;
-                self.collider_materials = [None; 64];
-                self.collider_part_transforms = [IDENTITY_TRANSFORM; 64];
-                ctx.mark_outputs_pending();
-                return;
-            }
-            Some(slot) => match ctx.inputs.mesh_source_slot(slot) {
-                Some(source) => Some(source),
-                None => {
-                    self.source_pending = true;
-                    self.pending_collider = None;
-                    self.collider_source = None;
-                    self.collider_path.clear();
-                    self.collider_selection = None;
-                    self.collider = None;
-                    self.collider_error = None;
-                    self.collider_source_transform = IDENTITY_TRANSFORM;
-                    self.collider_materials = [None; 64];
-                    self.collider_part_transforms = [IDENTITY_TRANSFORM; 64];
-                    ctx.mark_outputs_pending();
-                    return;
-                }
-            },
-        };
-        self.source_pending = false;
-        // A typed source owns the complete geometry description.  Legacy
-        // compound/path parameters are only resolved when this port is
-        // unwired, so changing them cannot recook a wired source.
-        let (compound_materials, compound) = if wired_source.is_some() {
-            ([None; 64], false)
-        } else {
-            match parse_compound_materials(ctx) {
-                Ok(value) => value,
-                Err(error) => {
-                    ctx.error(error);
-                    ctx.mark_outputs_pending();
-                    return;
-                }
-            }
-        };
-        let source_transform = if compound {
-            IDENTITY_TRANSFORM
-        } else {
-            requested_source_transform
-        };
-        let mut part_transforms = [IDENTITY_TRANSFORM; 64];
-        if compound {
-            for (slot, port) in PART_PORTS.iter().enumerate() {
-                part_transforms[slot] = ctx.inputs.transform(port).unwrap_or(IDENTITY_TRANSFORM);
-                if compound_materials[slot].is_some()
-                    && let Err(error) = validate_transform(part_transforms[slot])
-                {
-                    ctx.error(format!("compound part {slot}: {error}"));
-                    ctx.mark_outputs_pending();
-                    return;
+        let form = if kind == 0 { Form::Mesh } else { Form::Hulls };
+        let geometry = self.read_geometry(ctx, form, transform.scale);
+        self.loading = matches!(geometry, Ok(Geometry::Loading));
+        match geometry {
+            Ok(Geometry::Ready) => self.prepare(ctx.sim_step.offline()),
+            // Nothing new to build until every wired mesh has loaded.
+            Ok(Geometry::Loading) => {}
+            Err(error) => {
+                self.want.clone_from(&self.asked);
+                // A standing refusal keeps its reason: no allocation per frame.
+                if self.refused.as_deref() != Some(&*error) {
+                    self.refused = Some(Arc::from(error.as_ref()));
                 }
             }
         }
-        if let Err(error) = validate_transform(source_transform) {
-            ctx.error(error);
-            ctx.mark_outputs_pending();
-            return;
-        }
-        let path = match ctx.params.get("path") {
-            Some(ParamValue::String(path)) => path.as_str(),
-            _ => "",
-        };
-        let (path, selection) = if wired_source.is_some() {
-            ("", None)
-        } else {
-            (path, Some(MeshSelection::from_context(ctx)))
-        };
-        let changed = !same_mesh_source(self.collider_source.as_ref(), wired_source.as_ref())
-            || self.collider_path != path
-            || !same_optional_selection(self.collider_selection, selection)
-            || self.collider_source_transform != source_transform
-            || self.collider_materials != compound_materials
-            || self.collider_part_transforms != part_transforms;
-        if changed && self.pending_collider.is_none() {
-            self.collider_source = wired_source.clone();
-            self.collider_path.clear();
-            self.collider_path.push_str(path);
-            self.collider_selection = selection;
-            self.collider = None;
-            self.collider_error = None;
-            self.collider_source_transform = source_transform;
-            self.collider_materials = compound_materials;
-            self.collider_part_transforms = part_transforms;
-            if wired_source.is_some() || !path.is_empty() {
-                let path = std::path::PathBuf::from(path);
-                let source = wired_source.clone();
-                let (tx, rx) = mpsc::channel();
-                self.pending_collider = Some(rx);
-                std::thread::spawn(move || {
-                    let result: Result<ColliderGeometry, String> = (|| {
-                        if let Some(source) = source {
-                            let mut vertices = source.load_vertices()?;
-                            transform_vertices(&mut vertices, source_transform)?;
-                            match source {
-                                MeshSource::Gltf { selection, .. } => {
-                                    prepare_colliders(&vertices, selection.collider_parts)
-                                }
-                                MeshSource::Cube { .. } | MeshSource::Platonic { .. } => {
-                                    let points: Vec<_> = vertices
-                                        .into_iter()
-                                        .map(|vertex| vertex.position)
-                                        .collect();
-                                    let hull = manifold_physics::cook_hull(&points)
-                                        .map_err(|error| error.to_string())?;
-                                    Ok(ColliderGeometry { hulls: vec![hull] })
-                                }
-                            }
-                        } else if compound {
-                            let selection = selection.expect("legacy compound selection");
-                            let vertices = load_compound_materials(
-                                &path,
-                                selection,
-                                compound_materials,
-                                part_transforms,
-                            )?;
-                            prepare_colliders(&vertices, selection.collider_parts)
-                        } else {
-                            let selection = selection.expect("legacy imported selection");
-                            let mut vertices = selection.load(&path)?;
-                            transform_vertices(&mut vertices, source_transform)?;
-                            prepare_colliders(&vertices, selection.collider_parts)
-                        }
-                    })();
-                    let _ = tx.send(result);
-                });
-            }
-        }
-        if let Some(rx) = &self.pending_collider {
-            match rx.try_recv() {
-                Ok(Ok(collider)) => {
-                    if same_mesh_source(self.collider_source.as_ref(), wired_source.as_ref())
-                        && same_optional_selection(self.collider_selection, selection)
-                        && self.collider_path == path
-                        && self.collider_source_transform == source_transform
-                        && self.collider_materials == compound_materials
-                        && self.collider_part_transforms == part_transforms
-                    {
-                        self.collider = Some(Arc::new(collider));
-                    }
-                    self.pending_collider = None;
-                }
-                Ok(Err(error)) => {
-                    if same_mesh_source(self.collider_source.as_ref(), wired_source.as_ref())
-                        && same_optional_selection(self.collider_selection, selection)
-                        && self.collider_path == path
-                        && self.collider_source_transform == source_transform
-                        && self.collider_materials == compound_materials
-                        && self.collider_part_transforms == part_transforms
-                    {
-                        self.collider_error = Some(error);
-                    }
-                    self.pending_collider = None;
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    if same_mesh_source(self.collider_source.as_ref(), wired_source.as_ref())
-                        && same_optional_selection(self.collider_selection, selection)
-                        && self.collider_path == path
-                        && self.collider_source_transform == source_transform
-                        && self.collider_materials == compound_materials
-                        && self.collider_part_transforms == part_transforms
-                    {
-                        self.collider_error =
-                            Some("Physics collider preparation disconnected".into());
-                    }
-                    self.pending_collider = None;
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
-        }
-        if self.pending_collider.is_some()
-            || self.collider_error.is_some()
-            || !same_mesh_source(self.collider_source.as_ref(), wired_source.as_ref())
-            || !same_optional_selection(self.collider_selection, selection)
-            || self.collider_path != path
-            || self.collider_source_transform != source_transform
-            || self.collider_materials != compound_materials
-            || self.collider_part_transforms != part_transforms
-        {
-            ctx.mark_outputs_pending();
-            if let Some(error) = &self.collider_error {
-                ctx.error(error.clone());
-            }
-            return;
-        }
+        let collider = if self.refused.is_some() { None } else { self.shape.clone() };
         let body = RigidBody {
             transform,
             enabled,
             release_count,
             fragment_parent,
-            shape: selector("shape"),
-            kind: selector("motion"),
+            kind,
             mass: ctx.scalar_or_param("mass", crate::physics::DEFAULT_MASS_KG),
             friction: ctx.scalar_or_param("friction", 0.5),
             bounce: ctx.scalar_or_param("bounce", 0.15),
-            collider: self.collider.clone(),
+            collider,
+            refused: self.refused.clone(),
             wall: false,
+            identity: self.identity,
             spawn: read_spawn(ctx),
         };
-        let shape = body.shape;
         ctx.outputs.set_cpu_value("body", body);
-        ctx.outputs
-            .set_scalar("shape", ParamValue::Float(shape as f32));
     }
 }
 
@@ -553,7 +511,7 @@ mod tests {
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
     use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::ports::{PortType, ScalarType};
+    use manifold_node_engine::ports::PortType;
     use manifold_node_engine::exec::backend::MockBackend;
     use manifold_core::{Beats, Seconds};
 
@@ -566,199 +524,146 @@ mod tests {
         }
     }
 
-    fn run_once(
-        primitive: &mut RigidBodyNode,
-        backend: &mut MockBackend,
-        transform_slot: Slot,
-        source_slot: Slot,
-        body_slot: Slot,
-        shape_slot: Slot,
-        params: &ParamValues,
-    ) -> bool {
-        let input_bindings: &[(&'static str, Slot)] =
-            &[("transform", transform_slot), ("source", source_slot)];
-        let output_bindings: &[(&'static str, Slot)] =
-            &[("body", body_slot), ("shape", shape_slot)];
-        let mut scalar_scratch = Vec::new();
-        let mut camera_scratch = Vec::new();
-        let mut light_scratch = Vec::new();
-        let mut material_scratch = Vec::new();
-        let mut transform_scratch = Vec::new();
-        let mut atmosphere_scratch = Vec::new();
-        let mut render_mode_scratch = Vec::new();
-        let mut object_scratch = Vec::new();
-        let mut body_scratch = CpuWireWrites::default();
-        let inputs = NodeInputs::new(input_bindings, backend, &[]);
-        let outputs = NodeOutputs::new(
-            output_bindings,
-            backend,
-            &mut scalar_scratch,
-            &mut camera_scratch,
-            &mut light_scratch,
-            &mut material_scratch,
-            &mut transform_scratch,
-            &mut atmosphere_scratch,
-            &mut render_mode_scratch,
-            &mut object_scratch,
-        )
-        .with_cpu_value_writes(&mut body_scratch);
-        let pending = {
-            let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None);
-            primitive.run(&mut ctx);
-            ctx.outputs_pending
-        };
-        body_scratch.commit(backend.cpu_values_mut());
-        pending
+    struct Rig {
+        node: RigidBodyNode,
+        backend: MockBackend,
+        transform: Slot,
+        source: Slot,
+        body: Slot,
+        params: ParamValues,
+        /// Leave the mesh input unwired: a Group with no mesh inside.
+        unwired: bool,
+        /// Run as live preview, not export.
+        live: bool,
     }
 
-    fn settle(
-        primitive: &mut RigidBodyNode,
-        backend: &mut MockBackend,
-        transform_slot: Slot,
-        source_slot: Slot,
-        body_slot: Slot,
-        shape_slot: Slot,
-        params: &ParamValues,
-    ) -> RigidBody {
-        for _ in 0..200 {
-            let pending = run_once(
-                primitive,
-                backend,
-                transform_slot,
-                source_slot,
-                body_slot,
-                shape_slot,
-                params,
-            );
-            if !pending && let Some(body) = backend.cpu_values().get::<RigidBody>(body_slot) {
-                return body;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+    impl Rig {
+        fn new(source: MeshSource) -> Self {
+            let mut backend = MockBackend::new();
+            let transform = backend.acquire(ResourceId(0), PortType::Transform, None, (0, 0));
+            let source_slot = backend.acquire(ResourceId(1), PortType::MeshSource, None, (0, 0));
+            let body = backend.acquire(ResourceId(2), PortType::RigidBody, None, (0, 0));
+            backend.set_transform(transform, Transform::default());
+            backend.set_mesh_source(source_slot, source);
+            Self { node: RigidBodyNode::new(), backend, transform, source: source_slot, body, params: ParamValues::default(), unwired: false, live: false }
         }
-        panic!("rigid body source preparation did not settle");
+
+        fn run(&mut self) -> RigidBody {
+            let wired = [("transform", self.transform), ("source", self.source)];
+            let input_bindings: &[(&'static str, Slot)] = if self.unwired { &wired[..1] } else { &wired };
+            let output_bindings: &[(&'static str, Slot)] = &[("body", self.body)];
+            let mut scalar_scratch = Vec::new();
+            let mut camera_scratch = Vec::new();
+            let mut light_scratch = Vec::new();
+            let mut material_scratch = Vec::new();
+            let mut transform_scratch = Vec::new();
+            let mut atmosphere_scratch = Vec::new();
+            let mut render_mode_scratch = Vec::new();
+            let mut object_scratch = Vec::new();
+            let mut body_scratch = CpuWireWrites::default();
+            let inputs = NodeInputs::new(input_bindings, &self.backend, &[]);
+            let outputs = NodeOutputs::new(
+                output_bindings,
+                &self.backend,
+                &mut scalar_scratch,
+                &mut camera_scratch,
+                &mut light_scratch,
+                &mut material_scratch,
+                &mut transform_scratch,
+                &mut atmosphere_scratch,
+                &mut render_mode_scratch,
+                &mut object_scratch,
+            )
+            .with_cpu_value_writes(&mut body_scratch);
+            {
+                let mut ctx = EffectNodeContext::new(frame_time(), &self.params, inputs, outputs, None);
+                if self.live {
+                    ctx = ctx.with_sim_step(manifold_node_engine::exec::effect_node::SimStep::live(Seconds(1.0 / 60.0)));
+                }
+                self.node.run(&mut ctx);
+                assert!(!ctx.outputs_pending, "a body never holds its world");
+            }
+            body_scratch.commit(self.backend.cpu_values_mut());
+            self.backend.cpu_values().get::<RigidBody>(self.body).expect("a body every frame")
+        }
+
+        /// Run until the shape build settles.
+        fn settle(&mut self) -> RigidBody {
+            for _ in 0..400 {
+                let body = self.run();
+                if !self.node.warmup_pending() {
+                    return body;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("the collision shape build did not settle");
+        }
     }
 
     #[test]
-    fn rigid_body_source_pending_does_not_fallback_and_same_source_rebuilds() {
-        let mut backend = MockBackend::new();
-        let transform_slot = backend.acquire(ResourceId(0), PortType::Transform, None, (0, 0));
-        let source_slot = backend.acquire(ResourceId(1), PortType::MeshSource, None, (0, 0));
-        let body_slot = backend.acquire(ResourceId(2), PortType::RigidBody, None, (0, 0));
-        let shape_slot =
-            backend.acquire(ResourceId(3), PortType::Scalar(ScalarType::F32), None, (0, 0));
-        backend.set_transform(transform_slot, Transform::default());
-        backend.set_mesh_source(source_slot, MeshSource::Cube { size: 2.0 });
-        let mut primitive = RigidBodyNode::new();
-        let mut params = ParamValues::default();
-        params.insert(Cow::Borrowed("shape"), ParamValue::Enum(0));
-        let first = settle(
-            &mut primitive,
-            &mut backend,
-            transform_slot,
-            source_slot,
-            body_slot,
-            shape_slot,
-            &params,
-        );
-        let first_collider = first.collider.clone().expect("source hull");
-        assert_eq!(first_collider.hulls.len(), 1);
-        let repeated = settle(
-            &mut primitive,
-            &mut backend,
-            transform_slot,
-            source_slot,
-            body_slot,
-            shape_slot,
-            &params,
-        );
-        assert!(
-            Arc::ptr_eq(
-                repeated.collider.as_ref().expect("repeated source hull"),
-                &first_collider
-            ),
-            "stable source evaluation must retain the prepared collider"
-        );
+    fn a_body_keeps_its_shape_while_a_new_one_is_built() {
+        let mut rig = Rig::new(MeshSource::Cube { size: 2.0 });
+        let first = rig.settle().collider.expect("cube shape");
+        let hulls = first.hulls().expect("a moving body is hulls");
+        assert_eq!(hulls.len(), 1, "a cube is convex: one hull");
+        assert_eq!(hulls[0].len(), 8);
+        assert!(Arc::ptr_eq(&rig.settle().collider.unwrap(), &first), "an unchanged mesh keeps its shape");
 
-        backend.release(ResourceId(1), PortType::MeshSource, None, (0, 0));
-        assert!(run_once(
-            &mut primitive,
-            &mut backend,
-            transform_slot,
-            source_slot,
-            body_slot,
-            shape_slot,
-            &params
-        ));
-        assert!(primitive.collider.is_none());
-        backend.set_mesh_source(source_slot, MeshSource::Cube { size: 2.0 });
-        let restored = settle(
-            &mut primitive,
-            &mut backend,
-            transform_slot,
-            source_slot,
-            body_slot,
-            shape_slot,
-            &params,
-        );
-        let restored_collider = restored.collider.expect("restored source hull");
-        assert_eq!(restored_collider.hulls, first_collider.hulls);
-        assert_eq!(restored_collider.hulls[0].len(), 8);
+        rig.backend.release(ResourceId(1), PortType::MeshSource, None, (0, 0));
+        let reloading = rig.run();
+        assert!(Arc::ptr_eq(reloading.collider.as_ref().unwrap(), &first), "a reloading mesh keeps the old shape");
 
-        backend.set_mesh_source(source_slot, MeshSource::Cube { size: 0.6 });
-        let resized = settle(
-            &mut primitive, &mut backend, transform_slot, source_slot,
-            body_slot, shape_slot, &params,
-        ).collider.expect("edited source hull");
-        assert!(!Arc::ptr_eq(&resized, &restored_collider));
-        let extent = resized.hulls[0].iter()
-            .map(|point| point[0].abs()).fold(0.0_f32, f32::max);
+        rig.backend.set_mesh_source(rig.source, MeshSource::Cube { size: 0.6 });
+        let resized = rig.settle().collider.expect("edited shape");
+        assert!(!Arc::ptr_eq(&resized, &first));
+        let extent = resized.hulls().unwrap()[0].iter().map(|point| point[0].abs()).fold(0.0_f32, f32::max);
         assert!((extent - 0.3).abs() < 1e-6, "source edits change collision size");
 
-        backend.release(ResourceId(1), PortType::MeshSource, None, (0, 0));
-        params.insert(Cow::Borrowed("enabled"), ParamValue::Bool(false));
-        assert!(!run_once(
-            &mut primitive, &mut backend, transform_slot, source_slot,
-            body_slot, shape_slot, &params,
-        ), "disabled bodies do not wait for missing geometry");
-        assert!(!backend.cpu_values().get::<RigidBody>(body_slot).unwrap().enabled);
+        rig.params.insert(Cow::Borrowed("motion"), ParamValue::Enum(0));
+        let fixed = rig.settle().collider.expect("static shape");
+        assert!(matches!(*fixed, Solid::Mesh(_)), "a Fixed body is the exact mesh");
+    }
+
+    /// A Group set to Body or Collider with no mesh inside, from the start or
+    /// after its last part left, is refused at once with its reason, never
+    /// held as loading (section 7.4).
+    #[test]
+    fn a_group_with_no_mesh_is_refused_at_once() {
+        let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
+        rig.unwired = true;
+        let body = rig.run();
+        assert!(!rig.node.warmup_pending(), "never held as loading");
+        assert!(body.collider.is_none());
+        assert_eq!(body.refused.as_deref(), Some("this group has no mesh to collide with"));
+
+        let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
+        assert!(rig.settle().collider.is_some());
+        rig.unwired = true;
+        let body = rig.run();
+        assert!(!rig.node.warmup_pending() && body.collider.is_none() && body.refused.is_some(), "the last part leaving refuses it too");
+    }
+
+    /// Export takes the body's shape on its first frame, so the world never
+    /// steps without it; live preview builds it off the content thread and
+    /// the world keeps ticking meanwhile (section 7.4).
+    #[test]
+    fn an_export_takes_the_shape_on_the_first_frame() {
+        let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
+        assert!(rig.run().collider.is_some() && !rig.node.warmup_pending(), "export waits for the shape");
+
+        let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
+        rig.live = true;
+        assert!(rig.run().collider.is_none() && rig.node.warmup_pending(), "live never waits");
+        assert!(rig.settle().collider.is_some());
     }
 
     #[test]
-    fn rigid_body_invalid_mesh_source_reports_error_after_async_preparation() {
-        let mut backend = MockBackend::new();
-        let transform_slot = backend.acquire(ResourceId(0), PortType::Transform, None, (0, 0));
-        let source_slot = backend.acquire(ResourceId(1), PortType::MeshSource, None, (0, 0));
-        let body_slot = backend.acquire(ResourceId(2), PortType::RigidBody, None, (0, 0));
-        let shape_slot =
-            backend.acquire(ResourceId(3), PortType::Scalar(ScalarType::F32), None, (0, 0));
-        backend.set_transform(transform_slot, Transform::default());
-        backend.set_mesh_source(source_slot, MeshSource::Cube { size: f32::NAN });
-        let mut primitive = RigidBodyNode::new();
-        let params = ParamValues::default();
-        for _ in 0..200 {
-            let pending = run_once(
-                &mut primitive,
-                &mut backend,
-                transform_slot,
-                source_slot,
-                body_slot,
-                shape_slot,
-                &params,
-            );
-            assert!(pending, "invalid geometry must never emit a fallback body");
-            if primitive.collider_error.is_some() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(primitive.collider_error.is_some());
-        assert!(primitive.pending_collider.is_none());
-        assert!(run_once(
-            &mut primitive, &mut backend, transform_slot, source_slot,
-            body_slot, shape_slot, &params,
-        ));
-        assert!(primitive.collider_error.is_some());
-        assert!(primitive.pending_collider.is_none(), "unchanged invalid source retains its failure");
-        assert!(backend.cpu_values().get::<RigidBody>(body_slot).is_none());
+    fn a_bad_mesh_is_refused_with_a_reason() {
+        let mut rig = Rig::new(MeshSource::Cube { size: f32::NAN });
+        let body = rig.settle();
+        assert!(body.collider.is_none(), "invalid geometry never becomes a shape");
+        assert!(body.refused.is_some());
+        let again = rig.run();
+        assert!(again.refused.is_some() && rig.node.building.is_none(), "an unchanged bad mesh is not rebuilt");
     }
 }

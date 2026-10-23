@@ -1,5 +1,5 @@
 //! `render-import` — headless render of ONE glb/gltf file through the
-//! PRODUCTION import path (`assemble_import_graph`), for look-dev and as the
+//! PRODUCTION import path (`import_model` into the compiled scene), for look-dev and as the
 //! conformance harness's oracle binary (D2, `docs/GLB_CONFORMANCE_DESIGN.md`
 //! section 3). Shaped like `render_generator_preset.rs`: parse → build →
 //! converged-readback → PNG, sharing the SAME output transform
@@ -76,7 +76,7 @@ use manifold_compositor::compositor::{Compositor, CompositorFrame, CompositeLaye
 use manifold_compositor::display_capture::{AlphaInterpretation, LinearUiReadback};
 use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_compositor::presentation::{DisplayCapabilities, DisplayPlan, LinearPresentationTarget, LinearSceneFrame, PresentationPipeline, UI_FORMAT};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -235,7 +235,7 @@ impl AppPresentation {
 fn resolve_camera_sugar_param(suffix: &str, available: &[String]) -> Result<String, String> {
     let matches: Vec<&String> = available
         .iter()
-        .filter(|id| id.as_str() == suffix || id.ends_with(&format!("_{suffix}")))
+        .filter(|id| id.as_str() == suffix || id.ends_with(&format!("_{suffix}")) || id.ends_with(&format!(".{suffix}")))
         .collect();
     match matches.as_slice() {
         [] => Err(format!(
@@ -405,8 +405,8 @@ fn validate_benchmark_mode(args: &Args) -> Result<(), String> {
 /// too. Exit 2 only on argument/IO failure — the capture script owns the
 /// missing-fixture loud-fail (it checks the path exists before invoking).
 fn dump_def_mode(glb: &std::path::Path, out: &std::path::Path) -> ! {
-    let json = match assemble_import_graph(glb) {
-        Ok(pair) => serde_json::to_string_pretty(&pair)
+    let json = match compile_model_scene(glb).map(|(def, _)| def) {
+        Ok(def) => serde_json::to_string_pretty(&def)
             .unwrap_or_else(|e| panic!("serialize import def for {}: {e}", glb.display())),
         Err(e) => serde_json::to_string_pretty(&serde_json::json!({
             "import_error": e.to_string(),
@@ -1070,9 +1070,7 @@ fn load_render_input(
         let def = serde_json::from_slice(&bytes).map_err(|e| format!("parse saved graph: {e}"))?;
         Ok((def, "saved graph".to_string()))
     } else {
-        assemble_import_graph(path)
-            .map(|(def, report)| (def, format!("{report:?}")))
-            .map_err(|e| e.to_string())
+        compile_model_scene(path).map(|(def, model)| (def, format!("{} part(s)", model.roots.len())))
     }
 }
 
@@ -1096,8 +1094,7 @@ mod tests {
             fixture.display()
         );
 
-        let (def, _report) =
-            assemble_import_graph(&fixture).expect("Duck.glb assembles through the import path");
+        let (def, _model) = compile_model_scene(&fixture).expect("Duck.glb imports into a scene");
         let available_param_ids: Vec<String> = def
             .preset_metadata
             .as_ref()
@@ -1114,11 +1111,11 @@ mod tests {
             .unwrap_or_else(|e| panic!("tilt did not resolve to exactly one param: {e}"));
         assert_ne!(orbit_id, tilt_id, "orbit and tilt must resolve to distinct params");
         assert!(
-            orbit_id.ends_with("_orbit") || orbit_id == "orbit",
+            orbit_id.ends_with("_orbit") || orbit_id.ends_with(".orbit") || orbit_id == "orbit",
             "resolved orbit id '{orbit_id}' doesn't look like a camera orbit param"
         );
         assert!(
-            tilt_id.ends_with("_tilt") || tilt_id == "tilt",
+            tilt_id.ends_with("_tilt") || tilt_id.ends_with(".tilt") || tilt_id == "tilt",
             "resolved tilt id '{tilt_id}' doesn't look like a camera tilt param"
         );
 

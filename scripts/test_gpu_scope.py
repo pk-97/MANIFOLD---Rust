@@ -330,9 +330,6 @@ class ScopeTests(unittest.TestCase):
         cases = {
             "crates/manifold-compositor/src/layer_compositor.rs": ["layer_compositor"],
             "crates/manifold-compositor/src/preset_thumbnail.rs": ["preset_thumbnail"],
-            "crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade.rs": ["loop_upgrade"],
-            "crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs":
-                ["gltf_import", "gltf_card_precedence", "gltf_upgrade", "gltf_upgrade_project"],
         }
         import cpu_scope
         for path, modules in cases.items():
@@ -344,8 +341,7 @@ class ScopeTests(unittest.TestCase):
                     prefix = "node_graph::catalog_tests::" + module + "::"
                     self.assertIn(prefix, cpu.filterset)
                     self.assertIn(prefix, gpu.filters)
-                if path.startswith(("crates/manifold-compositor/src/",
-                                    "crates/manifold-nodes-scene/src/")):
+                if path.startswith("crates/manifold-compositor/src/"):
                     self.assertNotIn(gpu.workspace.owner(path), gpu.whole_packages)
         gltf = plan(["crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs"])
         self.assertTrue({"render_scene_material_upgrade::", "rt_bug318_import_toggle::",
@@ -361,8 +357,6 @@ class ScopeTests(unittest.TestCase):
             "crates/manifold-compositor/src/layer_compositor.rs": "layer_compositor::",
             "crates/manifold-compositor/src/preset_thumbnail.rs": "preset_thumbnail::",
             "crates/manifold-compositor/src/generator_renderer.rs": "generator_renderer::",
-            "crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade.rs":
-                "node_graph::scene_modifier_legacy_migration::loop_upgrade::",
         }
         for path, local in cases.items():
             with self.subTest(path=path):
@@ -620,7 +614,9 @@ class ScopeTests(unittest.TestCase):
         result = g.plan_for_paths(["crates/manifold-nodes-scene/src/node_graph/scene_vm.rs"], repo)
         runs = {(run['package'], run['target']): run for run in result.runs()}
         for harness in (('manifold-nodes', 'gpu_proofs'), ('manifold-nodes-scene', 'gpu_proofs')):
-            self.assertTrue(set(g.SMOKE_FILTERS) <= set(runs[harness]['filters']), harness)
+            filters = runs[harness]['filters']
+            # No filters is the whole harness, smoke included.
+            self.assertTrue(not filters or set(g.SMOKE_FILTERS) <= set(filters), harness)
 
     def test_manifest_and_lockfile_edits_keep_smoke_and_report_whole_packages(self):
         # BUG-bkfv2 evidence (BUG-xrdq2 dependency trim): describe() named only
@@ -778,7 +774,7 @@ class ScopeTests(unittest.TestCase):
     def test_rigid_sources_run_their_module_and_the_cs_rigid_suite(self):
         result = plan(["crates/manifold-water-rigid/src/physics.rs"])
         self.assertEqual(result.filters, {"physics::", "liquid_conformance::liquid_coupled_",
-                                          "physics_boxes::", "physics_solids::",
+                                          "physics_solids::",
                                           "catalog_tests::physics_impulses::"})
         self.assertFalse(result.whole_packages)
         self.assertFalse(result.unmapped)

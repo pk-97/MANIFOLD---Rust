@@ -4,7 +4,7 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{
-    SceneModifierInstanceDef, SceneEndpoint, SceneNodeRef, SceneTargetSelection,
+    SceneModifierInstanceDef, SceneEndpoint, SceneTargetSelection,
 };
 use manifold_node_engine::load::expand::compiler::Builder;
 use manifold_node_engine::load::expand::SceneModifierExpandError;
@@ -51,10 +51,7 @@ fn owner(nodes: Vec<EffectGraphNode>, wires: Vec<EffectGraphWire>) -> EffectGrap
 fn instance(scene: &str) -> SceneModifierInstanceDef {
     SceneModifierInstanceDef {
         id: NodeId::new("camera_modifier"),
-        scene: SceneNodeRef {
-            scope: Vec::new(),
-            node: NodeId::new(scene),
-        },
+        scene: NodeId::new(scene),
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: Vec::new(),
         legacy_math_view_carrier: None,
@@ -92,7 +89,7 @@ fn camera_chain_anchors_before_lens_and_preserves_downstream_fanout() {
         .attachment_key(&instance("scene"), None, SceneEndpoint::Camera)
         .unwrap();
 
-    assert_eq!(key.0.node, NodeId::new("lens"));
+    assert_eq!(key.0, NodeId::new("lens"));
     assert_eq!(key.1, "camera");
     assert!(graph.wires.contains(&wire(2, "out", 3, "camera")));
     assert!(graph.wires.contains(&wire(2, "out", 4, "camera")));
@@ -142,7 +139,7 @@ fn direct_camera_source_keeps_render_scene_attachment() {
         .attachment_key(&instance("scene"), None, SceneEndpoint::Camera)
         .unwrap();
 
-    assert_eq!(key.0.node, NodeId::new("scene"));
+    assert_eq!(key.0, NodeId::new("scene"));
     assert_eq!(key.1, "camera");
 }
 
@@ -168,7 +165,7 @@ fn multi_input_camera_switch_stays_at_render_scene_without_branch_guessing() {
         .attachment_key(&instance("scene"), None, SceneEndpoint::Camera)
         .unwrap();
 
-    assert_eq!(key.0.node, NodeId::new("scene"));
+    assert_eq!(key.0, NodeId::new("scene"));
     assert_eq!(key.1, "camera");
 }
 

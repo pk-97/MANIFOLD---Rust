@@ -252,6 +252,13 @@ pub(crate) fn macro_mapping_target(
     }
 }
 
+/// Whether `param_id` is a manifest param of `target`. Only those can be
+/// mapped: a scene item's structural field row carries an id like
+/// `cube#physics` that no manifest holds (SCENE_DOCUMENT_DESIGN.md ruling 3).
+pub(crate) fn manifest_holds(project: &Project, target: &manifold_core::GraphTarget, param_id: &str) -> bool {
+    project.with_preset_graph(target, |inst| inst.params.get(param_id).is_some()).unwrap_or(false)
+}
+
 /// The slider range of `param_id` on `inst` (the user's choice, else the
 /// declared range), or `(0.0, 1.0)` when the id is unknown.
 pub(crate) fn resolve_param_range(inst: &PresetInstance, param_id: &str) -> (f32, f32) {
@@ -358,7 +365,7 @@ mod tests {
                 "params": [{"id":"a_gain","name":"Gain","min":0.0,"max":1.0,"defaultValue":0.2}],
                 "bindings": [{"id":"a_gain","label":"Gain","defaultValue":0.2,"target":{"kind":"sceneModifier","modifierId":"a","paramId":"gain"}}]
             },
-            "sceneModifiers": [{"id":"a","scene":{"node":"scene"},"targets":"allObjects","graph": serde_json::to_value(local_graph()).unwrap()}],
+            "sceneModifiers": [{"id":"a","scene":"scene","targets":"allObjects","graph": serde_json::to_value(local_graph()).unwrap()}],
             "nodes": [], "wires": []
         }))
         .unwrap();
@@ -379,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_modifier_editor_owner_resolves_exact_generator() {
+    fn modifier_owner_resolves_exact_generator() {
         let (project, target, layer_a, layer_b) = project_with_modifier();
         let selection = SelectionState::default();
         let resolved = resolve_graph_target(
@@ -410,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_modifier_editor_owner_rejects_invalid_and_dangling_controls() {
+    fn modifier_owner_rejects_invalid_and_dangling_controls() {
         let (project, target, _, layer_b) = project_with_modifier();
         let selection = SelectionState::default();
         let invalid = GraphTarget::SceneModifier {

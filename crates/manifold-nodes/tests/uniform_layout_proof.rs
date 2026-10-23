@@ -551,6 +551,7 @@ const NON_STANDALONE: &[&str] = &[
     "node.mesh_edges",
     "node.one_euro_filter",
     "node.platonic_solid_edges",
+    "node.polygon_curve",
     "node.range",
     "node.repeat_outline",
     "node.switch_array",
@@ -603,6 +604,13 @@ const NON_STANDALONE: &[&str] = &[
     // The two-pass reduction, barriered (its DotParams are reflected in
     // uniform_layout_extended).
     "node.dot_products",
+    // Welded normals: barriered clear, accumulate and resolve passes over one
+    // hand shader, its SmoothUniforms reflected in uniform_layout_extended.
+    "node.smooth_normals",
+    // Mesh merging and nested copies: one hand shader each, their
+    // PartUniforms and NestUniforms reflected in uniform_layout_extended.
+    "node.merge_meshes",
+    "node.nest_copies",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.
@@ -631,6 +639,8 @@ const NON_STANDALONE: &[&str] = &[
     // The whitewater emitter packer, proven above.
     "node.whitewater_influence",
     "node.turbulence_emission_count",
+    // CPU-only piece cutter: the piece is written to shared memory, no GPU kernel or uniforms.
+    "node.mesh_fragment",
 ];
 
 fn coverage_errors(uncovered: &[String]) -> Vec<String> {

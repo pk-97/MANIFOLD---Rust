@@ -48,6 +48,14 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("node_path"),
+            label: "File Node",
+            ty: ParamType::String,
+            default: ParamValue::Float(0.0), // String default supplied by the node param; this slot is never read.
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("material_index"),
             label: "Material Index",
             ty: ParamType::Int,
@@ -88,8 +96,8 @@ manifold_node_engine::primitive! {
     aliases: ["gltf morph deltas", "morph target source", "blend shape deltas"],
     boundary_reason: IoBridge,
     extra_fields: {
-        // (path, material_index, skinned) last parsed (or in flight).
-        last_key: (String, i32, bool) = (String::new(), i32::MIN, false),
+        // (path, material_index, skinned, node_path) last parsed (or in flight).
+        last_key: (String, i32, bool, String) = (String::new(), i32::MIN, false, String::new()),
         cached_deltas: Vec<MeshVertex> = Vec::new(),
         staging: Option<manifold_gpu::GpuBuffer> = None,
         staging_len_bytes: u64 = 0,
@@ -120,7 +128,11 @@ impl Primitive for GltfMorphDeltasSource {
         // depends on it.
         let skinned = matches!(ctx.params.get("skinned"), Some(ParamValue::Bool(true)));
 
-        let key = (path.clone(), material_index, skinned);
+        let node_path = match ctx.params.get("node_path") {
+            Some(ParamValue::String(s)) => s.as_str().to_owned(),
+            _ => String::new(),
+        };
+        let key = (path.clone(), material_index, skinned, node_path.clone());
         if key != self.last_key && self.pending_load.is_none() {
             self.last_key = key;
             self.cached_deltas.clear();
@@ -140,7 +152,7 @@ impl Primitive for GltfMorphDeltasSource {
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = load_gltf_morph_deltas(&path_buf, load_material_index, skinned);
+                    let result = load_gltf_morph_deltas(&path_buf, load_material_index, skinned, &node_path);
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);
@@ -173,6 +185,9 @@ impl Primitive for GltfMorphDeltasSource {
         let capacity = dst.size / std::mem::size_of::<MeshVertex>() as u64;
 
         if self.cached_deltas.is_empty() {
+            // Nothing parsed yet (or the path is empty or failed): the buffer
+            // is allocation, not content, so every consumer waits for it.
+            ctx.mark_outputs_pending();
             return;
         }
 

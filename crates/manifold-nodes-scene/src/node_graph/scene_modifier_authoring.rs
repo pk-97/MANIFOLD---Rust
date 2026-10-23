@@ -7,7 +7,7 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::id::NodeId;
 use manifold_core::scene_modifier_preset::{
-    SceneAxis, SceneModifierInstanceDef, SceneNodeRef, SceneScalarExpr, SceneTargetSelection,
+    SceneAxis, SceneModifierInstanceDef, SceneScalarExpr, SceneTargetSelection,
     initialize_scene_modifier_snapshot, validate_scene_modifier_schema,
 };
 
@@ -28,7 +28,7 @@ pub fn prepare_new_scene_modifier(
     owner: &EffectGraphDef,
     recipe: &EffectGraphDef,
     id: NodeId,
-    scene: SceneNodeRef,
+    scene: NodeId,
     targets: SceneTargetSelection,
 ) -> Result<SceneModifierInstanceDef, SceneModifierExpandError> {
     let graph = initialize_scene_modifier_graph(owner, recipe)?;
@@ -56,19 +56,77 @@ pub fn validate_new_scene_modifier(
     validate_modifier_attachment(owner, instance, &SCENE_MODIFIER_REGISTRY)
 }
 
-/// Prepare and check one force a scene template brings, the way the Forces
-/// menu attaches one. This is the preparer template insertion takes
-/// (`manifold_core::scene_template::PrepareForce`).
-pub fn prepare_template_force(
+/// `owner` with `instance` appended and one host card param per live recipe
+/// param, bound to the instance by node id. Pure: it builds a graph value for
+/// the compiler, the preset checker and tests; it never writes a project.
+pub fn attach_scene_modifier(
     owner: &EffectGraphDef,
-    recipe: &EffectGraphDef,
-    id: NodeId,
-    scene: SceneNodeRef,
-    targets: SceneTargetSelection,
-) -> Result<SceneModifierInstanceDef, String> {
-    let instance = prepare_new_scene_modifier(owner, recipe, id, scene, targets).map_err(|error| error.to_string())?;
-    validate_new_scene_modifier(owner, &instance).map_err(|error| error.to_string())?;
-    Ok(instance)
+    instance: SceneModifierInstanceDef,
+) -> Result<EffectGraphDef, String> {
+    use manifold_core::effect_graph_def::{BindingDef, BindingTarget, PresetMetadata, StringBindingDef};
+    use manifold_core::effects::ParamConvert;
+
+    if owner.scene_modifiers.iter().any(|item| item.id == instance.id) {
+        return Err(format!("modifier id '{}' is already attached", instance.id));
+    }
+    let local = instance
+        .graph
+        .preset_metadata
+        .clone()
+        .ok_or_else(|| format!("modifier '{}' has no recipe card", instance.id))?;
+    let preparation: &[String] = local.scene_modifier.as_ref().map_or(&[], |recipe| &recipe.preparation_params);
+    let mut graph = owner.clone();
+    graph.version = graph.version.max(3);
+    let id = instance.id.clone();
+    graph.scene_modifiers.push(instance);
+    let metadata = graph.preset_metadata.as_mut().ok_or("the host has no preset metadata")?;
+    let host_id = |param: &str| {
+        let tuple = serde_json::to_string(&(id.as_str(), param)).unwrap_or_default();
+        format!("sceneModifier:{tuple}")
+    };
+    let in_use = |metadata: &PresetMetadata, key: &str| {
+        metadata.params.iter().any(|param| param.id == key)
+            || metadata.string_params.iter().any(|param| param.id == key)
+            || metadata.bindings.iter().any(|binding| binding.id == key)
+            || metadata.string_bindings.iter().any(|binding| binding.id == key)
+    };
+    for param in local.params.iter().filter(|param| !preparation.contains(&param.id)) {
+        let key = host_id(&param.id);
+        if in_use(metadata, &key) {
+            return Err(format!("host param id '{key}' is already in use"));
+        }
+        let mut outer = param.clone();
+        outer.id = key.clone();
+        metadata.params.push(outer);
+        metadata.bindings.push(BindingDef {
+            id: key,
+            label: param.name.clone(),
+            default_value: param.default_value,
+            target: BindingTarget::SceneModifier { modifier_id: id.clone(), param_id: param.id.clone() },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: false,
+        });
+    }
+    for param in &local.string_params {
+        let key = host_id(&param.id);
+        if in_use(metadata, &key) {
+            return Err(format!("host param id '{key}' is already in use"));
+        }
+        let mut outer = param.clone();
+        outer.id = key.clone();
+        metadata.string_params.push(outer);
+        metadata.string_bindings.push(StringBindingDef {
+            id: key,
+            label: param.name.clone(),
+            default_value: param.default_value.clone(),
+            target: BindingTarget::SceneModifier { modifier_id: id.clone(), param_id: param.id.clone() },
+        });
+    }
+    validate_scene_modifier_schema(&graph).map_err(|error| error.to_string())?;
+    Ok(graph)
 }
 
 /// A stock force from the scene modifier catalog, tuned by [`tune_force_card`].
@@ -217,7 +275,7 @@ fn required_axes(expr: &SceneScalarExpr, axes: &mut [bool; 3]) {
 /// scene reachability index as compilation, including nested object groups.
 pub fn scene_modifier_objects(
     owner: &EffectGraphDef,
-    scene: &SceneNodeRef,
-) -> Result<Vec<SceneNodeRef>, SceneModifierExpandError> {
+    scene: &NodeId,
+) -> Result<Vec<NodeId>, SceneModifierExpandError> {
     manifold_node_engine::load::expand::scene_objects_for_authoring(owner, scene)
 }

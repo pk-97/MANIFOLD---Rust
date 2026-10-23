@@ -60,15 +60,6 @@ pub struct Application {
     // GPU
     pub(crate) gpu: Option<GpuContext>,
 
-    /// Lazily-created fallback GPU device for import-graph validation
-    /// (`import_model_file`'s trial `PresetRuntime` build) when `gpu` is
-    /// still `None` — i.e. a model is dropped before `resumed()` has run.
-    /// IMPORT_RESPONSIVENESS_DESIGN.md D2/P2: validation always reuses ONE
-    /// device, never a fresh `GpuDevice::new()` per import; when the app's
-    /// real device already exists (the normal case) that one is used
-    /// instead and this field stays `None` for the process's lifetime.
-    pub(crate) import_validation_device: Option<std::sync::Arc<manifold_gpu::GpuDevice>>,
-
     // Windows
     pub(crate) window_registry: WindowRegistry,
     pub(crate) primary_window_id: Option<WindowId>,
@@ -143,6 +134,8 @@ pub struct Application {
     /// (D3: "concurrent drops queue... one worker at a time"). Drained by
     /// `drain_import_progress` immediately after each `Done`/`Failed`.
     pub(crate) import_queue: std::collections::VecDeque<crate::import_worker::ImportRequest>,
+    /// Model file facts by path, read on a worker (`crate::scene_models`).
+    pub(crate) model_store: crate::scene_models::ModelStore,
 
     /// Gig-resilience breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1), phase
     /// P2. Cadence gate — pure logic, ticked from the content-state drain in
@@ -447,8 +440,7 @@ pub struct Application {
     /// duplicate `SetGraphPreviewNode` commands each frame. `None` = nothing
     /// previewed (editor closed or multi/zero selection).
     pub(crate) last_preview_node: Option<manifold_core::NodeId>,
-    pub(crate) modifier_preview_object: Option<(manifold_core::GraphTarget, manifold_core::scene_modifier_preset::SceneNodeRef)>,
-    pub(crate) last_modifier_preview_context: Option<(Vec<manifold_core::NodeId>, Option<manifold_core::scene_modifier_preset::SceneNodeRef>)>,
+    pub(crate) last_modifier_preview_context: Option<Option<manifold_core::NodeId>>,
     pub(crate) last_modifier_preview_selection: Option<(std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>, Vec<u32>, Option<u32>)>,
     /// What graph the editor canvas is open on. Set by `OpenGraphEditor`
     /// (Effect target) or `OpenGeneratorGraphEditor` (Generator target);
@@ -571,11 +563,11 @@ impl Application {
             #[cfg(all(feature = "ui-automation", unix))]
             live_ui: None,
             gpu: None,
-            import_validation_device: None,
             import_progress_tx,
             import_progress_rx,
             import_worker_busy: false,
             import_queue: std::collections::VecDeque::new(),
+            model_store: Default::default(),
             window_registry: WindowRegistry::new(),
             primary_window_id: None,
             app_menu: None,
@@ -604,7 +596,6 @@ impl Application {
             internal_clipboard_change_count: None,
             content_pipeline_output: None,
             last_preview_node: None,
-            modifier_preview_object: None,
             last_modifier_preview_context: None,
             last_modifier_preview_selection: None,
             #[cfg(target_os = "macos")]
@@ -833,24 +824,6 @@ impl Application {
     pub(crate) fn send_content_cmd(&self, cmd: ContentCommand) {
         if let Some(ref tx) = self.content_tx {
             ContentCommand::send(tx, cmd);
-        }
-    }
-
-    /// The GPU device import-graph validation (`import_model_file`) builds
-    /// its trial `PresetRuntime` against. IMPORT_RESPONSIVENESS_DESIGN.md
-    /// D2/P2: never a fresh `GpuDevice` per import. Reuses the app's real
-    /// UI-side device (`self.gpu`, set by `resumed()`) whenever it exists;
-    /// falls back to ONE lazily-created device cached on `self` — created
-    /// at most once per process — for the window where a model can be
-    /// dropped before `resumed()` has run (proved reachable by BUG-219's
-    /// P1 harness).
-    pub(crate) fn validation_gpu_device(&mut self) -> std::sync::Arc<manifold_gpu::GpuDevice> {
-        match self.gpu.as_ref() {
-            Some(ctx) => ctx.device.clone(),
-            None => self
-                .import_validation_device
-                .get_or_insert_with(|| std::sync::Arc::new(manifold_gpu::GpuDevice::new()))
-                .clone(),
         }
     }
 
@@ -1735,8 +1708,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 pending_undo_redo_event: None,
                 graph_edit_diagnostic: None,
                 edit_selection_update: None,
-                modifier_selection_update: None,
-                object_modifier_selection_update: None,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };

@@ -127,10 +127,7 @@ fn scene_modifier_expand_conformance_reorder_keeps_generated_identity_set() {
 fn scene_modifier_expand_conformance_rejects_actual_target_and_stage_paths() {
     let mut missing = fixture();
     missing.scene_modifiers[0].targets = SceneTargetSelection::Explicit {
-        objects: vec![manifold_core::SceneNodeRef {
-            scope: vec![NodeId::new("scan_left_group")],
-            node: NodeId::new("does_not_exist"),
-        }],
+        objects: vec![NodeId::new("does_not_exist")],
     };
     assert!(matches!(
         expand_scene_modifiers(&missing, &registry()),
@@ -375,21 +372,6 @@ fn scene_modifier_expand_conformance_control_stage_broadcasts_once() {
         .collect();
     assert_eq!(amplitude_sources.len(), 2);
     assert!(amplitude_sources.iter().all(|source| *source == gate.id));
-}
-
-#[test]
-fn scene_modifier_expand_conformance_rejects_modifier_stack_over_capacity() {
-    let mut owner = fixture();
-    let template = owner.scene_modifiers[0].clone();
-    for index in 0..16 {
-        let mut instance = template.clone();
-        instance.id = NodeId::new(format!("modifier_{index}"));
-        owner.scene_modifiers.push(instance);
-    }
-    assert!(matches!(
-        expand_scene_modifiers(&owner, &registry()),
-        Err(SceneModifierExpandError::CapacityExceeded { .. })
-    ));
 }
 
 #[test]

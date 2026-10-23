@@ -14,6 +14,17 @@ impl ContentPipeline {
         &self.physics_overlay.frames
     }
 
+    /// A click on a scene picture, answered a couple of frames later by
+    /// [`Self::take_scene_picks`].
+    pub fn push_scene_pick(&mut self, pick: crate::scene_pick::ScenePick) {
+        self.scene_picks.push(pick);
+    }
+
+    /// The clicks answered since the last call, with the item drawn at each.
+    pub fn take_scene_picks(&mut self, project: Option<&manifold_core::project::Project>) -> Vec<crate::scene_pick::PickedItem> {
+        self.scene_picks.take_answered(project)
+    }
+
     /// What the solvers capped, clipped or refused on the layers that
     /// rendered, for the cards; recorded whatever Show gizmos says.
     pub fn setup_fits(&self) -> &crate::setup_check::SetupFitReport {
@@ -121,20 +132,6 @@ mod gizmos {
             let mut enc = device.create_encoder("Export gizmos");
             self.gizmos.draw_export(&device, &mut enc, &target, Some(&frame));
             enc.commit();
-        }
-
-        /// The newest frame's output handle origin and the camera it rendered
-        /// with: the proof that handles and picture share one frame.
-        #[cfg(all(test, feature = "gpu-proofs"))]
-        pub fn output_gizmo_probe(&self) -> Option<([f32; 3], manifold_node_engine::scene::camera::Camera)> {
-            let frame = self.physics_overlay.frames.iter().flatten().max_by_key(|frame| frame.frame)?;
-            Some((self.gizmos.output_handle_origin()?, frame.camera))
-        }
-
-        /// Where the viewport frame's handles sit.
-        #[cfg(all(test, feature = "gpu-proofs"))]
-        pub fn viewport_gizmo_origin(&self) -> Option<[f32; 3]> {
-            self.gizmos.viewport_handle_origin()
         }
     }
 }

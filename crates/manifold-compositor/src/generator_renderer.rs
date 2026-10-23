@@ -395,15 +395,17 @@ impl GeneratorRenderer {
     }
 
     /// Every generator layer that rendered in the last `render_all`, with
-    /// its fluid domains' snapshots and its worlds' unmade copies: the setup
-    /// check's run-time report reads what each solver did with the setup it
-    /// ran. `domains` and `not_made` are the caller's buffers, refilled per
-    /// layer.
+    /// its fluid domains' snapshots, its worlds' unmade copies and the bodies
+    /// they left out: the setup check's run-time report reads what each
+    /// solver did with the setup it ran. `domains`, `not_made` and `refused`
+    /// are the caller's buffers, refilled per layer.
+    #[allow(clippy::type_complexity)]
     pub fn each_rendered_setup(
         &self,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
         not_made: &mut Vec<(NodeId, u32)>,
-        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)]),
+        refused: &mut Vec<(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)>,
+        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)]),
     ) {
         for (layer_id, state) in &self.layer_generators {
             if state.rendered_pass != Some(self.render_pass) {
@@ -411,10 +413,12 @@ impl GeneratorRenderer {
             }
             domains.clear();
             not_made.clear();
+            refused.clear();
             state.generator.write_fluid_domains_watched(domains);
             state.generator.write_copies_not_made_watched(not_made);
-            if !domains.is_empty() || !not_made.is_empty() {
-                each(layer_id, domains, not_made);
+            state.generator.write_body_refusals_watched(refused);
+            if !domains.is_empty() || !not_made.is_empty() || !refused.is_empty() {
+                each(layer_id, domains, not_made, refused);
             }
         }
     }
@@ -451,6 +455,30 @@ impl GeneratorRenderer {
         if let Some(state) = self.layer_generators.get_mut(layer_id) {
             state.generator.set_scene_viewport_selection_mask(slots);
         }
+    }
+
+    /// Pick the item drawn at a point of `layer_id`'s output render
+    /// (SCENE_DOCUMENT_DESIGN.md section 7.14); [`Self::take_pick`] answers a
+    /// render later.
+    pub fn request_pick(&mut self, layer_id: &LayerId, pick: manifold_node_engine::scene::pick::PickRequest) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.request_pick(pick);
+        }
+    }
+
+    pub fn take_pick(&mut self, layer_id: &LayerId) -> Option<manifold_node_engine::scene::pick::PickHit> {
+        self.layer_generators.get_mut(layer_id)?.generator.take_pick()
+    }
+
+    /// [`Self::request_pick`] in `layer_id`'s scene viewport.
+    pub fn request_scene_viewport_pick(&mut self, layer_id: &LayerId, pick: manifold_node_engine::scene::pick::PickRequest) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.request_scene_viewport_pick(pick);
+        }
+    }
+
+    pub fn take_scene_viewport_pick(&mut self, layer_id: &LayerId) -> Option<manifold_node_engine::scene::pick::PickHit> {
+        self.layer_generators.get_mut(layer_id)?.generator.take_scene_viewport_pick()
     }
 
     /// The selection mask `layer_id`'s output render drew in the last

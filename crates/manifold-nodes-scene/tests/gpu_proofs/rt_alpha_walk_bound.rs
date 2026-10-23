@@ -125,6 +125,7 @@ fn alpha_texture(device: &GpuDevice, size: u32, opaque: impl Fn(u32, u32) -> boo
 
 fn card_object<'a>(vertices: &'a GpuBuffer, layers: usize, texture: &'a GpuTexture) -> RtObjectGeometry<'a> {
     RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
         material_attributes: Default::default(),
         vertex_buffer: vertices,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,

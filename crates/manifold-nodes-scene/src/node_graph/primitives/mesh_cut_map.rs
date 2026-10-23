@@ -315,12 +315,15 @@ fn run_cut_map(
     cell_size_default: f32,
 ) {
     poll_completed_status(ctx, state);
-    let Some(reference) = ctx.inputs.array("reference") else {
+    if ctx.inputs.slot("reference").is_none() {
+        ctx.mark_outputs_pending();
         ctx.error("node.cut_mesh_map: missing required `reference` input");
         return;
-    };
-    let Some(map) = ctx.outputs.array("map") else {
-        ctx.error("node.cut_mesh_map: missing required `map` output");
+    }
+    // A wired mesh with no buffer yet (or no GPU) waits, as the cut's
+    // remaps and fragments do.
+    let (Some(reference), Some(map)) = (ctx.inputs.array("reference"), ctx.outputs.array("map")) else {
+        ctx.mark_outputs_pending();
         return;
     };
     let live_output = ctx.outputs.array("live_count");

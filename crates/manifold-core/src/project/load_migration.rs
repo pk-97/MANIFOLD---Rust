@@ -79,10 +79,6 @@ impl Project {
         // own sun position and get the Sun light wired into the bake.
         self.migrate_world_sun_to_light();
 
-        // The physics box spawner lives on the copies body: saved scenes
-        // move Count, Spacing, Columns and Arrangement off the world.
-        self.migrate_world_copies_to_body();
-
         // A GPU water's column is an Initial Fill object: saved scenes wire
         // the same box through one.
         self.migrate_initial_volume_to_fill();

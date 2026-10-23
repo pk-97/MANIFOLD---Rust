@@ -8,7 +8,6 @@ use manifold_core::NodeId;
 use super::cinematic_tail::build_cinematic_tail;
 use super::scene_graph::{float, plain_node, wire};
 use manifold_core::scene_index::FlatSceneIndex;
-use manifold_core::SceneNodeRef;
 
 mod repair;
 pub use repair::restore_camera_effects;
@@ -20,7 +19,7 @@ const TAIL: &[&str] = &["node.coc_from_depth", "node.bokeh_gather", "node.motion
 /// Find effects belonging to this render/camera pair through actual wires,
 /// including group boundaries. Unrelated or ambiguous effects never become
 /// controls for the selected camera.
-pub fn camera_effect_controls(index: &FlatSceneIndex, scene: &SceneNodeRef) -> Vec<NodeId> {
+pub fn camera_effect_controls(index: &FlatSceneIndex, scene: &NodeId) -> Vec<NodeId> {
     let Ok(Some(camera)) = index.input(scene, "camera") else { return Vec::new(); };
     let Ok(render) = index.node(scene) else { return Vec::new(); };
     let input = |id: u32, port: &str| {
@@ -269,7 +268,7 @@ mod tests {
         prepare_camera_effects(&mut graph).unwrap();
         graph.nodes.insert(0, plain_node(90, "unrelated_blur", "node.motion_blur", "Unrelated"));
         graph.nodes.insert(0, plain_node(91, "unrelated_dof", "node.bokeh_gather", "Unrelated"));
-        let scene = SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
+        let scene = NodeId::new("scene");
         let index = FlatSceneIndex::build(&graph).unwrap();
         let controls = camera_effect_controls(&index, &scene);
         assert_eq!(controls.len(), 2);
@@ -292,7 +291,7 @@ mod tests {
         input.from_node = 90;
         input.from_port = "out".into();
         let index = FlatSceneIndex::build(&graph).unwrap();
-        let scene = SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
+        let scene = NodeId::new("scene");
         assert!(camera_effect_controls(&index, &scene).is_empty());
     }
 }

@@ -29,7 +29,7 @@ pub struct SceneData {
 /// command into a brand-new `Project`, so no flow sees another's edits.
 #[derive(Default)]
 pub struct FixtureCache {
-    imports: ahash::AHashMap<std::path::PathBuf, manifold_core::effect_graph_def::EffectGraphDef>,
+    imports: ahash::AHashMap<std::path::PathBuf, (manifold_core::scene_doc::ImportedModel, manifold_core::scene_doc::ModelFacts)>,
 }
 
 impl FixtureCache {
@@ -39,14 +39,13 @@ impl FixtureCache {
         self.imports.len()
     }
 
-    fn import_graph(&mut self, path: &std::path::Path, scene_name: &str) -> manifold_core::effect_graph_def::EffectGraphDef {
+    fn import_model(&mut self, path: &std::path::Path, scene_name: &str) -> (manifold_core::scene_doc::ImportedModel, manifold_core::scene_doc::ModelFacts) {
         self.imports
             .entry(path.to_path_buf())
             .or_insert_with(|| {
-                let (def, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(path)
-                    .unwrap_or_else(|e| panic!("ui-snap {scene_name}: assemble_import_graph({}) failed: {e}", path.display()));
-                eprintln!("ui-snap {scene_name}: import report: {report:?}");
-                def
+                manifold_nodes_scene::node_graph::gltf_import::read_model(path)
+                    .map(|read| (read.model, read.facts))
+                    .unwrap_or_else(|e| panic!("ui-snap {scene_name}: import_model({}) failed: {e}", path.display()))
             })
             .clone()
     }
@@ -70,15 +69,14 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
     }
     match scene {
         "timeline" => Some(timeline_scene()),
-        "physicsscene" => Some(physics_scene("PhysicsSolids", "Physics Solids")),
-        "newscene" => Some(new_scene("PhysicsSolids", "Physics Solids")),
-        "physicsboxes" => Some(physics_scene("PhysicsBoxes", "Physics Boxes")),
+        "physicsscene" => Some(physics_scene("Scene", "Scene")),
+        "newscene" => Some(new_scene("Scene", "Scene")),
         "fluidauthoring" => Some(physics_scene("Scene", "Fluid Authoring")),
-        "scene-setup" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
-        "waterdambreak" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
-        "waterdambreakmatter" => Some(physics_scene("WaterDamBreakMatter", "Water — Dam Break (Live GPU)")),
+        "scene-setup" => Some(physics_scene("Scene", "Scene")),
+        "waterdambreak" => Some(physics_scene("Scene", "Scene")),
+        "waterdambreakmatter" => Some(physics_scene("Scene", "Scene")),
         // The free-camera scene: Ocean drives a free camera through a lens.
-        "oceanscene" => Some(physics_scene("Ocean", "Ocean")),
+        "oceanscene" => Some(physics_scene("Scene", "Scene")),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {
@@ -160,8 +158,6 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
         // RT Quality panel flows (RT_QUALITY_SETTINGS_DESIGN.md P3) — plain
         // timeline content; the panel itself is pre-opened in script.rs.
         "rtquality" => Some(timeline_scene()),
-        "gltfanimscene" => Some(gltf_anim_scene()),
-        "heldoutmerge" => Some(heldout_merge_scene()),
         "empty" => Some(empty_scene()),
         "envmod" => Some(envelope_modulation_scene()),
         "dmxcard" => Some(dmxcard_scene()),
@@ -174,7 +170,7 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
 /// last; a scene missing from this list is caught there and rerun solo.
 pub fn installs_preset_overlay(scene: &str) -> bool {
     scene.starts_with("project:")
-        || matches!(scene, "gltfscene" | "mushroomscene" | "gltfanimscene" | "heldoutmerge")
+        || matches!(scene, "gltfscene" | "mushroomscene")
 }
 
 /// Zero-layer scene: what a user sees on File → New before doing anything.
@@ -241,6 +237,7 @@ fn physics_scene(preset: &'static str, name: &str) -> SceneData {
 /// `newscene`: a scene layer exactly as it is added, card untouched. A new
 /// scene's card is empty until the user puts controls on it.
 fn new_scene(preset: &'static str, name: &str) -> SceneData {
+    manifold_nodes::engine_scenes::install();
     let mut project = Project::default();
     let mut layer = Layer::new_generator(name.into(), PresetTypeId::new(preset), 0);
     layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(32.0)));
@@ -257,26 +254,13 @@ fn new_scene(preset: &'static str, name: &str) -> SceneData {
 /// so the flows that drive card rows start from a card that has them.
 fn set_up_scene_cards(project: &mut Project) {
     use manifold_core::scene_surface::{CardPin, Gate, SurfaceRole};
-    use manifold_nodes_scene::node_graph::scene_items::{owner_of, scene_items};
-    use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
     for layer in &mut project.timeline.layers {
         let Some(host) = layer.gen_params_mut() else { continue };
-        let Some(def) = host
-            .graph
-            .clone()
-            .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(host.effect_type()).map(|def| (*def).clone()))
-        else {
+        if host.scene.is_none() {
             continue;
-        };
-        let Some(vm) = SceneVm::from_def(&def) else { continue };
-        let items = scene_items(&def, &vm);
-        let Some(meta) = def.preset_metadata.as_ref() else { continue };
+        }
         for param in host.params.iter_mut() {
-            // A control no item owns drives nothing on screen, so a performer
-            // would not put it on the card.
-            let wanted = param.spec.scene.is_some_and(|scene| {
-                scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_)))
-            }) && owner_of(&items, meta, param.id()).is_some();
+            let wanted = param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_))));
             if wanted && param.choices.pin.is_none() {
                 param.choices.pin = Some(CardPin::Shown);
             }
@@ -297,141 +281,17 @@ fn imported_gltf_scene(
     fallback_name: &str,
     cache: &mut FixtureCache,
 ) -> SceneData {
-    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
     use manifold_editing::command::Command;
     use manifold_editing::commands::layer::ImportModelLayerCommand;
 
-    let def = cache.import_graph(path, scene_name);
-
-    let display_name = def
-        .preset_metadata
-        .as_ref()
-        .map(|m| m.display_name.clone())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| fallback_name.to_string());
-    let embedded = EmbeddedPreset {
-        kind: manifold_core::preset_def::PresetKind::Generator,
-        def,
-        origin: EmbeddedOrigin::Saved,
-    };
-
-    // Install the overlay BEFORE the layer is created — `Layer::new_generator`
-    // → `init_defaults` reads the process-global preset-definition registry to
-    // seed the curated card values, and the tracking layer's id only resolves
-    // once the overlay knows it (mirrors `Application::import_model_file`'s
-    // ordering, `app_lifecycle.rs`'s D9 deliverable-3 comment).
-    crate::project_io::install_embedded_presets(std::slice::from_ref(&embedded));
+    let (model, facts) = cache.import_model(path, scene_name);
+    let display_name = if model.name.is_empty() { fallback_name.to_string() } else { model.name.clone() };
+    let file = path.to_string_lossy();
+    let mut doc = model.scene_doc(&file, manifold_core::scene_doc::ItemId::new("model"));
+    doc.models.insert(file.into_owned(), facts);
 
     let mut project = Project::default();
-    let mut cmd = ImportModelLayerCommand::new(display_name, embedded, 0, None);
-    cmd.execute(&mut project);
-    // Same post-install step the real loader/import path runs after
-    // registering an embedded preset: resolve the tracking layer's manifest
-    // against it (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1).
-    project.reconcile_param_manifests();
-    set_up_scene_cards(&mut project);
-
-    let lid = cmd.inserted_layer_id().expect("layer inserted");
-    let mut selection = UIState::default();
-    selection.select_layer(lid);
-
-    SceneData { project, content: ContentState::default(), active: Some(0), selection }
-}
-
-/// `heldoutmerge`: SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P5's held-out
-/// gate — the same real, gitignored assets and real production merge path
-/// `scene_setup_p4_heldout_merge.rs`'s
-/// `merges_skull_into_warehouse_held_out_real_assets` proves (skull merged
-/// into the warehouse scene), wrapped as a live layer so the P5 outliner +
-/// properties can be screenshotted against it — both objects, both lights,
-/// and the eye/Duplicate/Remove affordances all have to read as real,
-/// clickable chrome on a scene neither this wave's synthetic-def unit tests
-/// nor the `gltfscene` two-object fixture exercise.
-pub(super) fn heldout_merge_scene() -> SceneData {
-    use manifold_core::effect_graph_def::SerializedParamValue;
-    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
-    use manifold_editing::command::Command;
-    use manifold_editing::commands::layer::ImportModelLayerCommand;
-    use manifold_nodes_scene::node_graph::gltf_import::{assemble_import_graph, assemble_merge_plan};
-
-    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf");
-    let warehouse = fixtures.join("abandoned_warehouse_-_interior_scene.glb");
-    let skull = fixtures.join("skull_salazar_downloadable.glb");
-
-    let (mut merged_def, report) = assemble_import_graph(&warehouse)
-        .unwrap_or_else(|e| panic!("ui-snap heldoutmerge: warehouse import failed: {e}"));
-    eprintln!("ui-snap heldoutmerge: warehouse import report: {report:?}");
-
-    let plan = assemble_merge_plan(&merged_def, &skull)
-        .unwrap_or_else(|e| panic!("ui-snap heldoutmerge: merge plan failed: {e}"));
-    eprintln!(
-        "ui-snap heldoutmerge: merge plan: {} new nodes, {} new wires, new_objects_count={}, report_lines={:?}",
-        plan.new_nodes.len(),
-        plan.new_wires.len(),
-        plan.new_objects_count,
-        plan.report_lines
-    );
-    merged_def.nodes.extend(plan.new_nodes.clone());
-    merged_def.wires.extend(plan.new_wires.clone());
-    if let Some(render_scene_node) = merged_def.nodes.iter_mut().find(|n| n.id == plan.render_scene_node_id) {
-        render_scene_node
-            .params
-            .insert("objects".to_string(), SerializedParamValue::Int { value: plan.new_objects_count as i32 });
-    }
-
-    let embedded = EmbeddedPreset {
-        kind: manifold_core::preset_def::PresetKind::Generator,
-        def: merged_def,
-        origin: EmbeddedOrigin::Saved,
-    };
-    crate::project_io::install_embedded_presets(std::slice::from_ref(&embedded));
-
-    let mut project = Project::default();
-    let mut cmd = ImportModelLayerCommand::new("Warehouse + Skull".to_string(), embedded, 0, None);
-    cmd.execute(&mut project);
-    project.reconcile_param_manifests();
-    set_up_scene_cards(&mut project);
-
-    let lid = cmd.inserted_layer_id().expect("layer inserted");
-    let mut selection = UIState::default();
-    selection.select_layer(lid);
-
-    SceneData { project, content: ContentState::default(), active: Some(0), selection }
-}
-
-/// `gltfanimscene`: GLTF_ANIMATION_DESIGN.md A4's L3 fixture — imports
-/// `BoxAnimated.glb` (A1's own gate fixture, already proven to animate
-/// through this exact import path) through the SAME real production path
-/// [`gltf_scene`] uses, so the resulting card carries the A4 Rate/Clip/Loop
-/// Mode/Retrigger knobs `gltf_import.rs::animation_card_controls` actually
-/// stamps — not a hand-built stand-in.
-pub(super) fn gltf_anim_scene() -> SceneData {
-    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
-    use manifold_editing::command::Command;
-    use manifold_editing::commands::layer::ImportModelLayerCommand;
-
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/khronos/BoxAnimated.glb");
-    let (def, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
-        .unwrap_or_else(|e| panic!("ui-snap gltfanimscene: assemble_import_graph({}) failed: {e}", path.display()));
-    eprintln!("ui-snap gltfanimscene: import report: {report:?}");
-
-    let display_name = def
-        .preset_metadata
-        .as_ref()
-        .map(|m| m.display_name.clone())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "BoxAnimated".to_string());
-    let embedded = EmbeddedPreset {
-        kind: manifold_core::preset_def::PresetKind::Generator,
-        def,
-        origin: EmbeddedOrigin::Saved,
-    };
-
-    crate::project_io::install_embedded_presets(std::slice::from_ref(&embedded));
-
-    let mut project = Project::default();
-    let mut cmd = ImportModelLayerCommand::new(display_name, embedded, 0, None);
+    let mut cmd = ImportModelLayerCommand::new(display_name, doc, Vec::new(), 0, None);
     cmd.execute(&mut project);
     project.reconcile_param_manifests();
     set_up_scene_cards(&mut project);

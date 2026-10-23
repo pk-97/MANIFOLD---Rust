@@ -79,7 +79,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -201,7 +201,7 @@ mod gating_gpu_tests {
     fn build_runtime(json: &str, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetRuntime {
         let registry = PrimitiveRegistry::with_builtin();
         PresetRuntime::from_json_str_with_device(
-            json,
+            &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
             &registry,
             std::sync::Arc::clone(&h.device),
             h.width,
@@ -428,7 +428,7 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime = PresetRuntime::from_json_str_with_device(
-            json,
+            &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
             &registry,
             std::sync::Arc::clone(&h.device),
             h.width,
@@ -519,7 +519,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime = PresetRuntime::from_json_str_with_device(
-            json,
+            &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
             &registry,
             std::sync::Arc::clone(&h.device),
             h.width,
@@ -605,7 +605,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_2048x1024_is_measured_and_re
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime = PresetRuntime::from_json_str_with_device(
-            json,
+            &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
             &registry,
             std::sync::Arc::clone(&h.device),
             h.width,

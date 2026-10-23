@@ -1,0 +1,115 @@
+{
+  "version": 3,
+  "name": "Copy Wave",
+  "presetMetadata": {
+    "id": "CopyWave",
+    "displayName": "Copy Wave",
+    "category": "Geometry",
+    "oscPrefix": "copy_wave",
+    "available": true,
+    "params": [
+      { "id": "amount", "name": "Amount", "min": -10.0, "max": 10.0, "defaultValue": 0.5 },
+      { "id": "frequency", "name": "Frequency", "min": 0.0, "max": 10.0, "defaultValue": 0.25 },
+      { "id": "phase", "name": "Phase", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wraps": true },
+      { "id": "wave_x", "name": "Wave X", "min": -1.0, "max": 1.0, "defaultValue": 1.0 },
+      { "id": "wave_y", "name": "Wave Y", "min": -1.0, "max": 1.0, "defaultValue": 0.0 },
+      { "id": "wave_z", "name": "Wave Z", "min": -1.0, "max": 1.0, "defaultValue": 0.0 },
+      { "id": "push_x", "name": "Push X", "min": -1.0, "max": 1.0, "defaultValue": 0.0 },
+      { "id": "push_y", "name": "Push Y", "min": -1.0, "max": 1.0, "defaultValue": 1.0 },
+      { "id": "push_z", "name": "Push Z", "min": -1.0, "max": 1.0, "defaultValue": 0.0 },
+      { "id": "enabled", "name": "Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "isToggle": true }
+    ],
+    "bindings": [
+      { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "enabled", "param": "value" } },
+      { "id": "amount", "label": "Amount", "defaultValue": 0.5, "target": { "kind": "node", "nodeId": "push", "param": "amount" } },
+      { "id": "frequency", "label": "Frequency", "defaultValue": 0.25, "target": { "kind": "node", "nodeId": "wave", "param": "frequency" } },
+      { "id": "phase", "label": "Phase", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "wave", "param": "phase" } },
+      { "id": "wave_x", "label": "Wave X", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "wave", "param": "direction_x" } },
+      { "id": "wave_y", "label": "Wave Y", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "wave", "param": "direction_y" } },
+      { "id": "wave_z", "label": "Wave Z", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "wave", "param": "direction_z" } },
+      { "id": "push_x", "label": "Push X", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "push", "param": "direction_x" } },
+      { "id": "push_y", "label": "Push Y", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "push", "param": "direction_y" } },
+      { "id": "push_z", "label": "Push Z", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "push", "param": "direction_z" } }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "copy_wave_stage",
+          "scope": "eachObject",
+          "inputs": [
+            { "port": "instances", "source": { "previous": { "endpoint": "instances" } } }
+          ],
+          "outputs": [
+            { "port": "instances", "endpoint": "instances" }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "copy_wave_stage",
+      "typeId": "group",
+      "handle": "CopyWaveStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" }
+          ],
+          "outputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" }
+          ]
+        },
+        "nodes": [
+          { "id": 1, "nodeId": "group_instances", "typeId": "system.group_input", "handle": "instances" },
+          { "id": 10, "nodeId": "group_output", "typeId": "system.group_output", "handle": "output" },
+          {
+            "id": 20,
+            "nodeId": "enabled",
+            "typeId": "node.value",
+            "handle": "enabled",
+            "params": { "value": { "type": "Float", "value": 1.0 } }
+          },
+          { "id": 21, "nodeId": "positions", "typeId": "node.copy_positions", "handle": "positions" },
+          {
+            "id": 22,
+            "nodeId": "wave",
+            "typeId": "node.wave_field_3d",
+            "handle": "wave",
+            "params": {
+              "frequency": { "type": "Float", "value": 0.25 },
+              "phase": { "type": "Float", "value": 0.0 },
+              "direction_x": { "type": "Float", "value": 1.0 },
+              "direction_y": { "type": "Float", "value": 0.0 },
+              "direction_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 23,
+            "nodeId": "push",
+            "typeId": "node.displace_copies",
+            "handle": "push",
+            "params": {
+              "amount": { "type": "Float", "value": 0.5 },
+              "direction_x": { "type": "Float", "value": 0.0 },
+              "direction_y": { "type": "Float", "value": 1.0 },
+              "direction_z": { "type": "Float", "value": 0.0 }
+            }
+          }
+        ],
+        "wires": [
+          { "fromNode": 1, "fromPort": "instances", "toNode": 21, "toPort": "instances" },
+          { "fromNode": 21, "fromPort": "out", "toNode": 22, "toPort": "positions" },
+          { "fromNode": 1, "fromPort": "instances", "toNode": 23, "toPort": "instances" },
+          { "fromNode": 22, "fromPort": "out", "toNode": 23, "toPort": "weights" },
+          { "fromNode": 23, "fromPort": "instances", "toNode": 10, "toPort": "instances" }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

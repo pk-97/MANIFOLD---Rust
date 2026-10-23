@@ -85,18 +85,46 @@ pub(crate) fn contracted_execution_order(
         }
     }
 
-    let mut pair_for = AHashMap::<NodeInstanceId, usize>::default();
-    // Keep the original graph index here. Dead pairs are filtered after this
-    // enumeration, so plan metadata can still address the behavior correctly.
-    for (pair_index, pair) in graph.node_pairs().iter().enumerate() {
+    // Pairs that share a node run as one unit: every pair's first before
+    // its second. A node in a substep block cannot also be paired.
+    let mut units = Vec::<Vec<NodeInstanceId>>::new();
+    let mut unit_for = AHashMap::<NodeInstanceId, usize>::default();
+    for pair in graph.node_pairs() {
         if !active.contains(&pair.first) || !active.contains(&pair.second) {
             continue;
         }
-        for node in [pair.first, pair.second] {
-            if pair_for.insert(node, pair_index).is_some() || block_for.contains_key(&node) {
-                return Err(GraphError::CycleDetected {
-                    involves: vec![pair.first, pair.second],
-                });
+        let cycle = || GraphError::CycleDetected { involves: vec![pair.first, pair.second] };
+        if block_for.contains_key(&pair.first) || block_for.contains_key(&pair.second) {
+            return Err(cycle());
+        }
+        match (unit_for.get(&pair.first).copied(), unit_for.get(&pair.second).copied()) {
+            (None, None) => {
+                unit_for.insert(pair.first, units.len());
+                unit_for.insert(pair.second, units.len());
+                units.push(vec![pair.first, pair.second]);
+            }
+            (Some(unit), None) => {
+                unit_for.insert(pair.second, unit);
+                units[unit].push(pair.second);
+            }
+            (None, Some(unit)) => {
+                let at = units[unit].iter().position(|&node| node == pair.second).expect("member of its unit");
+                units[unit].insert(at, pair.first);
+                unit_for.insert(pair.first, unit);
+            }
+            (Some(first), Some(second)) if first == second => {
+                let members = &units[first];
+                let position = |node| members.iter().position(|&member| member == node);
+                if position(pair.first) > position(pair.second) {
+                    return Err(cycle());
+                }
+            }
+            (Some(first), Some(second)) => {
+                let moved = std::mem::take(&mut units[second]);
+                for &node in &moved {
+                    unit_for.insert(node, first);
+                }
+                units[first].extend(moved);
             }
         }
     }
@@ -118,19 +146,16 @@ pub(crate) fn contracted_execution_order(
                 first_position: position,
                 internal_wires_allowed: true,
             });
-        } else if let Some(&pair_index) = pair_for.get(&node) {
-            let pair = &graph.node_pairs()[pair_index];
+        } else if let Some(&unit) = unit_for.get(&node) {
+            let members = units[unit].clone();
             let first_position = active_order
                 .iter()
-                .position(|&candidate| candidate == pair.first || candidate == pair.second)
+                .position(|candidate| members.contains(candidate))
                 .unwrap_or(position);
-            groups.push(ContractedGroup {
-                members: vec![pair.first, pair.second],
-                first_position,
-                internal_wires_allowed: false,
-            });
-            group_for.insert(pair.first, group_index);
-            group_for.insert(pair.second, group_index);
+            for &member in &members {
+                group_for.insert(member, group_index);
+            }
+            groups.push(ContractedGroup { members, first_position, internal_wires_allowed: false });
         } else {
             groups.push(ContractedGroup {
                 members: vec![node],

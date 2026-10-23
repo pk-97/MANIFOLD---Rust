@@ -92,31 +92,12 @@ pub enum TextInputField {
     /// `UserLibrary::rename` (My Library) or executes
     /// `RenameEmbeddedPresetCommand` (Project).
     RenamePreset,
-    /// Scene tab object rename (SCENE_SETUP_PANEL_DESIGN.md P2).
-    /// The object's address rides on `TextInputState::scene_item_ref` and the target layer on
-    /// `TextInputState::scene_object_layer_id` (`LayerId` not `Copy`). Commit
-    /// routes to `RenameGroupCommand`, addressed at the layer directly (no
-    /// graph editor needs to be open — the panel is a fourth surface).
-    SceneObjectRename,
-    /// Scene tab light rename (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
-    /// P5). The light's address rides on `TextInputState::scene_item_ref` and the target layer on
-    /// `TextInputState::scene_object_layer_id` (shared with
-    /// `SceneObjectRename` — the two sessions are mutually exclusive, only
-    /// one text edit is ever in flight at a time). Commit dispatches the
-    /// plain `SetNodeHandleCommand` (no group sweep — a light is never
-    /// wrapped in a group).
-    SceneLightRename,
-    /// Scene tab numeric value-cell type-in
-    /// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8's `EditValue` target).
-    /// Carries the target node's doc id (mirrors `GraphNumericParam`'s
-    /// shape); the rest (layer, scope_path, param_id, D10's `degrees` flag)
-    /// rides on [`TextInputState::scene_numeric_param`] (not `Copy`). Commit
-    /// parses f32 (degrees rows convert to radians), dispatches the SAME
-    /// `PanelAction::SceneSetupParamChanged` write the tab's drag/steppers
-    /// already use — ONE undo unit, no clamp (PARAM_RANGE_CONTRACT P1).
-    SceneNumericParam(u32),
+    /// Scene tab item rename. The item rides on `TextInputState::scene_item_ref`
+    /// and the layer on `TextInputState::scene_object_layer_id` (`LayerId` is
+    /// not `Copy`). Commit sends `RenameSceneItemCommand`.
+    SceneItemRename,
     /// Audio Setup dock gain-stepper value-cell type-in (P4's audio-dock
-    /// sibling of `SceneNumericParam`, D8). Carries nothing on the `Copy`
+    /// sibling of the inspector param type-in). Carries nothing on the `Copy`
     /// enum (`AudioSendId` isn't `Copy`); the send id rides on
     /// [`TextInputState::audio_send_gain_param`]. Commit parses f32,
     /// dispatches `SetAudioSendGainCommand` directly — no clamp (the
@@ -173,8 +154,7 @@ pub struct InspectorParamCtx {
     pub param_id: manifold_core::effects::ParamId,
     pub whole_numbers: bool,
     /// Angle row (stored radians, displayed degrees): prefill shows degrees and
-    /// commit converts back — same boundary contract as `SceneNumericParamCtx`'s
-    /// `degrees` flag.
+    /// commit converts back — the panel boundary's other half is `degrees_commit_value`.
     pub degrees: bool,
 }
 
@@ -212,27 +192,6 @@ pub struct GraphNumericParamCtx {
     pub outer_param_id: Option<String>,
 }
 
-/// Context for an in-flight Scene tab numeric type-in — set when the
-/// box opens ([`TextInputField::SceneNumericParam`]) and read on commit
-/// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8). Mirrors `InspectorParamCtx`'s
-/// shape; the write address is the tab's own `(scope_path, node_doc_id,
-/// param_id)` (`PanelAction::SceneSetupParamChanged`'s tuple), not a
-/// `ParamId` — the tab addresses graph nodes directly, not effect/generator
-/// param slots. No `old_value` here (unlike `InspectorParamCtx`): commit
-/// reads the live project value as the undo baseline directly — nothing else
-/// can write this field while the single-session type-in box is open.
-#[derive(Debug, Clone)]
-pub struct SceneNumericParamCtx {
-    pub layer_id: manifold_core::LayerId,
-    pub scope_path: Vec<u32>,
-    pub param_id: String,
-    /// D10: true for the committed degrees-display row table
-    /// (`transform_3d.rot_*`, `orbit_camera.orbit`/`tilt`, `free_camera`'s
-    /// euler triplet, `fov_y` on all three camera atoms) — commit converts
-    /// the typed degrees to radians before dispatch. Storage/model stay
-    /// radians; this is the ONLY place that conversion happens.
-    pub degrees: bool,
-}
 
 /// Context for an in-flight Audio Setup dock gain-stepper type-in
 /// ([`TextInputField::AudioSendGainParam`]), read on commit.
@@ -365,11 +324,11 @@ pub struct TextInputState {
     pub marker_id: Option<manifold_core::MarkerId>,
     /// AudioSendId for the AudioSendLabel field (Arc<str> not Copy).
     pub audio_send_id: Option<manifold_core::AudioSendId>,
-    /// LayerId for the `SceneObjectRename` field (not `Copy`, so stored
+    /// LayerId for the `SceneItemRename` field (not `Copy`, so stored
     /// separately — mirrors `layer_id`/`audio_send_id`).
     pub scene_object_layer_id: Option<manifold_core::LayerId>,
-    /// The object or light the open rename edits, by address.
-    pub scene_item_ref: Option<manifold_core::SceneNodeRef>,
+    /// The scene item the open rename edits.
+    pub scene_item_ref: Option<manifold_core::scene_doc::ItemId>,
     /// Param name for `GraphStringParam` (String not `Copy`, so stored here).
     pub graph_param_name: Option<String>,
     /// Cell context for `GraphTableCell` (carries the full table, so stored
@@ -386,9 +345,6 @@ pub struct TextInputState {
     /// Context for `GraphNumericParam` (param name + clamp range +
     /// `outer_param_id`). Set right after `begin()`, read on commit (P5d).
     pub graph_numeric_param: Option<GraphNumericParamCtx>,
-    /// Context for `SceneNumericParam` (layer + scope_path + param_id +
-    /// D10's `degrees` flag). Set right after `begin()`, read on commit (P4).
-    pub scene_numeric_param: Option<SceneNumericParamCtx>,
     /// Context for `AudioSendGainParam` (the send id). Set right after
     /// `begin()`, read on commit (P4).
     pub audio_send_gain_param: Option<AudioSendGainParamCtx>,
@@ -437,7 +393,6 @@ impl TextInputState {
             material_colour: None,
             driver_free_period: None,
             graph_numeric_param: None,
-            scene_numeric_param: None,
             audio_send_gain_param: None,
             automation_point_edit: None,
             save_preset: None,
@@ -502,7 +457,6 @@ impl TextInputState {
         self.material_colour = None;
         self.driver_free_period = None;
         self.graph_numeric_param = None;
-        self.scene_numeric_param = None;
         self.audio_send_gain_param = None;
         self.automation_point_edit = None;
         self.save_preset = None;
@@ -564,7 +518,6 @@ impl TextInputState {
         self.material_colour = None;
         self.driver_free_period = None;
         self.graph_numeric_param = None;
-        self.scene_numeric_param = None;
         self.audio_send_gain_param = None;
         self.automation_point_edit = None;
         self.save_preset = None;
@@ -804,7 +757,7 @@ pub const TEXT_INPUT_CURSOR_W: f32 = 1.0;
 pub const TEXT_INPUT_BLINK_PERIOD: f64 = 0.5;
 
 /// Lenient numeric parse shared by every type-in commit path (`InspectorParam`,
-/// `SceneNumericParam`, `AudioSendGainParam`): keep only the leading numeric
+/// `AudioSendGainParam`): keep only the leading numeric
 /// head, so a value typed with a trailing unit or stray character (e.g. an
 /// angle "45°") still commits instead of silently no-op'ing. Pure — factored
 /// out of the commit match arms so the parse itself is unit-testable without
@@ -837,7 +790,7 @@ pub fn parse_slider_range(text: &str) -> Option<Option<(f32, f32)>> {
 
 /// Degrees→radians commit-side conversion for angle rows — the panel
 /// boundary's other half (the display side lives in the row formatters).
-/// Shared by `SceneNumericParam` (D10) and `InspectorParam` (camera card
+/// Shared by `InspectorParam` (camera card
 /// angles). Pure passthrough when `degrees` is false, so every non-angle
 /// commit takes the identical path it always did.
 pub fn degrees_commit_value(parsed: f32, degrees: bool) -> f32 {

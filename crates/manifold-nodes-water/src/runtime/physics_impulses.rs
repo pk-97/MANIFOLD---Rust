@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::is_liquid_domain;
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::{Beats, NodeId, PlayedTime, Seconds};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::{FieldValue, TickStamp};
@@ -202,7 +202,7 @@ impl WaterRuntimeRef<'_> {
     pub fn prepare_scene_impulse(
         &self,
         owner: &EffectGraphDef,
-        scene: &SceneNodeRef,
+        scene: &NodeId,
         selection: &SceneTargetSelection,
         field_node: &NodeId,
         field_port: &str,
@@ -247,7 +247,7 @@ impl WaterRuntimeRef<'_> {
                 id = self.graph.get_node(instance).expect("coupled owner exists").node_id.clone();
             }
             if let Some(existing) = recipients.iter_mut().find(|entry| entry.instance == instance) {
-                existing.target = existing.target.union(target)?;
+                existing.target = existing.target.clone().union(target)?;
             } else {
                 recipients.push(Recipient { id, instance, target });
             }
@@ -476,7 +476,7 @@ impl WaterRuntime<'_> {
                 stamp,
                 ResolvedNodeImpulse {
                     field: field.clone(),
-                    target: recipient.target,
+                    target: recipient.target.clone(),
                 },
             )?);
         }

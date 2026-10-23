@@ -10,7 +10,6 @@ use manifold_core::project::Project;
 
 use crate::command::Command;
 
-mod modifier;
 
 use super::{
     descend_level, innermost_group_display_name, with_existing_target_graph_mut,
@@ -98,10 +97,6 @@ pub struct ToggleNodeParamExposeCommand {
 enum NodeExposeReverse {
     #[default]
     None,
-    Modifier {
-        graph: Option<EffectGraphDef>,
-        instance: super::InstanceLayerSnapshot,
-    },
     /// Captured on execute. Restored on undo.
     Captured {
         /// Previous membership of `inner_param` in the node's
@@ -312,6 +307,11 @@ fn static_slot_for(def: &EffectGraphDef, node_id: &NodeId, inner_param: &str) ->
 }
 
 impl Command for ToggleNodeParamExposeCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        // A node around a scene layer's Scene node puts its controls on the
+        // card like any graph's; the Scene node itself has none to expose.
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.node_u32_id])));
+    }
     /// Exposing adds a card param; unexposing drops it with its controls.
     fn touches(&self) -> manifold_core::change::ChangeSet {
         crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_CONTROLS)
@@ -322,7 +322,6 @@ impl Command for ToggleNodeParamExposeCommand {
 
     fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::execute(self, project);
             return;
         }
         let node_handle = self.node_handle.clone();
@@ -431,7 +430,6 @@ impl Command for ToggleNodeParamExposeCommand {
 
     fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::undo(self, project);
             return;
         }
         let reverse = std::mem::take(&mut self.reverse);

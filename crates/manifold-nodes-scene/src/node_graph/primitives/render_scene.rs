@@ -70,6 +70,7 @@ mod rt_changes;
 mod volume_optics;
 mod live_draw_args;
 mod selection_mask;
+mod item_pick;
 mod construction;
 mod frame_setup;
 mod post_passes;
@@ -78,6 +79,11 @@ mod rt_trace;
 mod rt_frame;
 mod prepasses;
 use prepasses::ShadowUniforms;
+mod instance_space;
+use instance_space::{IDENTITY_M4, instance_space_pair};
+mod matrix;
+pub(crate) use matrix::{mat4_inverse, model_matrix};
+use manifold_node_engine::mesh::pipeline::mat4_mul;
 mod pipelines;
 mod resources;
 #[cfg(feature = "gpu-proofs")]
@@ -740,8 +746,9 @@ struct RenderSceneUniforms {
     /// Both RT slots are written per object in the Pass 1 loop; non-mask
     /// pipelines never read `z`, and `w` is inert when RT is off.
     fog_params: [f32; 4],
-    /// Appearance gain and per-vertex-weight presence flag. `x` is gain,
-    /// `y` is 1 when the weights buffer is wired, and `z/w` are reserved.
+    /// `x` is the appearance gain, `y` is 1 when the weights buffer is wired,
+    /// `z` carries the single-object legacy map bits and `w` is the envmap's
+    /// turn in radians (the `env_rotation` param, read by `env_lookup_uv`).
     appearance: [f32; 4],
     /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
     ambient_tint: [f32; 4],
@@ -827,6 +834,10 @@ struct RenderSceneUniforms {
     /// Closed volume flag, homogeneous scattering density, embedded particle density, reserved.
     volume_optics: [f32; 4],
     volume_scattering_color: [f32; 4],
+    /// world = `model` · T_instance · `instance_inner`; see [`instance_space_pair`].
+    instance_inner: [[f32; 4]; 4],
+    /// Last frame's `instance_inner`, the velocity pair of `prev_model`.
+    prev_instance_inner: [[f32; 4]; 4],
 }
 
 // 800 = 50 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -849,7 +860,8 @@ struct RenderSceneUniforms {
 // Points mode point-size slot, appended at the tail so every existing
 // field keeps its offset (appending is the byte-identical contract).
 // 848 after optional closed-volume optics and scattering colour (+32).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 848);
+// 976 after the instance-space pair `instance_inner`/`prev_instance_inner` (+128).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 976);
 
 /// Per-map sampling metadata. Core maps retain hardware anisotropic
 /// samplers; extension maps use these settings within Metal sampler limits.
@@ -1074,8 +1086,9 @@ pub struct RenderScene {
     /// first-ever velocity is exactly zero, not approximately. Resized and
     /// reset to all-`None` on every `rebuild` (an object-count change may
     /// reassign what slot `n` means, so any stale history there is
-    /// discarded rather than risked).
-    prev_model: Vec<Option<[[f32; 4]; 4]>>,
+    /// discarded rather than risked). Stored as the instance-space pair
+    /// `[model, instance_inner]`.
+    prev_model: Vec<Option<[[[f32; 4]; 4]; 2]>>,
     /// Previous frame's scene `view_proj` (GBUFFER_DESIGN.md section 2 D5, P2).
     /// `None` = no history yet (same first-frame seeding rule as
     /// `prev_model`); reset on every `rebuild`.
@@ -1096,6 +1109,8 @@ pub struct RenderScene {
     rendered_lights: Vec<[f32; 3]>,
     /// The selection mask the editor outlines (D-102).
     selection: selection_mask::SelectionMask,
+    /// The item-id buffer a click reads (SCENE_DOCUMENT_DESIGN.md section 7.14).
+    pick: item_pick::ItemPick,
     /// The editor asked for this frame's scene depth (gizmo lines test
     /// against it); resolved into `shaft_depth_internal` when `depth` is
     /// unwired, copied there when it is wired.
@@ -1600,6 +1615,7 @@ fn compute_rt_lighting_key(
     rt_casters: &[manifold_gpu::raytrace::RtCasterParams],
     ambient_tint: &[f32],
     envmap_content: Option<ContentVersion>,
+    env_rotation: f32,
     light_data: &[[f32; 4]],
 ) -> u64 {
     let mut k = 0xcbf2_9ce4_8422_2325u64;
@@ -1622,6 +1638,8 @@ fn compute_rt_lighting_key(
     for f in ambient_tint {
         mix(f.to_bits());
     }
+    // A turned environment lights from new directions with the same map.
+    mix(env_rotation.to_bits());
     // Logical environment content changes lighting; moving identical pixels
     // between pool allocations does not. Resource identity and lifetime are
     // part of ContentVersion, so equal local revision numbers cannot collide.
@@ -2041,6 +2059,8 @@ struct FramePrelude<'ctx> {
     /// A pending envmap renders as absent (black image lighting); only a
     /// material that cannot draw without one abandons the frame.
     envmap_pending: bool,
+    /// The `env_rotation` param: radians every envmap lookup turns by.
+    env_rotation: f32,
     atmosphere: manifold_node_engine::scene::atmosphere::Atmosphere,
     render_mode: manifold_node_engine::scene::render_mode::RenderMode,
     light_data: Vec<[f32; 4]>,
@@ -2141,65 +2161,6 @@ fn cached_type_id() -> &'static EffectNodeType {
     CELL.get_or_init(|| EffectNodeType::new(RENDER_SCENE_TYPE_ID))
 }
 
-/// Build a column-major 4×4 model matrix from TRS params: `model = T *
-/// R * S`. Rotation order matches `render_instanced_3d_mesh.wgsl`'s
-/// `euler_xyz` (X → Y → Z, i.e. `R = Rz * Ry * Rx`) so render_scene and
-/// render_copies agree on what a given `(rot_x, rot_y, rot_z)` means.
-/// Non-uniform scale's normal skew is NOT corrected (no
-/// inverse-transpose) — v1 limitation, documented on the shader side.
-pub(crate) fn model_matrix(pos: [f32; 3], rot: [f32; 3], scale: [f32; 3]) -> [[f32; 4]; 4] {
-    let r = euler_xyz_columns(rot);
-    [
-        [
-            r[0][0] * scale[0],
-            r[0][1] * scale[0],
-            r[0][2] * scale[0],
-            0.0,
-        ],
-        [
-            r[1][0] * scale[1],
-            r[1][1] * scale[1],
-            r[1][2] * scale[1],
-            0.0,
-        ],
-        [
-            r[2][0] * scale[2],
-            r[2][1] * scale[2],
-            r[2][2] * scale[2],
-            0.0,
-        ],
-        [pos[0], pos[1], pos[2], 1.0],
-    ]
-}
-
-/// Column-major 3×3 rotation matrix for XYZ Euler angles (radians),
-/// composed as `Rz * Ry * Rx` — bit-for-bit the same column layout as
-/// `render_instanced_3d_mesh.wgsl`'s `euler_xyz`.
-fn euler_xyz_columns(rot: [f32; 3]) -> [[f32; 3]; 3] {
-    let (cx, sx) = (rot[0].cos(), rot[0].sin());
-    let (cy, sy) = (rot[1].cos(), rot[1].sin());
-    let (cz, sz) = (rot[2].cos(), rot[2].sin());
-
-    let rx = [[1.0, 0.0, 0.0], [0.0, cx, sx], [0.0, -sx, cx]];
-    let ry = [[cy, 0.0, -sy], [0.0, 1.0, 0.0], [sy, 0.0, cy]];
-    let rz = [[cz, sz, 0.0], [-sz, cz, 0.0], [0.0, 0.0, 1.0]];
-
-    mat3_mul(mat3_mul(rz, ry), rx)
-}
-
-/// Multiply two 3×3 column-major matrices: result = A * B. Mirrors
-/// `mesh::pipeline::mat4_mul`'s convention one dimension down.
-fn mat3_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
-    let mut out = [[0.0f32; 3]; 3];
-    for col in 0..3 {
-        for row in 0..3 {
-            out[col][row] =
-                a[0][row] * b[col][0] + a[1][row] * b[col][1] + a[2][row] * b[col][2];
-        }
-    }
-    out
-}
-
 /// Split a folded `[m00, m01, m10, m11, tx, ty]` per-map UV affine
 /// (G-P4) into its `vec4` linear part / `vec4` translation part for the
 /// uniform.
@@ -2208,78 +2169,6 @@ fn uv_m(t: &[f32; 6]) -> [f32; 4] {
 }
 fn uv_t(t: &[f32; 6]) -> [f32; 4] {
     [t[4], t[5], 0.0, 0.0]
-}
-
-/// Generic 4x4 matrix inverse (Gauss-Jordan elimination with partial
-/// pivoting), column-major `[[f32; 4]; 4]` — matches `view_proj`'s own
-/// convention throughout this file. RAYTRACING_DESIGN.md RT-D3: the RT
-/// shadow-ray pass reconstructs world position from the opaque-depth
-/// prepass + this inverse, so it must be exact — proven against a real
-/// camera's `view_proj` in `mat4_inverse_recovers_identity_for_a_real_
-/// camera` below, not eyeballed. `None` only for a genuinely singular
-/// `m` (a degenerate projection — no camera this file builds produces
-/// one).
-/// Column-major 4×4 product `a * b` — same `m[col][row]` storage as
-/// `mat4_inverse` below and every matrix this file builds.
-fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut out = [[0f32; 4]; 4];
-    for c in 0..4 {
-        for r in 0..4 {
-            let mut s = 0.0;
-            for k in 0..4 {
-                s += a[k][r] * b[c][k];
-            }
-            out[c][r] = s;
-        }
-    }
-    out
-}
-
-pub(crate) fn mat4_inverse(m: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
-    // Row-major augmented working copy [A | I] for elimination;
-    // `m[col][row]` (column-major) -> `a[row][col]`.
-    let mut a = [[0f32; 8]; 4];
-    for (r, row) in a.iter_mut().enumerate() {
-        for (c, col) in m.iter().enumerate() {
-            row[c] = col[r];
-        }
-        row[4 + r] = 1.0;
-    }
-    for col in 0..4 {
-        let mut pivot = col;
-        for r in (col + 1)..4 {
-            if a[r][col].abs() > a[pivot][col].abs() {
-                pivot = r;
-            }
-        }
-        if a[pivot][col].abs() < 1e-12 {
-            return None;
-        }
-        a.swap(col, pivot);
-        let inv_p = 1.0 / a[col][col];
-        for v in &mut a[col] {
-            *v *= inv_p;
-        }
-        for r in 0..4 {
-            if r == col {
-                continue;
-            }
-            let factor = a[r][col];
-            if factor != 0.0 {
-                let pivot_row = a[col];
-                for c in 0..8 {
-                    a[r][c] -= factor * pivot_row[c];
-                }
-            }
-        }
-    }
-    let mut out = [[0f32; 4]; 4];
-    for (r, row) in a.iter().enumerate() {
-        for c in 0..4 {
-            out[c][r] = row[4 + c];
-        }
-    }
-    Some(out)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2436,6 +2325,9 @@ fn build_uniforms(
         render_mode: [point_size, 0.0, 0.0, 0.0],
         volume_optics: [if material.volume_geometry && material.transmission_factor > 0.0 { 1.0 } else { 0.0 }, material.volume_scattering_density, material.volume_particle_density, 0.0],
         volume_scattering_color: [material.volume_scattering_color[0], material.volume_scattering_color[1], material.volume_scattering_color[2], 0.0],
+        // Object space; frame setup writes the Group-space pair.
+        instance_inner: IDENTITY_M4,
+        prev_instance_inner: IDENTITY_M4,
     }
 }
 
@@ -2483,6 +2375,8 @@ impl EffectNode for RenderScene {
 
     fn set_selection_mask(&mut self, slots: &[u32]) { self.selection.set(slots); }
     fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> { self.selection.texture() }
+    fn request_pick(&mut self, pick: manifold_node_engine::scene::pick::PickRequest) { self.pick.request(pick); }
+    fn take_pick(&mut self) -> Option<manifold_node_engine::scene::pick::PickHit> { self.pick.take() }
     fn set_gizmo_depth(&mut self, wanted: bool) { self.gizmo_depth_wanted = wanted; }
     fn gizmo_depth(&self) -> Option<&manifold_gpu::GpuTexture> {
         if self.gizmo_depth_ready { self.shaft_depth_internal.as_ref() } else { None }
@@ -2656,6 +2550,7 @@ impl EffectNode for RenderScene {
 
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
         self.selection.drawn = false;
+        self.pick.read_back();
         self.gizmo_depth_ready = false;
         self.rendered_camera = None;
         self.render_objects(ctx, None);
@@ -2705,6 +2600,7 @@ impl RenderScene {
             diffuse_transmission_color_map: inputs.slot_of("diffuse_transmission_color_map"),
             instances: inputs.slot_of("instances"),
             instance_count,
+            instances_space: manifold_node_engine::scene::scene_object::InstanceSpace::Object,
             emission_strength: 1.0,
             gain: 1.0,
         };
@@ -2766,7 +2662,7 @@ impl RenderScene {
             return;
         };
         let FramePrelude {
-            objects: _, cam: _, envmap_wired: _, envmap_pending: _, atmosphere: _,
+            objects: _, cam: _, envmap_wired: _, envmap_pending: _, env_rotation: _, atmosphere: _,
             render_mode: _, light_data: _, light_count: _, casters: _,
             caster_table: _,
             native_width: _, native_height: _, width: _, height: _, aspect: _, temporal_upscale: _,
@@ -2977,6 +2873,7 @@ impl RenderScene {
             return;
         };
         self.selection_mask_pass(ctx, &pre, &draws);
+        self.item_pick_pass(ctx, &pre, &draws);
         let target = &target;
         let resolve_target = &resolve_target;
         let depth_resolve_target = depth_resolve_target.as_ref();

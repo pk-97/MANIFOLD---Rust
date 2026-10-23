@@ -477,14 +477,10 @@ pub struct ContentPipeline {
     last_node_atlas_layout: Vec<(NodeId, u32)>,
 
     // ── Clip thumbnail atlas (section 24 5c) ──────────────────────────────
-    // BUG-119 root fix (2026-07-11): ONE IOSurface-backed texture shared by
-    // both threads, replacing a private persistent texture plus a
-    // `SharedTextureBridge` triple-buffer ring. Every cell blit uses
-    // `LoadAction::Load`; the ring's periodic full-surface publish blit (the
-    // ONLY `clear=true` write the atlas ever got) is gone, and with it the
-    // race where a wrapped writer cleared the surface the UI was concurrently
-    // sampling. `clip_atlas_persistent` IS the surface the UI reads — there
-    // is no separate write target and no front-buffer flip to publish.
+    // One IOSurface-backed texture shared by both threads. Every cell blit
+    // loads and nothing ever clears it, so the UI never samples a half-cleared
+    // atlas. `clip_atlas_persistent` is the surface the UI reads: there is no
+    // separate write target and no front-buffer flip.
     /// Clips that currently want a timeline thumbnail (sent by the UI, deduped).
     /// Empty = no timeline visible, so the whole snapshot path is skipped.
     clip_atlas_visible: Vec<manifold_core::ClipId>,
@@ -646,6 +642,8 @@ pub struct ContentPipeline {
     scene_viewport: scene_viewport_capture::SceneViewportCapture,
     physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
     setup_fits: crate::setup_check::SetupFitObservations,
+    /// Clicks on a scene picture waiting for the item drawn there.
+    scene_picks: crate::scene_pick::ScenePicks,
     /// The selection outline's requests and mask bridges (D-102).
     #[cfg(target_os = "macos")]
     outline: crate::selection_outline::OutlineCapture,
@@ -827,6 +825,7 @@ impl ContentPipeline {
             scene_viewport: Default::default(),
             physics_overlay: Default::default(),
             setup_fits: Default::default(),
+            scene_picks: Default::default(),
             #[cfg(target_os = "macos")]
             outline: Default::default(),
             #[cfg(target_os = "macos")]
@@ -1355,10 +1354,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.prepare_gpu_residency()
     }
 
-    /// Clone the content device handle for command admission. The handle is
-    /// shared with the pipeline, so redo admissions can query fresh allocator
-    /// values without introducing another device or synchronization primitive.
-    #[cfg(target_os = "macos")]
+    /// Clone the content device handle for the frame-time probe's readback.
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
     pub fn native_device_handle(&self) -> Option<std::sync::Arc<manifold_gpu::GpuDevice>> {
         self.native_device.clone()
     }
@@ -1670,7 +1667,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         &self.last_clip_atlas_layout
     }
 
-
     /// Request a one-shot dump of every output of `effect_id` to `dir` on the
     /// next render (the watched effect's node outputs, read back to disk as
     /// 16-bit PNGs + a manifest).
@@ -1927,8 +1923,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
 
         // === NATIVE METAL PATH ===
-        // When manifold-gpu is initialized, use raw Metal encoding.
-        // Native Metal encoding path.
         #[cfg(target_os = "macos")]
         if self.native_device.is_some() {
             self.render_content_native(
@@ -2208,6 +2202,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         });
                         gen_renderer.set_scene_viewport_request(scene_request,
                             self.scene_viewport.request.as_ref().and_then(|request| request.modifier.clone()));
+                        self.scene_picks.send(gen_renderer);
                         #[cfg(target_os = "macos")]
                         self.outline.apply(gen_renderer, self.physics_overlay.layer(), self.scene_viewport.generator_layer());
                         #[cfg(target_os = "macos")]
@@ -2222,6 +2217,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             &self.render_skip_scratch,
                             project_tempo.as_ref(),
                         );
+                        self.scene_picks.collect(gen_renderer);
                         break;
                     }
                 }
@@ -2241,7 +2237,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.gizmos.take_frame_depth(generators, self.physics_overlay.layer());
             #[cfg(target_os = "macos")]
             self.gizmos.compose_output(project, &stamps, self.physics_overlay.frames[self.write_surface_index].as_ref(), (self.output_w, self.output_h));
-            self.setup_fits.record(project, stamps, |domains, not_made, each| generators.into_iter().for_each(|g| g.each_rendered_setup(domains, not_made, &mut *each)));
+            self.setup_fits.record(project, stamps, |domains, not_made, refused, each| generators.into_iter().for_each(|g| g.each_rendered_setup(domains, not_made, refused, &mut *each)));
             // Selection masks and a generator viewport frame, beside the pictures (D9).
             #[cfg(target_os = "macos")]
             if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,

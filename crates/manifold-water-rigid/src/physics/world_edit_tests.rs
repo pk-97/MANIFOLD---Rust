@@ -188,7 +188,7 @@ fn slab_with_collider(offset: f32) -> RigidBody {
             if i & 4 == 0 { -0.5 } else { 0.5 },
         ]
     });
-    RigidBody { collider: Some(Arc::new(ColliderGeometry { hulls: vec![corners.collect()] })), ..slab(0.0) }
+    RigidBody { collider: Some(Arc::new(Solid::Hulls(vec![corners.collect()]))), ..slab(0.0) }
 }
 
 /// Dragging a part of an imported scan re-cooks the Fixed body's collider.
@@ -217,4 +217,86 @@ fn a_fixed_collider_swap_keeps_the_world_running_in_a_plain_frame() {
 #[test]
 fn a_fixed_collider_swap_keeps_the_world_running_in_a_replay() {
     a_fixed_collider_swap_keeps_the_world_running(replayed);
+}
+
+fn with_identity(body: RigidBody, identity: u64) -> RigidBody {
+    RigidBody { identity, ..body }
+}
+
+/// Adding a body ahead of a Shatter in tree order moves every later body to
+/// a new world port (ruling 23): the world follows them, pieces and their
+/// parent included, and keeps running.
+#[test]
+fn a_body_added_ahead_of_a_shatter_leaves_the_world_running() {
+    for drive in [plain as Drive, replayed as Drive] {
+        let parent = with_identity(crate_at([0.0, 6.0, 0.0]), 10);
+        let piece = with_identity(RigidBody { fragment_parent: Some(1), ..crate_at([0.0, 6.0, 0.0]) }, 11);
+        let falling = with_identity(crate_at([4.0, 8.0, 0.0]), 12);
+        let before = scene(&[(0, slab(0.0)), (1, parent.clone()), (2, piece.clone()), (3, falling.clone())]);
+        let added = with_identity(crate_at([-4.0, 3.0, 0.0]), 13);
+        let piece_moved = RigidBody { fragment_parent: Some(2), ..piece };
+        let after = scene(&[(0, slab(0.0)), (1, added), (2, parent.clone()), (3, piece_moved.clone()), (4, falling)]);
+        let mut control = start(drive, &before);
+        let mut simulation = start(drive, &before);
+        let epoch = simulation.impulse_epoch();
+        frames(&mut control, drive, 6, 20, &before);
+        frames(&mut simulation, drive, 6, 20, &after);
+        assert_eq!(simulation.impulse_epoch(), epoch, "no rebuild");
+        let (kept, expected) = (engine_pose(&simulation, 4), engine_pose(&control, 3));
+        assert!((kept[1] - expected[1]).abs() < 1e-4, "the falling crate followed its port: {kept:?} vs {expected:?}");
+        assert!(engine_pose(&simulation, 1)[1] < 3.0, "the new body joined and falls");
+        let mut released = after.clone();
+        released[2] = Some(RigidBody { release_count: 1.0, ..parent });
+        frames(&mut simulation, drive, 20, 24, &released);
+        assert!(simulation.fragment_parent_released[2] && simulation.fragment_active[3], "the piece still breaks off its moved parent");
+    }
+}
+
+/// A closed unit box as an exact static mesh: a Collider's form.
+fn mesh_slab(scale_x: f32) -> RigidBody {
+    let vertices = (0..8)
+        .map(|i| [if i & 1 == 0 { -0.5 } else { 0.5 }, if i & 2 == 0 { -0.5 } else { 0.5 }, if i & 4 == 0 { -0.5 } else { 0.5 }])
+        .collect();
+    let triangles = vec![
+        [0, 2, 1], [1, 2, 3], [4, 5, 6], [5, 7, 6], [0, 1, 4], [1, 5, 4],
+        [2, 6, 3], [3, 6, 7], [0, 4, 2], [2, 4, 6], [1, 3, 5], [3, 7, 5],
+    ];
+    RigidBody {
+        collider: Some(Arc::new(Solid::Mesh(manifold_physics::TriangleMesh { vertices, triangles }))),
+        transform: Transform { scale: [scale_x, 1.0, 4.0], ..Transform::default() },
+        ..slab(0.0)
+    }
+}
+
+/// Scale is a live row (ruling 3): writing it every frame, on a moving Body
+/// and on a static mesh Collider, swaps each one's shape in place. No body
+/// is reset, the scaled body keeps falling, and the Collider's new size
+/// catches a crate it did not reach before.
+#[test]
+fn a_modulated_scale_keeps_every_body_moving() {
+    for drive in [plain as Drive, replayed as Drive] {
+        let scene_at = |frame: usize| {
+            let grow = 1.0 + 0.05 * frame as f32;
+            let scaled = RigidBody { transform: Transform { scale: [0.5 * grow; 3], ..crate_at([0.0, 6.0, 0.0]).transform }, ..crate_at([0.0, 6.0, 0.0]) };
+            scene(&[(0, mesh_slab(4.0 * grow.min(6.0))), (1, scaled), (2, crate_at([9.0, 4.0, 0.0]))])
+        };
+        let mut simulation = start(drive, &scene_at(0));
+        let epoch = simulation.impulse_epoch();
+        let volume_at = |simulation: &RigidSimulation| installed_volume(simulation.world.as_ref().unwrap(), simulation.handles[1].unwrap()).unwrap();
+        let start_volume = volume_at(&simulation);
+        let mut last = engine_pose(&simulation, 1)[1];
+        for frame in 6..30 {
+            drive(&mut simulation, frame as f64 * DT, (frame + 1) as f64 * DT, &scene_at(frame));
+            let y = engine_pose(&simulation, 1)[1];
+            assert!(y < last, "frame {frame}: the scaled body keeps falling from where it was ({last} then {y})");
+            last = y;
+        }
+        assert_eq!(simulation.impulse_epoch(), epoch, "no rebuild");
+        let grown = volume_at(&simulation) / start_volume;
+        assert!((grown - 2.45f32.powi(3)).abs() < 0.05, "the engine holds the scaled shape: {grown} times the volume");
+        let held = scene_at(140);
+        frames(&mut simulation, drive, 30, 200, &held);
+        assert!(engine_pose(&simulation, 2)[1] > 0.4, "the grown Collider catches the far crate: {:?}", engine_pose(&simulation, 2));
+        assert_eq!(simulation.impulse_epoch(), epoch, "no rebuild");
+    }
 }

@@ -10,6 +10,8 @@ struct Instance { pos_scale: vec4<f32>, rot_pad: vec4<f32> };
 struct Uniforms {
     view_proj: mat4x4<f32>, model: mat4x4<f32>, inverse_view_proj: mat4x4<f32>,
     eye: vec4<f32>, parameters: vec4<f32>, appearance: vec4<f32>,
+    // world = model · T_instance · instance_inner, as render_scene.wgsl.
+    instance_inner: mat4x4<f32>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> vertices: array<Vertex>;
@@ -32,14 +34,15 @@ struct Out {
 };
 @vertex fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> Out {
     let inst = instances[iid];
-    let local = euler_xyz(inst.rot_pad.xyz) * (vertices[vid].position * inst.pos_scale.w) + inst.pos_scale.xyz;
+    let local = euler_xyz(inst.rot_pad.xyz) * ((u.instance_inner * vec4<f32>(vertices[vid].position, 1)).xyz * inst.pos_scale.w) + inst.pos_scale.xyz;
     let world = u.model * vec4<f32>(local, 1);
     var out: Out;
     out.position = u.view_proj * world;
     out.world = world.xyz;
     out.weight = 1.0;
     if u.appearance.y > 0.5 { out.weight = weights[vid]; }
-    out.orientation = sign(determinant(mat3x3<f32>(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz)) * inst.pos_scale.w);
+    out.orientation = sign(determinant(mat3x3<f32>(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz))
+        * determinant(mat3x3<f32>(u.instance_inner[0].xyz, u.instance_inner[1].xyz, u.instance_inner[2].xyz)) * inst.pos_scale.w);
     return out;
 }
 @fragment fn fs_path(in: Out, @builtin(front_facing) front: bool) -> @location(0) f32 {

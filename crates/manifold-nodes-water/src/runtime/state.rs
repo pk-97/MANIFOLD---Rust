@@ -94,6 +94,20 @@ impl RuntimeExtension for WaterRuntimeState {
         }
     }
 
+    fn write_body_refusals(
+        &self,
+        graph: &Graph,
+        slot: manifold_node_engine::runtime::extensions::RuntimeSlot<'_>,
+        output: &mut Vec<(manifold_core::NodeId, std::sync::Arc<str>, std::sync::Arc<str>)>,
+    ) {
+        for (node_id, instance) in slot.node_map {
+            let Some(node) = graph.get_node(*instance).and_then(|node| manifold_water_rigid::node::get(node.node.as_ref())) else {
+                continue;
+            };
+            output.extend(node.body_refusals().iter().map(|(input, reason)| (node_id.clone(), input.clone(), reason.clone())));
+        }
+    }
+
     fn is_scene_impulse_param(&self, param: &str) -> bool {
         Self::is_scene_impulse_param(self, param)
     }

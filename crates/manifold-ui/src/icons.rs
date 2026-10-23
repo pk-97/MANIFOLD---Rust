@@ -45,13 +45,14 @@ pub enum Icon {
     SceneWater = 16,
     SceneModel = 17,
     SceneForce = 18,
-    ScenePhysics = 19,
+    SceneMaterial = 19,
     SceneWorld = 20,
+    SceneSwarm = 21,
 }
 
 impl Icon {
     /// Number of distinct atlas icons (the atlas slot count).
-    pub const COUNT: usize = 21;
+    pub const COUNT: usize = 22;
 
     /// The atlas id (== PUA offset).
     #[inline]
@@ -120,21 +121,24 @@ pub fn layer_badge(layer_type: crate::types::LayerType) -> Icon {
     }
 }
 
-/// The Scene tab tree's mark for an item kind.
+/// The Scene tab tree's mark for an item kind. An Object whose shape is a
+/// plane gets the plane mark (`plane`).
 #[inline]
-pub fn scene_item_icon(kind: manifold_foundation::scene_surface::SceneItemKind) -> Icon {
-    use manifold_foundation::scene_surface::{ObjectKind, SceneItemKind};
+pub fn scene_item_icon(kind: manifold_foundation::scene_surface::ItemKind, plane: bool) -> Icon {
+    use manifold_foundation::scene_surface::ItemKind;
     match kind {
-        SceneItemKind::Camera => Icon::SceneCamera,
-        SceneItemKind::Light => Icon::SceneLight,
-        SceneItemKind::Object(ObjectKind::Mesh) => Icon::SceneMesh,
-        SceneItemKind::Object(ObjectKind::Plane) => Icon::ScenePlane,
-        SceneItemKind::Object(ObjectKind::Water) => Icon::SceneWater,
-        SceneItemKind::Object(ObjectKind::Model) => Icon::SceneModel,
-        SceneItemKind::Force => Icon::SceneForce,
-        SceneItemKind::Physics => Icon::ScenePhysics,
-        SceneItemKind::World => Icon::SceneWorld,
-        SceneItemKind::Source(_) => Icon::SceneWater,
+        ItemKind::Group => Icon::SceneModel,
+        ItemKind::Object if plane => Icon::ScenePlane,
+        ItemKind::Object => Icon::SceneMesh,
+        ItemKind::Camera => Icon::SceneCamera,
+        ItemKind::Light => Icon::SceneLight,
+        ItemKind::Material => Icon::SceneMaterial,
+        ItemKind::Water | ItemKind::WaterSource => Icon::SceneWater,
+        ItemKind::Swarm => Icon::SceneSwarm,
+        ItemKind::Force => Icon::SceneForce,
+        // A wave: a modifier bends what it targets.
+        ItemKind::Modifier => Icon::WaveSine,
+        ItemKind::World => Icon::SceneWorld,
     }
 }
 
@@ -164,8 +168,9 @@ mod tests {
             Icon::SceneWater,
             Icon::SceneModel,
             Icon::SceneForce,
-            Icon::ScenePhysics,
+            Icon::SceneMaterial,
             Icon::SceneWorld,
+            Icon::SceneSwarm,
         ]
         .into_iter()
         .enumerate()
@@ -178,8 +183,8 @@ mod tests {
 
     #[test]
     fn count_matches_highest_id() {
-        // COUNT must cover every variant — SceneWorld is the last id.
-        assert_eq!(Icon::SceneWorld.id() as usize, Icon::COUNT - 1);
+        // COUNT must cover every variant — SceneSwarm is the last id.
+        assert_eq!(Icon::SceneSwarm.id() as usize, Icon::COUNT - 1);
     }
 
     #[test]

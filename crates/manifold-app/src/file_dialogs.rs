@@ -123,6 +123,30 @@ pub(crate) fn pick_file(action: DialogAction, host: DialogHost, prefs: &mut User
     Some(path)
 }
 
+/// `pick_file` offering only `extensions`, a scene file field's own list: a
+/// texture field offers pictures, a model field models.
+pub(crate) fn pick_file_of(action: DialogAction, host: DialogHost, prefs: &mut UserPrefs, extensions: &[String]) -> Option<PathBuf> {
+    let mut dialog = build(action, host, prefs);
+    if !extensions.is_empty() {
+        dialog = dialog.add_filter(filter_name(extensions), extensions);
+    }
+    let path = dialog.pick_file()?;
+    remember(action, &path, prefs);
+    Some(path)
+}
+
+/// What a file field's extensions are, for the dialog's filter.
+fn filter_name(extensions: &[String]) -> &'static str {
+    let is = |known: &[&str]| extensions.iter().all(|ext| known.iter().any(|k| k.eq_ignore_ascii_case(ext)));
+    if is(manifold_core::file_loader::PICTURE_EXTENSIONS) {
+        "Pictures"
+    } else if is(&["glb", "gltf"]) {
+        "Models"
+    } else {
+        "Supported Files"
+    }
+}
+
 pub(crate) fn pick_files(action: DialogAction, host: DialogHost, prefs: &mut UserPrefs) -> Option<Vec<PathBuf>> {
     let paths = build(action, host, prefs).pick_files()?;
     if let Some(first) = paths.first() {

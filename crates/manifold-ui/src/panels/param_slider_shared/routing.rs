@@ -60,6 +60,59 @@ pub(crate) fn pick_list_action(
     Some(enum_dropdown(target, param_id, labels, current_index, button))
 }
 
+/// A click on a scene item's structural field row (the section 8 action
+/// rows): a pick list opens the shared menu under the row's button, every
+/// option carrying the `SceneFieldSet` it sends; a file field asks the app
+/// for its file dialog. A row with a reason (`inactive_reason`) is disabled,
+/// so its click does nothing.
+pub(crate) fn field_row_action(
+    target: &crate::panels::GraphParamTarget,
+    row: &crate::param_surface::ParamRow,
+    button: NodeId,
+) -> Vec<crate::panels::PanelAction> {
+    use crate::panels::PanelAction;
+    use crate::panels::dropdown::DropdownItem;
+    use crate::panels::scene_setup_panel::FieldControlVm;
+    let (Some(crate::param_surface::RowAffordance::Field { item, field, control }), crate::panels::GraphParamTarget::GeneratorOf(layer)) =
+        (&row.affordance, target)
+    else {
+        return Vec::new();
+    };
+    if row.spec.inactive_reason.is_some() {
+        return Vec::new();
+    }
+    match control {
+        FieldControlVm::Pick { options, .. } => {
+            let items = options
+                .iter()
+                .map(|option| DropdownItem {
+                    // No hover text on a menu item: a disabled choice names its reason.
+                    label: match &option.disabled {
+                        Some(reason) => format!("{} \u{2014} {reason}", option.label),
+                        None => option.label.clone(),
+                    },
+                    enabled: option.disabled.is_none(),
+                    separator_after: false,
+                    checked: option.checked,
+                    action: Some(PanelAction::Project(crate::ProjectAction::SceneFieldSet {
+                        layer_id: layer.clone(),
+                        item: item.clone(),
+                        field: field.clone(),
+                        pick: option.pick.clone(),
+                    })),
+                })
+                .collect();
+            vec![PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id: button, items })]
+        }
+        FieldControlVm::File { extensions, .. } => vec![PanelAction::Root(RootAction::SceneFieldFileClicked {
+            layer_id: layer.clone(),
+            item: item.clone(),
+            field: field.clone(),
+            extensions: extensions.clone(),
+        })],
+    }
+}
+
 fn enum_dropdown(
     target: crate::panels::GraphParamTarget,
     param_id: manifold_foundation::ParamId,

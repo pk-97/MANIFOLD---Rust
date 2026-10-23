@@ -105,7 +105,7 @@ fn build_runtime(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, 
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json(temporal_upscale);
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &json,
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(&json),
         &registry,
         std::sync::Arc::clone(&h.device),
         NATIVE_W,
@@ -196,7 +196,7 @@ fn temporal_upscale_depth_velocity_outputs_stay_render_res() {
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json(true);
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &json,
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(&json),
         &registry,
         std::sync::Arc::clone(&h.device),
         NATIVE_W,
@@ -519,7 +519,7 @@ fn live_rt_toggle_with_scene_object_does_not_dangle_mesh_slots() {
         ]}"#;
     let build = |label: &str| {
         PresetRuntime::from_json_str_with_device(
-            json,
+            &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
             &registry,
             std::sync::Arc::clone(&h.device),
             NATIVE_W,

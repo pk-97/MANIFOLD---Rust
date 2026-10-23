@@ -166,6 +166,8 @@ impl ViewportPass for SceneViewportPass {
         }
         self.renderer.selection_mask()
     }
+    fn request_pick(&mut self, pick: manifold_node_engine::scene::pick::PickRequest) { self.renderer.request_pick(pick); }
+    fn take_pick(&mut self) -> Option<manifold_node_engine::scene::pick::PickHit> { self.renderer.take_pick() }
     fn set_gizmo_depth(&mut self, wanted: bool) { self.renderer.set_gizmo_depth(wanted); }
     fn gizmo_depth(&self) -> Option<&GpuTexture> {
         if !self.last_attempt_valid {

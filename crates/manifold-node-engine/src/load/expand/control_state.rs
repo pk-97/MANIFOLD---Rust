@@ -177,7 +177,7 @@ impl PreparedModifierControlState {
                 let previous = prior_graph
                     .get_node_mut(previous_node.runtime_node_id)
                     .expect("previous node was checked above");
-                std::mem::swap(&mut current.node, &mut previous.node);
+                current.adopt_node(previous);
                 prior_state.migrate_node(
                     previous_node.runtime_node_id,
                     current_node.runtime_node_id,

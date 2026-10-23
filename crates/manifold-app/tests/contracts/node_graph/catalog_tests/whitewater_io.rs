@@ -2,6 +2,7 @@ use manifold_nodes_water::presets::gpu_flip::WaterScene;
 #[test]
 fn whitewater_preset_archive_preserves_graph() {
     use manifold_core::{project::Project, types::LayerType, preset_type_id::PresetTypeId};
+    manifold_nodes::engine_scenes::install();
     let def = manifold_nodes_water::presets::gpu_flip::render_def(WaterScene::dam_break(64));
     let mut project = Project::default();
     let index = project.timeline.add_layer("Dam Break", LayerType::Generator, PresetTypeId::new("WaterDamBreakGpuFlip"));

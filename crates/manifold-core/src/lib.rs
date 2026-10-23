@@ -73,20 +73,15 @@ pub mod preset_type_registry;
 pub mod project;
 pub mod recording;
 pub mod retired_cpu_flip;
-pub mod scene_exposure;
-pub mod scene_graph_edit;
-pub mod scene_template;
-pub mod scene_object_model;
-pub mod scene_slots;
+pub mod scene_doc;
+pub mod scene_schema;
 pub mod scene_world_controls;
 pub mod scene_index;
+pub mod scene_node;
 pub mod scene_impulse;
 pub mod scene_modifier_preset;
-pub mod scene_modifier_edit;
 pub mod scene_modifier_math_view;
-pub mod scene_modifier_periodicity;
 pub mod scene_source_identity;
-pub mod scene_object_migration;
 pub mod selection;
 pub mod session;
 pub mod settings;
@@ -105,12 +100,10 @@ pub use graph_target::GraphTarget;
 pub use scene_modifier_preset::{
     validate_scene_modifier_schema, SceneAxis, SceneContextValue, SceneEndpoint,
     SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneModifierRecipe,
-    SceneModifierSchemaError, SceneModifierStageDef, SceneNodeInitializer, SceneNodeRef, SceneNodeRefExt,
-    SceneParamCalibration, SceneScalarExpr, SceneStageInput, SceneStageOutput, SceneStageScope,
+    SceneModifierSchemaError, SceneModifierStageDef, SceneNodeInitializer, SceneParamCalibration, SceneScalarExpr, SceneStageInput, SceneStageOutput, SceneStageScope,
     SceneStageSource, SceneTargetSelection, EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
     SCENE_MODIFIER_RECIPE_VERSION,
 };
-pub use scene_modifier_periodicity::repair_scene_modifier_periodicity;
 pub use preset_type_id::PresetTypeId;
 pub use audio_features::{AudioFeatureSnapshot, BandFeatures, SendFeatures};
 pub use audio_mod::{
@@ -124,7 +117,7 @@ pub use control_history::{
     ControlContribution, ControlHistory, ControlHistoryError, ControlObservation,
     TriggerSourceStamp,
 };
-pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId, SceneId};
+pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, ItemId, LayerId, MarkerId, NodeId, SceneId};
 pub use layer::OverlapAction;
 pub use macro_bank::{
     MACRO_COUNT, MacroBank, MacroCurve, MacroMapping, MacroMappingTarget, MacroSlot,

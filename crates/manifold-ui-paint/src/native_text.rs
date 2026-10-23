@@ -544,7 +544,8 @@ fn generate_atlas_icons() -> [Vec<u8>; ICON_COUNT] {
         x if x == Icon::SceneWater.id() => generate_scene_water_icon(),
         x if x == Icon::SceneModel.id() => generate_scene_model_icon(),
         x if x == Icon::SceneForce.id() => generate_scene_force_icon(),
-        x if x == Icon::ScenePhysics.id() => generate_scene_physics_icon(),
+        x if x == Icon::SceneMaterial.id() => generate_scene_material_icon(),
+        x if x == Icon::SceneSwarm.id() => generate_scene_swarm_icon(),
         x if x == Icon::SceneWorld.id() => generate_scene_world_icon(),
         // Waveform shapes occupy ids 0..=4 in declaration order.
         _ => generate_single_waveform(i),
@@ -626,14 +627,21 @@ fn generate_scene_force_icon() -> Vec<u8> {
     })
 }
 
-/// Physics — a ball resting on the ground.
-fn generate_scene_physics_icon() -> Vec<u8> {
+/// Material — a sphere ring with a lit core.
+fn generate_scene_material_icon() -> Vec<u8> {
     supersample_icon(|nx, ny| {
-        let (dx, dy) = (nx - 0.5, ny - 0.46);
-        let ball = dx * dx + dy * dy <= 0.20 * 0.20;
-        let ground = (0.14..=0.86).contains(&nx) && (0.72..=0.80).contains(&ny);
-        ball || ground
+        let (dx, dy) = (nx - 0.5, ny - 0.5);
+        let r = (dx * dx + dy * dy).sqrt();
+        let ring = (r - 0.32).abs() <= SCENE_STROKE;
+        let (hx, hy) = (nx - 0.42, ny - 0.42);
+        ring || hx * hx + hy * hy <= 0.11 * 0.11
     })
+}
+
+/// Swarm — a loose scatter of dots.
+fn generate_scene_swarm_icon() -> Vec<u8> {
+    const DOTS: [(f32, f32); 6] = [(0.28, 0.30), (0.62, 0.24), (0.78, 0.52), (0.44, 0.50), (0.24, 0.72), (0.64, 0.76)];
+    supersample_icon(move |nx, ny| DOTS.iter().any(|&(cx, cy)| (nx - cx) * (nx - cx) + (ny - cy) * (ny - cy) <= 0.075 * 0.075))
 }
 
 /// World — a globe: outline, equator and one meridian.

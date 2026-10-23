@@ -12,95 +12,6 @@ impl ParamCardPanel {
         // row lookup, rather than migrated into `RowIndex`).
         match self.kind {
             ParamCardKind::Effect => {
-                // SCENE_MODIFIER_FRAMEWORK section 3.7 modifier chrome — the
-                // kind-specific buttons precede the shared effect shell.
-                if let Some(m) = &self.modifier {
-                    // Graph-editor navigation — the same destination the
-                    // generator card's cog emits: a modifier's nodes live in
-                    // the layer's generator graph, so that is where the cog
-                    // goes. Must precede the shared Effect arm below, which
-                    // would emit OpenGraphEditor(0) — modifier surfaces are
-                    // Effect-kind with a placeholder index.
-                    if self.cog_btn_id == Some(id) {
-                        return vec![PanelAction::Root(RootAction::OpenGraphTarget(
-                            crate::view::UiGraphTarget::SceneModifier {
-                                owner: Box::new(crate::view::UiGraphTarget::Generator(
-                                    m.layer_id.clone(),
-                                )),
-                                modifier_id: m.instance_id.clone(),
-                            },
-                        ))];
-                    }
-                    if self.toggle_btn_id == Some(id) {
-                        // Common modifier enable toggle: ONE param write on
-                        // the descriptor's enable target (INV-M7), resolved
-                        // app-side.
-                        return vec![PanelAction::Project(
-                            crate::panels::ProjectAction::SceneModifierToggleEnabled(
-                                m.layer_id.clone(),
-                                m.instance_id.clone(),
-                            ),
-                        )];
-                    }
-                    if self.modifier_objects_btn_id == Some(id) {
-                        return vec![PanelAction::Root(RootAction::SceneModifierObjectsClicked(
-                            m.layer_id.clone(),
-                            m.instance_id.clone(),
-                        ))];
-                    }
-                    if self.modifier_remove_btn_id == Some(id) {
-                        // The delete-collapse exit animation rides the
-                        // inspector's reconcile machinery — this only mutates.
-                        return vec![PanelAction::Project(
-                            crate::panels::ProjectAction::SceneModifiersRemove(
-                                m.layer_id.clone(),
-                                vec![m.instance_id.clone()],
-                            ),
-                        )];
-                    }
-                    if self.chevron_btn_id == Some(id) {
-                        self.set_collapsed(!self.is_collapsed());
-                        return vec![PanelAction::Params(ParamsAction::SectionFoldToggled)];
-                    }
-                    if self.header_bg_id == Some(id)
-                        || self.name_label_id == Some(id)
-                        || self.border_id == Some(id)
-                    {
-                        return vec![PanelAction::Params(ParamsAction::ModifierCardClicked(
-                            m.instance_id.clone(),
-                        ))];
-                    }
-                }
-                if let Some(m) = &self.object_modifier {
-                    if self.chevron_btn_id == Some(id) {
-                        self.set_collapsed(!self.is_collapsed());
-                        return vec![PanelAction::Params(ParamsAction::SectionFoldToggled)];
-                    }
-                    if self.cog_btn_id == Some(id) {
-                        return vec![PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(
-                            m.layer_id.clone(),
-                        ))];
-                    }
-                    if self.modifier_remove_btn_id == Some(id) {
-                        return vec![PanelAction::Project(
-                            crate::panels::ProjectAction::SceneSetupRemoveModifier(
-                                m.layer_id.clone(),
-                                m.owner.clone(),
-                                m.node_doc_id,
-                            ),
-                        )];
-                    }
-                    if self.header_bg_id == Some(id)
-                        || self.name_label_id == Some(id)
-                        || self.border_id == Some(id)
-                    {
-                        // Scene Setup owns selection for object cards. The
-                        // host captures the stable address on pointer/click;
-                        // no inspector modifier/effect selection action is
-                        // valid for this card species.
-                        return Vec::new();
-                    }
-                }
                 let ei = self.effect_index;
                 if self.toggle_btn_id == Some(id) {
                     return vec![PanelAction::Params(ParamsAction::EffectToggle(ei))];
@@ -240,9 +151,7 @@ impl ParamCardPanel {
 
     /// Drag-move dispatch. The state mutation + tree repositioning and the
     /// emitted [`PanelAction`]s are identical for both kinds — every emission
-    /// rides `param_target()` (BUG-3jpj: a modifier card's kind is Effect with
-    /// effect_index 0, so deriving the target from `self.kind` here re-addresses
-    /// mid-gesture moves to effect 0 and the drag dies). `fine` is Shift-held,
+    /// rides `param_target()`. `fine` is Shift-held,
     /// sampled per move (not just at grab) so pressing/releasing Shift mid-drag
     /// re-scales sensitivity live (D8).
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree, fine: bool) -> Vec<PanelAction> {
@@ -266,8 +175,7 @@ impl ParamCardPanel {
     }
 
     /// Drag-end dispatch — commit the active drag. Identical bookkeeping for
-    /// both kinds; every emission rides `param_target()` (BUG-3jpj — see
-    /// `handle_drag`).
+    /// both kinds.
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.row_host.is_dragging() {
             return self.row_host.handle_drag_end();
@@ -288,25 +196,13 @@ impl ParamCardPanel {
         }
         use crate::intent::Gesture::RightClick;
 
-        // Every emission rides param_target() — a modifier card must address
-        // its owning layer here too (BUG-3jpj), not effect_index 0.
         let target = self.param_target();
 
         // Card root: claim the whole area + the context-menu action. Any
         // descendant without a more specific intent folds here.
         if let Some(border_id) = self.border_id {
             intents.claim_area(border_id);
-            let menu = if let Some(m) = &self.modifier {
-                PanelAction::Root(RootAction::SceneModifierCardRightClicked(
-                    m.layer_id.clone(),
-                    m.instance_id.clone(),
-                ))
-            } else if let Some(m) = &self.object_modifier {
-                PanelAction::Root(RootAction::ObjectModifierCardRightClicked(m.clone()))
-            } else {
-                PanelAction::Params(ParamsAction::CardRightClicked(target.clone()))
-            };
-            intents.on(border_id, RightClick, menu);
+            intents.on(border_id, RightClick, PanelAction::Params(ParamsAction::CardRightClicked(target.clone())));
         }
 
         // Every materialised slider's right-click reset — main rows AND every

@@ -12,8 +12,8 @@ pub mod envelopes;
 pub mod graph;
 pub mod layer;
 pub mod marker;
-pub mod material;
 pub mod preset;
+pub mod scene_doc;
 pub mod selection;
 pub mod session_commands;
 pub mod settings;
@@ -41,10 +41,6 @@ pub const WHOLE_INSTANCES: ChangeSet = ChangeSet::of(&[
 /// removing or lifting nodes moves Shapes too.
 pub(crate) const GRAPH_EDIT: ChangeSet =
     ChangeSet::of(&[Part::Effects, Part::Overrides, Part::Shapes]);
-
-/// A graph edit that rebuilds the card manifest from the graph
-/// (`refresh_manifest_from_graph`): new params arrive with values.
-pub(crate) const GRAPH_AND_MANIFEST: ChangeSet = GRAPH_EDIT.union(ChangeSet::of(&[Part::Values]));
 
 /// A graph edit that also adds or removes card params, carrying their values
 /// and their drivers, envelopes, audio mods and Ableton mappings with them.

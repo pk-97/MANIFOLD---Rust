@@ -26,6 +26,7 @@ mod group;
 mod instance;
 mod instance_serde;
 mod param_defs;
+mod scene_install;
 #[cfg(test)]
 mod test_support;
 

@@ -192,7 +192,7 @@ pub fn walked_roles(
     solver: &str,
 ) -> Result<(Option<manifold_node_engine::scene::transform::Transform>, Vec<crate::fluid_role::FluidRoleKind>), Verdict> {
     use crate::fluid_role::{FluidRoleKind, initial_fill};
-    let objects: Vec<_> = crate::ROLE_PORTS.iter().filter_map(|port| x.object(port)).collect();
+    let objects: Vec<_> = (0..crate::role_count(x.params())).filter_map(|index| x.object(&format!("role_{index}"))).collect();
     let kinds: Vec<_> = objects.iter().filter_map(|(kind, _)| FluidRoleKind::from_index(*kind)).collect();
     let fills = objects.iter().filter(|(kind, _)| *kind == FluidRoleKind::InitialFill.index()).map(|(_, placed)| *placed);
     let fill = initial_fill(fills).map_err(|reason| Verdict::Refused(format!("{solver}: {reason}")))?;

@@ -8,7 +8,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
 #[cfg(test)]
-use manifold_nodes_water::presets::gpu_flip::{DAM_FILL_HEIGHT, REST_PER_CELL, DAM_OBSTACLE};
+use manifold_nodes_water::presets::gpu_flip::REST_PER_CELL;
 #[cfg(test)]
 use manifold_water_gpu_flip::primitives::gpu_flip_volume::VolumeDrift;
 #[cfg(test)]
@@ -725,228 +725,6 @@ fn gpu_flip_standing_wave_keeps_its_period() {
     assert!((period / 2.80 - 1.0).abs() <= 0.03, "standing-wave period {period:.3} s, outside 3% of 2.80 s");
 }
 
-/// How deep `p` sits inside the obstacle box at `pos` (m), negative outside.
-#[cfg(test)]
-fn obstacle_depth(p: &FluidParticle, pos: [f64; 3]) -> f64 {
-    let scale = DAM_OBSTACLE[1];
-    (0..3).map(|a| 0.5 * scale[a] - (f64::from(p.position_radius[a]) - pos[a]).abs()).fold(f64::INFINITY, f64::min)
-}
-
-/// The deepest live particle inside the obstacle at `pos`, and the live count.
-#[cfg(test)]
-fn deepest_in_obstacle(particles: &[FluidParticle], pos: [f64; 3]) -> (f64, usize) {
-    let live = particles.iter().filter(|p| p.position_radius[3] > 0.0);
-    live.fold((f64::NEG_INFINITY, 0), |(deepest, count), p| (deepest.max(obstacle_depth(p, pos)), count + 1))
-}
-
-/// The Dam Break's box as a Collider: the fill leaves the box's sites dead,
-/// the collapsing column flows round the box and over it, no live particle
-/// gets more than half a cell inside it, nothing outruns the column without
-/// the box by much, and the step removes under 0.5% of the water.
-#[test]
-fn gpu_flip_dam_break_flows_around_the_obstacle() {
-    let scene = WaterScene::dam_break(64).with_obstacle();
-    let h = scene.cell_size();
-    let mut run = Run::new(scene);
-    let pos = DAM_OBSTACLE[0];
-    let filled = run.particles();
-    let (deepest, live) = deepest_in_obstacle(&filled, pos);
-    let dead_inside = filled.iter().filter(|p| p.position_radius[3] == 0.0 && obstacle_depth(p, pos) > 0.0).count();
-    let missed = filled.iter().filter(|p| p.position_radius[3] > 0.0 && obstacle_depth(p, pos) > h).count();
-    println!("GPU FLIP obstacle fill: {live} live of {}, {dead_inside} dead inside the box, deepest live {:.3} cells", filled.len(), deepest / h);
-    assert!(dead_inside > 1000, "the fill left the box's sites alive");
-    assert_eq!(missed, 0, "a site a cell inside the box is alive");
-    let mut beside = 0;
-    for frame in 0..90 {
-        run.frame();
-        let particles = run.particles();
-        let stats = particle_stats(&particles);
-        let (deepest, _) = deepest_in_obstacle(&particles, pos);
-        // Water above the pool beside the box, in the box's x span.
-        let [lo, hi] = [pos[0] - 0.5 * DAM_OBSTACLE[1][0], pos[0] + 0.5 * DAM_OBSTACLE[1][0]];
-        let half_z = 0.5 * DAM_OBSTACLE[1][2];
-        beside = beside.max(
-            particles
-                .iter()
-                .filter(|p| p.position_radius[3] > 0.0)
-                .filter(|p| {
-                    let [x, y, z] = [0, 1, 2].map(|a| f64::from(p.position_radius[a]));
-                    (lo..hi).contains(&x) && (z - pos[2]).abs() > half_z && y > DAM_FILL_HEIGHT + 2.0 * h
-                })
-                .count(),
-        );
-        if frame % 10 == 9 {
-            println!(
-                "GPU FLIP obstacle frame {frame:3}: {} live, fastest {:.2} m/s, deepest in the box {:.3} cells, {beside} beside it",
-                stats.live,
-                stats.fastest,
-                deepest / h
-            );
-        }
-        assert_eq!(stats.bad, 0, "frame {frame}: a particle is not finite");
-        // The column without the box peaks near 13 m/s at 64³.
-        assert!(stats.fastest < 25.0, "frame {frame}: fastest particle {} m/s", stats.fastest);
-        assert!(deepest <= 0.5 * h, "frame {frame}: a live particle sits {:.3} cells inside the box", deepest / h);
-        assert!(stats.live as f64 >= 0.995 * live as f64, "frame {frame}: {} of {live} particles left", stats.live);
-    }
-    assert!(beside > 1000, "the wave never passed beside the box");
-}
-
-/// A pool at rest round a static box resting on the tank floor rests as the
-/// FLIP engine's does: no particle is lost, the level holds, and the water
-/// moves no faster than the engine's. On the engine's grid the waterline
-/// falls mid-cell, where both keep a few cm/s of lapping at every solid
-/// (`gpu_flip_engine_still_pool_round_a_box`, which printed `ENGINE`).
-#[test]
-fn gpu_flip_still_pool_rests_round_a_static_obstacle() {
-    // The engine's fastest particle at frames 19, 39 … 119 (GPU FLIP within
-    // 7% of each on 2026-10-05).
-    const ENGINE: [f64; 6] = [0.0438, 0.0129, 0.0183, 0.0241, 0.0221, 0.0190];
-    let scene = WaterScene::still_pool(64).with_obstacle();
-    let mut run = Run::new(scene);
-    let (_, live) = deepest_in_obstacle(&run.particles(), DAM_OBSTACLE[0]);
-    // The level once the fill has settled.
-    let mut level = None;
-    let mut fastest = Vec::new();
-    for frame in 0..120 {
-        run.frame();
-        if frame % 20 == 19 {
-            let stats = particle_stats(&run.particles());
-            println!("GPU FLIP pool round a box frame {frame:3}: {} live, fastest {:.2e} m/s, mean height {:.5} m", stats.live, stats.fastest, stats.mean_height);
-            assert_eq!((stats.live, stats.bad), (live, 0), "frame {frame}: particles lost or not finite");
-            let level = *level.get_or_insert(stats.mean_height);
-            assert!((stats.mean_height - level).abs() < 1e-4, "frame {frame}: the level moved from {level} to {}", stats.mean_height);
-            fastest.push(stats.fastest);
-        }
-    }
-    let peak = fastest.iter().copied().fold(0.0, f64::max);
-    let engine_peak = ENGINE.iter().copied().fold(0.0, f64::max);
-    assert!(peak < 1.25 * engine_peak, "the pool round the box reached {peak} m/s, the engine's {engine_peak} m/s");
-    let last = fastest[ENGINE.len() - 1];
-    assert!(last < 1.25 * ENGINE[5], "after 2 s the pool round the box moves at {last} m/s, the engine's at {} m/s", ENGINE[5]);
-}
-
-/// A box driven through a still pool at 1 m/s pushes the water ahead of it:
-/// the water in front moves with it, none gets more than a cell inside, and
-/// the step removes under 0.5% of the water, at one substep a tick and two.
-#[test]
-fn gpu_flip_moving_obstacle_pushes_the_pool() {
-    moving_obstacle_pushes(1);
-    moving_obstacle_pushes(2);
-}
-
-#[cfg(test)]
-fn moving_obstacle_pushes(steps: usize) {
-    let scene = WaterScene::still_pool(64).with_obstacle().with_steps(steps);
-    let h = scene.cell_size();
-    let mut run = Run::new(scene);
-    let transform = node_named(&run.graph, "obstacle_transform");
-    let start = DAM_OBSTACLE[0];
-    let (_, live) = deepest_in_obstacle(&run.particles(), start);
-    let speed = 1.0;
-    let mut ahead_speed = 0.0;
-    for frame in 1..=30 {
-        let pos = [start[0] + speed * f64::from(frame) / 60.0, start[1], start[2]];
-        run.graph.set_param(transform, "pos_x", manifold_node_engine::parameters::ParamValue::Float(pos[0] as f32)).expect("pos_x");
-        run.frame();
-        let particles = run.particles();
-        let stats = particle_stats(&particles);
-        let (deepest, _) = deepest_in_obstacle(&particles, pos);
-        let front = pos[0] + 0.5 * DAM_OBSTACLE[1][0];
-        let half = DAM_OBSTACLE[1].map(|s| 0.5 * s);
-        let ahead: Vec<f64> = particles
-            .iter()
-            .filter(|p| p.position_radius[3] > 0.0)
-            .filter(|p| {
-                let [x, _, z] = [0, 1, 2].map(|a| f64::from(p.position_radius[a]));
-                (front..front + 2.0 * h).contains(&x) && (z - pos[2]).abs() < half[2] - h
-            })
-            .map(|p| f64::from(p.velocity[0]))
-            .collect();
-        ahead_speed = ahead.iter().sum::<f64>() / ahead.len().max(1) as f64;
-        if frame % 5 == 0 {
-            println!(
-                "GPU FLIP moving box {steps} steps frame {frame:2}: {} live, deepest {:.3} cells, {} ahead at {ahead_speed:.3} m/s",
-                stats.live,
-                deepest / h,
-                ahead.len()
-            );
-        }
-        assert_eq!(stats.bad, 0, "frame {frame}: a particle is not finite");
-        assert!(deepest <= h, "frame {frame}: a live particle sits {:.3} cells inside the box", deepest / h);
-        assert!(stats.live as f64 >= 0.995 * live as f64, "frame {frame}: {} of {live} particles left", stats.live);
-    }
-    assert!(ahead_speed > 0.5 * speed, "{steps} steps: the water ahead moves at {ahead_speed} m/s against the box's {speed}");
-}
-
-/// SCENE_SETUP_PROGRAMME.md D8 (open meshes are solids) on GPU FLIP, the
-/// twin of `matter_open_mesh_collider_holds_liquid`: the Dam Break's box
-/// becomes an open, one-sided plane in Exact Mesh mode, wall to wall across
-/// the tank at 1 m, through the column. The default 0.05 m Shell Thickness
-/// is under two cells, so the shell is a cell either side of the plane. The
-/// column above it lands and rests on it, none of it falls through to the
-/// water below, and no live particle gets half a cell into the shell.
-#[test]
-fn gpu_flip_open_mesh_collider_holds_liquid() {
-    use manifold_node_engine::parameters::ParamValue;
-    let scene = WaterScene::dam_break(64).with_obstacle();
-    let h = scene.cell_size();
-    let plane_y = 1.0;
-    let half_shell = h.max(0.025);
-    let quad = manifold_nodes::testkit::open_mesh::write_open_quad_gltf();
-    let mut registry = PrimitiveRegistry::with_builtin();
-    register_substep_test_nodes(&mut registry);
-    let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
-    let collider = node_named(&graph, "obstacle_collider");
-    graph.set_param(collider, "geometry", ParamValue::Enum(1)).expect("geometry");
-    let path = quad.to_str().expect("utf-8 path").to_owned();
-    graph.set_param(collider, "path", ParamValue::String(std::sync::Arc::new(path))).expect("path");
-    let transform = node_named(&graph, "obstacle_transform");
-    // Wider than the 4 m tank, so no water runs round its edge.
-    for (name, value) in [("pos_x", 0.0), ("pos_y", plane_y), ("pos_z", 0.0), ("scale_x", 4.4), ("scale_y", 1.0), ("scale_z", 4.4)] {
-        graph.set_param(transform, name, ParamValue::Float(value as f32)).expect(name);
-    }
-    let mut run = Run::with_graph(scene, graph);
-    // The mesh loads on a worker; a poll count, not a wall-clock budget.
-    let mut polls = 0u32;
-    while particle_stats(&run.particles()).live == 0 {
-        polls += 1;
-        assert!(polls < 600, "the liquid never filled");
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        run.frame();
-    }
-    let live_y = |particles: &[FluidParticle]| -> Vec<f64> {
-        particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| f64::from(p.position_radius[1])).collect()
-    };
-    let filled = live_y(&run.particles());
-    let above = filled.iter().filter(|&&y| y > plane_y).count();
-    let below = filled.len() - above;
-    assert!(above > 10_000 && below > 10_000, "the column straddles the plane: {above} above, {below} below");
-    let mut resting = 0;
-    for frame in 0..90 {
-        run.frame();
-        let particles = run.particles();
-        let stats = particle_stats(&particles);
-        assert_eq!(stats.bad, 0, "frame {frame}: a particle is not finite");
-        let ys = live_y(&particles);
-        let now_above = ys.iter().filter(|&&y| y > plane_y).count();
-        let deepest = ys.iter().map(|&y| half_shell - (y - plane_y).abs()).fold(f64::NEG_INFINITY, f64::max);
-        resting = ys.iter().filter(|&&y| y > plane_y && y < plane_y + half_shell + 2.0 * h).count();
-        if frame % 15 == 14 {
-            println!(
-                "GPU FLIP open plane frame {frame:2}: {now_above} of {above} above, {} below, deepest in the shell {:.3} cells, {resting} resting on it",
-                ys.len() - now_above,
-                deepest / h
-            );
-        }
-        assert!(deepest <= 0.5 * h, "frame {frame}: a live particle sits {:.3} cells inside the shell", deepest / h);
-        assert!(now_above as f64 >= 0.995 * above as f64, "frame {frame}: {now_above} of {above} particles stayed above the plane");
-        assert!(ys.len() - now_above <= below + above / 200, "frame {frame}: water fell through the plane");
-    }
-    assert!(resting > 1000, "the column never came to rest on the plane: {resting}");
-    let _ = std::fs::remove_dir_all(quad.parent().expect("temp dir"));
-}
-
 /// Small native/GPU comparisons share seed geometry and simulation time.
 #[cfg(test)]
 mod native_reference {
@@ -957,7 +735,7 @@ mod native_reference {
 
     #[cfg(test)]
     fn world(scene: WaterScene) -> (FluidWorld, [f32; 3]) {
-        assert!(!scene.obstacle && !scene.surface);
+        assert!(!scene.surface);
         let layout = scene.layout();
         // Native mapping: 1.5 solid cells outside each authored wall.
         let offset = layout.min.map(|v| v - (1.5 * layout.cell_size) as f32);
@@ -1178,111 +956,13 @@ fn gpu_flip_still_pool_keeps_its_meshed_volume() {
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
 }
 
-/// A lid as wide as the tank pressed down into a 1 m pool at 1 m/s. It is
-/// posed before the fill, its bottom two cells under the surface, so the
-/// first tick moves it one frame's travel. No live particle ever leaves the
-/// box. Closed, the water under it is sealed off from air: every solve
-/// converges until the lid first kills water, and from then on a solve may
-/// reach its cap, which the stats report while the tick runs on. With the
-/// low-x face open the water escapes through it.
-#[test]
-fn gpu_flip_box_pressed_into_a_full_tank_converges_and_escapes_when_open() {
-    let closed = lid_pressed_into_pool(63);
-    let open = lid_pressed_into_pool(63 & !1);
-    println!("GPU FLIP pressed lid: water by the low-x face moves out at {:.3} m/s sealed, {:.3} m/s open; displacement rate over the open face {:.3} m/s", closed.0, open.0, open.1);
-    // Mass conservation: open, the water the lid displaces leaves through
-    // the open face, so the mean outflow there is the lid area times its
-    // speed over the open area. Sampled two to four cells in, the profile is
-    // not flat, so half of it is the floor. Sealed, the water has no way
-    // out, so by the wall it moves at under a quarter of the open flow.
-    assert!(open.0 > 0.5 * open.1, "open: the pressed water leaves at {:.3} m/s, under half the displacement rate {:.3}", open.0, open.1);
-    assert!(closed.0.abs() < 0.25 * open.0, "sealed: the water by the wall moves out at {:.3} m/s against {:.3} open", closed.0, open.0);
-}
-
-#[cfg(test)]
-const LID_SPEED: f64 = 1.0;
-#[cfg(test)]
-const LID_THICKNESS: f64 = 0.4;
-
-/// The mean -x speed of the water two to four cells in from the low-x face
-/// over the last ten frames, and the speed the lid's displacement would
-/// drive through that face: lid area times lid speed over the open area;
-/// and the volume rate taken off sealed pockets' pressure solves, summed.
-#[cfg(test)]
-fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
-    let scene = WaterScene::still_pool(64).with_obstacle().with_closed_faces(mask);
-    let h = scene.cell_size();
-    let side = scene.size;
-    let surface = 1.0;
-    let start = surface + 0.5 * LID_THICKNESS - 2.0 * h;
-    // Overlapping the walls by a cell, so no gap runs between lid and wall.
-    let width = side + 2.0 * h;
-    let lid = [("pos_x", 0.0), ("pos_y", start), ("pos_z", 0.0), ("scale_x", width), ("scale_y", LID_THICKNESS), ("scale_z", width)];
-    let mut run = Run::posed(scene, &lid.map(|(name, value)| ("obstacle_transform", name, value)));
-    let transform = node_named(&run.graph, "obstacle_transform");
-    let low_x = -0.5 * side;
-    let mut outward = Vec::new();
-    let mut drive = 0.0;
-    let mut removed = 0.0;
-    let mut squeezed = false;
-    for frame in 1..=30 {
-        let y = start - LID_SPEED * f64::from(frame) / 60.0;
-        run.graph.set_param(transform, "pos_y", manifold_node_engine::parameters::ParamValue::Float(y as f32)).expect("pos_y");
-        run.frame();
-        let stats = run.liquid_stats();
-        println!(
-            "GPU FLIP pressed lid mask {mask} frame {frame:2}: dry floor holes {}, {} live, {} pressure iterations, {} density, {} unconverged, {} unresolved, {:.3e}/{:.3e} m³/s removed from sealed pressure/density, dry/sealed/air cells {:?}, first air seed {:?} (dry neighbour phi/h {:.3}, particles {})",
-            stats.dry_floor_cells, stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets, stats.pressure_flux_removed, stats.density_flux_removed, stats.pocket_cells, stats.first_air_seed, f32::from_bits(stats.first_air_seed[4]) as f64 / h, stats.first_air_seed[5]
-        );
-        removed += f64::from(stats.pressure_flux_removed);
-        let half = (0.5 * side) as f32;
-        let outside = run
-            .particles()
-            .iter()
-            .filter(|p| p.position_radius[3] > 0.0)
-            .filter(|p| {
-                let q = p.position_radius;
-                q[0].abs() > half || q[2].abs() > half || q[1] < 0.0 || q[1] > side as f32
-            })
-            .count();
-        assert_eq!(outside, 0, "mask {mask}: frame {frame} left live water outside the box");
-        let entering = run.entering.iter().filter(|p| p.position_radius[3] > 0.0).count() as u32;
-        squeezed |= stats.live != entering;
-        if squeezed {
-            // Water the lid has squeezed into itself is killed there; past
-            // that a capped solve is reported and the tick still runs.
-            assert!(stats.live > 0, "mask {mask}: frame {frame} left no live water");
-            assert!(
-                stats.pressure_flux_removed.is_finite() && stats.density_flux_removed.is_finite(),
-                "mask {mask}: frame {frame} produced non-finite stats"
-            );
-        } else {
-            assert_eq!(stats.unconverged, 0, "mask {mask}: frame {frame} left a pressure or density solve unconverged before any water was squeezed");
-        }
-        assert_eq!(stats.unresolved_pockets, 0, "mask {mask}: frame {frame} left a pocket spread unfinished");
-        if frame > 20 {
-            let under = y - 0.5 * LID_THICKNESS;
-            drive = LID_SPEED * side * side / (side * under);
-            let near: Vec<f64> = run
-                .particles()
-                .iter()
-                .filter(|p| p.position_radius[3] > 0.0)
-                .filter(|p| (2.0 * h..4.0 * h).contains(&(f64::from(p.position_radius[0]) - low_x)))
-                .map(|p| -f64::from(p.velocity[0]))
-                .collect();
-            outward.push(near.iter().sum::<f64>() / near.len().max(1) as f64);
-        }
-    }
-    (outward.iter().sum::<f64>() / outward.len() as f64, drive, removed)
-}
-
 /// Encode replay changes nothing the step computes: 60 Dam Break ticks
 /// with the executor's replay on match replay off bit for bit, particles,
 /// faces and the solver's words, every tick, while the solver's rounds run
 /// as replayed segments and none directly.
 #[test]
 fn gpu_flip_replay_changes_nothing() {
-    let scene = WaterScene::dam_break(64).with_obstacle().with_steps(1);
+    let scene = WaterScene::dam_break(64).with_steps(1);
     let mut direct = Run::new(scene);
     direct.set_encode_replay(false);
     let mut replay = Run::new(scene);
@@ -1841,9 +1521,9 @@ fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
     let default_off = digest(None);
     eprintln!("DAM BREAK DIGEST 32 x4: {default_off:016x}");
     // The whole step's pin: only a commit that changes the step on purpose
-    // re-records it, and says why. Last re-recorded for the tank walls matching
+    // re-records it, and says why. Last re-recorded for the Dam Break losing its box (a scene Collider now), after the tank walls matching
     // the native engine; sheeting with walls and no pressure template gives it too.
-    assert_eq!(default_off, 0xb915_115e_7604_78dd, "sheeting off changed the Dam Break");
+    assert_eq!(default_off, 0xd73f_a72f_e5d9_5fbb, "sheeting off changed the Dam Break");
     assert_eq!(digest(Some(0.0)), default_off, "rate 0 changed the step");
 }
 
@@ -1879,7 +1559,7 @@ use manifold_node_engine::testkit::atom::{node_named, output_of};
 /// the tick's inflow births and refusals (stats words 1, 28 and 29).
 #[cfg(test)]
 fn inflow_ticks(drain: bool, fill_slots: Option<i32>, seconds: usize) -> Vec<[u32; 3]> {
-    let scene = WaterScene { obstacle: false, fill_height: 0.0, column: [[0.0; 2]; 3], ..WaterScene::dam_break(24) };
+    let scene = WaterScene { fill_height: 0.0, column: [[0.0; 2]; 3], ..WaterScene::dam_break(24) };
     let mut def = water_def(scene);
     let domain = def.nodes.iter().find(|node| node.node_id.as_str() == "domain").expect("domain").id;
     let first = def.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
@@ -1898,7 +1578,7 @@ fn inflow_ticks(drain: bool, fill_slots: Option<i32>, seconds: usize) -> Vec<[u3
             "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
         })));
         def.nodes.push(node(source, format!("source_{k}"), "node.fluid_role_source", serde_json::json!({
-            "role": {"type": "Enum", "value": role}, "shape": {"type": "Enum", "value": 1}, "radius": float(0.866_025_4),
+            "role": {"type": "Enum", "value": role},
             "velocity_x": float(velocity[0]), "velocity_y": float(velocity[1]), "velocity_z": float(velocity[2]),
         })));
         let wire = |from_node: u32, from_port: &str, to_node: u32, to_port: String| manifold_core::effect_graph_def::EffectGraphWire {

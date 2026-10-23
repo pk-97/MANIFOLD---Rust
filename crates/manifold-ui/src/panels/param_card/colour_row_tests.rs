@@ -38,6 +38,7 @@ fn row(id: &'static str, name: &str, value: f32) -> ParamRow {
         mapping: RowMapping { osc_address: None, ableton_display: None, ableton_range: None, mappable: false },
         rgb_members: None,
         modulator_stored: false,
+        affordance: None,
     }
 }
 
@@ -66,7 +67,6 @@ fn scene_card(editable: bool) -> (ParamCardPanel, UITree) {
         supports_envelopes: true,
         has_graph_mod: false,
         layer_id: None,
-        modifier: None,
         rows,
         string_params: vec![],
         audio_sends: Vec::new(),

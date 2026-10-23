@@ -76,10 +76,7 @@ fn math_view_runtime_adds_diagrams_to_the_one_scene_plan_and_routes_values() {
         set(&owner, &mut params, "math_view_mode", 1.0);
         set(&owner, &mut params, "orbit", 0.73);
         runtime.apply_param_values(&params);
-        let local = manifold_core::scene_modifier_preset::SceneNodeRef {
-            scope: vec![NodeId::new("vortex_stage")],
-            node: NodeId::new("patch"),
-        };
+        let local = NodeId::new("patch");
         let copies = runtime
             .modifier_node_copies(&NodeId::new("vortex_a"), &local)
             .unwrap();
@@ -583,7 +580,7 @@ fn retired_params_leave_before_scene_modifier_value_writes() {
     }
     let mut def: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/assets/generator-presets/WaterDamBreakGpuFlip.json"
+        "/tests/fixtures/presets/WaterDamBreakGpuFlip.json"
     )))
     .unwrap();
     let step = find_step(&mut def.nodes).expect("the Dam Break has a GPU FLIP step");
@@ -603,7 +600,7 @@ fn retired_params_leave_before_scene_modifier_value_writes() {
         "/assets/scene-modifier-presets/UniformForce.json"
     )))
     .unwrap();
-    let scene = manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
+    let scene = NodeId::new("scene");
     let force = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         &def,
         &recipe,
@@ -612,7 +609,7 @@ fn retired_params_leave_before_scene_modifier_value_writes() {
         manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
     )
     .unwrap();
-    let def = manifold_core::scene_modifier_edit::insert_scene_modifier(&def, 0, force).unwrap().graph;
+    let def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&def, force).unwrap();
     assert!(manifold_node_engine::load::graph_loader::has_retired_params(&def));
     PresetRuntime::from_def_for_render(def, &PrimitiveRegistry::with_builtin(), None, false)
         .expect("the retired card leaves at load and the layer builds");
@@ -643,14 +640,11 @@ fn math_view_arrows_draw_after_every_mesh_modifier() {
         ("OrderedRecon", true), ("SurfaceWaves", true), ("ElasticSculpture", true),
         ("SpatialEchoes", false),
     ] {
-        let mut owner = owner();
         let recipe: EffectGraphDef = serde_json::from_str(
             &std::fs::read_to_string(format!("{dir}{name}.json")).unwrap(),
         ).unwrap();
-        *owner.scene_modifiers[0].graph = recipe;
-        let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-            &owner, &NodeId::new("vortex_a"),
-        ).unwrap().graph;
+        let mut owner = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner_with(recipe);
+        manifold_core::phong_migration::migrate_phong_to_pbr(&mut owner);
         let mut params = manifest(&owner);
         for (control, value) in [("mode", 1.0), ("grid", 0.0), ("trails", 0.0), ("ghosts", 0.0), ("density", 8.0)] {
             set(&owner, &mut params, &format!("math_view_{control}"), value);

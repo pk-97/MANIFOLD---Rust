@@ -36,12 +36,12 @@ fn face_grid_fusion_in_host_graphs() {
     assert!(sampled.iter().all(|n| !n.fused), "GPU FLIP face components stay unfused: {sampled:?}");
     assert!(sampled.iter().all(|n| n.kind == "pointwise"), "GPU FLIP face components are eligible atoms: {sampled:?}");
 
-    let alone = report(matter_dam_break_faces(None, false));
+    let alone = report(matter_dam_break_faces(None));
     let components = of_type(&alone, "node.matter_face_component");
     assert_eq!(components.len(), 3);
     assert!(components.iter().all(|n| !n.fused), "a lone matter component is its own dispatch: {components:?}");
 
-    let consumed = report(matter_dam_break_faces(Some(1), false));
+    let consumed = report(matter_dam_break_faces(Some(1)));
     let components = of_type(&consumed, "node.matter_face_component");
     let fused: Vec<_> = components.iter().filter(|n| n.fused).collect();
     assert_eq!(fused.len(), 1, "only the consumed axis fuses: {components:?}");
@@ -51,8 +51,8 @@ fn face_grid_fusion_in_host_graphs() {
     assert!(members.contains(&"node.divide_by_value"), "the consumer shares the region: {members:?}");
 }
 
-/// The MPM face scene, at every Resolution its domain admits, with and
-/// without the moving box, either refuses by name or covers every dispatch
+/// The MPM face scene, at every Resolution its domain admits, either
+/// refuses by name or covers every dispatch
 /// under the liquid extent rules; the fused consumer's lattice is the one at
 /// 64.
 #[test]
@@ -60,18 +60,16 @@ fn matter_face_scene_covers_every_dispatch() {
     use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
     use manifold_node_engine::exec::extent::{ExtentError};
 use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
-    for collider in [false, true] {
-        let mut preset = LiquidPreset::build(&matter_dam_break_faces(None, collider)).expect("the face scene builds");
-        let mut ran = 0;
-        for res in preset.resolutions() {
-            match preset.check(res) {
-                Ok(_) => ran += 1,
-                Err(ExtentError::Refused { reason, .. }) if reason.contains("Grid Budget") || reason.contains("Resolution") => {}
-                Err(error) => panic!("collider {collider}, Resolution {res}: {error}"),
-            }
+    let mut preset = LiquidPreset::build(&matter_dam_break_faces(None)).expect("the face scene builds");
+    let mut ran = 0;
+    for res in preset.resolutions() {
+        match preset.check(res) {
+            Ok(_) => ran += 1,
+            Err(ExtentError::Refused { reason, .. }) if reason.contains("Grid Budget") || reason.contains("Resolution") => {}
+            Err(error) => panic!("Resolution {res}: {error}"),
         }
-        assert!(ran > 100, "collider {collider}: only {ran} resolutions run");
     }
-    let mut consumed = LiquidPreset::build(&matter_dam_break_faces(Some(1), false)).expect("the consumer scene builds");
+    assert!(ran > 100, "only {ran} resolutions run");
+    let mut consumed = LiquidPreset::build(&matter_dam_break_faces(Some(1))).expect("the consumer scene builds");
     consumed.check(64).unwrap_or_else(|error| panic!("consumer at 64: {error}"));
 }

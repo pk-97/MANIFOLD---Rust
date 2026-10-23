@@ -38,7 +38,8 @@ pub struct SubsurfaceParams {
     pub light_count: u32,
     pub material_count: u32,
     pub query_units_per_pixel: u32,
-    pub _pad: u32,
+    /// Radians every environment lookup turns by (the render's `env_rotation`).
+    pub env_rotation: f32,
 }
 
 const _: () = assert!(std::mem::size_of::<SubsurfaceParams>() == 112);
@@ -50,7 +51,7 @@ const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, slot_row_base) == 9
 const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, light_count) == 96);
 const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, material_count) == 100);
 const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, query_units_per_pixel) == 104);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, _pad) == 108);
+const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, env_rotation) == 108);
 
 /// One shadow-casting light's ray-tracing params — the per-caster payload
 /// of [`ShadowRayParams::casters`]. Field order/packing mirrors the MSL
@@ -182,7 +183,10 @@ pub struct ShadowRayParams {
     /// sun caster whose rgb transmission tint fills `out_svt`;
     /// SVT_SLOT_NONE = no designated sun.
     pub svt_slot: u32,
-    pub _pad_emissive: [u32; 3],
+    /// Radians every environment lookup turns by, counter-clockwise seen
+    /// from above: the render's `env_rotation` (`refl_env_sample`).
+    pub env_rotation: f32,
+    pub _pad_emissive: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
     /// RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows in
@@ -251,7 +255,8 @@ impl ShadowRayParams {
             refl_max_roughness,
             refl_rough_band,
             svt_slot,
-            _pad_emissive: [0; 3],
+            env_rotation: 0.0,
+            _pad_emissive: [0; 2],
             inv_view_proj,
             slot_row_base: 0,
             light_count: 0,
@@ -272,6 +277,12 @@ impl ShadowRayParams {
     pub fn with_lights(mut self, light_count: u32, light_data_addr: u64) -> Self {
         self.light_count = light_count;
         self.light_data_addr = light_data_addr;
+        self
+    }
+
+    /// Turn every environment lookup by `radians`, as the raster does.
+    pub fn with_env_rotation(mut self, radians: f32) -> Self {
+        self.env_rotation = radians;
         self
     }
 }
@@ -384,6 +395,7 @@ impl GiMaterial {
 // RT_INSTANCING_DESIGN.md D11: slot_row_base appended after inv_view_proj
 // (offset 400). The light table count/address then occupy offsets 404/408;
 // the u64 naturally rounds the complete payload to 416 bytes.
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, env_rotation) == 324);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 336);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, slot_row_base) == 400);
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, light_count) == 404);
@@ -565,9 +577,16 @@ pub struct RtNormalSource {
     /// the remaining eleven follow the authored raster-index order, followed
     /// by AO's canonical raster index 3.
     pub extra_tex_indices: [u32; 15],
+    /// Upper-left 3x3 of the instance-space inner matrix, applied to
+    /// local directions before the instance fold (identity in Object
+    /// space). Normals take its cofactor, computed in the kernel.
+    pub inner_matrix: [[f32; 3]; 3],
+    /// Keeps the 8-byte struct alignment the MSL mirror rounds to.
+    pub _pad_inner: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 1024);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 1064);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, inner_matrix) == 1024);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, material_attributes) == 276);
 const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 688);
 const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, sampling) == 8);
@@ -646,8 +665,9 @@ const _: () = assert!(
 /// descriptor-build kernel. Layout notes (mirrored field-for-field in the
 /// MSL): `model` fills the first 64 bytes, `instances_addr` lands at 64
 /// (8-aligned), the three `u32`s pack to 84, and the explicit pad brings
-/// the stride to 96 — MSL rounds the same struct to 96 (its `float2` pad
-/// requires 8-byte alignment, landing at 88). Asserted, not hand-counted.
+/// the first block to 96 — MSL rounds that block to 96 (its `float2` pad
+/// requires 8-byte alignment, landing at 88); `inner` follows at 96 for a
+/// 160-byte stride. Asserted, not hand-counted.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct RtInstanceBuildObj {
@@ -656,10 +676,15 @@ pub(crate) struct RtInstanceBuildObj {
     slot_base: u32,
     slot_count: u32,
     cast_shadows: u32,
-    _pad: [f32; 2],
+    /// Three words, not two: MSL places its `float2 _pad` at 88, so the
+    /// 16-aligned `inner` starts at 96 on both sides.
+    _pad: [f32; 3],
+    /// The instance-space inner matrix: slot world = model · T · inner.
+    inner: [[f32; 4]; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<RtInstanceBuildObj>() == 96);
+const _: () = assert!(std::mem::size_of::<RtInstanceBuildObj>() == 160);
+const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, inner) == 96);
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, instances_addr) == 64);
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_base) == 72);
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_count) == 76);
@@ -695,7 +720,8 @@ pub(crate) fn write_instance_obj_params(ptr: *mut u8, objects: &[RtObjectGeometr
             slot_base: base,
             slot_count: slots,
             cast_shadows: obj.cast_shadows as u32,
-            _pad: [0.0; 2],
+            _pad: [0.0; 3],
+            inner: obj.instance_inner,
         };
         // SAFETY: `ptr` is the buffer's mapped base, sized
         // `objects.len() * stride` by the caller; per-element unaligned

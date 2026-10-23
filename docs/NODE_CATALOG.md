@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 394 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 404 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -111,7 +111,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Checkerboard | `node.checkerboard` | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
 | Draw Lines | `node.draw_lines` | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
 | Draw Rectangles | `node.draw_rectangles` | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
-| glTF Texture | `node.gltf_texture_source` | Source | Loads an embedded image from a glTF/.glb file as a texture, so an imported model's baked-in albedo/alpha map flows into the render pipeline like any other text… |
+| Texture File | `node.gltf_texture_source` | Source | Loads a picture file, or an image embedded in a glTF/.glb model, as a texture, so a Material's picture or an imported model's baked-in map flows into the rende… |
 | Glyph Atlas | `node.glyph_atlas` | Source | Provides the fixed ASCII coverage atlas used by terminal glyph rendering. |
 | Gradient | `node.gradient` | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | HDRI Source | `node.hdri_source` | Source | Loads a linear-HDR .exr environment map from disk as a texture, so a real-world HDRI capture flows into node.render_scene's envmap input like any other texture… |
@@ -166,7 +166,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (94)
+### 3D Geometry (104)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -175,24 +175,26 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Atmosphere | `node.atmosphere` | Source | Scene fog + sky tint for render_scene. Wire it into a scene's atmosphere input; put fog density on a fader for an instant depth-mood knob. |
 | Bend Mesh | `node.bend_mesh` | Filter | Curves a mesh into an arc around a hinge line, like bending a rod. Position and lighting normals both rotate exactly, so it reads correctly at any angle, inclu… |
 | Camera Lens | `node.camera_lens` | Filter | The physical camera: focus distance, aperture, shutter angle, and exposure — one lens any camera source can feed, and every 3D consumer reads. |
-| Camera Switch | `node.camera_switch` | Source | Switches between two cameras. Scene modifiers use it so toggling the modifier on and off never rebuilds the graph. |
+| Camera Switch | `node.camera_switch` | Source | Picks which of several cameras is shown. Switching is live and never rebuilds the graph, so a camera cut lands on the frame it is asked for. |
 | Combine XY (curve) | `node.combine_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | Copy Positions | `node.copy_positions` | Map | Turns copy transforms into homogeneous XYZ positions for downstream fields and geometry math. |
 | Count Surface Edges | `node.count_surface_edges` | Filter | Counts shared marching-cubes surface edges at lattice nodes so a later scan can index one vertex per crossing. |
 | Count Surface Triangles | `node.count_surface_triangles` | Filter | Works out how many triangles each small cube of the liquid's surface needs, the first step of building its mesh. |
 | Cube Mesh | `node.cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
+| Curve Solid | `node.curve_solid_source` | Source | Hands the solid an extruded, revolved or tube curve makes to physics and copies, so a curve shape can fall, collide or be copied. |
 | Cut Mesh Bands | `node.cut_mesh_bands` | Source | Cuts mesh triangles into directional bands while retaining source-triangle provenance. |
 | Cut Mesh Cells | `node.cut_mesh_cells` | Source | Cuts mesh triangles into grid cells while retaining source-triangle provenance. |
 | Cut Out Box | `node.cut_out_box` | Filter | Hides the part of a mesh inside a box, for example to cut a hole in an ocean where a splash tank sits. |
 | Cylinder Wrap Field | `node.cylinder_wrap_field` | Map | Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry. |
 | Digital Plants Render | `node.digital_plants_render` | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
 | Displace Copies | `node.displace_copies` | Filter | Moves copies along a chosen direction according to a scalar field while preserving their transform metadata. |
+| Drop Hidden Triangles | `node.drop_hidden_triangles` | Filter | Removes the parts of a mesh that an alpha cut has hidden, so the hole shows on any material. |
 | Edge Pairs | `node.edge_pairs` | Source | Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start. |
 | Extrude Curve | `node.extrude_curve` | Source | Pushes a flat 2D shape straight through space to build a 3D extrusion — like a cookie cutter dragged through dough. Turns outlines into solid ribbons or bevele… |
 | Facet Normals | `node.facet_normals` | Filter | Recomputes a mesh's normals from its own triangle geometry, giving flat, faceted shading — the exact fix for a mesh whose normals went stale after a heavy defo… |
 | Flatten 3D → 2D | `node.flatten_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
 | Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
-| Fluid Role Source | `node.fluid_role_source` | Source | Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire. |
+| Fluid Role Source | `node.fluid_role_source` | Source | Prepares one reusable fluid source geometry and emits its typed CPU role wire. |
 | Fold | `node.fold_mesh` | Filter | Mirrors a mesh across a plane through the origin along one axis, with adjustable blend amount — the building block for kaleidoscope geometry. |
 | Free Camera | `node.free_camera` | Source | A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly. |
 | Glitch Jitter | `node.glitch_jitter` | Filter | Snaps every vertex to a new random offset on each time step, giving a hard-cut digital glitch look. |
@@ -208,12 +210,16 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Loop Camera | `node.loop_camera` | Source | A camera that flies through a scene in a perfect loop, locked to the beat. |
 | Make Triangles | `node.make_triangles` | Filter | Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render. |
 | Melt | `node.melt_mesh` | Filter | Pulls every vertex downward by a noise-driven amount, making a mesh appear to melt or slump. |
+| Merge Meshes | `node.merge_meshes` | Filter | Joins several meshes into one, each where its own transform puts it. The way a whole group becomes one shape to scatter particles over. |
 | Mesh Edges | `node.mesh_edges` | Filter | Outputs the wireframe edges of a triangle mesh, so any imported model can be drawn as lines. The mesh counterpart of Grid Edges. |
+| Mesh Fragment | `node.mesh_fragment` | Filter | One piece of a shape broken into pieces: the triangles it draws and the shape its body collides with. |
 | Mesh Ramp | `node.mesh_ramp` | Source | Turns a mesh's own positions into a growth mask — a value from 0 to 1 per vertex that sweeps across the mesh along an axis. Feeds any deformer's weight input t… |
 | Mesh Spatial Mask | `node.mesh_spatial_mask` | Source | Makes soft band or sphere weights from mesh positions for driving a staged surface response. |
 | Mesh Stagger Envelope | `node.mesh_stagger_envelope` | Source | Turns elapsed beats into a directional attack/hold/release weight that arrives across a mesh in order. |
+| Mesh Texture Weights | `node.mesh_texture_weights` | Source | Reads a picture across a 3D mesh from all three sides at once, giving every point a value that can push the surface in or out. |
 | Morph Mesh | `node.morph_mesh` | Filter | Blends smoothly between two meshes vertex-by-vertex, so one shape dissolves into another. Works best when both meshes share the same vertex count and layout. |
 | Morph Targets Blend | `node.morph_targets_blend` | Filter | Blends an imported mesh's morph targets by their live animated weights — the GPU counterpart to a Morph Weights node's sampled weight vector. |
+| Nest Copies | `node.nest_copies` | Map | Puts a whole set of copies at every copy of another set: copies of copies. |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | Boil | `node.noise_displace` | Filter | Pushes every vertex along its normal by animated simplex noise, so a mesh appears to simmer and bubble. |
 | Normal Wave Mesh | `node.normal_wave_mesh` | Filter | Travels a smooth directional wave across the current textured mesh while carrying its lighting frame. |
@@ -226,6 +232,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Mesh | `node.platonic_solid_mesh` | Source | Builds a reusable closed triangle mesh for any of the five Platonic solids. |
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
+| Polygon Curve | `node.polygon_curve` | Source | Draws the outline of a polygon or a star as a list of points. Sides sets the corners; Pinch pulls every other corner in to make a star. |
 | Projected Grid | `node.projected_grid` | Source | Lays a grid on a water level that fills the camera's view out to the horizon, dense near the camera and thin far away, the base surface for an ocean. |
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
@@ -252,13 +259,16 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Shatter | `node.shatter_mesh` | Filter | Explodes a mesh into separate triangular shards, each sliding away along its own flat face normal. |
 | Skin Mesh | `node.skin_mesh` | Filter | Deforms an imported rigged mesh by its animated skeleton — the GPU counterpart to a Skeleton Pose node's joint matrices. |
 | Slice | `node.slice_mesh` | Filter | Clamps all vertices past a plane onto the plane, turning a mesh into a flat cut face you can sweep across. |
+| Smooth Normals | `node.smooth_normals` | Filter | Gives every corner of a mesh one shared, smooth direction, so pushing the surface outward keeps hard edges joined instead of splitting the faces apart. |
 | Smooth Surface Mesh | `node.smooth_surface_mesh` | Filter | Smooths a liquid's surface mesh by easing each point toward its neighbours, rounding off the small facets and steps. |
+| Sphere Mesh | `node.sphere_mesh` | Source | Builds a smooth round ball of mesh, the sphere among the built-in solids. |
+| Subdivide Mesh | `node.subdivide_mesh` | Filter | Splits every triangle of a mesh into smaller ones without changing its shape, so a bend or a wave has enough points to curve smoothly. |
 | Surface Mesh Normals | `node.surface_mesh_normals` | Filter | Rebuilds smooth normals from the final surface triangles so lighting follows the smoothed water. |
 | Taper Mesh | `node.taper_mesh` | Filter | Narrows a mesh toward a point along one axis, like sharpening a pencil or a candle flame. The lighting normals scale with it so the taper still shades correctl… |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
 | Transform 3D | `node.transform_3d` | Source | Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live. |
 | Transform Mesh Patches | `node.transform_mesh_patches` | Filter | Moves textured mesh patches with periodic full-angle poses and weighted translations using a reference triangle stream. |
-| Shake | `node.transform_shake` | Filter | Stateless shake on a Transform wire — rotational jitter dominant, positional at a quarter ratio, driven by time and frequency. |
+| Shake | `node.transform_shake` | Filter | Stateless shake on a Transform wire: position and rotation jitter, each with its own strength, driven by time and frequency. |
 | Tube From Path | `node.tube_from_path` | Source | Sweeps a tube of adjustable thickness along a path — the way you'd build a vine, cable, or ribbon from a center-line curve. Thickness and lift can vary per poi… |
 | Twist Mesh | `node.twist_mesh` | Filter | Twists a mesh around its own length, like wringing out a cloth or spinning a vine. Position and lighting normals both rotate exactly, so continuous saw-LFO spi… |
 | Volume Surface Mesh | `node.volume_surface_mesh` | Filter | Builds the triangle mesh of a liquid's surface from its density field, ready to render with any material. |
@@ -363,7 +373,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | Shape Particle Blobs | `node.shape_particle_blobs` | Map | Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads. |
 | Smooth Lattice | `node.smooth_lattice` | Filter | Softens a liquid's density field so its surface comes out smooth instead of lumpy. |
 | Sort Particles Into Cells | `node.sort_particles_into_cells` | Filter | Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly. |
-| Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissol… |
+| Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface or through its volume. The way an… |
 | — | `node.spawn_whitewater` | Filter | Places the new foam, spray and bubble particles around the breaking water that throws them off. |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | — | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |
@@ -524,7 +534,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 |---|---|---|---|
 | — | `system.mesh_input` | — | — |
 
-### Effect & generator presets (99)
+### Effect & generator presets (84)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -536,7 +546,7 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `BlobTrackingV2Colour` | Blob Track V2 — Colour | effect | Stylize | 14 |
 | `BlobTrackingV2Motion` | Blob Track V2 — Motion | effect | Stylize | 11 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
-| `BlossomWire` | Blossom Wire | generator | Geometry | 13 |
+| `BlossomWire` | Blossom Wire | generator | Geometry | 11 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
 | `CodeTerminal` | Code Terminal | effect | Stylize | 8 |
@@ -545,16 +555,16 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
 | `Cymatics` | Cymatics | generator | Pattern | 7 |
 | `DataMosh` | Data Mosh | effect | Stylize | 8 |
-| `DepthOfField` | Depth of Field | effect | Filmic | 11 |
+| `DepthOfField` | Depth of Field | effect | Filmic | 9 |
 | `DigitalDrift` | Digital Drift | effect | Stylize | 7 |
-| `DigitalPlants` | Digital Plants | generator | Geometry | 18 |
+| `DigitalPlants` | Digital Plants | generator | Geometry | 14 |
 | `Dither` | Dither | effect | Stylize | 2 |
 | `Duocylinder` | Duocylinder | generator | Geometry | 11 |
 | `EdgeDetect` | Edge Detect | effect | Stylize | 2 |
 | `EdgeStretch` | Edge Stretch | effect | Spatial | 3 |
 | `FilmGrain` | Film Grain | effect | Filmic | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
-| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 26 |
+| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 22 |
 | `Glitch` | Glitch | effect | Stylize | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Filmic | 3 |
@@ -578,7 +588,6 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 370 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -589,41 +598,27 @@ _Generated from the node registry. Do not hand-edit. 394 nodes registered, group
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
 | `MaskLayer` | Mask Layer | effect | Spatial | 3 |
 | `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 347 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 23 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
-| `Ocean` | Ocean | generator | Sim | 364 |
-| `OceanCliff` | Ocean Cliff | generator | Sim | 2361 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 18 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1340 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1998 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `RubblePile` | Rubble Pile | generator | Geometry | 1347 |
-| `Scene` | Scene | generator | Geometry | 369 |
+| `Scene` | Scene | generator | Geometry | 0 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
-| `Swarm` | Swarm | generator | Geometry | 408 |
-| `SwarmCloud` | Swarm Cloud | generator | Geometry | 417 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2062 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1416 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2017 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1394 |
-| `WaterInScan` | Water in a Photoscan | generator | Sim | 2062 |
-| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2345 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1071 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

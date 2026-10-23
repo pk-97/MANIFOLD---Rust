@@ -495,12 +495,8 @@ fn modifier_preview_selection(
     snap: &manifold_ui::graph_view::GraphSnapshot,
     canvas_scope: &[u32],
     selected: Option<u32>,
-) -> (Option<manifold_core::NodeId>, Vec<manifold_core::NodeId>) {
-    let fallback = stable_scope_path(snap, canvas_scope).unwrap_or_default();
-    let Some(selected) = selected else { return (None, fallback); };
-    resolve_preview_target_with_scope(snap, canvas_scope, selected)
-        .map(|(node, scope)| (Some(node), scope))
-        .unwrap_or((None, fallback))
+) -> Option<manifold_core::NodeId> {
+    resolve_preview_target_with_scope(snap, canvas_scope, selected?).map(|(node, _)| node)
 }
 
 /// Resolve an on-canvas param row `(node_id, inner_param)` to the
@@ -1213,12 +1209,6 @@ impl Application {
             .map(|graph| (*graph).clone())
     }
 
-    /// Authoring values for viewport geometry, including exposed controls.
-    /// This is a disposable projection, never a project edit or runtime result.
-    pub(crate) fn viewport_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-        crate::scene_gizmo::authored_def(&self.local_project, self.watched_graph_target.as_ref()?)
-    }
-
     /// Resolve the canvas's current selection into copy-ready data: the selected
     /// def nodes plus the wires whose BOTH endpoints are selected (internal
     /// connectivity only). `None` when nothing is watched or selected. Backs
@@ -1311,9 +1301,6 @@ impl Application {
             self.content_tx.as_ref(),
         ) {
             return;
-        }
-        if self.modifier_preview_object.as_ref().is_some_and(|(owner, _)| owner != &target) {
-            self.modifier_preview_object = None;
         }
         self.editor_graph.catalog_default_changed();
         // The content thread clears both preview requests when the watched
@@ -1432,9 +1419,6 @@ impl Application {
             self.watched_graph_target.as_ref(),
             Some(manifold_core::GraphTarget::SceneModifier { .. })
         );
-        let preview_object = self.modifier_preview_object.as_ref()
-            .filter(|(target, _)| Some(target) == self.watched_graph_target.as_ref())
-            .map(|(_, object)| object.clone());
         let (preview_node, modifier_context) = match (self.graph_canvas.as_ref(), editor_ui_snap.as_ref()) {
             (Some(canvas), Some(snap)) if scene_modifier_watched => {
                 let selected = canvas.selected_node_id();
@@ -1449,9 +1433,9 @@ impl Application {
                 if unchanged {
                     (self.last_preview_node.clone(), None)
                 } else {
-                    let (node, scope) = modifier_preview_selection(snap, canvas_scope, selected);
+                    let node = modifier_preview_selection(snap, canvas_scope, selected);
                     self.last_modifier_preview_selection = Some((snap.clone(), canvas_scope.to_vec(), selected));
-                    (node, Some((scope, preview_object)))
+                    (node, Some(None))
                 }
             }
             (Some(canvas), Some(snap)) => (
@@ -1462,7 +1446,7 @@ impl Application {
             ),
             _ if scene_modifier_watched => {
                 self.last_modifier_preview_selection = None;
-                (None, Some((Vec::new(), None)))
+                (None, Some(None))
             }
             _ => {
                 self.last_modifier_preview_selection = None;
@@ -1482,8 +1466,7 @@ impl Application {
         }
         if let Some(context) = modifier_context
             && self.last_modifier_preview_context.as_ref() != Some(&context) {
-                let (scope, object) = context.clone();
-                self.send_content_cmd(ContentCommand::SetModifierPreviewContext { scope, object });
+                self.send_content_cmd(ContentCommand::SetModifierPreviewContext { object: context.clone() });
                 self.last_modifier_preview_context = Some(context);
         }
 
@@ -1710,10 +1693,15 @@ impl Application {
                 info.has_image = show_image;
                 info.diagnostic = session.displayed.as_ref().map_or(Some("Waiting for the scene to render…"), |frame| frame.diagnostic());
             }
-            // The selected shape's outline slots and pick targets over the
-            // authored scene. The handle lines are the content thread's, built
-            // from the scene it renders (`gizmo_overlay.rs`).
-            let drawn = crate::viewport_selection::ViewportSelection::refresh(&mut ws.viewport_selection, viewport_def.scene.as_ref(), &ws.viewport_selected);
+            // The Scene panel's selection over the authored scene: the outline
+            // slots, and the handles a press grabs. The handle lines are the
+            // content thread's, built from the scene it renders
+            // (`gizmo_overlay.rs`).
+            let items = match self.watched_graph_target.as_ref() {
+                Some(manifold_core::GraphTarget::Generator(layer)) => self.ws.ui_root.scene_setup_panel.selected_of(layer),
+                _ => &[],
+            };
+            let drawn = crate::viewport_selection::ViewportSelection::refresh(&mut ws.viewport_selection, viewport_def.scene.as_ref(), items);
             if let Some(drawn) = drawn {
                 drawn.outline(&mut ws.viewport_outline);
             }
@@ -2218,21 +2206,14 @@ mod preview_target_tests {
         // lives at the parent scope rather than inside the canvas scope.
         let resolved = resolve_preview_target(&s, &[5], 2).unwrap();
         assert_eq!(resolved, NodeId::new("grp"));
-        assert_eq!(modifier_preview_selection(&s, &[5], Some(2)), (Some(resolved), Vec::<NodeId>::new()));
-        // A normal inner node retains the enclosing stable group path.
-        assert_eq!(
-            modifier_preview_selection(&s, &[5], Some(1)),
-            (Some(NodeId::new("inner")), vec![NodeId::new("grp")])
-        );
+        assert_eq!(modifier_preview_selection(&s, &[5], Some(2)), Some(resolved));
+        assert_eq!(modifier_preview_selection(&s, &[5], Some(1)), Some(NodeId::new("inner")));
 
         let mut sibling = group_container();
         sibling.id = 6;
         sibling.node_id = NodeId::new("sibling");
         let siblings = snap(vec![group_container(), sibling], vec![]);
-        assert_eq!(
-            modifier_preview_selection(&siblings, &[6], Some(1)),
-            (Some(NodeId::new("inner")), vec![NodeId::new("sibling")])
-        );
+        assert_eq!(modifier_preview_selection(&siblings, &[6], Some(1)), Some(NodeId::new("inner")));
     }
 }
 
@@ -2258,7 +2239,7 @@ mod binding_reroute_tests {
     };
     use manifold_core::macro_bank::MacroCurve;
     use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        SceneModifierInstanceDef, SceneTargetSelection,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2513,7 +2494,7 @@ mod binding_reroute_tests {
         };
         host.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("modifier"),
-            scene: SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
@@ -2838,4 +2819,17 @@ fn annotate_preparation_controls(
             annotate_preparation_controls(&mut group.nodes, local);
         }
     }
+}
+
+/// Why the graph editor will not save `target` as a preset: a scene layer's
+/// graph holds its compiled Scene node, and a scene is saved from the Scene
+/// panel, never as a hand-wired graph (SCENE_DOCUMENT_DESIGN.md ruling 18).
+pub(crate) fn scene_graph_save_refusal(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+) -> Option<&'static str> {
+    project
+        .graph_target_owner(target)
+        .is_some_and(|host| host.scene.is_some())
+        .then_some("A scene layer's graph holds its scene; save the scene from the Scene panel.")
 }

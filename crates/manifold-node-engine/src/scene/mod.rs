@@ -1,6 +1,7 @@
 pub mod atmosphere;
 pub mod boundary_nodes;
 pub mod camera;
+pub mod curve_sweep;
 pub mod depth_rule;
 pub mod light;
 pub mod live_extent;
@@ -8,9 +9,9 @@ pub mod material;
 pub mod mesh_asset_source;
 mod mesh_boundary;
 pub mod mesh_change;
-pub mod mesh_partition;
 pub mod mesh_source;
 pub mod mesh_selection;
+pub mod pick;
 pub mod render_mode;
 pub mod scene_object;
 pub mod scene_viewport;

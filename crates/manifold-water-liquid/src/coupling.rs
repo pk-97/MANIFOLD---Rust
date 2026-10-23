@@ -25,10 +25,12 @@ use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 use manifold_physics::clock::TICK;
 use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidLayout};
-use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
+use crate::fluid_role::PreparedFluidGeometry;
+#[cfg(test)]
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
+use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation, Solid};
+use manifold_physics::TriangleMesh;
 use manifold_node_engine::scene::transform::Transform;
 
 /// Where a coupled body's controls come from.
@@ -46,7 +48,11 @@ struct Coupled {
     source: Source,
     /// The largest face of the body's local hull box.
     face_area: f32,
+    /// The water's slip friction along this body ([`set_friction`]).
     friction: f32,
+    /// The world's shape revision of this body the geometry was built from;
+    /// an in-place reshape bumps it and the geometry is built again.
+    revision: u32,
 }
 
 /// The liquid tick whose reaction the GPU is still writing.
@@ -86,7 +92,7 @@ pub const REACTION_FLOATS: usize = 8;
 
 /// A pending tick's float reaction as one impulse per row; rows that take no
 /// reaction are left alone. `offset` counts the rows before the first
-/// coupled body's (the Collider roles').
+/// coupled body's.
 #[inline]
 pub fn decode_reaction(
     offset: usize,
@@ -108,13 +114,6 @@ pub fn decode_reaction(
     Ok(())
 }
 
-/// The coupled bodies a liquid takes beside `roles`' colliders: the body
-/// rows it holds that the colliders leave free.
-pub fn coupling_capacity(roles: &[Option<FluidRole>]) -> usize {
-    let colliders = roles.iter().flatten().filter(|role| role.kind == FluidRoleKind::Collider).count();
-    MAX_LIQUID_BODIES.saturating_sub(colliders)
-}
-
 /// A coupled domain's box and which faces are closed (bit order −x, +x, −y,
 /// +y, −z, +z, as `closed_faces`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -131,6 +130,11 @@ impl DomainWalls {
         Self { min: layout.min, size, closed }
     }
 
+    /// The domain's box, min then max.
+    pub fn bounds(&self) -> [[f32; 3]; 2] {
+        [self.min, std::array::from_fn(|axis| self.min[axis] + self.size[axis])]
+    }
+
     /// One Fixed slab per closed face, in face order.
     fn slabs(&self) -> impl Iterator<Item = RigidBody> + '_ {
         let extent = self.size.iter().fold(0.0f32, |a, &b| a.max(b));
@@ -144,7 +148,6 @@ impl DomainWalls {
                 std::array::from_fn(|d| if d == axis { half_thick } else { 0.5 * self.size[d] + 2.0 * half_thick });
             RigidBody {
                 transform: Transform { pos, scale: half.map(|h| h * 3f32.sqrt()), ..Transform::default() },
-                shape: 1,
                 kind: 0,
                 bounce: 0.0,
                 wall: true,
@@ -205,6 +208,11 @@ pub struct LiquidRigidOwner {
     impulses: Vec<BodyImpulse>,
     handover: HandoverError,
     pending: Option<PendingTick>,
+    capacity: usize,
+    /// Bodies joined the world; the coupled rows follow at the next frame
+    /// start ([`Self::rebind`]), once the pending reaction has decoded
+    /// against the old ones.
+    rebind: bool,
 }
 
 impl LiquidRigidOwner {
@@ -216,7 +224,7 @@ impl LiquidRigidOwner {
     pub fn new(
         inputs: &RigidSceneInputs,
         walls: DomainWalls,
-        colliders: RigidImpulseTargets,
+        colliders: &RigidImpulseTargets,
         capacity: usize,
         epoch: u64,
         reuse: Option<&LiquidRigidOwner>,
@@ -227,20 +235,8 @@ impl LiquidRigidOwner {
         rigid.advance_worker(&walled, Seconds::ZERO, 0, &mut Uncoupled)?;
         let layout = CoupledRigidLayout::new(&rigid, &walled);
         let world = rigid.native_world().ok_or("Liquid coupling: the rigid world was not prepared")?;
-        let mut selected: Vec<(BodyHandle, Source)> = rigid
-            .native_handles()
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| colliders.contains_body(*index))
-            .filter_map(|(index, handle)| handle.map(|handle| (handle, Source::Body(index))))
-            .chain(colliders.groups().flat_map(|group| {
-                rigid.native_copy_handles(group).iter().flatten().map(move |&handle| (handle, Source::Group(group)))
-            }))
-            .collect();
-        let uncoupled = selected.len().saturating_sub(capacity);
-        selected.truncate(capacity);
         let reuse = reuse.filter(|owner| owner.matches(inputs, walls, colliders, capacity));
-        let known = |source: Source| {
+        let known = |source: Source, _: BodyHandle, _: u32| {
             reuse.and_then(|owner| {
                 owner
                     .bodies
@@ -250,31 +246,7 @@ impl LiquidRigidOwner {
                     .map(|(body, geometry)| (Arc::clone(geometry), body.face_area))
             })
         };
-        let mut bodies = Vec::with_capacity(selected.len());
-        let mut geometries = Vec::with_capacity(selected.len());
-        // A group's copies share one hull, built for its first copy.
-        let mut group_hull: Option<(usize, Arc<PreparedFluidGeometry>, f32)> = None;
-        for (handle, source) in selected {
-            let cached = match source {
-                Source::Group(group) => group_hull
-                    .as_ref()
-                    .filter(|(cached, _, _)| *cached == group)
-                    .map(|(_, geometry, area)| (Arc::clone(geometry), *area)),
-                Source::Body(_) => None,
-            };
-            let (geometry, face_area) = match known(source).or(cached) {
-                Some(known) => known,
-                None => {
-                    let built = hull_geometry(world, handle)?;
-                    if let Source::Group(group) = source {
-                        group_hull = Some((group, Arc::clone(&built.0), built.1));
-                    }
-                    built
-                }
-            };
-            bodies.push(Coupled { handle, source, face_area, friction: 0.0 });
-            geometries.push(geometry);
-        }
+        let Bound { bodies, geometries, uncoupled } = bind(&rigid, &walled, colliders, capacity, known)?;
         let mut frame = CoupledRigidFrame::default();
         layout.prepare_output(&mut frame);
         layout.capture(world, &mut frame)?;
@@ -285,7 +257,7 @@ impl LiquidRigidOwner {
             initial: inputs.clone(),
             walls,
             walled,
-            colliders,
+            colliders: colliders.clone(),
             uncoupled,
             epoch,
             completed: 0,
@@ -298,8 +270,10 @@ impl LiquidRigidOwner {
             impulses: Vec::new(),
             handover: HandoverError::default(),
             pending: None,
+            capacity,
+            rebind: false,
         };
-        owner.update_friction(inputs);
+        set_friction(&mut owner.bodies, inputs);
         let world = owner.rigid.native_world().expect("prepared above");
         capture_rows(world, &owner.bodies, &mut owner.rows, &mut owner.contacts)?;
         Ok(owner)
@@ -311,10 +285,10 @@ impl LiquidRigidOwner {
         &self,
         inputs: &RigidSceneInputs,
         walls: DomainWalls,
-        colliders: RigidImpulseTargets,
+        colliders: &RigidImpulseTargets,
         capacity: usize,
     ) -> bool {
-        self.colliders == colliders
+        self.colliders == *colliders
             && self.bodies.len() == capacity.min(self.bodies.len() + self.uncoupled)
             && self.walls == walls
             && self.initial.same_topology(inputs)
@@ -322,6 +296,88 @@ impl LiquidRigidOwner {
                 left.as_ref().and_then(|body| body.fragment_parent)
                     == right.as_ref().and_then(|body| body.fragment_parent)
             })
+    }
+
+    /// Take a changed scene into the running world without a new epoch: a
+    /// body or copy group that joined starts where it is authored, and every
+    /// body already moving keeps its state. The poses follow at once; the
+    /// liquid takes the new bodies at the next frame start
+    /// ([`Self::rebind`]). False when the change needs a fresh world (a body
+    /// left or changed its shape, the walls moved, a fragment appeared) or
+    /// no tick has run yet; the caller then builds a new owner.
+    pub fn admit(
+        &mut self,
+        inputs: &RigidSceneInputs,
+        walls: DomainWalls,
+        colliders: &RigidImpulseTargets,
+        capacity: usize,
+    ) -> Result<bool, String> {
+        // Before the first tick a body that arrives (a wired mesh landing a
+        // frame late) belongs to the epoch's start: the fill must seed
+        // around it, and a restart loses nothing yet.
+        if self.completed == 0 && self.pending.is_none() {
+            return Ok(false);
+        }
+        if walls != self.walls || capacity != self.capacity {
+            return Ok(false);
+        }
+        let mut walled = inputs.clone();
+        walls.install(&mut walled);
+        if !self.rigid.admit_worker_edits(&walled)? {
+            return Ok(false);
+        }
+        self.layout = CoupledRigidLayout::new(&self.rigid, &walled);
+        let world = self.rigid.native_world().ok_or("Liquid coupling: admitting bodies lost the rigid world")?;
+        let stamp = self.frame.stamp;
+        self.layout.prepare_output(&mut self.frame);
+        self.layout.capture(world, &mut self.frame)?;
+        self.frame.stamp = stamp;
+        self.initial = inputs.clone();
+        self.walled = walled;
+        self.colliders = colliders.clone();
+        self.rebind = true;
+        Ok(true)
+    }
+
+    /// Whether the coupled bodies lag the world: a body joined, or a copy
+    /// group laid out a different count at a tick start.
+    pub fn wants_rebind(&self) -> bool {
+        let selected = self.rigid.native_handles().iter().enumerate()
+            .filter(|(index, handle)| handle.is_some() && self.colliders.contains_body(*index))
+            .count()
+            + self.colliders.groups().map(|group| self.rigid.native_copy_handles(group).iter().flatten().count()).sum::<usize>();
+        self.rebind || selected != self.bodies.len() + self.uncoupled
+    }
+
+    /// Couple the world's bodies as they stand now, keeping each body's
+    /// hull, and so its distance lattice, by its Box3D handle. Only between
+    /// liquid ticks; the caller prepares the liquid's bodies again from
+    /// [`Self::geometries`].
+    pub fn rebind(&mut self) -> Result<(), String> {
+        if self.pending.is_some() {
+            return Err("Liquid coupling: settle the pending reaction before rebinding bodies".into());
+        }
+        let known = |_: Source, handle: BodyHandle, revision: u32| {
+            self.bodies
+                .iter()
+                .zip(&self.geometries)
+                .find(|(body, _)| body.handle == handle && body.revision == revision)
+                .map(|(body, geometry)| (Arc::clone(geometry), body.face_area))
+        };
+        let Bound { bodies, geometries, uncoupled } = bind(&self.rigid, &self.walled, &self.colliders, self.capacity, known)?;
+        self.bodies = bodies;
+        self.geometries = geometries;
+        self.uncoupled = uncoupled;
+        self.layout = CoupledRigidLayout::new(&self.rigid, &self.walled);
+        let world = self.rigid.native_world().ok_or("Liquid coupling: rebinding bodies lost the rigid world")?;
+        let stamp = self.frame.stamp;
+        self.layout.prepare_output(&mut self.frame);
+        self.layout.capture(world, &mut self.frame)?;
+        self.frame.stamp = stamp;
+        set_friction(&mut self.bodies, &self.walled);
+        capture_rows(world, &self.bodies, &mut self.rows, &mut self.contacts)?;
+        self.rebind = false;
+        Ok(())
     }
 
     /// Colliding bodies past the capacity it was built with.
@@ -405,7 +461,7 @@ impl LiquidRigidOwner {
         self.walled.clone_from(inputs);
         self.walls.install(&mut self.walled);
         self.rigid.advance_worker(&self.walled, self.completed_time, 0, &mut Uncoupled)?;
-        self.update_friction(inputs);
+        set_friction(&mut self.bodies, inputs);
         let world = self.rigid.native_world().ok_or("Liquid coupling: reanchor lost the rigid world")?;
         self.layout.capture(world, &mut self.frame)?;
         capture_rows(world, &self.bodies, &mut self.rows, &mut self.contacts)
@@ -445,23 +501,12 @@ impl LiquidRigidOwner {
         decode(pending, &self.rows, &mut self.impulses)?;
         let mut rows = self.rows.iter();
         self.impulses.retain(|_| rows.next().is_some_and(takes_reaction));
-        self.step(inputs, pending)?;
-        Ok(())
-    }
-
-    fn update_friction(&mut self, inputs: &RigidSceneInputs) {
-        for body in &mut self.bodies {
-            let source = match body.source {
-                Source::Body(slot) => inputs.bodies[slot].as_ref(),
-                Source::Group(group) => inputs.groups[group].as_ref(),
-            };
-            body.friction = source.map_or(0.0, |body| body.friction.clamp(0.0, 1.0));
-        }
+        self.step(inputs, pending)
     }
 
     /// Step Box3D over tick `completed` with the decoded impulses.
     fn step(&mut self, inputs: &RigidSceneInputs, pending: PendingTick) -> Result<(), String> {
-        self.update_friction(inputs);
+        set_friction(&mut self.bodies, inputs);
         let expected = TickStamp { epoch: self.epoch, tick: self.completed };
         let mut coupling = LiquidCoupling {
             expected,
@@ -488,10 +533,98 @@ impl LiquidRigidOwner {
     }
 }
 
-/// A body's installed hulls about its centre of mass, and its largest local
-/// box face.
-fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle) -> Result<(Arc<PreparedFluidGeometry>, f32), String> {
-    let mut meshes = world.hull_meshes(handle).map_err(|error| error.to_string())?;
+/// Set each body's water slip friction. Water slides freely along a fixed
+/// Collider, as FLIP Fluids obstacles do (BUG-elwvu.31 (Collider water
+/// slip)); a moving Body keeps its own Friction for the water.
+fn set_friction(bodies: &mut [Coupled], inputs: &RigidSceneInputs) {
+    for body in bodies {
+        let source = match body.source {
+            Source::Body(slot) => inputs.bodies.get(slot).and_then(Option::as_ref),
+            Source::Group(group) => inputs.groups.get(group).and_then(Option::as_ref),
+        };
+        body.friction = source.filter(|body| body.kind != 0).map_or(0.0, |body| body.friction.clamp(0.0, 1.0));
+    }
+}
+
+/// Each colliding body and copy the liquid takes, in slot order then each
+/// group's copies, up to `capacity`, with its hull: `known` hands back a
+/// hull already built, else it is built from the world. Returns the bodies,
+/// their hulls, and how many colliding bodies are past the capacity.
+fn bind(
+    rigid: &RigidSimulation,
+    walled: &RigidSceneInputs,
+    colliders: &RigidImpulseTargets,
+    capacity: usize,
+    known: impl Fn(Source, BodyHandle, u32) -> Option<(Arc<PreparedFluidGeometry>, f32)>,
+) -> Result<Bound, String> {
+    let world = rigid.native_world().ok_or("Liquid coupling: the rigid world was not prepared")?;
+    let mut selected: Vec<(BodyHandle, Source)> = rigid
+        .native_handles()
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| colliders.contains_body(*index))
+        .filter_map(|(index, handle)| handle.map(|handle| (handle, Source::Body(index))))
+        .chain(colliders.groups().flat_map(|group| {
+            rigid.native_copy_handles(group).iter().flatten().map(move |&handle| (handle, Source::Group(group)))
+        }))
+        .collect();
+    let uncoupled = selected.len().saturating_sub(capacity);
+    selected.truncate(capacity);
+    let mut bodies = Vec::with_capacity(selected.len());
+    let mut geometries = Vec::with_capacity(selected.len());
+    // A group's copies share one hull, built for its first copy.
+    let mut group_hull: Option<(usize, Arc<PreparedFluidGeometry>, f32)> = None;
+    for (handle, source) in selected {
+        let cached = match source {
+            Source::Group(group) => group_hull
+                .as_ref()
+                .filter(|(cached, _, _)| *cached == group)
+                .map(|(_, geometry, area)| (Arc::clone(geometry), *area)),
+            Source::Body(_) => None,
+        };
+        let revision = world.shape_revision(handle).map_err(|error| error.to_string())?;
+        let (geometry, face_area) = match known(source, handle, revision).or(cached) {
+            Some(known) => known,
+            None => {
+                let body = match source {
+                    Source::Body(index) => walled.bodies.get(index).and_then(Option::as_ref),
+                    Source::Group(_) => None,
+                };
+                let built = hull_geometry(world, handle, body)?;
+                if let Source::Group(group) = source {
+                    group_hull = Some((group, Arc::clone(&built.0), built.1));
+                }
+                built
+            }
+        };
+        bodies.push(Coupled { handle, source, face_area, friction: 0.0, revision });
+        geometries.push(geometry);
+    }
+    Ok(Bound { bodies, geometries, uncoupled })
+}
+
+/// The coupled bodies, their hulls, and the colliding bodies past capacity.
+struct Bound {
+    bodies: Vec<Coupled>,
+    geometries: Vec<Arc<PreparedFluidGeometry>>,
+    uncoupled: usize,
+}
+
+/// A body's installed solid about its centre of mass, and its largest local
+/// box face: its hulls, or for a static collider its exact mesh at its scale.
+fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle, body: Option<&RigidBody>) -> Result<(Arc<PreparedFluidGeometry>, f32), String> {
+    let exact = body.and_then(|body| match body.collider.as_deref() {
+        Some(Solid::Mesh(mesh)) => Some(TriangleMesh {
+            vertices: mesh.vertices.iter().map(|v| std::array::from_fn(|axis| v[axis] * body.transform.scale[axis])).collect(),
+            triangles: mesh.triangles.clone(),
+        }),
+        _ => None,
+    });
+    let fixed = exact.is_some();
+    let mut meshes = match exact {
+        Some(mesh) => vec![mesh],
+        None => world.hull_meshes(handle).map_err(|error| error.to_string())?,
+    };
     let centre = world.local_center_of_mass(handle).map_err(|error| error.to_string())?;
     let (mut low, mut high) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
     for vertex in meshes.iter_mut().flat_map(|mesh| mesh.vertices.iter_mut()) {
@@ -501,13 +634,16 @@ fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle) -> Result<(Arc<Prepar
             high[axis] = high[axis].max(vertex[axis]);
         }
     }
-    if meshes.is_empty() || !(0..3).all(|axis| high[axis] > low[axis]) {
+    // A flat static mesh (a ground plane) is a shell in the water; it still
+    // needs two sides.
+    if meshes.is_empty() || (0..3).filter(|&axis| high[axis] > low[axis]).count() < 2 {
         return Err("Liquid coupling: a coupled body has no solid hull".into());
     }
     let size: [f32; 3] = std::array::from_fn(|axis| high[axis] - low[axis]);
     let face = (size[0] * size[1]).max(size[1] * size[2]).max(size[0] * size[2]);
-    // Cooked hulls are closed, so no shell thickness applies.
-    Ok((Arc::new(PreparedFluidGeometry::new(meshes, 0.0)), face))
+    // A static collider never moves, so each water crops its lattice to its domain.
+    let geometry = if fixed { PreparedFluidGeometry::fixed(meshes) } else { PreparedFluidGeometry::new(meshes) };
+    Ok((Arc::new(geometry.of_body(handle)), face))
 }
 
 /// Each coupled body's state as a row: its centre of mass, 1/m, velocities,
@@ -690,6 +826,92 @@ fn quaternion_angle(a: [f32; 4], b: [f32; 4]) -> f32 {
     2.0 * (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().atan2(r[3].abs())
 }
 
+/// The solids one Water's rigid owner shares with every other Water in its
+/// scene (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision
+/// shapes)): each Collider's and Body's hull and its row at the first tick
+/// of this frame, held to its motion (no inverse mass or inertia). The other
+/// water flows round them; only the owner's water pushes the bodies back,
+/// since Box3D steps inside one liquid's ticks.
+#[derive(Default)]
+pub struct SharedSolids {
+    geometries: Vec<Arc<PreparedFluidGeometry>>,
+    rows: Vec<LiquidBody>,
+    contacts: Vec<BodySupports>,
+    uncoupled: usize,
+    /// Copied from the owner this frame, before this water runs.
+    fresh: bool,
+    /// Scratch for a later tick's rows.
+    advanced: Vec<LiquidBody>,
+}
+
+impl SharedSolids {
+    /// Take the owner water's solids for this frame, or none.
+    pub fn copy_from(&mut self, owner: Option<&LiquidRigidOwner>) {
+        self.geometries.clear();
+        self.rows.clear();
+        self.contacts.clear();
+        self.uncoupled = 0;
+        self.fresh = true;
+        let Some(owner) = owner else { return };
+        self.geometries.extend(owner.geometries().iter().cloned());
+        self.rows.extend(owner.rows().iter().map(|row| {
+            let mut held = *row;
+            held.position_inv_mass[3] = 0.0;
+            for inertia in [&mut held.inv_inertia_x, &mut held.inv_inertia_y, &mut held.inv_inertia_z] {
+                inertia[..3].fill(0.0);
+            }
+            held
+        }));
+        self.contacts.resize(self.rows.len(), [[0.0; 4]; super::bodies::SUPPORT_VEC4S]);
+        self.uncoupled = owner.uncoupled();
+    }
+
+    /// The hulls this frame, or none when the owner did not run first.
+    pub fn geometries(&self) -> &[Arc<PreparedFluidGeometry>] {
+        if self.fresh { &self.geometries } else { &[] }
+    }
+
+    pub fn rows(&self) -> &[LiquidBody] {
+        if self.fresh { &self.rows } else { &[] }
+    }
+
+    pub fn contacts(&self) -> &[BodySupports] {
+        if self.fresh { &self.contacts } else { &[] }
+    }
+
+    /// Bodies past the owner's capacity, which no water takes.
+    pub fn uncoupled(&self) -> usize {
+        self.uncoupled
+    }
+
+    /// The rows `seconds` after the first tick's start, each body carried
+    /// along its motion: a later tick of this frame starts there.
+    pub fn rows_after(&mut self, seconds: f32) -> &[LiquidBody] {
+        self.advanced.clear();
+        self.advanced.extend(self.rows.iter().map(|row| {
+            let (position, rotation) = super::bodies::body_pose_at(row, seconds);
+            let mut moved = *row;
+            moved.position_inv_mass[..3].copy_from_slice(&position);
+            moved.rotation = rotation;
+            moved
+        }));
+        &self.advanced
+    }
+
+    /// The frame's water has used them; the next frame takes them anew.
+    pub fn used(&mut self) {
+        self.fresh = false;
+    }
+}
+
+/// A liquid domain that owns a rigid world or takes another's solids.
+pub trait SharesSolids {
+    /// The rigid owner, when this water couples its scene's world.
+    fn rigid_owner(&self) -> Option<&LiquidRigidOwner>;
+    /// Where this water takes another water's solids.
+    fn shared_solids_mut(&mut self) -> &mut SharedSolids;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,7 +965,7 @@ mod tests {
     #[test]
     fn a_full_hundred_body_world_couples_every_body_inside_its_walls() {
         let (scene, colliders) = full_world(100);
-        let mut owner = LiquidRigidOwner::new(&scene, CLOSED, colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
+        let mut owner = LiquidRigidOwner::new(&scene, CLOSED, &colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
         assert_eq!((owner.rows().len(), owner.uncoupled()), (100, 0));
         for tick in 0..(2.0 / TICK) as u64 {
             owner.set_pending(PendingTick { tick, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)), offline: true });
@@ -762,18 +984,18 @@ mod tests {
     #[test]
     fn bodies_past_the_capacity_are_counted_not_coupled() {
         let (scene, colliders) = full_world(100);
-        let owner = LiquidRigidOwner::new(&scene, CLOSED, colliders, 40, 1, None).expect("owner");
+        let owner = LiquidRigidOwner::new(&scene, CLOSED, &colliders, 40, 1, None).expect("owner");
         assert_eq!((owner.rows().len(), owner.uncoupled()), (40, 60));
-        assert!(owner.matches(&scene, CLOSED, colliders, 40));
-        assert!(!owner.matches(&scene, CLOSED, colliders, 41));
-        let all = LiquidRigidOwner::new(&scene, CLOSED, colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
-        assert!(all.matches(&scene, CLOSED, colliders, 100));
-        assert!(all.matches(&scene, CLOSED, colliders, MAX_LIQUID_BODIES - 1));
-        assert!(!all.matches(&scene, CLOSED, colliders, 99));
+        assert!(owner.matches(&scene, CLOSED, &colliders, 40));
+        assert!(!owner.matches(&scene, CLOSED, &colliders, 41));
+        let all = LiquidRigidOwner::new(&scene, CLOSED, &colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
+        assert!(all.matches(&scene, CLOSED, &colliders, 100));
+        assert!(all.matches(&scene, CLOSED, &colliders, MAX_LIQUID_BODIES - 1));
+        assert!(!all.matches(&scene, CLOSED, &colliders, 99));
 
-        // The largest world, walls and all: one body past the liquid's rows.
-        let (largest, colliders) = full_world(manifold_core::scene_surface::PHYSICS_WORLD_MAX_BODIES as usize);
-        let mut owner = LiquidRigidOwner::new(&largest, CLOSED, colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
+        // A world one body past the liquid's rows, walls and all.
+        let (largest, colliders) = full_world(MAX_LIQUID_BODIES + 1);
+        let mut owner = LiquidRigidOwner::new(&largest, CLOSED, &colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
         assert_eq!((owner.rows().len(), owner.uncoupled()), (MAX_LIQUID_BODIES, 1));
         owner.set_pending(PendingTick { tick: 0, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(Seconds::ZERO, Seconds(TICK)), offline: true });
         owner.settle_ready(Some(&largest), |_| true, no_reaction).unwrap();
@@ -786,7 +1008,7 @@ mod tests {
         let scene = scene();
         let walls = DomainWalls { min: [-1.2, 0.0, -1.2], size: [2.4; 3], closed: 0b11_1111 };
         let colliders = RigidImpulseTargets::body(0).unwrap();
-        let mut owner = LiquidRigidOwner::new(&scene, walls, colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
+        let mut owner = LiquidRigidOwner::new(&scene, walls, &colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
         for tick in 0..(3.0 / TICK) as u64 {
             owner.set_pending(PendingTick { tick, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)), offline: true });
             owner.settle_ready(Some(&scene), |_| true, no_reaction).unwrap();
@@ -809,7 +1031,7 @@ mod tests {
         scene.gravity = [s * 9.81, -(1.0 + load) * 9.81, 0.0];
         let walls = DomainWalls { min: [-1.2, 0.0, -1.2], size: [2.4; 3], closed: 0b11_1111 };
         let colliders = RigidImpulseTargets::body(0).unwrap();
-        let mut owner = LiquidRigidOwner::new(&scene, walls, colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
+        let mut owner = LiquidRigidOwner::new(&scene, walls, &colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
         let mut start = 0.0;
         for tick in 0..(2.5 / TICK) as u64 {
             if tick == (0.5 / TICK) as u64 {
@@ -898,7 +1120,7 @@ mod tests {
         inputs.bodies[1].as_mut().unwrap().transform.pos[0] = 10.0;
         inputs.bodies[0].as_mut().unwrap().kind = 2;
         let colliders = RigidImpulseTargets::body(0).unwrap().union(RigidImpulseTargets::body(1).unwrap());
-        let mut owner = LiquidRigidOwner::new(&inputs, OPEN, colliders, MAX_LIQUID_BODIES, 1, None).unwrap();
+        let mut owner = LiquidRigidOwner::new(&inputs, OPEN, &colliders, MAX_LIQUID_BODIES, 1, None).unwrap();
         owner.set_step(manifold_water_rigid::physics::SimStep::live(Seconds(TICK)));
         // More than one live frame's budget has already completed before
         // an overloaded frame reanchors the authored scene.
@@ -934,7 +1156,7 @@ mod tests {
     fn liquid_coupled_reaction_reaches_the_body() {
         let scene = scene();
         let colliders = RigidImpulseTargets::body(0).unwrap();
-        let mut owner = LiquidRigidOwner::new(&scene, OPEN, colliders, MAX_LIQUID_BODIES, 3, None).expect("owner");
+        let mut owner = LiquidRigidOwner::new(&scene, OPEN, &colliders, MAX_LIQUID_BODIES, 3, None).expect("owner");
         owner.set_pending(PendingTick { tick: 0, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds((0) as f64 * TICK), manifold_core::Seconds(TICK)), offline: true });
         owner
             .settle_ready(Some(&scene), |_| true, |pending, rows, impulses| {
@@ -945,16 +1167,57 @@ mod tests {
             .unwrap();
         let v = owner.rows()[0].linear_velocity[1];
         assert!((v - (1.0 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
+
+        // A body that joins mid-run couples without a new epoch: the first
+        // keeps its motion and its hull, and the next tick takes both.
+        let mut grown = scene.clone();
+        let first = scene.bodies[0].clone().unwrap();
+        grown.bodies[1] = Some(RigidBody { transform: Transform { pos: [2.0, 1.0, 0.0], ..first.transform }, ..first });
+        let both = colliders.clone().union(RigidImpulseTargets::body(1).unwrap());
+        assert!(!owner.matches(&grown, OPEN, &both, MAX_LIQUID_BODIES));
+        let hull = Arc::clone(&owner.geometries()[0]);
+        assert!(owner.admit(&grown, OPEN, &both, MAX_LIQUID_BODIES).unwrap());
+        assert!(owner.matches(&grown, OPEN, &both, MAX_LIQUID_BODIES) && owner.wants_rebind());
+        owner.rebind().unwrap();
+        assert_eq!((owner.epoch(), owner.completed(), owner.rows().len()), (3, 1, 2));
+        assert!(Arc::ptr_eq(&owner.geometries()[0], &hull));
+        assert_eq!(owner.rows()[0].linear_velocity[1], v);
+        owner.set_pending(PendingTick { tick: 1, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds(TICK), manifold_core::Seconds(2.0 * TICK)), offline: true });
+        owner
+            .settle_ready(Some(&grown), |_| true, |_, rows, impulses| {
+                assert_eq!((rows.len(), impulses.len()), (2, 2));
+                Ok(())
+            })
+            .unwrap();
+        assert!(!owner.wants_rebind());
+
+        // A Scale write (a live row) swaps that body's shape in place: the
+        // same epoch, the body keeps its motion, and its hull is built again
+        // at the new size while the other body's carries over.
+        let moving = owner.rows()[0].linear_velocity[1];
+        let mut scaled = grown.clone();
+        scaled.bodies[0].as_mut().unwrap().transform.scale = [2.0; 3];
+        let (hull, other) = (Arc::clone(&owner.geometries()[0]), Arc::clone(&owner.geometries()[1]));
+        assert!(owner.admit(&scaled, OPEN, &both, MAX_LIQUID_BODIES).unwrap());
+        owner.rebind().unwrap();
+        assert_eq!((owner.epoch(), owner.completed()), (3, 2), "no new epoch");
+        assert_eq!(owner.rows()[0].linear_velocity[1], moving);
+        assert!(!Arc::ptr_eq(&owner.geometries()[0], &hull) && Arc::ptr_eq(&owner.geometries()[1], &other));
+        let width = |geometry: &PreparedFluidGeometry| {
+            let xs = geometry.meshes.iter().flat_map(|mesh| mesh.vertices.iter().map(|v| v[0]));
+            xs.clone().fold(f32::NEG_INFINITY, f32::max) - xs.fold(f32::INFINITY, f32::min)
+        };
+        assert!((width(&owner.geometries()[0]) / width(&hull) - 2.0 / scene.bodies[0].as_ref().unwrap().transform.scale[0]).abs() < 1e-3);
     }
 
-    /// A float reaction of m·(1 m/s) up, read past one Collider role's row,
+    /// A float reaction of m·(1 m/s) up, read past one leading row,
     /// reaches Box3D on top of the tick's gravity; a reaction too short for
     /// the rows is refused by name.
     #[test]
     fn liquid_coupled_float_reaction_decodes_to_body_impulse() {
         let scene = scene();
         let colliders = RigidImpulseTargets::body(0).unwrap();
-        let mut owner = LiquidRigidOwner::new(&scene, OPEN, colliders, MAX_LIQUID_BODIES, 3, None).expect("owner");
+        let mut owner = LiquidRigidOwner::new(&scene, OPEN, &colliders, MAX_LIQUID_BODIES, 3, None).expect("owner");
         let mut reaction = [0.0f32; 2 * REACTION_FLOATS];
         reaction[REACTION_FLOATS + 1] = 32.0;
         reaction[REACTION_FLOATS + 5] = 1.0e-9;
@@ -997,7 +1260,7 @@ mod tests {
         };
         let colliders = RigidImpulseTargets::body(0).unwrap();
         let run = |fps: f64| {
-            let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
+            let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, &colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
             let (mut clock, mut scenes) = (LiquidClock::default(), TickSamples::default());
             let (mut times, mut last, mut rows) = (Vec::new(), None::<f64>, Vec::new());
             for index in 0..=(fps as u64) {
@@ -1041,7 +1304,7 @@ mod tests {
             }
         }
 
-        let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
+        let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, &colliders, MAX_LIQUID_BODIES, 1, None).expect("owner");
         owner.set_pending(PendingTick { tick: 0, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds(0.0), manifold_core::Seconds(TICK)), offline: true });
         assert!(owner.settle_ready(None, |_| true, no_reaction).unwrap_err().contains("never sampled"));
         assert_eq!((owner.completed(), owner.pending().map(|p| p.tick)), (0, Some(0)));
@@ -1064,7 +1327,7 @@ mod tests {
             scene
         };
         let colliders = RigidImpulseTargets::body(0).unwrap();
-        let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, colliders, MAX_LIQUID_BODIES, 1, None)?;
+        let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, &colliders, MAX_LIQUID_BODIES, 1, None)?;
         let (mut clock, mut scenes) = (LiquidClock::default(), TickSamples::default());
         let frame = clock.advance(PlayedTime::from_played(0.0), TICK, speed(0.0), 0.0, false, offline);
         scenes.settle(&clock, &frame, Some(&scene_at(0.0)));
@@ -1140,7 +1403,7 @@ mod tests {
         let mut scene = scene();
         scene.gravity = [0.0; 3];
         let colliders = RigidImpulseTargets::body(0).unwrap();
-        let mut owner = LiquidRigidOwner::new(&scene, OPEN, colliders, MAX_LIQUID_BODIES, 1, None).unwrap();
+        let mut owner = LiquidRigidOwner::new(&scene, OPEN, &colliders, MAX_LIQUID_BODIES, 1, None).unwrap();
         let mut velocity = 0.0;
         for tick in 0..3 {
             owner.set_pending(PendingTick { tick, stamp: 42, interval: manifold_physics::stepping::StepInterval::new(Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)), offline: true });

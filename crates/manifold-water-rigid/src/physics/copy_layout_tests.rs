@@ -67,7 +67,7 @@ fn yaw_of(rotation: [f32; 4]) -> f32 {
 #[test]
 fn the_platonic_widths_are_the_installed_hulls_bit_for_bit() {
     for shape in 0..5u32 {
-        let body = RigidBody { shape, ..cube([0.0; 3], 0.8) };
+        let body = RigidBody { collider: Some(platonic_solid(shape)), ..cube([0.0; 3], 0.8) };
         assert_eq!(copy_width(&body), platonic_width(shape, 0.8), "shape {shape}");
         let half = PLATONIC_HALF_WIDTH[shape as usize];
         let max = manifold_node_engine::platonic::platonic_points(shape).iter().map(|p| p[0]).fold(f32::MIN, f32::max);
@@ -148,7 +148,7 @@ fn ring_neighbours_sit_one_spacing_apart_once_their_corners_clear() {
 
 #[test]
 fn the_group_transform_turns_and_scales_the_layout_as_one() {
-    for layout in [CopyLayout::Grid, CopyLayout::Scatter, CopyLayout::Line, CopyLayout::Ring] {
+    for layout in [CopyLayout::Grid, CopyLayout::Scatter, CopyLayout::Line, CopyLayout::Ring, CopyLayout::Spiral, CopyLayout::Random] {
         let flat = group(layout, 12, 1.2, 4);
         let turned = Arrangement { rotation: [0.3, -0.7, 0.2], ..flat };
         let width = platonic_width(1, 0.6);
@@ -313,16 +313,16 @@ fn a_group_with_physics_off_is_drawn_at_rest_with_no_bodies() {
 #[test]
 fn the_shared_pool_reports_its_shortfall_and_rebalances_on_a_count_edit() {
     let group = |count: f32| RigidBody { spawn: CopySpawn { count, ..CopySpawn::default() }, ..cube([0.0, 50.0, 0.0], 0.2) };
-    let mut scene = RigidSceneInputs { bodies: vec![None], groups: vec![Some(group(3_000.0)), Some(group(2_000.0))], gravity: [0.0; 3], ..RigidSceneInputs::default() };
+    let mut scene = RigidSceneInputs { bodies: vec![None], groups: vec![Some(group((MAX_COPIES - 1_000) as f32)), Some(group(2_000.0))], gravity: [0.0; 3], ..RigidSceneInputs::default() };
     scene.targeted_fields = vec![None; 3];
     let mut simulation = RigidSimulation::default().with_step(SimStep::export(FIXED_TICK));
     simulation.advance_scene(&scene, PlayedTime::ZERO, 1.0, 0.0).unwrap();
-    assert_eq!((simulation.active_copies(0), simulation.active_copies(1)), (3_000, 1_000));
+    assert_eq!((simulation.active_copies(0), simulation.active_copies(1)), (MAX_COPIES - 1_000, 1_000));
     assert_eq!(simulation.copies_not_made(), 1_000);
     let epoch = simulation.impulse_epoch;
-    scene.groups[0] = Some(group(1_000.0));
+    scene.groups[0] = Some(group((MAX_COPIES - 3_000) as f32));
     simulation.advance_scene(&scene, PlayedTime::from_played(1.0 / 60.0), 1.0, 0.0).unwrap();
-    assert_eq!((simulation.active_copies(0), simulation.active_copies(1)), (1_000, 2_000));
+    assert_eq!((simulation.active_copies(0), simulation.active_copies(1)), (MAX_COPIES - 3_000, 2_000));
     assert_eq!(simulation.copies_not_made(), 0);
     assert_eq!(simulation.impulse_epoch, epoch);
 }

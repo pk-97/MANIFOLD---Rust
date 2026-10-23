@@ -30,6 +30,11 @@ use manifold_node_engine::scene::source_asset::{mesh_identity, LoadedAsset, Sour
 /// `node.mesh_ramp`'s 0..1 bounds are meaningful without a separate
 /// `normalize_mesh` GPU atom (which would need a same-frame GPU->CPU bounds
 /// readback, forbidden by DECOMPOSING section 7).
+/// The top of the vertex-count params: only what an Int param can hold. No
+/// count cap of its own; the GPU's buffer size is the limit, and a mesh the
+/// buffer cannot hold is refused (`load_error`), never cut short.
+const MAX_VERTICES: f32 = 2_000_000_000.0;
+
 pub const GLTF_FIT_MODES: &[&str] = &["none", "unit_box"];
 
 fn source_trace_enabled() -> bool {
@@ -129,7 +134,7 @@ fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) ->
 manifold_node_engine::primitive! {
     name: GltfMeshSource,
     type_id: "node.gltf_mesh_source",
-    purpose: "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform.",
+    purpose: "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform. node_path (a file node path, empty by default) selects that one node's own mesh instead, already placed in the file's world space.",
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
@@ -141,6 +146,14 @@ manifold_node_engine::primitive! {
             label: "File",
             ty: ParamType::String,
             default: ParamValue::Float(0.0), // String default supplied via stringBindings; this slot is never read.
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("node_path"),
+            label: "File Node",
+            ty: ParamType::String,
+            default: ParamValue::Float(0.0), // String default supplied by the node param; this slot is never read.
             range: None,
             enum_values: &[],
         },
@@ -181,7 +194,7 @@ manifold_node_engine::primitive! {
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(200000.0),
-            range: Some((36.0, 8000000.0)),
+            range: Some((36.0, MAX_VERTICES)),
             enum_values: &[],
         },
         ParamDef {
@@ -209,10 +222,9 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         // BUG-194/BUG-195 (SCENE_SETUP_PANEL_DESIGN.md D4/D5): import-time
-        // provenance, never read by `evaluate()`/`run()` — stamped by
-        // `gltf_import.rs` at import/merge time and read back by
-        // `SceneVm::from_def` (the header's vertex-count row) and
-        // `merge_import_into_graph` (scale-sanity's reference-radius pick).
+        // provenance, never read by `evaluate()`/`run()` — stamped by the
+        // scene compiler and read back by the scene table's vertex-count
+        // row and by Shatter.
         // -1 / -1.0 mean "unknown" (a hand-built node never touched by the
         // importer) — never a fabricated non-negative default.
         // BUG-221: a plain constant per-vertex translate — see
@@ -248,7 +260,7 @@ manifold_node_engine::primitive! {
             label: "Source Vertex Count",
             ty: ParamType::Int,
             default: ParamValue::Float(-1.0),
-            range: Some((-1.0, 8_000_000.0)),
+            range: Some((-1.0, MAX_VERTICES)),
             enum_values: &[],
         },
         ParamDef {
@@ -279,8 +291,8 @@ manifold_node_engine::primitive! {
         // port-shadowed performance scalars, so a full re-parse on change
         // is the simple, correct choice over a second CPU-side cache tier.
         // BUG-221: translate_x/y/z joined the tuple the same way.
-        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, u32, u32) =
-            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0, 1, 0),
+        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), String) =
+            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0, (1, 0), String::new()),
         // Last successfully parsed geometry (CPU-side), retained only until
         // it is uploaded to `staging`.
         cached_verts: Vec<MeshVertex> = Vec::new(),
@@ -375,6 +387,10 @@ impl Primitive for GltfMeshSource {
         let requested_translate_z = float_param("translate_z", 0.0);
         let requested_fragment_count = float_param("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
         let requested_fragment_index = float_param("fragment_index", 0.0).round().max(0.0) as u32;
+        let requested_node_path = match params.get("node_path") {
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
+        };
 
         let requested_key_matches = self.last_key.0.as_str() == requested_path
             && self.last_key.1 == requested_mesh_index
@@ -386,8 +402,8 @@ impl Primitive for GltfMeshSource {
             && self.last_key.7 == requested_translate_x
             && self.last_key.8 == requested_translate_y
             && self.last_key.9 == requested_translate_z
-            && self.last_key.10 == requested_fragment_count
-            && self.last_key.11 == requested_fragment_index;
+            && self.last_key.10 == (requested_fragment_count, requested_fragment_index)
+            && self.last_key.11 == requested_node_path;
         if !requested_key_matches {
             return SourceAssetIdentity::Pending;
         }
@@ -446,6 +462,10 @@ impl Primitive for GltfMeshSource {
         let translate = [translate_x, translate_y, translate_z];
         let fragment_count = ctx.param_f32("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
         let fragment_index = ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32;
+        let node_path = match ctx.params.get("node_path") {
+            Some(ParamValue::String(s)) => s.as_str().to_owned(),
+            _ => String::new(),
+        };
 
         // 2. Re-trigger a background parse if the effective selection (or
         // the fit/recenter/translate_* authoring choice) changed since the
@@ -461,8 +481,8 @@ impl Primitive for GltfMeshSource {
             translate_x,
             translate_y,
             translate_z,
-            fragment_count,
-            fragment_index,
+            (fragment_count, fragment_index),
+            node_path.clone(),
         );
         if key != self.last_key && self.pending_load.is_none() {
             if source_trace_enabled() {
@@ -490,7 +510,9 @@ impl Primitive for GltfMeshSource {
                 // every primitive of that material across the scene
                 // (the importer's per-material object). Otherwise the
                 // mesh_index / primitive_index path applies.
-                let selector = if material_index == DEFAULT_MATERIAL_MESH_PARAM {
+                let selector = if !node_path.is_empty() {
+                    GltfMeshSelector::Node { path: node_path.as_str().into(), material: material_index }
+                } else if material_index == DEFAULT_MATERIAL_MESH_PARAM {
                     // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): the
                     // synthetic default-material object — every primitive
                     // with no glTF material, scene-wide.
@@ -563,6 +585,7 @@ impl Primitive for GltfMeshSource {
                         self.content_version = self.content_version.wrapping_add(1);
                         self.published_source = Some(MeshSource::Gltf {
                             path: Arc::from(self.last_key.0.as_str()),
+                            node_path: (!self.last_key.11.is_empty()).then(|| Arc::from(self.last_key.11.as_str())),
                             selection: MeshSelection {
                                 mesh: mesh_index,
                                 primitive: primitive_index,
@@ -572,10 +595,6 @@ impl Primitive for GltfMeshSource {
                                 translate,
                                 fragment_count,
                                 fragment_index,
-                                // Collider preparation owns this setting; a
-                                // visible mesh source carries a neutral
-                                // default for the later role consumer.
-                                collider_parts: 32,
                             },
                         });
                     }
@@ -671,14 +690,21 @@ impl Primitive for GltfMeshSource {
 
         // 6. (Re)build the staging buffer when cached_verts changed.
         if !self.uploaded {
-            let n = self.cached_verts.len().min(capacity as usize);
-            if self.cached_verts.len() > capacity as usize {
-                log::warn!(
-                    "node.gltf_mesh_source: mesh has {} vertices, capacity {} — truncating",
-                    self.cached_verts.len(),
-                    capacity
-                );
+            let n = self.cached_verts.len();
+            if n > capacity as usize {
+                // Drawing a cut-off mesh would silently drop triangles. The
+                // parsed mesh is kept: once the file's facts arrive, the
+                // recompile sizes the buffer from them and the mesh draws.
+                if self.load_error.is_none() {
+                    let reason = format!("mesh has {n} vertices but its buffer holds {capacity}");
+                    log::error!("node.gltf_mesh_source: {reason}");
+                    ctx.error(reason.clone());
+                    self.load_error = Some(reason);
+                }
+                ctx.mark_outputs_pending();
+                return;
             }
+            self.load_error = None;
             let bytes = &self.cached_verts[..n];
             let len_bytes = (n * std::mem::size_of::<MeshVertex>()) as u64;
             let device = ctx.gpu_encoder().device;
@@ -828,10 +854,9 @@ mod tests {
         params
     }
 
-    fn source_key(
-        path: &str,
-        mesh_index: i32,
-    ) -> (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, u32, u32) {
+    type SourceKey = (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), String);
+
+    fn source_key(path: &str, mesh_index: i32) -> SourceKey {
         (
             path.to_owned(),
             mesh_index,
@@ -843,8 +868,8 @@ mod tests {
             0.0,
             0.0,
             0.0,
-            1,
-            0,
+            (1, 0),
+            String::new(),
         )
     }
 
@@ -992,12 +1017,11 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection }) = source_a else {
+        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection, .. }) = source_a else {
             panic!("CPU-only glTF source did not settle");
         };
         assert_eq!(loaded_path.as_ref(), path_a);
         assert_eq!(loaded_selection.mesh, -1);
-        assert_eq!(loaded_selection.collider_parts, 32);
         assert_eq!(primitive.cached_verts.capacity(), 0);
         let SourceAssetIdentity::Ready(identity_a) = Primitive::source_asset_identity(&primitive, &params_a) else {
             panic!("published CPU source must expose its loaded identity");
@@ -1033,7 +1057,7 @@ mod tests {
             if !pending {
                 source_b = backend.mesh_source(source_slot);
                 if source_b.as_ref().is_some_and(|source| match source {
-                    MeshSource::Gltf { path, selection } => path.as_ref() == path_b && selection.mesh == 0,
+                    MeshSource::Gltf { path, selection, .. } => path.as_ref() == path_b && selection.mesh == 0,
                     _ => false,
                 }) {
                     break;
@@ -1041,12 +1065,11 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection }) = source_b else {
+        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection, .. }) = source_b else {
             panic!("changed CPU-only glTF source did not settle");
         };
         assert_eq!(loaded_path.as_ref(), path_b);
         assert_eq!(loaded_selection.mesh, 0);
-        assert_eq!(loaded_selection.collider_parts, 32);
         assert_eq!(primitive.cached_verts.capacity(), 0);
         let SourceAssetIdentity::Ready(identity_b) = Primitive::source_asset_identity(&primitive, &params_b) else {
             panic!("replacement CPU source must publish its own loaded identity");
@@ -1174,7 +1197,9 @@ mod gpu_tests {
     use manifold_gpu::testkit::TestDevice;
     use manifold_core::{Beats, Seconds};
 
-    const CAPACITY: u32 = 20_000;
+    // The node's own default Max Capacity, as a hand-built graph gets it. A
+    // buffer smaller than the mesh refuses it rather than cutting it short.
+    const CAPACITY: u32 = 200_000;
 
     fn frame_time() -> FrameTime {
         FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
@@ -1270,7 +1295,7 @@ mod gpu_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("gltf_mesh_source: parse never settled");
+        panic!("gltf_mesh_source: parse never settled ({:?})", prim.load_error);
     }
 
     fn make_buffer_backend(device: &TestDevice) -> (MetalBackend, ResourceId, Slot) {
@@ -1461,10 +1486,16 @@ mod gpu_tests {
     }
 }
 
-fn load_physics_mesh_asset(path: &std::path::Path, selection: &manifold_node_engine::scene::mesh_selection::MeshSelection) -> Result<Vec<MeshVertex>, String> {
+fn load_physics_mesh_asset(
+    path: &std::path::Path,
+    node: Option<&str>,
+    selection: &manifold_node_engine::scene::mesh_selection::MeshSelection,
+) -> Result<Vec<MeshVertex>, String> {
     use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
     use crate::node_graph::decode_cache::cached_load_gltf_mesh;
-        let selector = if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
+        let selector = if let Some(node) = node.filter(|node| !node.is_empty()) {
+            GltfMeshSelector::Node { path: node.into(), material: selection.material }
+        } else if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
             GltfMeshSelector::DefaultMaterial
         } else if selection.material >= 0 {
             GltfMeshSelector::Material {
@@ -1516,9 +1547,9 @@ mod mesh_asset_source_tests {
         for (mesh, primitive) in [(-1, -1), (0, -1), (0, 0)] {
             let selection = manifold_node_engine::scene::mesh_selection::MeshSelection {
                 mesh, primitive, material: -1, fit: true, recenter: true,
-                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0, collider_parts: 1,
+                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0,
             };
-            let direct = super::load_physics_mesh_asset(&path, &selection).unwrap();
+            let direct = super::load_physics_mesh_asset(&path, None, &selection).unwrap();
             let registered = manifold_node_engine::scene::mesh_asset_source::load_mesh(&path, &selection).unwrap();
             let selected = selection.load(&path).unwrap();
             assert_eq!(direct.len(), 3);

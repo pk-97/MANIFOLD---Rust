@@ -1,7 +1,7 @@
 pub(super) mod tests {
     use std::fs;
     use manifold_water_liquid::primitives::fluid_role_source::{CompoundPreparation, WiredPreparation};
-    use manifold_water_liquid::primitives::fluid_role_source::geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
+    use manifold_water_liquid::primitives::fluid_role_source::geometry::{prepare_geometry, prepare_wired_geometry};
     use manifold_water_liquid::testkit::fluid_role_source::cube_triangle_list;
     use manifold_node_engine::scene::mesh_source::MeshSource;
     use manifold_node_engine::scene::mesh_selection::MeshSelection;
@@ -75,11 +75,12 @@ pub(super) mod tests {
         for (slot, source_path) in [&path, &second_path].into_iter().enumerate() {
             wired.sources[slot] = Some(MeshSource::Gltf {
                 path: std::sync::Arc::from(source_path.to_str().unwrap()),
-                selection: manifold_water_liquid::primitives::fluid_role_source::default_selection(32).with_material(slot as i32),
+                node_path: None,
+                selection: manifold_water_liquid::primitives::fluid_role_source::default_selection().with_material(slot as i32),
             });
         }
         let transform = Transform { pos: [0.0, 2.0, 0.0], ..Transform::default() };
-        let first = prepare_wired_geometry(&wired, transform, GeometryMode::ExactMesh, 32).unwrap();
+        let first = prepare_wired_geometry(&wired, transform).unwrap();
         assert_eq!(first[0].vertices.len(), 8);
         assert_eq!(first[0].triangles.len(), 12);
         assert!(first[0].vertices.iter().all(|v| v[1] >= 1.5 && v[1] <= 2.5));
@@ -90,14 +91,14 @@ pub(super) mod tests {
             selection.translate[0] = 0.25;
         }
         wired.part_transforms[1].pos[0] -= 0.25;
-        let moved = prepare_wired_geometry(&wired, transform, GeometryMode::ExactMesh, 32).unwrap();
+        let moved = prepare_wired_geometry(&wired, transform).unwrap();
         assert_eq!(first[0].vertices, moved[0].vertices);
         assert_eq!(first[0].triangles, moved[0].triangles);
 
         if let Some(MeshSource::Gltf { selection, .. }) = &mut wired.sources[1] {
             selection.material = 0;
         }
-        let doubled = prepare_wired_geometry(&wired, transform, GeometryMode::ExactMesh, 32).unwrap();
+        let doubled = prepare_wired_geometry(&wired, transform).unwrap();
         assert!(manifold_physics::closed_triangles(&doubled[0]).unwrap().contains(&false),
             "two copies of one half are an open surface, not the original closed cube");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -115,17 +116,8 @@ pub(super) mod tests {
             translate: [0.0; 3],
             fragment_count: 1,
             fragment_index: 0,
-            collider_parts: 1,
         };
-        let meshes = prepare_geometry(
-            &path,
-            selection,
-            1,
-            1.0,
-            Transform::default(),
-            GeometryMode::ExactMesh,
-            Some(&compound),
-        )
+        let meshes = prepare_geometry(&path, selection, Transform::default(), Some(&compound))
         .unwrap();
         assert_eq!(meshes[0].vertices.len(), 8);
         assert_eq!(meshes[0].triangles.len(), 12);

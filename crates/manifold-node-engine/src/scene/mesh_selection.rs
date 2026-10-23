@@ -2,7 +2,7 @@
 use std::path::Path;
 
 use crate::exec::effect_node::EffectNodeContext;
-use super::mesh_partition::{Fragment, partition};
+use manifold_foundation::mesh_partition::{Fragment, partition};
 use crate::parameters::ParamValue;
 use crate::mesh::MeshVertex;
 
@@ -16,7 +16,6 @@ pub struct MeshSelection {
     pub translate: [f32; 3],
     pub fragment_count: u32,
     pub fragment_index: u32,
-    pub collider_parts: u32,
 }
 
 impl MeshSelection {
@@ -37,17 +36,19 @@ impl MeshSelection {
             fragment_count: ctx
                 .param_f32("fragment_count", 1.0)
                 .round()
-                .clamp(1.0, 64.0) as u32,
+                .clamp(1.0, manifold_foundation::mesh_partition::MAX_PIECES as f32) as u32,
             fragment_index: ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32,
-            collider_parts: ctx
-                .param_f32("collider_parts", 32.0)
-                .round()
-                .clamp(1.0, 64.0) as u32,
         }
     }
 
     pub fn load(&self, path: &Path) -> Result<Vec<MeshVertex>, String> {
-        let vertices = super::mesh_asset_source::load_mesh(path, self)?;
+        self.load_node(path, None)
+    }
+
+    /// [`Self::load`] of the mesh of one file node (an imported part), when
+    /// `node` names one.
+    pub fn load_node(&self, path: &Path, node: Option<&str>) -> Result<Vec<MeshVertex>, String> {
+        let vertices = super::mesh_asset_source::load_mesh_node(path, node, self)?;
         select_fragment(vertices, self.fragment_count, self.fragment_index)
     }
 }

@@ -1,0 +1,140 @@
+{
+  "version": 3,
+  "name": "Scene Loop (copies)",
+  "presetMetadata": {
+    "id": "SceneLoopCopies",
+    "displayName": "Scene Loop (copies)",
+    "category": "Geometry",
+    "oscPrefix": "scene_loop_copies",
+    "available": false,
+    "params": [
+      { "id": "pattern_length", "name": "Pattern", "min": 1.0, "max": 8.0, "defaultValue": 1.0, "wholeNumbers": true },
+      { "id": "cell_size", "name": "Spacing", "min": 0.01, "max": 1000.0, "defaultValue": 10.0 },
+      { "id": "jitter_amount", "name": "Jitter", "min": 0.0, "max": 1.0, "defaultValue": 0.0 },
+      { "id": "enabled", "name": "Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "isToggle": true }
+    ],
+    "bindings": [
+      { "id": "pattern_length", "label": "Pattern", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "scene_array", "param": "pattern_length" } },
+      { "id": "cell_size", "label": "Spacing", "defaultValue": 10.0, "target": { "kind": "node", "nodeId": "scene_array", "param": "cell_size" } },
+      { "id": "jitter_amount", "label": "Jitter", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "scene_array", "param": "jitter_amount" } },
+      { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "loop_switch", "param": "selector" } },
+      { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "loop_count_switch", "param": "selector" } }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": true,
+      "enabledParam": "enabled",
+      "preparationParams": [],
+      "stages": [
+        {
+          "group": "loop_corridor_stage",
+          "scope": "scene",
+          "inputs": [
+            { "port": "camera", "source": { "previous": { "endpoint": "camera" } } }
+          ],
+          "outputs": []
+        },
+        {
+          "group": "loop_copies_stage",
+          "scope": "eachObject",
+          "inputs": [
+            { "port": "cells", "source": { "stageOutput": { "stage": "loop_corridor_stage", "port": "instances" } } },
+            { "port": "previous", "source": { "previous": { "endpoint": "instances" } } },
+            { "port": "previousCount", "source": { "previous": { "endpoint": "instanceCount" } } }
+          ],
+          "outputs": [
+            { "port": "instances", "endpoint": "instances" },
+            { "port": "instanceCount", "endpoint": "instanceCount" }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "loop_corridor_stage",
+      "typeId": "group",
+      "handle": "SceneLoopCorridorStage",
+      "group": {
+        "interface": {
+          "inputs": [ { "name": "camera", "portType": "Camera" } ],
+          "outputs": [ { "name": "instances", "portType": "Array(InstanceTransform)" } ]
+        },
+        "nodes": [
+          { "id": 1, "nodeId": "group_camera", "typeId": "system.group_input", "handle": "camera" },
+          {
+            "id": 2,
+            "nodeId": "scene_array",
+            "typeId": "node.scene_array",
+            "handle": "scene_array",
+            "params": {
+              "pattern_length": { "type": "Int", "value": 1 },
+              "axis": { "type": "Enum", "value": 4 },
+              "cell_size": { "type": "Float", "value": 10.0 },
+              "jitter_seed": { "type": "Int", "value": 0 },
+              "jitter_amount": { "type": "Float", "value": 0.0 }
+            }
+          },
+          { "id": 3, "nodeId": "loop_corridor_output", "typeId": "system.group_output", "handle": "output" }
+        ],
+        "wires": [
+          { "fromNode": 1, "fromPort": "camera", "toNode": 2, "toPort": "camera" },
+          { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "instances" }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "loop_copies_stage",
+      "typeId": "group",
+      "handle": "SceneLoopCopiesStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "cells", "portType": "Array(InstanceTransform)" },
+            { "name": "previous", "portType": "Array(InstanceTransform)" },
+            { "name": "previousCount", "portType": "Scalar(F32)" }
+          ],
+          "outputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" },
+            { "name": "instanceCount", "portType": "Scalar(F32)" }
+          ]
+        },
+        "nodes": [
+          { "id": 1, "nodeId": "group_cells", "typeId": "system.group_input", "handle": "cells" },
+          { "id": 2, "nodeId": "group_previous", "typeId": "system.group_input", "handle": "previous" },
+          { "id": 3, "nodeId": "group_previous_count", "typeId": "system.group_input", "handle": "previousCount" },
+          { "id": 4, "nodeId": "loop_nest", "typeId": "node.nest_copies", "handle": "loop_nest" },
+          {
+            "id": 5,
+            "nodeId": "loop_switch",
+            "typeId": "node.switch_instances",
+            "handle": "loop_switch",
+            "params": { "selector": { "type": "Float", "value": 1.0 } }
+          },
+          {
+            "id": 6,
+            "nodeId": "loop_count_switch",
+            "typeId": "node.switch_value",
+            "handle": "loop_count_switch",
+            "params": { "selector": { "type": "Float", "value": 1.0 } }
+          },
+          { "id": 7, "nodeId": "loop_copies_output", "typeId": "system.group_output", "handle": "output" }
+        ],
+        "wires": [
+          { "fromNode": 1, "fromPort": "cells", "toNode": 4, "toPort": "outer" },
+          { "fromNode": 2, "fromPort": "previous", "toNode": 4, "toPort": "inner" },
+          { "fromNode": 3, "fromPort": "previousCount", "toNode": 4, "toPort": "inner_count" },
+          { "fromNode": 2, "fromPort": "previous", "toNode": 5, "toPort": "in_0" },
+          { "fromNode": 4, "fromPort": "copies", "toNode": 5, "toPort": "in_1" },
+          { "fromNode": 3, "fromPort": "previousCount", "toNode": 6, "toPort": "in_0" },
+          { "fromNode": 4, "fromPort": "count", "toNode": 6, "toPort": "in_1" },
+          { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "instances" },
+          { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "instanceCount" }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

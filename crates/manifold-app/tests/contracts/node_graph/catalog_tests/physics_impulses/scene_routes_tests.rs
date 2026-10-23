@@ -23,10 +23,7 @@ fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
     );
     // No continuous acceleration; isolate velocity changes from Fire.
     def.wires.retain(|wire| wire.from_node != 1);
-    def = manifold_core::scene_modifier_edit::insert_scene_modifier(
-        &def,
-        0,
-        SceneModifierInstanceDef {
+    def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&def, SceneModifierInstanceDef {
             id: NodeId::new("force"),
             scene: reference("scene"),
             targets: SceneTargetSelection::Explicit {
@@ -35,10 +32,8 @@ fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
             mesh_frames: vec![],
             legacy_math_view_carrier: None,
             graph: Box::new(recipe),
-        },
-    )
-    .unwrap()
-    .graph;
+        })
+    .unwrap();
     let mut manifest = ParamManifest::from_params(
         def.preset_metadata
             .as_ref()
@@ -202,23 +197,23 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
 }
 
 #[test]
-fn scene_impulse_routes_refuse_one_hit_when_full_and_never_latch() {
+fn scene_impulse_routes_take_a_burst_past_the_history_and_never_latch() {
     let (def, manifest) = scene_fixture(&["part_a"]);
     let fire = alias(&def, "fire");
     let mut runtime =
         PresetRuntime::from_def_for_render(def, &registry(), Some(&manifest), false).unwrap();
     runtime.execute_frame(time(0.0));
     let mut sequence = 0;
-    for _ in 0..256 {
+    // A rigid world's hit history grows with a burst (ruling 23): one past
+    // the 256 it holds up front is admitted, never refused.
+    for _ in 0..257 {
         assert_eq!(runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence), Ok(ImpulseFire::Admitted));
     }
-    let error = runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence).unwrap_err();
-    assert!(error.contains("refused"), "{error}");
-    // No reset: the queued hits land, their receipts drain, the next Fire lands.
+    // No reset: the queued hits land once, their receipts drain, the next Fire lands.
     runtime.execute_frame(time(DT));
     let mut receipts = 0;
     runtime.water().drain_scene_impulses(|_, _| receipts += 1);
-    assert_eq!(receipts, 256);
+    assert_eq!(receipts, 257);
     assert_eq!(runtime.fire_scene_impulse(&fire, time(DT), &mut sequence), Ok(ImpulseFire::Admitted));
     runtime.execute_frame(time(2.0 * DT));
     let mut landed = Vec::new();

@@ -4,20 +4,20 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
 };
-use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneStageScope};
+use manifold_core::scene_modifier_preset::SceneStageScope;
 
 use super::SceneModifierExpandError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneModifierNodeCopy {
-    pub object: Option<SceneNodeRef>,
+    pub object: Option<NodeId>,
     pub node_id: NodeId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneModifierNodeRoute {
     pub modifier_id: NodeId,
-    pub local: SceneNodeRef,
+    pub local: NodeId,
     pub copies: Vec<SceneModifierNodeCopy>,
 }
 
@@ -37,7 +37,7 @@ pub(super) fn build_routes(
     owner: &EffectGraphDef,
     expanded: &EffectGraphDef,
     leaf_maps: &BTreeMap<String, BTreeMap<String, Vec<NodeId>>>,
-    target_maps: &BTreeMap<String, Vec<SceneNodeRef>>,
+    target_maps: &BTreeMap<String, Vec<NodeId>>,
 ) -> Result<Vec<SceneModifierNodeRoute>, SceneModifierExpandError> {
     let expanded_ids: HashSet<&str> = expanded
         .nodes
@@ -86,7 +86,7 @@ pub(super) fn build_routes(
         for (local_id, (local, scope)) in leaves {
             let copies = local_maps.get(&local_id).ok_or_else(|| {
                 missing(
-                    &local.node,
+                    &local,
                     format!("generated copies for '{local_id}' are missing"),
                 )
             })?;
@@ -97,7 +97,7 @@ pub(super) fn build_routes(
             };
             if copies.len() != expected {
                 return Err(invalid(
-                    local.node.to_string(),
+                    local.to_string(),
                     format!(
                         "expected {expected} generated copies for '{local_id}', got {}",
                         copies.len()
@@ -167,7 +167,7 @@ fn collect_leaves(
     root_scope: Option<SceneStageScope>,
     stage_scopes: &BTreeMap<String, SceneStageScope>,
     seen_ids: &mut HashSet<String>,
-    leaves: &mut BTreeMap<String, (SceneNodeRef, SceneStageScope)>,
+    leaves: &mut BTreeMap<String, (NodeId, SceneStageScope)>,
     path: &NodeId,
 ) -> Result<(), SceneModifierExpandError> {
     if scope.len() > 64 {
@@ -207,10 +207,7 @@ fn collect_leaves(
                 path,
             )?;
         } else if !boundary && !node.node_id.is_empty() {
-            let reference = SceneNodeRef {
-                scope: scope.to_vec(),
-                node: node.node_id.clone(),
-            };
+            let reference = node.node_id.clone();
             let scope_kind = root_scope.unwrap_or(SceneStageScope::Scene);
             if leaves
                 .insert(node.node_id.as_str().to_string(), (reference, scope_kind))
@@ -257,10 +254,10 @@ mod tests {
             "version": 3,
             "sceneModifiers": [{
                 "id": "modifier",
-                "scene": {"node": "scene"},
+                "scene": "scene",
                 "targets": {"explicit": {"objects": [
-                    {"scope": ["object"], "node": "obj-a"},
-                    {"scope": ["object"], "node": "obj-b"}
+                    "obj-a",
+                    "obj-b"
                 ]}},
                 "graph": {
                     "version": 3,
@@ -315,7 +312,7 @@ mod tests {
     }
 
     type LeafMaps = BTreeMap<String, BTreeMap<String, Vec<NodeId>>>;
-    type TargetMaps = BTreeMap<String, Vec<SceneNodeRef>>;
+    type TargetMaps = BTreeMap<String, Vec<NodeId>>;
 
     fn fixture() -> (EffectGraphDef, EffectGraphDef, LeafMaps, TargetMaps) {
         let owner: EffectGraphDef = serde_json::from_value(owner_json()).expect("owner parses");
@@ -353,14 +350,8 @@ mod tests {
         let target_maps = BTreeMap::from([(
             "modifier".to_string(),
             vec![
-                SceneNodeRef {
-                    scope: vec![NodeId::new("object")],
-                    node: NodeId::new("obj-a"),
-                },
-                SceneNodeRef {
-                    scope: vec![NodeId::new("object")],
-                    node: NodeId::new("obj-b"),
-                },
+                NodeId::new("obj-a"),
+                NodeId::new("obj-b"),
             ],
         )]);
         (owner, expanded, leaf_maps, target_maps)
@@ -373,9 +364,8 @@ mod tests {
             build_routes(&owner, &expanded, &leaf_maps, &target_maps).expect("routes build");
         let shared = routes
             .iter()
-            .find(|route| route.local.node == "shared-leaf")
+            .find(|route| route.local == "shared-leaf")
             .unwrap();
-        assert_eq!(shared.local.scope, vec![NodeId::new("shared-stage")]);
         assert_eq!(
             shared.copies,
             vec![SceneModifierNodeCopy {
@@ -385,12 +375,8 @@ mod tests {
         );
         let each = routes
             .iter()
-            .find(|route| route.local.node == "nested-leaf")
+            .find(|route| route.local == "nested-leaf")
             .unwrap();
-        assert_eq!(
-            each.local.scope,
-            vec![NodeId::new("object-stage"), NodeId::new("nested-stage")]
-        );
         assert_eq!(each.copies.len(), 2);
         assert_eq!(
             each.copies[0].object,
@@ -464,7 +450,7 @@ mod tests {
         assert_eq!(routes.len(), 2);
         assert!(routes.iter().all(|route| {
             !matches!(
-                route.local.node.as_str(),
+                route.local.as_str(),
                 "shared-stage" | "shared-input" | "shared-output" | "nested-stage"
             )
         }));

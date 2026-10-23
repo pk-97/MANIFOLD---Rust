@@ -11,26 +11,6 @@ impl InspectorCompositePanel {
         cards.iter().filter(|card| selected.contains(card.effect_id())).map(|card| card.effect_id().clone()).collect()
     }
 
-    pub fn select_modifier_ids(&mut self, layer: &LayerId, ids: &[manifold_foundation::NodeId]) {
-        if self.modifier_scope_id.as_ref() != Some(layer) { return; }
-        self.selected_master_ids.clear();
-        self.selected_layer_ids.clear();
-        self.selected_modifier_ids.clear();
-        self.selected_modifier_ids.extend(ids.iter().cloned());
-        self.last_clicked_modifier = ids.last().cloned();
-        self.pending_reveal = self.modifier_cards.iter().find(|card|
-            card.modifier_info().is_some_and(|info| ids.first() == Some(&info.instance_id)))
-            .map(|card| (card.effect_id().clone(), None));
-    }
-
-    pub fn select_modifier_for_context_menu(&mut self, layer: &LayerId, id: &manifold_foundation::NodeId) {
-        if self.modifier_scope_id.as_ref() != Some(layer) { return; }
-        if !self.selected_modifier_ids.contains(id)
-            && let Some(index) = self.modifier_cards.iter().position(|card| card.modifier_info().is_some_and(|info| info.instance_id == *id)) {
-            self.select_modifier(index);
-        }
-    }
-
     /// Select exactly `ids` on `tab` and queue a reveal of the first. The
     /// selected cards and the reveal show at the next inspector build, so the
     /// view version moves, but only when the selection or the reveal changed.
@@ -44,12 +24,10 @@ impl InspectorCompositePanel {
         };
         let unchanged = *shown == wanted
             && other.is_empty()
-            && self.selected_modifier_ids.is_empty()
             && self.last_effect_tab == tab
             && self.pending_reveal == reveal;
         self.selected_master_ids.clear();
         self.selected_layer_ids.clear();
-        self.selected_modifier_ids.clear();
         self.selection_set_mut(tab).extend(ids.iter().cloned());
         self.last_effect_tab = tab;
         self.pending_reveal = reveal;
@@ -62,7 +40,7 @@ impl InspectorCompositePanel {
     /// and reuse the inspector's reveal path.
     pub fn reveal_trigger_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
         let id = self.effects[Self::SCOPE_LAYER].iter_mut()
-            .chain(self.gen_params.iter_mut()).chain(self.modifier_cards.iter_mut())
+            .chain(self.gen_params.iter_mut())
             .find(|card| card.routes_clip_trigger(target, param))
             .and_then(|card| card.reveal_param(param).then(|| card.effect_id().clone()));
         let Some(id) = id else { return false; };
@@ -84,7 +62,7 @@ impl InspectorCompositePanel {
             .and_then(|group| self.group_nodes.iter().find(|nodes| nodes.group_id == group.id))
             .map(|nodes| tree.get_bounds(nodes.header));
         let bounds = group_bounds.or_else(|| self.cards_for_tab(self.active_tab).iter()
-            .chain(self.gen_params.iter()).chain(self.modifier_cards.iter()).find(|card| card.effect_id() == id)
+            .chain(self.gen_params.iter()).find(|card| card.effect_id() == id)
             .and_then(|card| param.as_ref().and_then(|param| card.clip_response_rect(tree, param.as_ref()))
                 .or_else(|| card.live_bounds(tree))));
         let Some(bounds) = bounds else { return; };
@@ -112,7 +90,6 @@ impl InspectorCompositePanel {
         let tab = self.active_tab;
         let Some(members) = self.rack_groups[Self::scope_idx(tab)].iter()
             .find(|group| group.id == *group_id).map(|group| group.member_ids.clone()) else { return; };
-        self.selected_modifier_ids.clear();
         if !additive {
             self.selected_master_ids.clear();
             self.selected_layer_ids.clear();
@@ -162,85 +139,6 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn on_modifier_card_clicked(&mut self, card_index: usize, modifiers: Modifiers) {
-        let Some(id) = self
-            .modifier_cards
-            .get(card_index)
-            .and_then(ParamCardPanel::modifier_info)
-            .map(|info| info.instance_id.clone())
-        else {
-            return;
-        };
-        let cmd = modifiers.ctrl || modifiers.command;
-        let shift = modifiers.shift;
-        if shift {
-            self.range_select_modifiers(card_index);
-        } else if cmd {
-            self.toggle_modifier_selection(card_index);
-        } else {
-            self.select_modifier(card_index);
-        }
-        self.last_clicked_modifier = Some(id);
-    }
-
-    pub(super) fn select_modifier(&mut self, card_index: usize) {
-        let Some(id) = self
-            .modifier_cards
-            .get(card_index)
-            .and_then(ParamCardPanel::modifier_info)
-            .map(|info| info.instance_id.clone())
-        else {
-            return;
-        };
-        self.selected_master_ids.clear();
-        self.selected_layer_ids.clear();
-        self.selected_modifier_ids.clear();
-        self.selected_modifier_ids.insert(id.clone());
-        self.last_clicked_modifier = Some(id);
-    }
-
-    fn toggle_modifier_selection(&mut self, card_index: usize) {
-        let Some(id) = self
-            .modifier_cards
-            .get(card_index)
-            .and_then(ParamCardPanel::modifier_info)
-            .map(|info| info.instance_id.clone())
-        else {
-            return;
-        };
-        self.selected_master_ids.clear();
-        self.selected_layer_ids.clear();
-        if !self.selected_modifier_ids.remove(&id) {
-            self.selected_modifier_ids.insert(id.clone());
-        }
-        self.last_clicked_modifier = Some(id);
-    }
-
-    fn range_select_modifiers(&mut self, card_index: usize) {
-        if card_index >= self.modifier_cards.len() {
-            return;
-        }
-        let anchor = self
-            .last_clicked_modifier
-            .as_ref()
-            .and_then(|id| {
-                self.modifier_cards.iter().position(|card| {
-                    card.modifier_info().is_some_and(|info| &info.instance_id == id)
-                })
-            })
-            .unwrap_or(0);
-        let lo = anchor.min(card_index);
-        let hi = anchor.max(card_index);
-        self.selected_master_ids.clear();
-        self.selected_layer_ids.clear();
-        self.selected_modifier_ids.clear();
-        for card in &self.modifier_cards[lo..=hi] {
-            if let Some(info) = card.modifier_info() {
-                self.selected_modifier_ids.insert(info.instance_id.clone());
-            }
-        }
-    }
-
     /// Unity EffectSelectionManager.SelectCard (lines 89-100)
     /// Select a single card, clearing all others across ALL tabs.
     /// Note: does NOT update card visuals — call apply_selection_visuals() after.
@@ -254,8 +152,6 @@ impl InspectorCompositePanel {
         // Clear all tabs so only one card is selected globally
         self.selected_master_ids.clear();
         self.selected_layer_ids.clear();
-        self.selected_modifier_ids.clear();
-        self.last_clicked_modifier = None;
 
         let set = self.selection_set_mut(tab);
         set.insert(id.clone());
@@ -272,8 +168,6 @@ impl InspectorCompositePanel {
         }
         let id = cards[card_index].effect_id().clone();
 
-        self.selected_modifier_ids.clear();
-        self.last_clicked_modifier = None;
         let set = self.selection_set_mut(tab);
         if set.contains(&id) {
             set.remove(&id);
@@ -294,8 +188,6 @@ impl InspectorCompositePanel {
         let ids: Vec<EffectId> = cards.iter().map(|c| c.effect_id().clone()).collect();
         let first_id = ids[0].clone();
 
-        self.selected_modifier_ids.clear();
-        self.last_clicked_modifier = None;
         let set = self.selection_set_mut(tab);
         set.clear();
         for id in ids {
@@ -305,80 +197,10 @@ impl InspectorCompositePanel {
         true
     }
 
-    pub fn select_all_modifiers(&mut self) -> bool {
-        if self.modifier_cards.is_empty() {
-            return false;
-        }
-        self.selected_master_ids.clear();
-        self.selected_layer_ids.clear();
-        self.selected_modifier_ids.clear();
-        for card in &self.modifier_cards {
-            if let Some(info) = card.modifier_info() {
-                self.selected_modifier_ids.insert(info.instance_id.clone());
-            }
-        }
-        self.last_clicked_modifier = self
-            .modifier_cards
-            .first()
-            .and_then(ParamCardPanel::modifier_info)
-            .map(|info| info.instance_id.clone());
-        !self.selected_modifier_ids.is_empty()
-    }
-
     /// How many effects are selected in the active tab.
     pub fn selected_effect_count(&self) -> usize {
         let (set, _) = self.selection_for_tab(self.last_effect_tab);
         set.len()
-    }
-
-    pub fn has_modifier_selection(&self) -> bool {
-        !self.selected_modifier_ids.is_empty()
-    }
-
-    pub fn selected_modifier_ids(&self) -> Vec<manifold_foundation::NodeId> {
-        self.modifier_cards
-            .iter()
-            .filter_map(ParamCardPanel::modifier_info)
-            .filter(|info| self.selected_modifier_ids.contains(&info.instance_id))
-            .map(|info| info.instance_id.clone())
-            .collect()
-    }
-
-    /// Return the selected modifier ids in stack order for a captured menu
-    /// target. A menu opened on an unselected card acts on that card alone;
-    /// a menu opened on a selected card keeps the complete multi-selection.
-    pub fn selected_modifier_ids_for(
-        &self,
-        layer_id: &LayerId,
-        clicked: &manifold_foundation::NodeId,
-    ) -> Vec<manifold_foundation::NodeId> {
-        let clicked_is_selected = self
-            .modifier_cards
-            .iter()
-            .filter_map(ParamCardPanel::modifier_info)
-            .any(|info| &info.layer_id == layer_id
-                && &info.instance_id == clicked
-                && self.selected_modifier_ids.contains(&info.instance_id));
-        self.modifier_cards
-            .iter()
-            .filter_map(ParamCardPanel::modifier_info)
-            .filter(|info| &info.layer_id == layer_id)
-            .filter(|info| !clicked_is_selected || self.selected_modifier_ids.contains(&info.instance_id))
-            .filter(|info| clicked_is_selected || &info.instance_id == clicked)
-            .map(|info| info.instance_id.clone())
-            .collect()
-    }
-
-    pub fn modifier_has_graph_mod(
-        &self,
-        layer_id: &LayerId,
-        id: &manifold_foundation::NodeId,
-    ) -> bool {
-        self.modifier_cards.iter().any(|card| {
-            card.modifier_info().is_some_and(|info| {
-                &info.layer_id == layer_id && &info.instance_id == id
-            }) && card.has_graph_mod()
-        })
     }
 
     /// Resolve a double-clicked node to a numeric param's value cell across the
@@ -403,11 +225,6 @@ impl InspectorCompositePanel {
                 return vec![a];
             }
         }
-        for card in &self.modifier_cards {
-            if let Some(a) = card.value_cell_typein(node_id, tree) {
-                return vec![a];
-            }
-        }
         Vec::new()
     }
 
@@ -427,11 +244,6 @@ impl InspectorCompositePanel {
             return vec![a];
         }
         for card in &self.effects[Self::SCOPE_LAYER] {
-            if let Some(a) = card.driver_period_typein(node_id, tree) {
-                return vec![a];
-            }
-        }
-        for card in &self.modifier_cards {
             if let Some(a) = card.driver_period_typein(node_id, tree) {
                 return vec![a];
             }
@@ -497,11 +309,6 @@ impl InspectorCompositePanel {
             && gp.owns_node(tree, node_id)
         {
             return Some(PressedTarget::GenParam);
-        }
-        for (i, card) in self.modifier_cards.iter().enumerate() {
-            if card.owns_node(tree, node_id) {
-                return Some(PressedTarget::Modifier(i));
-            }
         }
         for (i, card) in self.effects[Self::SCOPE_LAYER].iter().enumerate() {
             if card.owns_node(tree, node_id) {
@@ -589,15 +396,6 @@ impl InspectorCompositePanel {
                 .into_iter()
                 .collect();
         }
-        // SCENE_MODIFIER_FRAMEWORK section 3.7: the modifier picker — the
-        // owning layer rides on the action; the app builds the kind list
-        // (applied/inapplicable disabled) and opens the typed dropdown.
-        if self.add_modifier_btn == Some(node_id) {
-            return match self.modifier_scope_id.clone() {
-                Some(lid) => vec![PanelAction::Params(ParamsAction::AddModifierClicked(lid))],
-                None => Vec::new(),
-            };
-        }
         if let Some(target) = self.find_target_for_node(tree, node_id) {
             self.update_last_effect_tab(&target);
             match target {
@@ -665,23 +463,6 @@ impl InspectorCompositePanel {
                     .as_mut()
                     .map(|gp| gp.handle_click(node_id, tree))
                     .unwrap_or_default(),
-                // Modifier cards share effect selection and card drag routing,
-                // while retaining their own stable-id stack.
-                PressedTarget::Modifier(i) => {
-                    let actions = self
-                        .modifier_cards
-                        .get_mut(i)
-                        .map(|c| c.handle_click(node_id, tree))
-                        .unwrap_or_default();
-                    if actions.iter().any(|a| {
-                        matches!(a, PanelAction::Params(ParamsAction::ModifierCardClicked(_)))
-                    }) {
-                        self.on_modifier_card_clicked(i, modifiers);
-                    } else if !self.is_card_target_selected(&PressedTarget::Modifier(i)) {
-                        self.auto_select_card(&PressedTarget::Modifier(i));
-                    }
-                    actions
-                }
                 PressedTarget::Scrollbar => Vec::new(),
             }
         } else {
@@ -715,9 +496,9 @@ impl InspectorCompositePanel {
             if !modifiers.shift
                 && !modifiers.ctrl
                 && !modifiers.command
-                && !self.is_card_target_selected(t)
+                && !self.is_effect_target_selected(t)
             {
-                self.auto_select_card(t);
+                self.auto_select_effect(t);
             }
         }
 
@@ -765,11 +546,6 @@ impl InspectorCompositePanel {
                     .as_mut()
                     .map(|gp| gp.handle_pointer_down(node_id, pos, tree))
                     .unwrap_or_default(),
-                PressedTarget::Modifier(i) => self
-                    .modifier_cards
-                    .get_mut(i)
-                    .map(|c| c.handle_pointer_down(node_id, pos, tree))
-                    .unwrap_or_default(),
                 PressedTarget::Scrollbar => {
                     self.dragging_scrollbar = true;
                     self.dragging_scrollbar_master = Some(node_id) == self.master_scroll.track_id()
@@ -793,7 +569,6 @@ impl InspectorCompositePanel {
     fn card_for_target_mut(&mut self, gpt: &crate::GraphParamTarget) -> Option<&mut ParamCardPanel> {
         match gpt {
             crate::GraphParamTarget::Effect(id) => self.effects.iter_mut().flatten()
-                .chain(self.modifier_cards.iter_mut())
                 .find(|card| card.effect_id() == id),
             crate::GraphParamTarget::Generator | crate::GraphParamTarget::GeneratorOf(_) => self.gen_params.as_mut(),
         }

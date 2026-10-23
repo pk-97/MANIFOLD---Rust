@@ -57,7 +57,4 @@ pub(crate) fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
 }
 }
-pub(crate) fn table(rows: Vec<Vec<f32>>) -> SerializedParamValue {
-    SerializedParamValue::Table { rows }
-}
 

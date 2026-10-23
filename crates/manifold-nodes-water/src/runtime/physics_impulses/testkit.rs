@@ -15,7 +15,7 @@ impl PreparedSceneImpulse {
     pub fn test_recipient_id(&self, index: usize) -> &NodeId { &self.recipients[index].id }
     #[doc(hidden)]
     #[cfg(feature = "gpu-proofs")]
-    pub fn test_recipient_target(&self, index: usize) -> ImpulseTarget { self.recipients[index].target }
+    pub fn test_recipient_target(&self, index: usize) -> ImpulseTarget { self.recipients[index].target.clone() }
 }
 impl CapturedSceneImpulse {
     #[doc(hidden)]

@@ -13,7 +13,7 @@ use crate::physics::{RigidSceneInputs, RigidSimulation};
 #[derive(Clone, Copy)]
 pub struct CoupledRigidInputs<'a> {
     pub scene: &'a RigidSceneInputs,
-    pub colliders: RigidImpulseTargets,
+    pub colliders: &'a RigidImpulseTargets,
     pub density: f64,
 }
 
@@ -187,6 +187,7 @@ impl CoupledRigidLayout {
                     rot_euler: quat_to_render_scene_euler(pose.rotation),
                     scale,
                     billboard: false,
+                    ..Default::default()
                 };
             }
             next += count;

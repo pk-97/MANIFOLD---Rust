@@ -47,6 +47,24 @@ impl<T: Clone> PackedRows<T> {
         *self = wider;
     }
 
+    /// Rearrange every row's cells so new column `c` holds old column
+    /// `from[c]` (filler for a new column): the ports a recompile moved.
+    pub fn move_columns(&mut self, from: &[Option<usize>]) {
+        let mut moved = Self::new(self.filler.clone());
+        moved.configure(from.len(), self.capacity);
+        for index in 0..self.len {
+            let row = self.physical(index);
+            let to = index * from.len();
+            for (cell, at) in moved.cells[to..to + from.len()].iter_mut().zip(from) {
+                if let Some(at) = at.filter(|at| *at < self.stride) {
+                    cell.clone_from(&self.cells[row + at]);
+                }
+            }
+        }
+        moved.len = self.len;
+        *self = moved;
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }

@@ -1,8 +1,7 @@
 use manifold_node_engine::load::expand::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::scene_modifier_preset::{
-    SceneContextValue, SceneModifierInstanceDef, SceneNodeRef,
-    SceneStageSource, SceneTargetSelection,
+    SceneContextValue, SceneModifierInstanceDef, SceneStageSource, SceneTargetSelection,
 };
     use manifold_core::NodeId;
     use manifold_core::effect_graph_def::BindingTarget;
@@ -71,10 +70,7 @@ use manifold_core::scene_modifier_preset::{
         });
         let instance = SceneModifierInstanceDef {
             id: NodeId::new("modifier"),
-            scene: SceneNodeRef {
-                scope: vec![],
-                node: NodeId::new("scan_render"),
-            },
+            scene: NodeId::new("scan_render"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![],
             legacy_math_view_carrier: None,

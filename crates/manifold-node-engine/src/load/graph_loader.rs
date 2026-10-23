@@ -354,9 +354,6 @@ pub fn migrate_graph_shape(def: Cow<'_, EffectGraphDef>) -> Cow<'_, EffectGraphD
     if manifold_core::sky_sun::carries_world_sun(&def) {
         manifold_core::sky_sun::migrate_world_sun(def.to_mut(), &|_| None);
     }
-    if manifold_core::copies_body::carries_world_copies(&def) {
-        manifold_core::copies_body::migrate_world_copies(def.to_mut());
-    }
     if manifold_core::initial_fill::carries_initial_volume(&def) {
         manifold_core::initial_fill::migrate_initial_volume(def.to_mut());
     }
@@ -532,30 +529,6 @@ pub fn instantiate_def(
             &migrated
         }
         None => def,
-    };
-
-    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D5: migrate `node.render_scene`'s
-    // legacy per-object port wiring (`mesh_k`/`material_k`/17 maps/
-    // `transform_k`/`instances_k`) into `node.scene_object` nodes feeding
-    // `object_k`. Same single-choke-point placement as the type-id
-    // migration just above — every loader (project load, bundled/reference
-    // preset load, user-library preset load, `graph_tool migrate`, AND the
-    // live glTF importer's freshly-built output, which still emits the
-    // legacy shape until P3 repoints it) converges on `instantiate_def`, so
-    // landing the migration here covers all of them without a separate
-    // call site per producer. Structural, no version gate — idempotence is
-    // the gate (a def with no legacy wires is untouched, `false`, no
-    // clone). Must run AFTER type-id migration (a renamed old-shape
-    // render_scene, if one ever existed, is caught first) and BEFORE the
-    // group flatten below (the mint needs the def's still-nested group
-    // structure to place scene_object in the right scope).
-    let mut scene_object_migrated = def.clone();
-    let def = if manifold_core::scene_object_migration::migrate_scene_object_wires(
-        &mut scene_object_migrated,
-    ) {
-        &scene_object_migrated
-    } else {
-        def
     };
 
     let before_flatten = super::migration::run_stage(def, super::migration::MigrationStage::BeforeFlatten);
@@ -1643,7 +1616,7 @@ mod tests {
         let mut doc: EffectGraphDef = serde_json::from_value(serde_json::json!({
             "version": 3, "nodes": [], "wires": [],
             "sceneModifiers": [{
-                "id": "modifier", "scene": {"node": "scene"},
+                "id": "modifier", "scene": "scene",
                 "targets": "allObjects",
                 "graph": {"version": 3, "nodes": [], "wires": []}
             }]
@@ -2008,7 +1981,7 @@ mod tests {
             "version": 3,
             "nodes": [{"id": 1, "nodeId": "step", "typeId": "node.scalar", "handle": "step",
                 "params": {"top_speed": {"type": "Float", "value": 23.0}}}], "wires": [],
-            "sceneModifiers": [{"id": "modifier", "scene": {"node": "scene"}, "targets": "allObjects",
+            "sceneModifiers": [{"id": "modifier", "scene": "scene", "targets": "allObjects",
                 "graph": {"version": 3, "nodes": [
                     {"id": 1, "nodeId": "step", "typeId": "node.gpu_flip_step", "handle": "step",
                      "params": {"top_speed": {"type": "Float", "value": 137.0}}}], "wires": []}}]

@@ -25,9 +25,9 @@ DNS. All source anchors below refer to this SHA, not this worktree's HEAD.
 | Card ownership | `crates/manifold-app/src/ui_bridge/projection/scene.rs:102–123`; `scene_vm.rs:1350–1372` | Exists: owned node IDs select exposures; water owns its domain, whitewater and budget. Child mesh ownership is new. |
 | Family recipe | `crates/manifold-nodes-water/src/presets/gpu_flip.rs:707–745`, `:764–854`, `:879–895` | BUG-ju9j (Add Fluid inserts no whitewater): Add Fluid imports only water material/object from the seed; render builders separately import whitewater dressing. Shared solver is not shared family construction. |
 | Golden fixture | `crates/manifold-nodes/src/engine_contract_tests/whitewater_golden_tests.rs:64–95`, `:144–152` | Exists: `variant()`/`all_emitters()` edit top-level `whitewater`/`whitewater_budget`; fingerprints read step outputs and captures. Grouped lookup must not silently skip edits. |
-| Template insertion | `crates/manifold-core/src/scene_template.rs` (`insert_scene_template`), `crates/manifold-editing/src/scene_template.rs` | One wire away: template, fresh IDs, metadata stamping and undo; extend single-output insertion and metadata coverage. |
-| Visibility | `crates/manifold-nodes-scene/src/node_graph/gltf_import/object_group/static_compound.rs:313–321`; `crates/manifold-app/src/ui_bridge/project.rs:1342–1365` | Exists: shared binding retargeted to `parent_visible`, resolved through ordinary parameter commands. |
-| Delete / duplicate | `crates/manifold-editing/src/commands/graph/scene.rs:1137–1146`, `:1191–1197`; `scene/duplicate.rs:444–451` | Parent deletion is one wire away: group slots removed together, fluid roles detached. Duplicates deliberately carry no card exposes. |
+| Template insertion | `scene_template.rs` (`insert_scene_template`), `scene_template.rs` | One wire away: template, fresh IDs, metadata stamping and undo; extend single-output insertion and metadata coverage. |
+| Visibility | `manifold-nodes-scene/src/node_graph/gltf_import/object_group/static_compound.rs:313–321` (deleted); `crates/manifold-app/src/ui_bridge/project.rs:1342–1365` | Exists: shared binding retargeted to `parent_visible`, resolved through ordinary parameter commands. |
+| Delete / duplicate | `scene.rs:1137–1146`, `:1191–1197`; `scene/duplicate.rs:444–451` | Parent deletion is one wire away: group slots removed together, fluid roles detached. Duplicates deliberately carry no card exposes. |
 | Sheet Fill Rate | `crates/manifold-water-gpu-flip/src/primitives/gpu_flip_step.rs:2232`; `scene_vm.rs:1350–1353` | On main: domain param `sheet_fill_rate` (0..1, default 0), domain → step wire and card binding after Max Iterations (`gpu_flip_preset.rs` `scene_cards`); domain ownership puts it on Water. |
 
 The committed `docs/WHITEWATER_STAGE_FUSION_DESIGN.md:3` records P0 and P1
@@ -165,7 +165,7 @@ its role. No family Duplicate control or keyboard/context bypass.
 ### Change surface and re-derivation
 
 F1a owns renderer builders, golden fixtures and both
-`assets/generator-presets/WaterDamBreak{GpuFlip,Particles}.json`.
+`tests/fixtures/presets/WaterDamBreak{GpuFlip,Particles}.json`.
 F1b/F2 own `scene_vm.rs`, `scene_exposure.rs`, editing `scene/fluid.rs` and
 `fluid/template.rs`, scene lifecycle tests, app `ui_bridge/project.rs`,
 `projection/scene.rs`, `projection/inspector.rs`,
@@ -231,7 +231,7 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
   `water_family_visibility_round_trip`, `no_bespoke_row_infra`; negative scan.
   `scripts/run_ui_flows.py --touched` accounts for every selected flow.
 - **Demo/gesture:** L3,
-  `cargo xtask ui-snap scene-setup --script scripts/ui-flows/water-family-preset.json`:
+  `cargo xtask ui-snap scene-setup --script water-family-preset.json` (deleted):
   load Dam Break, Add Water, undo/redo, select Water then Foam, edit Size;
   assert ownership, bound values and parent/child visibility. Save/reload,
   modulate Amount and Size, and assert distinct targets. PNG for Peter.
@@ -252,7 +252,7 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
   fluid-role detachment, external source survival, atomic delete/undo/redo,
   absent Duplicate and rename/binding persistence after save/reload.
 - **Demo/gesture:** L3,
-  `cargo xtask ui-snap scene-setup --script scripts/ui-flows/water-family-controls.json`:
+  `cargo xtask ui-snap scene-setup --script water-family-controls.json` (deleted):
   Hide Spray, hide/show Water, rename both, undo, delete Water, undo;
   assert child choice and restored family IDs/bindings. PNG for Peter.
 - **Scope/forbidden:** focused lifecycle/flow and mapped proofs. No child graph

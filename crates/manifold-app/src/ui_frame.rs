@@ -262,7 +262,7 @@ pub(crate) fn apply_ui_frame_invalidations(
     let rebuilt = rebuild_regions(ui_root, cache, regions);
     // Nodes that moved in place slid under a still cursor; no rebuild
     // cleared their hover, so resolve it again where the pointer is.
-    let cards_moved = ui_root.inspector.take_moved_in_place() | ui_root.scene_setup_panel.take_moved_in_place();
+    let cards_moved = ui_root.inspector.take_moved_in_place();
     if inspector_scrolled || scrolled || moved || cards_moved {
         ui_root.input.refresh_hover(&mut ui_root.tree);
     }
@@ -606,7 +606,7 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     }
     // The inspector projection already built the eyes from the project.
     if projections.contains(Projection::SceneEyes) && !inspector_sync {
-        crate::ui_bridge::sync_scene_outliner_eyes(ui_root, project);
+        crate::ui_bridge::sync_scene_row_values(ui_root, project);
     }
     if driver_periods_moved {
         crate::ui_bridge::sync_driver_readouts(ui_root, project, idx);

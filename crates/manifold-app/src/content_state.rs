@@ -87,24 +87,6 @@ pub struct GraphEditDiagnostic {
     pub message: String,
 }
 
-/// Authoritative selection of scene-modifier cards created by one content edit.
-/// IDs are minted on the content thread, so the UI must consume this update
-/// instead of predicting them from a pre-edit snapshot.
-#[derive(Clone, Debug)]
-pub struct ModifierSelectionUpdate {
-    pub sequence: u64,
-    pub layer_id: manifold_core::LayerId,
-    pub ids: Vec<manifold_core::NodeId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ObjectModifierSelectionUpdate {
-    pub sequence: u64,
-    pub layer_id: LayerId,
-    pub owner: manifold_core::SceneNodeRef,
-    pub node_doc_id: u32,
-}
-
 /// State snapshot sent from the content thread to the UI thread through a
 /// one-slot handoff ([`state_channel`]); a replaced state folds into its
 /// replacement ([`ContentState::absorb_replaced`]).
@@ -286,11 +268,9 @@ pub struct ContentState {
     /// Speed 0) and refused, with the newest refusal. The UI shows each
     /// increase once.
     pub scene_impulses: manifold_core::scene_impulse::SceneImpulseDiagnostics,
-    /// Most recent authoritative selection update for newly created scene
-    /// modifier cards. Persistent across snapshots for sequence-gated UI use.
+    /// Most recent authoritative selection update for newly created items.
+    /// Persistent across snapshots for sequence-gated UI use.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
-    pub modifier_selection_update: Option<Arc<ModifierSelectionUpdate>>,
-    pub object_modifier_selection_update: Option<Arc<ObjectModifierSelectionUpdate>>,
 
     // ── Ableton bridge ──────────────────────────────────────────
     /// Ableton session data for UI dropdown population.
@@ -677,8 +657,6 @@ impl Default for ContentState {
             trigger_delivery_failure: None,
             scene_impulses: Default::default(),
             edit_selection_update: None,
-            modifier_selection_update: None,
-            object_modifier_selection_update: None,
             ableton_session: None,
             sync_offsets: [0.0; 3],
             ableton_connected: false,

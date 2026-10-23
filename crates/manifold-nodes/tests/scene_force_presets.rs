@@ -3,7 +3,7 @@
 use manifold_nodes as _;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
-use manifold_core::scene_modifier_edit::insert_scene_modifier;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
 use manifold_core::scene_modifier_preset::{
     SceneEndpoint, SceneStageScope, SceneStageSource, SceneTargetSelection,
     validate_scene_modifier_schema,
@@ -16,7 +16,7 @@ use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scen
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution::Executor, exec::effect_node::FrameTime, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::compile};
 
-const PHYSICS_SOLIDS: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");
+const PHYSICS_SOLIDS: &str = include_str!("fixtures/presets/PhysicsSolids.json");
 
 const RECIPES: [(&str, &str, &str); 3] = [
     ("UniformForce", "node.uniform_vector_field", "Direction X"),
@@ -154,8 +154,7 @@ fn force_recipes_validate_and_expose_finite_controls() {
         assert_eq!(modifier.impulses.len(), 1);
         let impulse = &modifier.impulses[0];
         assert_eq!(impulse.param_id, "fire");
-        assert_eq!(impulse.field.scope, vec![NodeId::new("force_source_stage")]);
-        assert_eq!(impulse.field.node.as_str(), "force_impulse_gate");
+        assert_eq!(impulse.field.as_str(), "force_impulse_gate");
         assert_eq!(impulse.port, "out");
     }
 }
@@ -282,10 +281,7 @@ fn force_sources_scale_strength_then_enabled_and_apply_additively() {
         .nodes
         .iter()
         .find(|node| node.type_id == "node.render_scene")
-        .map(|node| manifold_core::scene_modifier_preset::SceneNodeRef {
-            scope: Vec::new(),
-            node: node.node_id.clone(),
-        })
+        .map(|node| node.node_id.clone())
         .expect("physics host has render_scene");
     for name in ["UniformForce", "RadialForce", "VortexForce"] {
         let instance = prepare_new_scene_modifier(
@@ -294,16 +290,12 @@ fn force_sources_scale_strength_then_enabled_and_apply_additively() {
             NodeId::new(format!("cpu-{name}")),
             scene.clone(),
             SceneTargetSelection::Explicit {
-                objects: vec![manifold_core::scene_modifier_preset::SceneNodeRef {
-                    scope: Vec::new(),
-                    node: NodeId::new("physics_demo_114"),
-                }],
+                objects: vec![NodeId::new("physics_demo_114")],
             },
         )
         .unwrap_or_else(|error| panic!("{name} attaches to a physics recipient: {error}"));
-        let attached = insert_scene_modifier(&host, 0, instance)
-            .unwrap_or_else(|error| panic!("{name} attaches: {error}"))
-            .graph;
+        let attached = attach_scene_modifier(&host, instance)
+            .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
         prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin())
             .unwrap_or_else(|error| panic!("{name} prepares: {error}"));
     }
@@ -351,7 +343,7 @@ fn force_impulses_are_independent_enabled_gated_and_serializable() {
             .expect("serialized scene modifier recipe");
         assert_eq!(modifier.impulses.len(), 1);
         assert_eq!(modifier.impulses[0].param_id, "fire");
-        assert_eq!(modifier.impulses[0].field.node.as_str(), "force_impulse_gate");
+        assert_eq!(modifier.impulses[0].field.as_str(), "force_impulse_gate");
     }
 }
 
@@ -535,19 +527,13 @@ fn evaluate_force_output(names: &[&str], controls: &[Vec<(&str, f32)>], impulse:
             &host,
             &recipe,
             NodeId::new(format!("force-{index}")),
-            manifold_core::scene_modifier_preset::SceneNodeRef {
-                scope: vec![],
-                node: scene.clone(),
-            },
+            scene.clone(),
             SceneTargetSelection::Explicit {
-                objects: vec![manifold_core::scene_modifier_preset::SceneNodeRef {
-                    scope: vec![],
-                    node: NodeId::new("physics_demo_114"),
-                }],
+                objects: vec![NodeId::new("physics_demo_114")],
             },
         )
         .unwrap();
-        host = insert_scene_modifier(&host, index, instance).unwrap().graph;
+        host = attach_scene_modifier(&host, instance).unwrap();
     }
     let prepared = prepare_scene_modifiers(&host, &registry).unwrap();
     let routes = prepared.routes;
@@ -557,7 +543,7 @@ fn evaluate_force_output(names: &[&str], controls: &[Vec<(&str, f32)>], impulse:
             .iter()
             .find(|route| {
                 route.modifier_id.as_str() == "force-0"
-                    && route.local.node.as_str() == "force_impulse_gate"
+                    && route.local.as_str() == "force_impulse_gate"
             })
             .expect("impulse route resolves the source gate");
         let producer = route
@@ -652,10 +638,7 @@ fn force_recipes_prepare_with_zero_selected_bodies() {
         .nodes
         .iter()
         .find(|node| node.type_id == "node.render_scene")
-        .map(|node| manifold_core::scene_modifier_preset::SceneNodeRef {
-            scope: Vec::new(),
-            node: node.node_id.clone(),
-        })
+        .map(|node| node.node_id.clone())
         .expect("physics host has render_scene");
     for name in ["UniformForce", "RadialForce", "VortexForce"] {
         let instance = prepare_new_scene_modifier(
@@ -668,9 +651,8 @@ fn force_recipes_prepare_with_zero_selected_bodies() {
             },
         )
         .unwrap_or_else(|error| panic!("{name} accepts zero selected bodies: {error}"));
-        let attached = insert_scene_modifier(&host, 0, instance)
-            .unwrap_or_else(|error| panic!("{name} attaches: {error}"))
-            .graph;
+        let attached = attach_scene_modifier(&host, instance)
+            .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
         prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin())
             .unwrap_or_else(|error| panic!("{name} prepares with zero selected bodies: {error}"));
     }
@@ -686,7 +668,7 @@ fn industry_force_recipes_attach_and_evaluate() {
         .nodes
         .iter()
         .find(|node| node.type_id == "node.render_scene")
-        .map(|node| manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() })
+        .map(|node| node.node_id.clone())
         .expect("physics host has render_scene");
     for name in ["Wind", "Attractor", "Explosion"] {
         let def = recipe(name);
@@ -700,10 +682,10 @@ fn industry_force_recipes_attach_and_evaluate() {
         for param in &metadata.params {
             assert_eq!(bound.contains(param.id.as_str()), param.id != "fire", "{name}.{} binding", param.id);
         }
-        for objects in [Vec::new(), vec![manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: NodeId::new("physics_demo_114") }]] {
+        for objects in [Vec::new(), vec![NodeId::new("physics_demo_114")]] {
             let instance = prepare_new_scene_modifier(&host, &def, NodeId::new(format!("set-{name}")), scene.clone(), SceneTargetSelection::Explicit { objects })
                 .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
-            let attached = insert_scene_modifier(&host, 0, instance).unwrap_or_else(|error| panic!("{name} inserts: {error}")).graph;
+            let attached = attach_scene_modifier(&host, instance).unwrap_or_else(|error| panic!("{name} inserts: {error}"));
             prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin()).unwrap_or_else(|error| panic!("{name} prepares: {error}"));
         }
     }
@@ -739,12 +721,10 @@ fn industry_force_recipes_attach_and_evaluate() {
     assert!(close(blast, std::array::from_fn(|i| size * at[i] / d)), "{blast:?}");
 }
 
-const SWARM: &str = include_str!("../assets/generator-presets/Swarm.json");
-const FLOATING_BOX: &str = include_str!("../assets/generator-presets/WaterFloatingBoxMatter.json");
 
-fn render_scene(host: &EffectGraphDef) -> manifold_core::scene_modifier_preset::SceneNodeRef {
+fn render_scene(host: &EffectGraphDef) -> manifold_core::NodeId {
     let node = host.nodes.iter().find(|node| node.type_id == "node.render_scene").expect("a render scene");
-    manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: node.node_id.clone() }
+    node.node_id.clone()
 }
 
 /// `host` with the force `name` on every object of its scene.
@@ -755,73 +735,7 @@ fn with_force(host: &EffectGraphDef, name: &str) -> EffectGraphDef {
 fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> EffectGraphDef {
     let instance = prepare_new_scene_modifier(host, recipe, NodeId::new(format!("all-{name}")), render_scene(host), SceneTargetSelection::AllObjects)
         .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
-    insert_scene_modifier(host, 0, instance).unwrap_or_else(|error| panic!("{name} attaches: {error}")).graph
-}
-
-/// `host` with the Add menu's Swarm inserted by the one template insertion,
-/// its object in the render scene's next slot.
-fn graft_swarm(host: &EffectGraphDef) -> EffectGraphDef {
-    let template = manifold_nodes_scene::node_graph::scene_templates::swarm_template(0, (0.0, 0.0)).expect("the stock swarm reads");
-    manifold_core::scene_template::insert_scene_template_preparing(host, &render_scene(host), None, &template, &manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_template_force)
-        .expect("the swarm inserts beside water and a physics world")
-        .graph
-}
-
-/// The stable id of `def`'s swarm forces node, wherever it is grouped.
-fn swarm_forces_id(def: &EffectGraphDef) -> NodeId {
-    fn find(nodes: &[EffectGraphNode]) -> Option<NodeId> {
-        nodes.iter().find_map(|node| {
-            (node.type_id == "node.swarm_forces")
-                .then(|| node.node_id.clone())
-                .or_else(|| node.group.as_deref().and_then(|body| find(&body.nodes)))
-        })
-    }
-    find(&def.nodes).expect("a swarm")
-}
-
-/// BUG-g5rw2: a scene force on every object reaches a swarm through its
-/// forces node, and its Impulse goes to the swarm as a whole. The Swarm
-/// template with a Radial force builds; so does a scene with water, a
-/// physics world and a swarm under one force.
-#[test]
-fn a_swarm_takes_force_hits_and_builds_beside_water_and_a_physics_world() {
-    use manifold_core::scene_impulse::ImpulseTarget;
-    use manifold_node_engine::load::expand::impulse_recipients;
-    use manifold_node_engine::runtime::PresetRuntime;
-    let registry = PrimitiveRegistry::with_builtin();
-    let swarm: EffectGraphDef = serde_json::from_str(SWARM).unwrap();
-    let pushed = with_force(&swarm, "RadialForce");
-    let recipients = impulse_recipients(&pushed, &render_scene(&pushed), &SceneTargetSelection::AllObjects, &registry).expect("the swarm takes hits");
-    assert_eq!(recipients, vec![(swarm_forces_id(&swarm), ImpulseTarget::Swarm)]);
-    PresetRuntime::from_def_for_render(pushed, &registry, None, false).expect("the Swarm template with a Radial force builds");
-
-    let host: EffectGraphDef = serde_json::from_str(FLOATING_BOX).unwrap();
-    let mixed = with_force(&graft_swarm(&host), "RadialForce");
-    let recipients = impulse_recipients(&mixed, &render_scene(&mixed), &SceneTargetSelection::AllObjects, &registry).expect("every recipient takes hits");
-    assert!(recipients.contains(&(swarm_forces_id(&mixed), ImpulseTarget::Swarm)), "{recipients:?}");
-    assert!(recipients.iter().any(|(_, target)| target.affects_fluid()), "{recipients:?}");
-    assert!(recipients.iter().any(|(_, target)| target.rigid_targets().is_some()), "{recipients:?}");
-    PresetRuntime::from_def_for_render(mixed, &registry, None, false).expect("water, a physics world and a swarm install under one force");
-}
-
-/// A Wind with Turbulence on drifts its gusts over time, and they replay
-/// with the physics ticks: the card builds over water, a physics world and
-/// a swarm together, and over the stock solids.
-#[test]
-fn a_gusty_wind_builds_over_water_a_physics_world_and_a_swarm() {
-    use manifold_node_engine::runtime::PresetRuntime;
-    let registry = PrimitiveRegistry::with_builtin();
-    let mut wind = recipe("Wind");
-    let metadata = wind.preset_metadata.as_mut().unwrap();
-    metadata.params.iter_mut().find(|param| param.id == "turbulence").unwrap().default_value = 6.0;
-    for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == "turbulence") {
-        binding.default_value = 6.0;
-    }
-    let host: EffectGraphDef = serde_json::from_str(FLOATING_BOX).unwrap();
-    let mixed = with_recipe(&graft_swarm(&host), "Wind", &wind);
-    PresetRuntime::from_def_for_render(mixed, &registry, None, false).expect("gusts over water, a physics world and a swarm build");
-    let solids: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).unwrap();
-    PresetRuntime::from_def_for_render(with_recipe(&solids, "Wind", &wind), &registry, None, false).expect("gusts over the solids build");
+    attach_scene_modifier(host, instance).unwrap_or_else(|error| panic!("{name} attaches: {error}"))
 }
 
 /// BUG-2bulf (force loads one file into every object): two bodies whose

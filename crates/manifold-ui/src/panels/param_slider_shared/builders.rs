@@ -1791,7 +1791,7 @@ pub(crate) fn build_button_row(
     // A pick list keeps a slider row's T, D and A lane, in the same columns:
     // arming one attaches the modulator, and an attached row draws as the
     // slider whose drawer shows it (`ParamRow::kind`).
-    if kind == RowKind::Choice {
+    if kind == RowKind::Choice && info.affordance.is_none() {
         let env_arm_w = if build_env_button { DE_BUTTON_SIZE + DE_BUTTON_GAP } else { 0.0 };
         let btn_x = x + slider_w + MOD_LANE_GAP;
         let drv_btn_x = btn_x + env_arm_w;
@@ -1939,6 +1939,7 @@ pub(crate) fn build_button_row(
     // A toggle/trigger row has no separate row-catcher; its button IS the row's
     // identity and its sole drivable control, so the param-id-derived name lands
     // there.
+    super::state::set_row_hover(tree, [Some(button_id), Some(label_id)].into_iter().flatten(), info);
     let pid: &str = &info.id;
     tree.set_name(button_id, format!("param_row.{pid}"));
     let cy = build_note_lines(tree, parent, x, cy, slider_w, info);
@@ -2268,11 +2269,7 @@ pub(crate) fn build_param_row(
         ));
     }
 
-    for node in [Some(slider.track), Some(slider.value_text), slider.label].into_iter().flatten() {
-        if let Some(node) = tree.get_node_mut(node) {
-            node.tooltip.clone_from(&info.spec.tooltip);
-        }
-    }
+    super::state::set_row_hover(tree, [Some(slider.track), Some(slider.value_text), slider.label].into_iter().flatten(), info);
     BitmapSlider::mark_past_end(tree, &slider, super::state::past_slider_end(shown_value, &info.spec));
     ids.slider = Some(slider);
 
@@ -2485,15 +2482,13 @@ pub(crate) fn build_param_row(
     ids
 }
 
-/// The lines under a row: its setup warning, then the dimmed reason it does
-/// nothing right now. Returns the next row's top.
+/// The lines under a row: its setup warning. The reason a row does nothing
+/// right now is never standing text: it is the row's hover text
+/// ([`set_row_hover`]). Returns the next row's top.
 fn build_note_lines(
     tree: &mut UITree, parent: Option<NodeId>, x: f32, mut cy: f32, width: f32, info: &ParamRow,
 ) -> f32 {
-    let lines = [
-        (info.spec.setup_warning.as_deref(), color::STATUS_BAD),
-        (info.spec.inactive_reason.as_deref(), color::TEXT_DIMMED_C32),
-    ];
+    let lines = [(info.spec.setup_warning.as_deref(), color::STATUS_BAD)];
     for (text, text_color) in lines {
         let Some(text) = text else { continue };
         tree.add_label(parent, x, cy, width, ROW_HEIGHT, text, UIStyle {

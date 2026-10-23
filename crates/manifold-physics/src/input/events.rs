@@ -286,6 +286,20 @@ impl<T> EventQueue<T> {
         self.events.len()
     }
 
+    /// The events the queue holds before it overflows.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Raise the capacity to `capacity`, allocating now so later enqueues
+    /// and ticks reuse the storage. A smaller capacity changes nothing.
+    pub fn grow(&mut self, capacity: usize) {
+        if capacity > self.capacity {
+            self.events.reserve(capacity - self.events.len());
+            self.capacity = capacity;
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }

@@ -62,6 +62,17 @@ impl Executor {
             .and_then(|(_, _, pass)| pass.selection_mask())
     }
 
+    /// A pixel pick in the viewport; dropped when no viewport is open.
+    pub(crate) fn request_scene_viewport_pick(&mut self, pick: crate::scene::pick::PickRequest) {
+        if let Some((_, _, pass)) = self.scene_viewport.as_mut() {
+            pass.request_pick(pick);
+        }
+    }
+
+    pub(crate) fn take_scene_viewport_pick(&mut self) -> Option<crate::scene::pick::PickHit> {
+        self.scene_viewport.as_mut().and_then(|(_, _, pass)| pass.take_pick())
+    }
+
     /// Whether the viewport's scene depth is kept for gizmo lines.
     pub(crate) fn set_scene_viewport_gizmo_depth(&mut self, wanted: bool) {
         if self.scene_viewport_gizmo_depth == wanted {

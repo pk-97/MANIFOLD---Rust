@@ -19,12 +19,14 @@ MODES
            (requires ffmpeg and ffprobe on PATH)
   perf     A9 bounded performance: explicitly invoked release-build proof,
            `cargo test --release -p manifold-nodes --features rt-perf-proofs
-           --test gpu_proofs -- rt_dynamic_perf --test-threads=1`, followed by
-           the held-out and reference-content app measurements.
-           Requires --reference-project and --held-out-project; both files'
-           SHA-256 hashes are recorded in the report fixtures. Pass
-           --static-baseline-report with the measured pre-change report to
-           qualify the static RT regression gate.
+           --test gpu_proofs -- rt_dynamic_perf --test-threads=1`.
+           Requires --reference-project; its SHA-256 hash is recorded in the
+           report fixtures. Pass --static-baseline-report with the measured
+           pre-change report to qualify the static RT regression gate. The
+           content-thread frame budget has no harness since the app's
+           held-out and reference-content measurements went with the old
+           scene path, so the live budget reports not_evaluated and the
+           overall verdict stays blocked until one exists.
 
 Every required group has a dispatch entry. Absence is detected by listing tests
 (`cargo test -- --list`), recorded as a blocked group ("tests not yet
@@ -54,7 +56,7 @@ USAGE
   scripts/rt_dynamic_acceptance.py --manifest-path Cargo.toml --mode cpu \
       --report /tmp/rt-acc-cpu.json
   scripts/rt_dynamic_acceptance.py --manifest-path Cargo.toml --mode perf \
-      --reference-project ref.manifold --held-out-project held.manifold \
+      --reference-project ref.manifold \
       --report /tmp/rt-acc-perf.json
 
 Obsolete when: the acceptance tests report and aggregate their own results
@@ -604,11 +606,6 @@ def mode_catalog(repo: Path, manifest: Path, artifact_dir: Path):
     return exit_code, tests, metrics, commands, []
 
 
-def _list_named_tests(cmd: list[str], repo: Path, log_path: Path) -> tuple[set[str], int, float]:
-    """List one cargo test target without coupling app tests to GPU proof names."""
-    return list_tests(cmd + ["--", "--list"], repo, log_path)
-
-
 def _load_json_report(path: Path, label: str) -> tuple[dict | None, str | None]:
     if not path.is_file():
         return None, f"{label} report is missing: {path}"
@@ -648,23 +645,8 @@ def _nested(value: object, *keys: str) -> object | None:
     return value
 
 
-def _bool_fields(report: dict, fields: tuple[tuple[str, ...], ...]) -> tuple[bool, list[str]]:
-    missing = []
-    failed = []
-    for path in fields:
-        value = _nested(report, *path)
-        label = ".".join(path)
-        if not isinstance(value, bool):
-            missing.append(label)
-        elif not value:
-            failed.append(label)
-    return not missing and not failed, missing + failed
-
-
 def _perf_qualification(
     reference: dict,
-    held_out: dict,
-    reference_content: dict | None = None,
     static_regression: dict | None = None,
 ) -> tuple[dict, list[str]]:
     """Classify measured perf evidence without turning absent baselines into passes."""
@@ -690,34 +672,6 @@ def _perf_qualification(
     if bad_production:
         problems.extend(f"reference.{name}.status" for name in bad_production)
 
-    enforced_fields = (
-        ("enforced", "completeFrames"),
-        ("enforced", "noGpuFaults"),
-        ("enforced", "zeroPostWarmupBufferAllocations"),
-        ("enforced", "zeroPostWarmupAccelerationStructureAllocations"),
-        ("enforced", "rtDispatched"),
-        ("enforced", "profilingClean"),
-    )
-    held_out_ok, held_out_problems = _bool_fields(held_out, enforced_fields)
-    if not held_out_ok:
-        problems.extend(f"heldOut.{field}" for field in held_out_problems)
-    if held_out.get("status") != "measured":
-        problems.append("heldOut.status")
-
-    reference_content_cpu_wall = None
-    if reference_content is not None:
-        reference_content_ok, reference_content_problems = _bool_fields(
-            reference_content, enforced_fields)
-        if not reference_content_ok:
-            problems.extend(f"referenceContent.{field}" for field in reference_content_problems)
-        if reference_content.get("status") != "measured":
-            problems.append("referenceContent.status")
-        value = _nested(reference_content, "cpuWall", "p95Ms")
-        if isinstance(value, (int, float)):
-            reference_content_cpu_wall = float(value)
-        else:
-            problems.append("referenceContent.cpuWall.p95Ms")
-
     # These gates are deliberately separate from correctness/resource status.
     # The optional pre-change report is evaluated by mode_perf and supplied
     # here as a structured result when available.
@@ -740,23 +694,21 @@ def _perf_qualification(
         value = _nested(item, section, "p95Ms")
         return float(value) if isinstance(value, (int, float)) else None
 
-    held_out_cpu_wall = _nested(held_out, "cpuWall", "p95Ms")
     live_values = {
         "fullGpuFrameP95Ms": array_number(production, "dynamic_selective_refit", "gpuFrame"),
         # The renderer proof's cpuEncode is only its production renderer
-        # section; use the separate full-content measurement below.
-        # The reference content harness is the only source for the full
-        # content-thread frame gate. Held-out cpuWall is report-only.
-        "contentFrameP95Ms": reference_content_cpu_wall,
+        # section, not the full content-thread frame, which has no harness.
+        "contentFrameP95Ms": None,
         "dynamicAsMaintenanceP95Ms": array_number(reference.get("configurations"), "dynamic_selective_refit", "gpuAsMaintenance"),
     }
     live_budget = "pass"
     for label, value in live_values.items():
         limit = 2.0 if label == "dynamicAsMaintenanceP95Ms" else 16.67
-        if value is None:
-            live_budget = "not_evaluated"
-        elif value > limit:
+        # A measured overrun fails even while another value is unmeasured.
+        if value is not None and value > limit:
             live_budget = "fail"
+        elif value is None and live_budget == "pass":
+            live_budget = "not_evaluated"
     qualification = {
         "correctness": "pass" if not problems else "fail",
         "resource": "pass" if not problems else "fail",
@@ -765,41 +717,34 @@ def _perf_qualification(
         "overall": ("fail" if problems or live_budget == "fail" or static_baseline == "fail"
                     else "pass" if live_budget == "pass" and static_baseline == "pass"
                     else "blocked"),
-        "heldOutContentFrameP95Ms": (float(held_out_cpu_wall)
-                                      if isinstance(held_out_cpu_wall, (int, float))
-                                      else None),
-        "referenceContentFrameP95Ms": reference_content_cpu_wall,
     }
     return qualification, problems
 
 
 def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
-              reference_project: Path | None, held_out_project: Path | None,
+              reference_project: Path | None,
               static_baseline_report: Path | None = None):
     fixtures = []
     tests = []
     commands = []
     missing_inputs = []
-    for label, path in (("reference-project", reference_project),
-                        ("held-out-project", held_out_project)):
-        if path is None:
-            missing_inputs.append(f"{label} not given")
-        elif not Path(path).exists():
-            missing_inputs.append(f"{label} not found: {path}")
-        else:
-            fixtures.append({"name": Path(path).name, "hash": sha256_file(Path(path))})
+    if reference_project is None:
+        missing_inputs.append("reference-project not given")
+    elif not Path(reference_project).exists():
+        missing_inputs.append(f"reference-project not found: {reference_project}")
+    else:
+        fixtures.append({"name": Path(reference_project).name,
+                         "hash": sha256_file(Path(reference_project))})
     if static_baseline_report is not None and static_baseline_report.is_file():
         fixtures.append({"name": static_baseline_report.name,
                          "hash": sha256_file(static_baseline_report)})
     if missing_inputs:
-        # A9: no invented proxy pass — a missing held-out fixture blocks.
+        # A9: no invented proxy pass — a missing reference fixture blocks.
         tests.append(blocked_entry(
-            "perf: inputs", "; ".join(missing_inputs),
-            "--reference-project and --held-out-project"))
+            "perf: inputs", "; ".join(missing_inputs), "--reference-project"))
         return 1, tests, {"passed": 0, "failed": 0, "blocked": 1}, commands, fixtures
 
     reference_project = Path(reference_project)
-    held_out_project = Path(held_out_project)
     checked_in_reference = repo / "crates/manifold-nodes-scene/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
     if not checked_in_reference.is_file():
         tests.append(blocked_entry(
@@ -831,56 +776,11 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
             "tests not yet implemented"))
         return 1, tests, {"passed": 0, "failed": 0, "blocked": 1}, commands, fixtures
 
-    held_out_base = ["cargo", "test", "--release", "-p", "manifold-app",
-                     "--features", "journey-proofs,perf-soak", "rt_dynamic_held_out::rt_dynamic_held_out"]
-    held_out_list_log = artifact_dir / "list-held-out.log"
-    held_out_listed, held_out_rc, held_out_list_duration = _list_named_tests(
-        held_out_base, repo, held_out_list_log)
-    commands.append({"cmd": " ".join(held_out_base + ["--", "--list"]),
-                     "exitCode": held_out_rc,
-                     "durationSec": round(held_out_list_duration, 1),
-                     "log": str(held_out_list_log)})
-    if held_out_rc != 0:
-        return 2, [blocked_entry("perf: rt_dynamic_held_out",
-                                 f"listing exited {held_out_rc}",
-                                 "listable test suite")], {"passed": 0, "failed": 0, "blocked": 1}, commands, fixtures
-    if not any("rt_dynamic_held_out" in name for name in held_out_listed):
-        tests.append(blocked_entry(
-            "rt_dynamic_held_out", "0 tests listed for 'rt_dynamic_held_out'",
-            "tests not yet implemented"))
-        return 1, tests, {"passed": 0, "failed": 0, "blocked": 1}, commands, fixtures
-
-    reference_content_base = [
-        "cargo", "test", "--release", "-p", "manifold-app",
-        "--features", "journey-proofs,perf-soak", "rt_dynamic_reference_content",
-    ]
-    reference_content_list_log = artifact_dir / "list-reference-content.log"
-    reference_content_listed, reference_content_rc, reference_content_list_duration = _list_named_tests(
-        reference_content_base, repo, reference_content_list_log)
-    commands.append({"cmd": " ".join(reference_content_base + ["--", "--list"]),
-                     "exitCode": reference_content_rc,
-                     "durationSec": round(reference_content_list_duration, 1),
-                     "log": str(reference_content_list_log)})
-    if reference_content_rc != 0:
-        return 2, [blocked_entry("perf: rt_dynamic_reference_content",
-                                 f"listing exited {reference_content_rc}",
-                                 "listable test suite")], {"passed": 0, "failed": 0, "blocked": 1}, commands, fixtures
-    if not any("rt_dynamic_reference_content" in name for name in reference_content_listed):
-        tests.append(blocked_entry(
-            "rt_dynamic_reference_content", "0 tests listed for 'rt_dynamic_reference_content'",
-            "tests not yet implemented"))
-        return 1, tests, {"passed": 0, "failed": 0, "blocked": 1}, commands, fixtures
-
     reference_report = artifact_dir / "rt_dynamic_perf.json"
-    held_out_report = artifact_dir / "held-out.json"
-    reference_content_report = artifact_dir / "reference-content.json"
     env = {
         "MANIFOLD_RT_REFERENCE_PROJECT": reference_project,
-        "MANIFOLD_RT_HELD_OUT_PROJECT": held_out_project,
         "MANIFOLD_RT_PERF_REPORT": reference_report,
         "MANIFOLD_RT_REFERENCE_REPORT": reference_report,
-        "MANIFOLD_RT_HELD_OUT_REPORT": held_out_report,
-        "MANIFOLD_RT_REFERENCE_CONTENT_REPORT": reference_content_report,
     }
     run_log = artifact_dir / "run-rt_dynamic_perf-release.log"
     run_cmd = ["cargo", "test", "--release", "-p", "manifold-nodes-scene",
@@ -901,59 +801,10 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
             "parseable test output"))
         rc = 1
 
-    held_out_log = artifact_dir / "run-rt_dynamic_held_out-release.log"
-    held_out_cmd = held_out_base + ["--", "--test-threads=1"]
-    held_out_rc, held_out_dur = run_streamed(held_out_cmd, repo, held_out_log, env=env)
-    commands.append({"cmd": " ".join(held_out_cmd), "exitCode": held_out_rc,
-                     "durationSec": round(held_out_dur, 1), "log": str(held_out_log),
-                     "env": {key: str(value) for key, value in env.items()}})
-    held_out_output = held_out_log.read_text(errors="replace") if held_out_log.exists() else ""
-    held_out_tests = parse_test_results(held_out_output)
-    for test in held_out_tests:
-        test["artifactPaths"] = [str(held_out_log)]
-    tests.extend(held_out_tests)
-    held_out_summary = parse_result_summary(held_out_output)
-    if held_out_rc == 0 and not held_out_tests:
-        tests.append(blocked_entry(
-            "perf: rt_dynamic_held_out", "run passed but no per-test results parsed",
-            "parseable test output"))
-        held_out_rc = 1
-
-    reference_content_log = artifact_dir / "run-rt_dynamic_reference_content-release.log"
-    reference_content_cmd = reference_content_base + ["--", "--test-threads=1"]
-    reference_content_rc, reference_content_duration = run_streamed(
-        reference_content_cmd, repo, reference_content_log, env=env)
-    commands.append({"cmd": " ".join(reference_content_cmd),
-                     "exitCode": reference_content_rc,
-                     "durationSec": round(reference_content_duration, 1),
-                     "log": str(reference_content_log),
-                     "env": {key: str(value) for key, value in env.items()}})
-    reference_content_output = reference_content_log.read_text(errors="replace") if reference_content_log.exists() else ""
-    reference_content_tests = parse_test_results(reference_content_output)
-    for test in reference_content_tests:
-        test["artifactPaths"] = [str(reference_content_log)]
-    tests.extend(reference_content_tests)
-    reference_content_summary = parse_result_summary(reference_content_output)
-    if reference_content_rc == 0 and not reference_content_tests:
-        tests.append(blocked_entry(
-            "perf: rt_dynamic_reference_content",
-            "run passed but no per-test results parsed",
-            "parseable test output"))
-        reference_content_rc = 1
-
     reference_report_data, reference_error = _load_json_report(reference_report, "reference")
-    held_out_report_data, held_out_error = _load_json_report(held_out_report, "held-out")
-    reference_content_report_data, reference_content_error = _load_json_report(
-        reference_content_report, "reference-content")
     tests.append(_report_test("perf: reference report", reference_report_data,
                               reference_error, reference_report))
-    tests.append(_report_test("perf: held-out report", held_out_report_data,
-                              held_out_error, held_out_report))
-    tests.append(_report_test("perf: reference content report",
-                              reference_content_report_data,
-                              reference_content_error, reference_content_report))
-    report_errors = [error for error in (
-        reference_error, held_out_error, reference_content_error) if error]
+    report_errors = [reference_error] if reference_error else []
     static_regression = validate_static_baseline(
         static_baseline_report, reference_report_data, reference_report)
     static_test_status = static_regression["status"]
@@ -968,28 +819,17 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
     if reference_report_data and reference_report_data.get("referenceProjectHash"):
         if reference_report_data["referenceProjectHash"] != expected_hash:
             report_errors.append("reference report source hash does not match checked-in graph")
-    if held_out_report_data:
-        if not held_out_report_data.get("projectHash"):
-            report_errors.append("held-out report is missing projectHash")
-        elif held_out_report_data["projectHash"] != sha256_file(held_out_project):
-            report_errors.append("held-out report project hash does not match supplied project")
-    if reference_content_report_data:
-        if not reference_content_report_data.get("projectHash"):
-            report_errors.append("reference content report is missing projectHash")
-        elif reference_content_report_data["projectHash"] != expected_hash:
-            report_errors.append("reference content report project hash does not match checked-in graph")
 
     qualification = None
     qualification_problems = []
-    if not report_errors and reference_report_data and held_out_report_data and reference_content_report_data:
+    if not report_errors and reference_report_data:
         qualification, qualification_problems = _perf_qualification(
-            reference_report_data, held_out_report_data,
-            reference_content_report_data, static_regression)
+            reference_report_data, static_regression)
         if qualification_problems:
             tests.append(blocked_entry(
                 "perf: correctness/resource evidence",
                 "; ".join(qualification_problems),
-                "reference and held-out correctness/resource fields"))
+                "reference correctness/resource fields"))
 
     if qualification and qualification["overall"] == "blocked":
         tests.append(blocked_entry("perf: full live qualification",
@@ -997,19 +837,13 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
             "measured reference live budget and pre-change static baseline"))
 
     metrics = {
-        "passed": (reference_summary["passed"] + held_out_summary["passed"]
-                   + reference_content_summary["passed"]),
-        "failed": (reference_summary["failed"] + held_out_summary["failed"]
-                   + reference_content_summary["failed"]),
-        "ignored": (reference_summary["ignored"] + held_out_summary["ignored"]
-                    + reference_content_summary["ignored"]),
+        "passed": reference_summary["passed"],
+        "failed": reference_summary["failed"],
+        "ignored": reference_summary["ignored"],
         "blocked": sum(1 for test in tests if test["status"] == "blocked"),
         "sourceHashes": {
             "checkedInReference": expected_hash,
             "suppliedReference": reference_hash,
-            "suppliedHeldOut": sha256_file(held_out_project),
-            "reportedHeldOut": held_out_report_data.get("projectHash") if held_out_report_data else None,
-            "reportedReferenceContent": reference_content_report_data.get("projectHash") if reference_content_report_data else None,
         },
         "qualification": qualification or {
             "correctness": "not_evaluated",
@@ -1017,24 +851,8 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
             "liveBudget": "not_evaluated",
             "staticBaseline": static_regression.get("status", "not_evaluated"),
             "overall": "fail",
-            "heldOutContentFrameP95Ms": None,
-            "referenceContentFrameP95Ms": None,
         },
         "staticRegression": static_regression,
-        "achieved": {
-            "heldOutContentFrameP95Ms": (
-                float(_nested(held_out_report_data, "cpuWall", "p95Ms"))
-                if held_out_report_data
-                and isinstance(_nested(held_out_report_data, "cpuWall", "p95Ms"), (int, float))
-                else None
-            ),
-            "referenceContentFrameP95Ms": (
-                float(_nested(reference_content_report_data, "cpuWall", "p95Ms"))
-                if reference_content_report_data
-                and isinstance(_nested(reference_content_report_data, "cpuWall", "p95Ms"), (int, float))
-                else None
-            ),
-        },
         "gateStatuses": {
             "reference": reference_report_data.get("gates") if reference_report_data else None,
             "referenceConfigurations": {
@@ -1043,13 +861,9 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
                               if reference_report_data else [])
                 if isinstance(entry, dict)
             },
-            "heldOut": held_out_report_data.get("enforced") if held_out_report_data else None,
-            "referenceContent": reference_content_report_data.get("enforced") if reference_content_report_data else None,
             "staticRegression": static_regression,
         },
         "referenceReport": reference_report_data,
-        "heldOutReport": held_out_report_data,
-        "referenceContentReport": reference_content_report_data,
     }
     if static_test_status == "pass":
         metrics["passed"] += 1
@@ -1058,8 +872,7 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
     else:
         metrics["blocked"] += 1
     exit_code = 0
-    if (rc != 0 or held_out_rc != 0 or reference_content_rc != 0
-            or metrics["ignored"] or report_errors):
+    if rc != 0 or metrics["ignored"] or report_errors:
         exit_code = 1
     if qualification and qualification["overall"] != "pass":
         exit_code = 1
@@ -1126,7 +939,7 @@ def main() -> int:
         epilog="Modes: cpu (A1 unit tests), gpu (A2-A5 correctness groups via "
         "gpu_proofs_gate.py), catalog (A6, --filter rt_dynamic_catalog), "
         "export (A7, journey-proofs, needs ffmpeg/ffprobe), perf (A9, release "
-        "build, needs --reference-project and --held-out-project). Groups "
+        "build, needs --reference-project). Groups "
         "whose tests are not yet implemented report blocked and exit nonzero. "
         "Exit 0 = all selected groups passed, 1 = failure/blocked/missing, "
         "2 = the runner could not complete.",
@@ -1147,10 +960,6 @@ def main() -> int:
     parser.add_argument(
         "--reference-project", type=Path, default=None,
         help="perf mode: reference-scene project file (SHA-256 recorded)",
-    )
-    parser.add_argument(
-        "--held-out-project", type=Path, default=None,
-        help="perf mode: held-out-scene project file (SHA-256 recorded)",
     )
     parser.add_argument(
         "--static-baseline-report", type=Path, default=None,
@@ -1204,7 +1013,7 @@ def main() -> int:
         else:  # perf
             exit_code, tests, metrics, commands, fixtures = mode_perf(
                 repo, manifest, artifact_dir, args.reference_project,
-                args.held_out_project, args.static_baseline_report)
+                args.static_baseline_report)
 
         report["tests"] = tests
         report["metrics"] = metrics

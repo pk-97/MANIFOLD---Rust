@@ -130,12 +130,12 @@ pub struct FluidDomainSnapshot {
     pub uncoupled_bodies: u32,
 }
 
-/// Maximum number of fluid-role ports supported by a graph boundary.
-pub const MAX_FLUID_ROLES: usize = 64;
+/// The role inputs (`role_0`, `role_1`, ...) a liquid domain starts with; its
+/// `roles` param grows them, one per source.
+pub const DEFAULT_ROLE_PORTS: usize = 4;
 
-/// The most body rows one GPU liquid holds per tick: its Collider roles,
-/// then the coupled Physics World's bodies. GPU FLIP marks each solid face
+/// The most body rows one GPU liquid holds per tick: the coupled Physics
+/// World's Colliders and Bodies. GPU FLIP marks each solid face
 /// with its body in one byte, 0 for none, three bytes in a float's exact
 /// integers. Bodies past it are not coupled, and the domain reports how many.
 pub const MAX_LIQUID_BODIES: usize = 255;
-const _: () = assert!(MAX_FLUID_ROLES <= MAX_LIQUID_BODIES);

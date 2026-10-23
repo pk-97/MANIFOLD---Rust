@@ -1,4 +1,4 @@
-use crate::collect::{collect_asset_paths, re_point_scene_modifier_asset, re_point_string_param, AssetTarget};
+use crate::collect::{collect_asset_paths, re_point_scene_file, re_point_scene_modifier_asset, re_point_string_param, AssetTarget};
 use manifold_core::file_loader::NodeFileLoad;
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
@@ -49,6 +49,7 @@ impl PathResolver {
 
         let search_dirs = Self::build_search_dirs(project, &project_dir);
         let refs = collect_asset_paths(project);
+        let mut relinked_scenes: Vec<LayerId> = Vec::new();
 
         for asset in refs {
             match asset.target {
@@ -106,6 +107,23 @@ impl PathResolver {
                         &mut result,
                     );
                 }
+                AssetTarget::SceneFile { layer_id } => {
+                    if Self::resolve_scene_file(project, &layer_id, &asset.path, &project_dir, &search_dirs, &mut result)
+                        && !relinked_scenes.contains(&layer_id)
+                    {
+                        relinked_scenes.push(layer_id);
+                    }
+                }
+            }
+        }
+        // The load compiled each scene before its files were found: compile
+        // a re-linked one again so it reads them.
+        for layer_id in relinked_scenes {
+            if let Some(inst) = project.timeline.find_layer_by_id_mut(layer_id.as_str()).and_then(|(_, layer)| layer.gen_params_mut())
+                && let Some(doc) = inst.scene.clone()
+                && let Err(error) = inst.install_scene_document(doc)
+            {
+                log::warn!("[PathResolver] scene on {layer_id} did not compile after re-linking its files: {error}");
             }
         }
 
@@ -165,6 +183,7 @@ impl PathResolver {
                 }
                 AssetTarget::StringParam { .. } => {}
                 AssetTarget::SceneModifierStringParam { .. } => {}
+                AssetTarget::SceneFile { .. } => {}
             }
         }
     }
@@ -384,6 +403,37 @@ impl PathResolver {
             result.unresolved.push(path_str);
         }
     }
+
+    /// Re-link a file a scene layer's document names. It has no relative
+    /// sibling and no size, so the chain is the stored (possibly relative)
+    /// path, then filename search in known dirs. `true` when it re-pointed.
+    fn resolve_scene_file(
+        project: &mut Project,
+        layer_id: &LayerId,
+        path: &Path,
+        project_dir: &str,
+        search_dirs: &HashSet<String>,
+        result: &mut PathResolutionResult,
+    ) -> bool {
+        let path_str = path.to_string_lossy().to_string();
+        if path.is_absolute() && path.is_file() {
+            result.already_valid_count += 1;
+            return false;
+        }
+        let resolved = Self::try_resolve(&path_str, Some(&path_str), -1, project_dir, search_dirs);
+        match resolved {
+            Some(resolved) if re_point_scene_file(project, layer_id, &path_str, &resolved) => {
+                result.resolved_count += 1;
+                true
+            }
+            _ => {
+                result.unresolved_count += 1;
+                result.unresolved.push(path_str);
+                false
+            }
+        }
+    }
+
 
     fn resolve_scene_modifier_string_param(
         project: &mut Project,

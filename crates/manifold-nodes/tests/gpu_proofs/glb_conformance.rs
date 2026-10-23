@@ -1,6 +1,6 @@
 //! GLB conformance harness (GLB_CONFORMANCE_DESIGN.md G-P1) — renders every
 //! asset in `tests/fixtures/gltf/khronos/manifest.json` through the
-//! PRODUCTION import path (`assemble_import_graph`) and gates each
+//! PRODUCTION import path (`compile_model_scene`) and gates each
 //! `expect_pass` asset with the numeric asserts named in the manifest, never
 //! by pixel-matching Khronos's own published renders (D3). `xfail` assets
 //! still run (when their fixture is present) so a future phase's flip to
@@ -33,7 +33,8 @@ use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_core::scene_doc::ImportedModel;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -227,32 +228,286 @@ fn region_mean_rgb(rgba: &[u8], region: [f64; 4]) -> (f64, f64, f64) {
 }
 
 // ---------------------------------------------------------------------------
+// The old importer's stage (camera framing, sun, environment)
+// ---------------------------------------------------------------------------
+//
+// The goldens, coverage floors and regions were captured under the old
+// importer's own stage: the model recentred on its vertex box at unit scale,
+// an orbit camera fitted to that box, one hard-shadowed sun when the file
+// has no lights, and a softbox environment with a stronger fill. Importing
+// never moves the scene's camera, so the sweep writes that stage onto the
+// compiled card instead. The math is the old `scene_scale::Framing` and
+// `gltf_import_summary` box (before the scene document redesign).
+
+type Mat4 = [[f32; 4]; 4];
+
+const MAT4_IDENTITY: Mat4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
+/// Column-major `a * b` (`m[col][row]`, glTF's convention).
+fn mat4_mul(a: &Mat4, b: &Mat4) -> Mat4 {
+    let mut out = [[0.0f32; 4]; 4];
+    for (c, column) in out.iter_mut().enumerate() {
+        for (r, cell) in column.iter_mut().enumerate() {
+            *cell = (0..4).map(|k| a[k][r] * b[c][k]).sum();
+        }
+    }
+    out
+}
+
+fn mat4_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
+    [0, 1, 2].map(|r| m[0][r] * p[0] + m[1][r] * p[1] + m[2][r] * p[2] + m[3][r])
+}
+
+fn mat4_from_trs(t: [f32; 3], q: [f32; 4], s: [f32; 3]) -> Mat4 {
+    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+    [
+        [(1.0 - 2.0 * (y * y + z * z)) * s[0], 2.0 * (x * y + w * z) * s[0], 2.0 * (x * z - w * y) * s[0], 0.0],
+        [2.0 * (x * y - w * z) * s[1], (1.0 - 2.0 * (x * x + z * z)) * s[1], 2.0 * (y * z + w * x) * s[1], 0.0],
+        [2.0 * (x * z + w * y) * s[2], 2.0 * (y * z - w * x) * s[2], (1.0 - 2.0 * (x * x + y * y)) * s[2], 0.0],
+        [t[0], t[1], t[2], 1.0],
+    ]
+}
+
+/// A plain-float VEC3/VEC4 accessor's components, stride honoured.
+fn read_f32s(accessor: &gltf::Accessor, buffers: &[gltf::buffer::Data]) -> Option<Vec<f32>> {
+    let width = match accessor.dimensions() {
+        gltf::accessor::Dimensions::Vec3 => 3,
+        gltf::accessor::Dimensions::Vec4 => 4,
+        _ => return None,
+    };
+    let view = accessor.view()?;
+    let buffer = buffers.get(view.buffer().index())?;
+    let stride = view.stride().unwrap_or(width * 4);
+    let base = view.offset() + accessor.offset();
+    let mut out = Vec::with_capacity(accessor.count() * width);
+    for i in 0..accessor.count() {
+        for c in 0..width {
+            let at = base + i * stride + c * 4;
+            out.push(f32::from_le_bytes(buffer.0.get(at..at + 4)?.try_into().ok()?));
+        }
+    }
+    Some(out)
+}
+
+/// `EXT_mesh_gpu_instancing`'s per-instance transforms, none without it.
+fn instance_transforms(node: &gltf::Node, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Option<Vec<Mat4>> {
+    let attributes = node.extension_value("EXT_mesh_gpu_instancing")?.get("attributes")?.clone();
+    let read = |name: &str| {
+        let index = attributes.get(name)?.as_u64()? as usize;
+        read_f32s(&document.accessors().nth(index)?, buffers)
+    };
+    let (t, r, s) = (read("TRANSLATION"), read("ROTATION"), read("SCALE"));
+    let count = t.as_ref().map(|d| d.len() / 3).or(r.as_ref().map(|d| d.len() / 4)).or(s.as_ref().map(|d| d.len() / 3))?;
+    Some(
+        (0..count)
+            .map(|i| {
+                mat4_from_trs(
+                    t.as_ref().map_or([0.0; 3], |d| [d[i * 3], d[i * 3 + 1], d[i * 3 + 2]]),
+                    r.as_ref().map_or([0.0, 0.0, 0.0, 1.0], |d| [d[i * 4], d[i * 4 + 1], d[i * 4 + 2], d[i * 4 + 3]]),
+                    s.as_ref().map_or([1.0; 3], |d| [d[i * 3], d[i * 3 + 1], d[i * 3 + 2]]),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// The old importer's scene box: every vertex in world space, a skinned
+/// mesh's through its bind-pose skin matrices (its node transform ignored,
+/// as glTF draws it), an instanced mesh's through every instance.
+fn old_import_bounds(path: &Path) -> Result<([f32; 3], [f32; 3]), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let gltf = gltf::Gltf::from_slice_without_validation(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let buffers = gltf::import_buffers(&gltf.document, path.parent(), gltf.blob.clone())
+        .map_err(|e| format!("buffers {}: {e}", path.display()))?;
+    let document = &gltf.document;
+    let mut parent_of = vec![None; document.nodes().count()];
+    for node in document.nodes() {
+        for child in node.children() {
+            parent_of[child.index()] = Some(node.index());
+        }
+    }
+    let static_world = |index: usize| {
+        let mut chain = vec![index];
+        while let Some(parent) = parent_of[*chain.last().unwrap()] {
+            chain.push(parent);
+        }
+        chain.iter().rev().fold(MAT4_IDENTITY, |world, &i| mat4_mul(&world, &document.nodes().nth(i).unwrap().transform().matrix()))
+    };
+    // The roots the importer walks: the default scene, else every scene's
+    // nodes, else every parentless node.
+    let roots: Vec<gltf::Node> = match document.default_scene() {
+        Some(scene) => scene.nodes().collect(),
+        None if document.scenes().len() > 0 => {
+            let mut seen = std::collections::BTreeSet::new();
+            document.scenes().flat_map(|s| s.nodes()).filter(|n| seen.insert(n.index())).collect()
+        }
+        None => document.nodes().filter(|n| parent_of[n.index()].is_none()).collect(),
+    };
+    let mut lo = [f32::INFINITY; 3];
+    let mut hi = [f32::NEG_INFINITY; 3];
+    let mut grow = |p: [f32; 3]| {
+        for axis in 0..3 {
+            lo[axis] = lo[axis].min(p[axis]);
+            hi[axis] = hi[axis].max(p[axis]);
+        }
+    };
+    let mut stack: Vec<(gltf::Node, Mat4)> = roots.into_iter().map(|n| (n, MAT4_IDENTITY)).collect();
+    while let Some((node, parent)) = stack.pop() {
+        let world = mat4_mul(&parent, &node.transform().matrix());
+        if let Some(mesh) = node.mesh() {
+            let instance_worlds: Vec<Mat4> = match instance_transforms(&node, document, &buffers) {
+                Some(list) => list.iter().map(|m| mat4_mul(&world, m)).collect(),
+                None => vec![world],
+            };
+            let skin_matrices: Option<Vec<Mat4>> = node.skin().map(|skin| {
+                let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+                let inverse_binds: Vec<Mat4> = reader
+                    .read_inverse_bind_matrices()
+                    .map_or_else(|| vec![MAT4_IDENTITY; skin.joints().count()], |it| it.collect());
+                skin.joints()
+                    .enumerate()
+                    .map(|(k, joint)| mat4_mul(&static_world(joint.index()), inverse_binds.get(k).unwrap_or(&MAT4_IDENTITY)))
+                    .collect()
+            });
+            for primitive in mesh.primitives() {
+                let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+                let Some(positions) = reader.read_positions() else { continue };
+                let positions: Vec<[f32; 3]> = positions.collect();
+                let joints: Option<Vec<[u16; 4]>> = reader.read_joints(0).map(|it| it.into_u16().collect());
+                let weights: Option<Vec<[f32; 4]>> = reader.read_weights(0).map(|it| it.into_f32().collect());
+                if let (Some(skin), Some(joints), Some(weights)) = (&skin_matrices, &joints, &weights) {
+                    for (i, p) in positions.iter().enumerate() {
+                        let total: f32 = weights[i].iter().sum::<f32>().max(1e-8);
+                        let mut posed = [0.0f32; 3];
+                        for k in 0..4 {
+                            let Some(m) = skin.get(joints[i][k] as usize) else { continue };
+                            let q = mat4_point(m, *p);
+                            for axis in 0..3 {
+                                posed[axis] += weights[i][k] / total * q[axis];
+                            }
+                        }
+                        grow(posed);
+                    }
+                    continue;
+                }
+                for instance in &instance_worlds {
+                    positions.iter().for_each(|p| grow(mat4_point(instance, *p)));
+                }
+            }
+        }
+        stack.extend(node.children().map(|child| (child, world)));
+    }
+    if !lo[0].is_finite() {
+        return Err(format!("{}: no geometry for the old framing box", path.display()));
+    }
+    Ok((lo, hi))
+}
+
+/// Card values that rebuild the old importer's stage around `model`.
+fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f32)>, String> {
+    let (lo, hi) = old_import_bounds(path)?;
+    let center = [0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5);
+    let dims = [0, 1, 2].map(|axis| hi[axis] - lo[axis]);
+    let radius = ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
+    let fov_y = 0.9_f32;
+    let half_fov_tan = (fov_y * 0.5).tan();
+    let per_axis_fit = dims.iter().map(|&extent| (extent * 0.5) / half_fov_tan * 1.15).fold(0.0f32, f32::max);
+    let distance = (2.2 * radius).max(per_axis_fit);
+    let near = (distance - radius).max(1e-4) * 0.5;
+    // 200 is `node.orbit_camera`'s default far plane, 10000 its range max.
+    let far = 200.0f32.max(distance + 1.5 * radius).min(10_000.0);
+
+    // The model at unit scale with the old box centre at the origin. The
+    // drop placement put the file-bounds centre there at `scale`, so its
+    // position over `scale` is the model's own centre less that one.
+    let (new_center, scale, position) = match (model.bounds, model.placement()) {
+        (Some((blo, bhi)), Some(p)) => ([0, 1, 2].map(|a| (blo[a] + bhi[a]) * 0.5), p.scale, p.position),
+        _ => ([0.0; 3], 1.0, [0.0; 3]),
+    };
+    let model_position = [0, 1, 2].map(|a| position[a] / scale + new_center[a] - center[a]);
+
+    let mut setup: Vec<(String, f32)> = vec![
+        ("model.scale_x".into(), 1.0),
+        ("model.scale_y".into(), 1.0),
+        ("model.scale_z".into(), 1.0),
+        ("model.pos_x".into(), model_position[0]),
+        ("model.pos_y".into(), model_position[1]),
+        ("model.pos_z".into(), model_position[2]),
+        ("camera.orbit".into(), 0.7),
+        ("camera.tilt".into(), 0.3),
+        ("camera.distance".into(), distance),
+        ("camera.fov_y".into(), fov_y),
+        ("camera.look_y".into(), 0.0),
+        ("camera.near".into(), near),
+        ("camera.far".into(), far),
+        ("camera.focus_distance".into(), distance),
+        ("camera.f_stop".into(), 32.0),
+        ("camera.shutter_angle".into(), 180.0),
+        // The old contact-shadow reach: half the model's radius.
+        ("world.ao_distance".into(), (radius * 0.5).clamp((0.001 * radius).max(0.01), 2.0 * radius)),
+        // Softbox at full strength with the old import's fill and strips.
+        // The old environment had no sun wired in, so no sun disc.
+        ("environment.env_intensity".into(), 1.0),
+        ("environment.fill".into(), 0.6),
+        ("environment.emitter_intensity".into(), 3.0),
+        ("environment.sun_disc_intensity".into(), 0.0),
+    ];
+    if model.lights.is_empty() {
+        // The old synthesized key: a hard-shadowed sun from (5, 2, 3) onto
+        // the origin, its shadow box wrapped to the model.
+        setup.extend([
+            ("sun.pos_x".into(), 5.0),
+            ("sun.pos_y".into(), 2.0),
+            ("sun.pos_z".into(), 3.0),
+            ("sun.aim_x".into(), 0.0),
+            ("sun.aim_y".into(), 0.0),
+            ("sun.aim_z".into(), 0.0),
+            ("sun.intensity".into(), 3.5),
+            ("sun.cast_shadows".into(), 1.0),
+            ("sun.shadow_softness".into(), 0.0),
+            ("sun.light_size".into(), 1.0),
+            ("sun.range".into(), (radius * 1.5).max(0.01)),
+            ("sun.shadow_resolution".into(), 4096.0),
+        ]);
+    } else {
+        // The old import lit a file with its own lights only.
+        setup.extend([("sun.intensity".into(), 0.0), ("sun.cast_shadows".into(), 0.0)]);
+    }
+    Ok(setup)
+}
+
+// ---------------------------------------------------------------------------
 // Render (production import path + the ONE shared readback transform, D2)
 // ---------------------------------------------------------------------------
 
-/// Import `path` through `assemble_import_graph` and render it to converged,
+/// Import `path` through `compile_model_scene` and render it to converged,
 /// tonemapped RGBA8 pixels — same convergence-poll shape `render_import.rs`
 /// uses (BUG-100/BUG-117: byte-stability alone can't distinguish "done" from
 /// "every background texture decode is still mid-flight"), reimplemented
 /// here rather than shelling out to the bin so a test failure carries a Rust
 /// backtrace, not a subprocess exit code.
 fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) -> Result<Vec<u8>, String> {
-    let (def, _report) = assemble_import_graph(path)?;
+    let (def, model) = compile_model_scene(path)?;
 
     let mut params: Vec<Param> = def
         .preset_metadata
         .as_ref()
         .map(|m| m.params.iter().map(|s| Param::bundled(s.clone())).collect())
         .unwrap_or_default();
-    for (id, v) in overrides {
-        if let Some(p) = params.iter_mut().find(|p| p.id() == *id) {
+    for (id, v) in old_import_setup(path, &model)? {
+        let param = params
+            .iter_mut()
+            .find(|p| p.id() == id)
+            .ok_or_else(|| format!("setup param {id} is not on the compiled card"))?;
+        param.value = v;
+    }
+    // Each override sets every card param whose id ends with its suffix:
+    // `.intensity` reaches every light, `.env_intensity` the environment.
+    // Imported materials start with no ambient term, so lights off is dark.
+    for (suffix, v) in overrides {
+        for p in params.iter_mut().filter(|p| p.id().ends_with(suffix)) {
             p.value = *v;
         }
-        // An override naming a param this asset's card doesn't expose (e.g.
-        // `sun_int` on an asset with no synthesized sun — shouldn't happen,
-        // every import graph carries the same outer-card shape, but this
-        // isn't the place to panic over it) is silently a no-op, same as
-        // `render_import`'s own tolerance for graphs that vary.
     }
     let manifest = ParamManifest::from_params(params);
 
@@ -435,7 +690,7 @@ fn run_check(device: &Arc<GpuDevice>, asset: &str, path: &Path, check: &CheckSpe
             let rgba = render_asset(
                 device,
                 path,
-                &[("sun_int", 0.0), ("env_intensity", 0.0), ("scene_ambient", 0.0)],
+                &[(".intensity", 0.0), (".env_intensity", 0.0)],
                 value / 2.0,
             )?;
             let frac = non_black_fraction(&rgba);

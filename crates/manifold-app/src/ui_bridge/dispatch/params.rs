@@ -78,7 +78,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         | ParamsAction::ParamToggle(gpt, param_id) = action
         && let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab,
             active_layer, ctx.selection, &ctx.project)
-        && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(&ctx.project, &target, param_id.as_ref())
+        && let Some(reason) = crate::graph_target::macro_parameter_lock_reason(&ctx.project, &target, param_id.as_ref())
     {
         ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
         return DispatchResult::handled();
@@ -125,7 +125,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         ParamsAction::AssignClipTriggerSource(target, param_id, source) => {
             let target = crate::editing_host::to_graph_target(target);
-            if let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(
+            if let Some(reason) = crate::graph_target::macro_parameter_lock_reason(
                 &ctx.project, &target, param_id.as_ref(),
             ) {
                 ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
@@ -487,10 +487,6 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // target rides the request/session atomically from the click
         // (PRESET_BROWSER_AUDITION D2), so there is nothing to re-resolve.
         ParamsAction::AddEffectClicked { .. } => DispatchResult::handled(),
-        // SCENE_MODIFIER_FRAMEWORK section 3.7 (Inspector card region + picker): the modifier picker opens an
-        // app-side overlay (UIRoot::try_open_dropdown); the dispatch layer
-        // has nothing to mutate.
-        ParamsAction::AddModifierClicked(_layer_id) => DispatchResult::handled(),
         ParamsAction::BrowserSearchClicked => DispatchResult::handled(),
         ParamsAction::RemoveEffect(fx_idx) => {
             let tab = effective_tab;
@@ -734,7 +730,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ctx.ui.inspector.clear_effect_selection(&mut ctx.ui.tree);
             DispatchResult::handled()
         }
-        ParamsAction::CardRightClicked(_) | ParamsAction::ModifierCardClicked(_)
+        ParamsAction::CardRightClicked(_)
         | ParamsAction::EffectGroupAddModifierClicked(_) => {
             // Handled by UIRoot::try_open_dropdown (opens the card context menu)
             // — should not reach dispatch.

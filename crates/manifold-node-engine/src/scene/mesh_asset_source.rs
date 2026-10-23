@@ -3,14 +3,22 @@ use std::path::Path;
 use crate::mesh::MeshVertex;
 use super::mesh_selection::MeshSelection;
 
+/// Load `path`'s mesh: the one file node `node` names (an imported part),
+/// else what the selection picks from the whole file.
+pub type LoadMesh = fn(&Path, Option<&str>, &MeshSelection) -> Result<Vec<MeshVertex>, String>;
+
 pub struct MeshAssetSource {
-    pub load: fn(&Path, &MeshSelection) -> Result<Vec<MeshVertex>, String>,
+    pub load: LoadMesh,
 }
 inventory::collect!(MeshAssetSource);
 
 pub fn load_mesh(path: &Path, selection: &MeshSelection) -> Result<Vec<MeshVertex>, String> {
+    load_mesh_node(path, None, selection)
+}
+
+pub fn load_mesh_node(path: &Path, node: Option<&str>, selection: &MeshSelection) -> Result<Vec<MeshVertex>, String> {
     let mut sources = inventory::iter::<MeshAssetSource>.into_iter();
     let source = sources.next().ok_or("mesh asset provider must be linked")?;
     assert!(sources.next().is_none(), "duplicate mesh asset provider");
-    (source.load)(path, selection)
+    (source.load)(path, node, selection)
 }

@@ -7,7 +7,7 @@ use manifold_core::effect_graph_def::{
 use manifold_core::id::NodeId;
 use manifold_core::liquid_domain::{MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
-use crate::bundled_presets::bundled_preset_def;
+use crate::engine_scenes::scene_def;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_water_gpu_mpm::matter::{MatterPoint, STATS_WORDS};
 use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
@@ -260,6 +260,7 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
         };
         def.wires.extend([
             wire(start_k, "transform", body_k, "transform"),
+            wire(mesh, "source", body_k, "source"),
             wire(body_k, "body", world, &format!("body_{k}")),
             wire(body_k, "pose", object_k, "transform"),
             wire(mesh, "vertices", object_k, "vertices"),
@@ -290,7 +291,7 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
 /// the water standing where the static obstacle stands, and that obstacle
 /// removed. A light box is where an explicit body reaction runs away.
 pub fn gpu_flip_dam_break_with_box(density_ratio: f32) -> (EffectGraphDef, BoxScene) {
-    let water = WaterScene { obstacle: false, ..WaterScene::dam_break(64) };
+    let water = WaterScene::dam_break(64);
     let edge = 0.6;
     let scene = BoxScene {
         domain_size: water.size as f32,
@@ -366,7 +367,7 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
         Some(scene) => scene.test_stacked(fixture, scene.apply(bundled("WaterFloatingBoxMatter"), MATTER_DOMAIN_TYPE_ID)),
         None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
         None if fixture == Fixture::FaceGrid => {
-            let mut def = matter_dam_break_faces(None, false);
+            let mut def = matter_dam_break_faces(None);
             let resolution = SerializedParamValue::Int { value: FACE_GRID_RESOLUTION as i32 };
             set_type_param(&mut def, MATTER_DOMAIN_TYPE_ID, "resolution", resolution);
             def
@@ -375,7 +376,7 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     })
 }
 fn bundled(id: &'static str) -> EffectGraphDef {
-    bundled_preset_def(&PresetTypeId::new(id))
+    scene_def(&PresetTypeId::new(id))
         .unwrap_or_else(|| panic!("no bundled preset {id}"))
         .as_ref()
         .clone()

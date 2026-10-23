@@ -21,6 +21,7 @@ pub mod device_guard;
 pub mod fonts;
 pub mod hash;
 pub mod id;
+pub mod mesh_partition;
 pub mod param_range;
 pub mod scene_surface;
 pub mod scratch;
@@ -31,8 +32,7 @@ pub mod work_count;
 pub use cold_touch::{ColdTouchKind, cold_touch_count, record_cold_touch, reset_cold_touch_counts, set_transport_playing, thread_cold_touch_count, total_cold_touches};
 
 pub use hash::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};
-pub use scene_surface::SceneNodeRef;
-pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
+pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, ItemId, LayerId, MarkerId, NodeId};
 pub use units::{Beats, Bpm, PlayedTime, Seconds};
 
 /// Stable identifier for a single parameter slot.

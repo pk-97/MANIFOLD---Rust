@@ -19,7 +19,7 @@ fn restore(def: &mut EffectGraphDef) -> Result<(), String> {
         return Err("Camera setup needs one scene at the top level.".into());
     };
     let scene_id = scene.id;
-    let scene_ref = manifold_core::SceneNodeRef { scope: Vec::new(), node: scene.node_id.clone() };
+    let scene_ref = scene.node_id.clone();
     let mut edges = def.wires.iter().filter(|edge| edge.to_node == scene_id && edge.to_port == "camera");
     let camera_edge = edges.next().cloned();
     if edges.next().is_some() { return Err("The scene has more than one camera connection.".into()); }

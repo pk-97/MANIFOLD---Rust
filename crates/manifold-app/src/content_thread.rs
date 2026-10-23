@@ -239,11 +239,8 @@ pub struct ContentThread {
     /// every regular snapshot carries the diagnostic to the UI.
     pub graph_edit_diagnostic: Option<Arc<crate::content_state::GraphEditDiagnostic>>,
     /// Most recent content-authoritative selection update for newly created
-    /// scene modifiers, retained until a newer update.
+    /// items, retained until a newer update.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
-    pub modifier_selection_update: Option<Arc<crate::content_state::ModifierSelectionUpdate>>,
-    pub object_modifier_selection_update:
-        Option<Arc<crate::content_state::ObjectModifierSelectionUpdate>>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
@@ -841,6 +838,11 @@ impl ContentThread {
         );
         if let Some(id) = self.content_pipeline.take_issued_present() {
             self.issued_presents.record(id, self.frame_deadline);
+        }
+        for picked in self.content_pipeline.take_scene_picks(self.engine.project()) {
+            let sequence = self.edit_selection_update.as_ref().map_or(1, |update| update.sequence.wrapping_add(1));
+            let selection = crate::edit_selection::EditSelection::Picked(picked);
+            self.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
         }
         self.physics_metrics = self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
@@ -1535,8 +1537,6 @@ impl ContentThread {
             trigger_delivery_failure: self.engine.trigger_delivery_failure(),
             scene_impulses,
             edit_selection_update: self.edit_selection_update.clone(),
-            modifier_selection_update: self.modifier_selection_update.clone(),
-            object_modifier_selection_update: self.object_modifier_selection_update.clone(),
             ableton_session,
             ableton_connected: self.ableton_bridge.is_connected(),
             ableton_transport_enabled: self.ableton_bridge.is_transport_enabled(),

@@ -11,8 +11,7 @@ use manifold_core::GraphTarget;
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
-use manifold_core::scene_object_model::SceneObjectModel;
-use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
+use manifold_nodes_scene::node_graph::scene_vm::{SceneStructure, SceneVm};
 
 /// Parts whose writes can change the watched graph or which graph resolves.
 /// Graph edits declare Overrides; Values is left out so a slider drag does not
@@ -24,8 +23,8 @@ pub(crate) struct EditorGraphCache {
     catalog_default_version: u64,
     badge: Option<(GraphKey, bool)>,
     viewport: Option<(GraphKey, ViewportDef)>,
-    /// The scene's object model, keyed without Values.
-    models: Option<(GraphKey, Option<Arc<[SceneObjectModel]>>)>,
+    /// The viewport scene's structure, keyed on the graph parts alone.
+    structure: Option<(GraphKey, Arc<SceneStructure>)>,
 }
 
 /// (watched target, catalog default version, catalog generation, parts key)
@@ -94,46 +93,32 @@ impl EditorGraphCache {
         has_mod
     }
 
-    /// The scene a gizmo host shows. It also reads the owner's base values,
-    /// so it keys on Values too; the object model reads no values, so it is
-    /// kept across a value-only rebuild (PHYSICS_ENGINE_BOUNDARY_DESIGN.md
-    /// section 5.2 (One scene-object model)).
-    pub(crate) fn viewport_def(
-        &mut self,
-        project: &Project,
-        target: Option<&GraphTarget>,
-        parts: &PartStamps,
-    ) -> ViewportDef {
+    /// The scene a gizmo host shows. Its handles sit at the owner's base
+    /// values, so it keys on Values too; a value write rebuilds only what
+    /// the values place, over the structure cached for the graph parts.
+    pub(crate) fn viewport_def(&mut self, project: &Project, target: Option<&GraphTarget>, parts: &PartStamps) -> ViewportDef {
         let key = self.key(target, parts, GRAPH_PARTS.union(ChangeSet::of(&[Part::Values])));
         if let Some((cached, def)) = &self.viewport
             && *cached == key
         {
             return def.clone();
         }
-        let structure = self.key(target, parts, GRAPH_PARTS);
+        let structure_key = self.key(target, parts, GRAPH_PARTS);
+        let structure = self
+            .structure
+            .as_ref()
+            .filter(|(cached, _)| *cached == structure_key)
+            .map(|(_, structure)| structure);
         let def = target.map_or_else(ViewportDef::default, |target| {
-            let authored = crate::scene_gizmo::authored_def(project, target);
-            let models = match &self.models {
-                Some((cached, models)) if *cached == structure => models.clone(),
-                _ => authored.as_ref().and_then(SceneVm::object_models).map(Arc::from),
-            };
-            self.models = Some((structure, models));
-            let models = self.models.as_ref().and_then(|(_, models)| models.as_deref());
-            let scene = authored
-                .as_ref()
-                .and_then(|def| SceneVm::from_def_with_models(def, &[], models))
-                .map(Arc::new);
-            ViewportDef { resolved: crate::graph_target::resolve(project, target).is_some(), scene }
+            let scene = crate::scene_gizmo::scene_vm_of(project, target, structure).map(Arc::new);
+            ViewportDef { resolved: scene.is_some() || crate::graph_target::resolve(project, target).is_some(), scene }
         });
+        self.structure = def.scene.as_ref().map(|scene| (structure_key, Arc::clone(scene.structure())));
         self.viewport = Some((key, def.clone()));
         def
     }
-
-    #[cfg(test)]
-    fn models(&self) -> Option<Arc<[SceneObjectModel]>> {
-        self.models.as_ref().and_then(|(_, models)| models.clone())
-    }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -186,8 +171,9 @@ mod tests {
 
     #[test]
     fn viewport_scene_reuses_until_its_inputs_move() {
-        let project = crate::ui_bridge::force_project("RadialForce", &["force_a"]);
-        let target = GraphTarget::Generator(manifold_core::LayerId::new("scene"));
+        let mut project = Project::default();
+        let index = project.timeline.add_layer("Scene", manifold_core::types::LayerType::Generator, manifold_core::PresetTypeId::SCENE);
+        let target = GraphTarget::Generator(project.timeline.layers[index].layer_id.clone());
         let mut parts = PartStamps::default();
         let mut cache = EditorGraphCache::default();
         let first = cache.viewport_def(&project, Some(&target), &parts);
@@ -201,30 +187,13 @@ mod tests {
         bump(&mut parts, Part::Values);
         let fresh = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
         assert!(!Arc::ptr_eq(&first, &fresh), "base values feed the authored projection");
+        assert!(Arc::ptr_eq(first.structure(), fresh.structure()), "a value write never lays out the scene again");
+
+        bump(&mut parts, Part::Overrides);
+        let rebuilt = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
+        assert!(!Arc::ptr_eq(fresh.structure(), rebuilt.structure()), "a graph edit does");
 
         let none = cache.viewport_def(&project, None, &parts);
         assert!(!none.resolved && none.scene.is_none());
-    }
-
-    /// A value write rebuilds the scene but keeps its object model; a graph
-    /// edit rebuilds both.
-    #[test]
-    fn physics_boundary_value_update_no_rebuild() {
-        let project = crate::ui_bridge::force_project("RadialForce", &["force_a"]);
-        let target = GraphTarget::Generator(manifold_core::LayerId::new("scene"));
-        let mut parts = PartStamps::default();
-        let mut cache = EditorGraphCache::default();
-        let first = cache.viewport_def(&project, Some(&target), &parts);
-        let models = cache.models().expect("a scene layer has an object model");
-        assert!(!models.is_empty());
-
-        bump(&mut parts, Part::Values);
-        let valued = cache.viewport_def(&project, Some(&target), &parts);
-        assert!(!Arc::ptr_eq(first.scene.as_ref().unwrap(), valued.scene.as_ref().unwrap()), "values rebuild the scene");
-        assert!(Arc::ptr_eq(&models, &cache.models().unwrap()), "a value write keeps the model");
-
-        bump(&mut parts, Part::Overrides);
-        cache.viewport_def(&project, Some(&target), &parts);
-        assert!(!Arc::ptr_eq(&models, &cache.models().unwrap()), "a graph edit rebuilds the model");
     }
 }

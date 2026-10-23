@@ -65,6 +65,15 @@ impl PresetRuntime {
         }
     }
 
+    /// Append the same slot's worlds' refused bodies. The caller reuses the
+    /// buffer.
+    pub fn write_body_refusals_watched(&self, output: &mut Vec<(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)>) {
+        let Some(slot) = self.extension_slots().first() else { return };
+        for extension in &self.extensions {
+            extension.write_body_refusals(&self.graph, slot, output);
+        }
+    }
+
     /// Translate the selected generated modifier copy back to authored node IDs.
     pub fn write_modifier_fluid_domains(
         &self,

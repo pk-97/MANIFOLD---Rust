@@ -100,15 +100,9 @@ use serde_json::{Value, json};
             step.with_iterations(4),
             WaterScene::dam_break(64).with_steps(1).with_surface(),
         ];
-        // The obstacle, bare and meshed, and in the still pool the kinematic
-        // proof moves it through.
-        let obstacle = LATTICES.into_iter().flat_map(|n| {
-            let dam = WaterScene::dam_break(n).with_obstacle();
-            [dam, dam.with_surface(), WaterScene::still_pool(n).with_obstacle()]
-        });
         // The open-face drain.
         let open = [WaterScene::still_pool(64).with_closed_faces(63 & !1)];
-        for scene in all.chain(probes).chain(obstacle).chain(open) {
+        for scene in all.chain(probes).chain(open) {
             let n = scene.pressure.n;
             let def = water_def(scene);
             let (graph, plan) = built(&def);
@@ -185,19 +179,6 @@ use serde_json::{Value, json};
         let pool = per_slot * f64::from(AUTO_INFLOW_SLOTS);
         println!("GPU FLIP auto inflow pool: {per_slot:.0} bytes a slot, {:.2} GB", pool / 1e9);
         assert!((0.5e9..1.5e9).contains(&pool), "{pool} bytes");
-        // The walk reports the pool the allocator gets: the obstacle turned
-        // into an Inflow grows the fill's count to the inflow pool.
-        let scene = WaterScene::dam_break(64);
-        let collider = render_def(scene);
-        let mut inflow = collider.clone();
-        find_node_mut(&mut inflow.nodes, "obstacle_collider")
-            .expect("obstacle collider")
-            .params
-            .insert("role".into(), serde_json::from_value(json!({"type": "Enum", "value": 1})).unwrap());
-        let grown = walked(&inflow, false, "inflow").scene_bytes - walked(&collider, false, "collider").scene_bytes;
-        let expected = per_slot * (f64::from(AUTO_INFLOW_SLOTS) - scene.particles() as f64);
-        println!("GPU FLIP inflow walk: {grown} bytes more, {expected:.0} expected");
-        assert!((grown as f64 - expected).abs() < 1e-3 * expected, "{grown} bytes, {expected:.0} expected");
     }
 
 
@@ -376,7 +357,7 @@ use serde_json::{Value, json};
         };
         let registry = PrimitiveRegistry::with_builtin();
         for name in [SHIPPED_PRESET, "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
+            let json = scene_json(&PresetTypeId::new(name)).unwrap();
             let mut preset: Value = serde_json::from_str(&json).unwrap();
             let surface_id = if name == SHIPPED_PRESET { "surface" } else { "liquid_surface" };
             let surface = manifold_nodes_water::testkit::conformance::json_node_mut(&mut preset, surface_id)
@@ -487,7 +468,7 @@ use serde_json::{Value, json};
         use manifold_node_engine::runtime::PresetRuntime;
 
         for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
+            let json = scene_json(&PresetTypeId::new(name)).unwrap();
             let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
             let saved = serde_json::to_string(&def).unwrap();
             let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
@@ -565,11 +546,7 @@ use serde_json::{Value, json};
         assert_eq!(domain.handle.as_deref(), Some("Simulation"));
         // This handle belongs to insertion; the preset recipe leaves it unnamed.
         domain.handle = None;
-        for (def, particles, obstacle) in [
-            (render_def(WaterScene::dam_break(64)), false, true),
-            (particle_view_def(), true, true),
-            (render_def(WaterScene { obstacle: false, ..WaterScene::dam_break(64) }), false, false),
-        ] {
+        for (def, particles) in [(render_def(WaterScene::dam_break(64)), false), (particle_view_def(), true)] {
             let saved = serde_json::to_string(&def).unwrap();
             let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
             let family = find_node(&def.nodes, "water_family").unwrap();
@@ -579,8 +556,7 @@ use serde_json::{Value, json};
             let mut outputs = family_outputs().to_vec();
             if !particles { outputs.push("object_4"); }
             assert_eq!(group.interface.outputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), outputs);
-            assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-                if obstacle { vec!["role_0"] } else { vec![] });
+            assert!(group.interface.inputs.is_empty(), "solids reach the water from the World, not a role input");
             assert_eq!(facts(&body.nodes, &body.wires, particles), facts(&group.nodes, &group.wires, particles));
             assert_eq!(group.nodes.iter().filter(|n| n.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID).count(), 1);
             assert_eq!(group.nodes.iter().filter(|n| n.type_id == "node.whitewater_obstacle_source").count(), 1);
@@ -607,27 +583,12 @@ use serde_json::{Value, json};
         }
     }
 
-    #[test]
-    fn gpu_flip_shipped_scene_rows_keep_authored_names() {
-        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(SHIPPED_PRESET)).unwrap();
-        let vm = SceneVm::from_def(def.as_ref()).expect("shipped scene resolves");
-        let names: Vec<_> = vm.objects.iter().filter_map(|object| match object {
-            SceneObjectVm::Known(row) => Some(row.name.as_str()),
-            _ => None,
-        }).collect();
-        for name in ["Water", "Foam", "Spray", "Bubbles", "Obstacle"] {
-            assert_eq!(names.iter().filter(|&&found| found == name).count(), 1, "{name}: {names:?}");
-        }
-        assert!(!names.contains(&""), "scene rows must have authored names");
-    }
-
     /// The shipped `WaterDamBreakGpuFlip.json` is the builder's Dam Break at 64,
     /// so the tests that build it run what ships. `UPDATE_GPU_FLIP_PRESET=1`
     /// rewrites it from the builder.
     #[test]
     fn gpu_flip_shipped_preset_is_the_builders_dam_break() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{SHIPPED_PRESET}.json"));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/presets/{SHIPPED_PRESET}.json"));
         let built = serde_json::to_value(render_def(WaterScene::dam_break(64))).expect("serialise");
         if std::env::var("UPDATE_GPU_FLIP_PRESET").is_ok() {
             let mut json = serde_json::to_string_pretty(&built).expect("serialise");
@@ -644,7 +605,7 @@ use serde_json::{Value, json};
     /// first, since this view is built from it.
     #[test]
     fn gpu_flip_particle_view_is_built_from_the_dam_break() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{PARTICLE_VIEW_PRESET}.json"));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/presets/{PARTICLE_VIEW_PRESET}.json"));
         let existing: EffectGraphDef = serde_json::from_str(&std::fs::read_to_string(&path).expect("Particle View reads")).expect("preset parses");
         assert_preset_root(&existing.nodes);
         let def = particle_view_def();
@@ -673,7 +634,7 @@ use serde_json::{Value, json};
             assert!(node.inputs().iter().any(|input| input.name == port), "{type_id} has no {port} input");
         }
         let bundled = |name: &'static str| -> EffectGraphDef {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            let json = scene_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
             serde_json::from_str(&json).expect("the preset parses")
         };
         for (name, def) in [
@@ -708,7 +669,7 @@ use serde_json::{Value, json};
             ("Add Fluid's liquid body", gpu_flip_liquid_body()),
         ];
         for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET, "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            let json = scene_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
             graphs.push((name, serde_json::from_str(&json).expect("the preset parses")));
         }
         for (name, def) in graphs {
@@ -736,7 +697,7 @@ use serde_json::{Value, json};
             ("Add Fluid's liquid body", gpu_flip_liquid_body()),
         ];
         for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            let json = scene_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
             graphs.push((name, serde_json::from_str(&json).expect("the preset parses")));
         }
         for (name, def) in graphs {
@@ -892,10 +853,10 @@ use serde_json::{Value, json};
     }
 
 use manifold_water_gpu_flip::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
-use manifold_nodes::bundled_presets::bundled_preset_json;
+use manifold_nodes::engine_scenes::scene_json;
 use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
 
 fn shipped_preset() -> Value {
-    let json = manifold_nodes::bundled_presets::bundled_preset_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");
+    let json = manifold_nodes::engine_scenes::scene_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");
     serde_json::from_str(&json).expect("the GPU FLIP preset parses")
 }

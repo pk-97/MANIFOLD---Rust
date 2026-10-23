@@ -12,7 +12,6 @@ const SCENE_FIXTURES: &[&str] = &[
     "gltfscene",
     "mushroomscene",
     "physicsscene",
-    "physicsboxes",
     "fluidauthoring",
     "waterdambreak",
     "waterdambreakmatter",
@@ -126,8 +125,9 @@ fn scene_card_rows_survive_save_and_reload() {
 
 /// A PhysicsSolids control the template declares, bound to one top-level node.
 fn template_node_control() -> (manifold_core::effect_graph_def::EffectGraphDef, String, String) {
+    manifold_nodes::engine_scenes::install();
     let ty = manifold_core::PresetTypeId::from_string("PhysicsSolids".into());
-    let template = manifold_nodes::bundled_presets::bundled_preset_def(&ty).expect("PhysicsSolids");
+    let template = manifold_nodes::engine_scenes::scene_def(&ty).expect("PhysicsSolids");
     let meta = template.preset_metadata.as_ref().unwrap();
     let (id, node_id) = meta
         .params
@@ -147,6 +147,7 @@ fn template_node_control() -> (manifold_core::effect_graph_def::EffectGraphDef, 
 }
 
 fn physics_solids(graph: manifold_core::effect_graph_def::EffectGraphDef) -> PresetInstance {
+    manifold_nodes::engine_scenes::install();
     let mut fx = PresetInstance::new_generator(manifold_core::PresetTypeId::from_string(
         "PhysicsSolids".into(),
     ));
@@ -239,37 +240,6 @@ fn joined_vs_saved(fx: &PresetInstance) -> (usize, Vec<String>) {
     (compared, diffs)
 }
 
-/// The card and panel dump on a scene with a model merged into its layer
-/// graph through the production merge command.
-fn merged_model_layer() -> PresetInstance {
-    use manifold_core::GraphTarget;
-    let mut project = manifold_core::project::Project::default();
-    let ty = manifold_core::PresetTypeId::from_string("PhysicsSolids".into());
-    let index = project.timeline.add_layer("Merged", manifold_core::types::LayerType::Generator, ty.clone());
-    let layer = project.timeline.layers[index].layer_id.clone();
-    let default = manifold_nodes::bundled_presets::bundled_preset_def(&ty).expect("PhysicsSolids").as_ref().clone();
-    let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
-    let plan = manifold_nodes_scene::node_graph::gltf_import::assemble_merge_plan(&default, &glb).expect("merge plan");
-    let mut editing = manifold_editing::service::EditingService::new();
-    editing.execute(
-        Box::new(
-            manifold_editing::commands::graph::ImportModelIntoSceneCommand::new(
-                GraphTarget::Generator(layer), vec![], plan.render_scene_node_id, plan.new_nodes,
-                plan.new_wires, plan.new_objects_count, plan.new_card_params.clone(), plan.new_card_bindings,
-                plan.new_string_params, plan.new_string_bindings, default,
-            )
-            .with_scene_bounds(plan.scene_bounds),
-        ),
-        &mut project,
-    );
-    assert_eq!(editing.take_rejection(), None);
-    let fx = project.timeline.layers[index].gen_params().expect("merged layer").clone();
-    let merged = plan.new_card_params.iter().filter(|s| fx.params.get(&s.id).is_some_and(|p| p.source == SpecSource::Lookup)).count();
-    println!("JOIN_DUMP merged tiger_lily: {merged} of {} merged controls resolve through the lookup", plan.new_card_params.len());
-    assert!(merged > 0, "merged controls missing from the joined manifest");
-    fx
-}
-
 /// SCENE_SURFACES_DESIGN.md P1 gate (no visible change): for every control
 /// the lookup describes, the joined name, range and flags equal the saved
 /// full spec the stamp wrote.
@@ -290,7 +260,6 @@ fn joined_specs_match_saved_specs_on_bundled_scenes() {
             scenes.push((format!("fixture {scene}"), with_graph(fx.clone())));
         }
     }
-    scenes.push(("merged tiger_lily".into(), merged_model_layer()));
     let mut all = Vec::new();
     let mut total = 0;
     for (label, fx) in &scenes {

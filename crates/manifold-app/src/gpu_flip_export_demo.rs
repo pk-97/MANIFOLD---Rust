@@ -39,6 +39,7 @@ fn project() -> Project {
 }
 
 fn project_of(preset: &'static str) -> Project {
+    manifold_nodes::engine_scenes::install();
     let mut project = Project::default();
     project.settings.bpm = Bpm(BPM as f32);
     project.settings.output_width = WIDTH as i32;
@@ -87,7 +88,7 @@ fn export(fps: u32, dir: &Path) -> Vec<u8> {
     let mut content = headless_content_thread(project(), WIDTH, HEIGHT);
     let (cmd_tx, cmd_rx) = unbounded();
     let (state_tx, state_rx) = crate::content_state::state_channel();
-    crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
+    crate::headless_harness::warm_project(&mut content, &state_tx);
     let (observation_tx, observation_rx) = unbounded();
     let _observer = crate::content_export::install_export_observer(observation_tx, None);
     crate::content_export::capture_export_sdr_frame(frames - 1);
@@ -163,7 +164,7 @@ fn liquid_presets_play_without_pipeline_compiles() {
     for preset in [PRESET, "WaterDamBreakMatter", "WaterFloatingBoxMatter", "WaterStillPoolMatter"] {
         let mut content = headless_content_thread(project_of(preset), WIDTH, HEIGHT);
         let (state_tx, _state_rx) = crate::content_state::state_channel();
-        crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
+        crate::headless_harness::warm_project(&mut content, &state_tx);
         let before = cold_touch_count(ColdTouchKind::PipelineCompile);
         content.handle_command(ContentCommand::Play);
         for _ in 0..120 {
@@ -183,7 +184,7 @@ fn gpu_flip_dam_break_paused_live_frames_hold() {
     let dir = out_dir();
     let mut content = headless_content_thread(project(), WIDTH, HEIGHT);
     let (state_tx, _state_rx) = crate::content_state::state_channel();
-    crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
+    crate::headless_harness::warm_project(&mut content, &state_tx);
     let device = std::sync::Arc::clone(content.content_pipeline.native_gpu_for_tests().expect("native device"));
     let grab = |content: &crate::content_thread::ContentThread| {
         content.content_pipeline.wait_for_render_complete();
@@ -232,8 +233,8 @@ fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let mut content = headless_content_thread(project, W, H);
     let (state_tx, state_rx) = crate::content_state::state_channel();
-    crate::scene_modifier_journey::set_generator_param(&mut content, &layer_id, "resolution", 32.0);
-    crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
+    crate::headless_harness::set_generator_param(&mut content, &layer_id, "resolution", 32.0);
+    crate::headless_harness::warm_project(&mut content, &state_tx);
     (0..runs)
         .map(|run| {
             let (cmd_tx, cmd_rx) = unbounded();

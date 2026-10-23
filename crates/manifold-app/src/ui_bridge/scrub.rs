@@ -663,7 +663,7 @@ pub(crate) fn dispatch_scrub(
             ctx.selection,
             &ctx.project,
         )
-        && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(
+        && let Some(reason) = crate::graph_target::macro_parameter_lock_reason(
             &ctx.project,
             &target,
             param_id.as_ref(),
@@ -687,6 +687,17 @@ pub(crate) fn dispatch_scrub(
     // gestures check at their own opens).
     if matches!(phase, ScrubPhase::Begin) {
         ctx.scrub.check_single_active_on_begin("wire");
+    }
+
+    // A Scale axis of an item whose Scale link is on: every card edit of it
+    // (a drag, a typed value, a reset) moves all three in proportion, as one
+    // gesture and one undo step (SCENE_DOCUMENT_DESIGN.md section 7.17).
+    // Modulation, MIDI and OSC never come through here.
+    if let ValueRef::Param(gpt @ manifold_ui::GraphParamTarget::GeneratorOf(layer), param_id) = value_ref
+        && let Some((ids, axis)) = ctx.ui.scene_setup_panel.linked_scale_axes(layer, param_id.as_ref())
+    {
+        let target = resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project);
+        return dispatch_linked_scale(target, ids, axis, phase, ctx);
     }
 
     match value_ref {
@@ -2169,7 +2180,7 @@ pub(crate) fn begin_param_group(
 ) -> bool {
     if let Some(reason) = card_ids
         .iter()
-        .find_map(|id| crate::scene_modifier_edit::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()))
+        .find_map(|id| crate::graph_target::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()))
     {
         ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
         return false;
@@ -2270,6 +2281,43 @@ pub(crate) fn commit_param_group(ctx: &mut DispatchCtx) {
         let cmd = manifold_editing::command::CompositeCommand::new(changes, label.into());
         ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
     }
+}
+
+/// A card edit of Scale axis `axis` of a linked item, as one gesture over its
+/// three Scale params `ids`: each Move scales all three by the dragged
+/// axis's change from its value before the gesture, so the press that jumps
+/// the slider to the pointer scales the other two with it.
+fn dispatch_linked_scale(
+    target: Option<GraphTarget>,
+    ids: [ParamId; 3],
+    axis: usize,
+    phase: &ScrubPhase,
+    ctx: &mut DispatchCtx,
+) -> DispatchResult {
+    match phase {
+        ScrubPhase::Begin => {
+            if let Some(target) = target {
+                begin_param_group(ctx, target, ids.to_vec(), Vec::new(), "Scale");
+            }
+        }
+        ScrubPhase::Move(manifold_ui::ScrubValue::Scalar(value)) => {
+            let Some(ResolvedScrub::ParamGroup { cards, .. }) = &ctx.scrub.active else {
+                return DispatchResult::handled();
+            };
+            if !cards.iter().map(|card| &card.id).eq(ids.iter()) {
+                return DispatchResult::handled();
+            }
+            let from = cards[axis].baseline;
+            let values: Vec<f32> = cards
+                .iter()
+                .map(|card| if from.abs() > f32::EPSILON { card.baseline * value / from } else { *value })
+                .collect();
+            move_param_group(ctx, &values, &[]);
+        }
+        ScrubPhase::Move(_) => {}
+        ScrubPhase::Commit => commit_param_group(ctx),
+    }
+    DispatchResult::handled()
 }
 
 fn dispatch_rgb_scrub(

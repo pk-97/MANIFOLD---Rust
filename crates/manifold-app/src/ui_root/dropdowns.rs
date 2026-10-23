@@ -178,100 +178,6 @@ fn preset_allowed_on_layer_type(
     }
 }
 
-/// Build the typed target/preview menu for one modifier card. Every mutation
-/// and preview action carries the stable object address; labels are display
-/// text only and may safely collide.
-fn modifier_object_menu_items(
-    layer_id: &manifold_core::LayerId,
-    info: &manifold_ui::param_surface::ModifierCardInfo,
-) -> Vec<DropdownItem> {
-    scene_target_menu_items(layer_id, info, false)
-}
-
-fn scene_target_menu_items(
-    layer_id: &manifold_core::LayerId,
-    info: &manifold_ui::param_surface::ModifierCardInfo,
-    force: bool,
-) -> Vec<DropdownItem> {
-    use manifold_core::SceneNodeRef;
-
-    let selected_count = info.objects.iter().filter(|object| object.selected).count();
-    let mut items = Vec::with_capacity(info.objects.len() + selected_count + 2);
-    let all_action = PanelAction::Project(ProjectAction::SceneModifierSetTargets(
-        layer_id.clone(),
-        info.instance_id.clone(),
-        None,
-    ));
-    items.push(DropdownItem::new(if force { "All physics objects" } else { "Apply to all objects" })
-        .with_check(info.targets_all)
-        .with_action(all_action));
-    if force {
-        items.push(DropdownItem::new("No targets")
-            .with_check(!info.targets_all && selected_count == 0)
-            .with_action(PanelAction::Project(ProjectAction::SceneModifierSetTargets(
-                layer_id.clone(), info.instance_id.clone(), Some(Vec::new()),
-            ))));
-    }
-
-    for (index, option) in info.objects.iter().enumerate() {
-        let action = if info.targets_all {
-            Some(vec![option.object.clone()])
-        } else if option.selected {
-            if selected_count <= 1 && !force {
-                None
-            } else {
-                let targets: Vec<SceneNodeRef> = info
-                    .objects
-                    .iter()
-                    .filter(|candidate| candidate.selected && candidate.object != option.object)
-                    .map(|candidate| candidate.object.clone())
-                    .collect();
-                Some(targets)
-            }
-        } else {
-            let mut targets: Vec<SceneNodeRef> = info
-                .objects
-                .iter()
-                .filter(|candidate| candidate.selected)
-                .map(|candidate| candidate.object.clone())
-                .collect();
-            targets.push(option.object.clone());
-            Some(targets)
-        };
-        let mut item = match action {
-            Some(targets) => DropdownItem::new(&option.label).with_action(
-                PanelAction::Project(ProjectAction::SceneModifierSetTargets(
-                    layer_id.clone(),
-                    info.instance_id.clone(),
-                    Some(targets),
-                )),
-            ),
-            None => DropdownItem::disabled(&option.label),
-        }
-        .with_check(option.selected);
-        if index + 1 == info.objects.len() {
-            item = item.with_separator();
-        }
-        items.push(item);
-    }
-
-    if info.objects.is_empty() {
-        // Keep the target section visually distinct even for a temporarily
-        // empty object snapshot.
-        items[0] = items[0].clone().with_separator();
-    }
-    for option in info.objects.iter().filter(|object| object.selected && !force) {
-        items.push(DropdownItem::new(&format!("Preview {}", option.label)).with_action(
-            PanelAction::Root(RootAction::PreviewSceneModifierObject(
-                layer_id.clone(),
-                info.instance_id.clone(),
-                option.object.clone(),
-            )),
-        ));
-    }
-    items
-}
-
 /// Build the source assignment menu for one parameter. The target snapshot is
 /// the authority for both the current source and the compatible lane ids, so
 /// a stale or unavailable lane never appears as a selectable item.
@@ -366,25 +272,11 @@ fn trigger_target_picker_items(
 
 #[cfg(test)]
 mod tests {
-    use super::{modifier_object_menu_items, preset_allowed_on_layer_type};
+    use super::preset_allowed_on_layer_type;
     use manifold_core::types::LayerType;
-    use manifold_core::{LayerId, NodeId};
-    use manifold_ui::panels::{PanelAction, ProjectAction, RootAction};
-    use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption};
-    use manifold_core::SceneNodeRef;
+    use manifold_core::LayerId;
+    use manifold_ui::panels::PanelAction;
 
-    #[test]
-    fn scene_force_menu_can_clear_last_target_without_losing_stable_address() {
-        let items = super::scene_target_menu_items(&LayerId::new("layer"),
-            &info(false, vec![object("body", true)]), true);
-        assert_eq!(items[0].label, "All physics objects");
-        assert!(items.iter().any(|item| item.label == "No targets" && matches!(&item.action,
-            Some(PanelAction::Project(ProjectAction::SceneModifierSetTargets(layer, id, Some(targets))))
-                if layer.as_str() == "layer" && id.as_str() == "modifier" && targets.is_empty())));
-        assert!(items.iter().any(|item| item.label == "Duplicate" && matches!(&item.action,
-            Some(PanelAction::Project(ProjectAction::SceneModifierSetTargets(_, _, Some(targets)))) if targets.is_empty())));
-        assert!(!items.iter().any(|item| item.label.starts_with("Preview")));
-    }
 
     #[test]
     fn automation_numeric_menu_captures_the_clicked_point_value() {
@@ -457,75 +349,8 @@ mod tests {
         }
     }
 
-    fn object(id: &str, selected: bool) -> ModifierObjectOption {
-        ModifierObjectOption {
-            object: SceneNodeRef {
-                scope: vec![NodeId::new("scope")],
-                node: NodeId::new(id),
-            },
-            label: "Duplicate".to_string(),
-            selected,
-        }
-    }
 
-    fn info(targets_all: bool, objects: Vec<ModifierObjectOption>) -> ModifierCardInfo {
-        ModifierCardInfo {
-            instance_id: NodeId::new("modifier"),
-            layer_id: LayerId::new("layer"),
-            params_owner: Default::default(),
-            enabled_label: "Enabled".to_string(),
-            stack_index: 0,
-            stack_len: 1,
-            targets_all,
-            objects,
-        }
-    }
 
-    #[test]
-    fn modifier_object_menu_keeps_exact_addresses_and_distinct_preview_actions() {
-        let items = modifier_object_menu_items(
-            &LayerId::new("layer"),
-            &info(false, vec![object("a", true), object("b", true)]),
-        );
-        let targets = items
-            .iter()
-            .filter_map(|item| item.action.as_ref())
-            .filter_map(|action| match action {
-                PanelAction::Project(ProjectAction::SceneModifierSetTargets(_, _, Some(targets))) => {
-                    Some(targets)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(targets.len(), 2);
-        assert_eq!(targets[0][0].node, NodeId::new("b"));
-        assert_eq!(targets[1][0].node, NodeId::new("a"));
-        assert!(items.iter().any(|item| {
-            item.label == "Preview Duplicate"
-                && matches!(
-                    item.action,
-                    Some(PanelAction::Root(RootAction::PreviewSceneModifierObject(_, _, ref object)))
-                        if object.node == NodeId::new("a")
-                )
-        }));
-        assert!(items.iter().any(|item| {
-            item.label == "Preview Duplicate"
-                && matches!(
-                    item.action,
-                    Some(PanelAction::Root(RootAction::PreviewSceneModifierObject(_, _, ref object)))
-                        if object.node == NodeId::new("b")
-                )
-        }));
-    }
-
-    #[test]
-    fn modifier_object_menu_disables_removing_last_explicit_target() {
-        let items = modifier_object_menu_items(&LayerId::new("layer"), &info(false, vec![object("a", true)]));
-        let target = items.iter().find(|item| item.label == "Duplicate").expect("target item");
-        assert!(!target.enabled);
-        assert!(target.checked);
-        assert!(items.iter().any(|item| item.label == "Apply to all objects" && item.enabled));
-    }
 }
 
 /// Convert an AbletonSession into the picker's thin data struct.
@@ -976,62 +801,6 @@ impl UIRoot {
                             .with_action(PanelAction::Layer(LayerAction::SetLayerAudioSend(idx.clone(), Some(id)))),
                     );
                 }
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            PanelAction::Params(ParamsAction::AddModifierClicked(layer_id)) => {
-                // SCENE_MODIFIER_FRAMEWORK section 3.7 (Inspector card region + picker): the modifier picker —
-                // the inspector's configured model (one entry per registry
-                // kind, applicability computed at the structural sync).
-                // Typed dropdown: each clickable item carries its own apply
-                // action, so there is no index→meaning map to keep in sync.
-                let items: Vec<DropdownItem> = self
-                    .inspector
-                    .modifier_picker()
-                    .iter()
-                    .map(|e| match &e.disabled {
-                        Some(reason) => {
-                            DropdownItem::disabled(&format!("{} — {}", e.label, reason))
-                        }
-                        None => DropdownItem::new(&e.label).with_action(
-                            PanelAction::Project(ProjectAction::SceneModifierApply(
-                                layer_id.clone(),
-                                e.preset_id.clone(),
-                            )),
-                        ),
-                    })
-                    .collect();
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            PanelAction::Root(RootAction::SceneModifierObjectsClicked(layer_id, instance_id)) => {
-                // Resolve against the exact card instance that emitted the
-                // click. The card snapshot owns stable object addresses; this
-                // menu never reconstructs them from labels or positions.
-                let force_info = self.scene_setup_panel.force_card_info(instance_id)
-                    .filter(|info| &info.layer_id == layer_id).cloned();
-                let force = force_info.is_some();
-                let Some(info) = force_info.or_else(|| self.inspector.modifier_card_info(instance_id)
-                    .filter(|info| &info.layer_id == layer_id).cloned()) else {
-                    return true;
-                };
-                let items = if force { scene_target_menu_items(layer_id, &info, true) }
-                    else { modifier_object_menu_items(layer_id, &info) };
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
-            PanelAction::Root(RootAction::SceneSetupAddClicked(layer_id, group)) => {
-                if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
-                    return true;
-                }
-                let items = self.scene_setup_panel.add_menu(*group).into_iter().map(|entry| {
-                    let item = match (&entry.disabled, entry.action) {
-                        (Some(reason), _) => DropdownItem::disabled(&format!("{} \u{2014} {}", entry.label, reason)),
-                        (None, Some(action)) => DropdownItem::new(&entry.label).with_action(action),
-                        (None, None) => DropdownItem::disabled(&entry.label),
-                    };
-                    if entry.separator_after { item.with_separator() } else { item }
-                }).collect();
                 self.open_dropdown_typed(items, trigger);
                 true
             }
@@ -1824,81 +1593,36 @@ impl UIRoot {
                 true
             }
             PanelAction::Root(RootAction::SceneItemRightClicked) => {
+                use manifold_ui::panels::actions::CardEditAction;
                 self.object_cards_have_focus = true;
                 let mut items = card_edit_menu_items(self.scene_item_clipboard.is_some(), false, false);
-                let selected = self.scene_setup_panel.selected_scene_item();
-                if let Some(selected) = selected {
-                    let can_copy = self.scene_setup_panel.scene_item_edit_allowed(
-                        manifold_ui::panels::actions::CardEditAction::Copy,
-                    );
-                    let can_cut = self.scene_setup_panel.scene_item_edit_allowed(
-                        manifold_ui::panels::actions::CardEditAction::Cut,
-                    );
-                    let can_duplicate = self.scene_setup_panel.scene_item_edit_allowed(
-                        manifold_ui::panels::actions::CardEditAction::Duplicate,
-                    );
+                if let Some(selected) = self.scene_setup_panel.selected_scene_item() {
+                    let allowed = |action| self.scene_setup_panel.scene_item_edit_allowed(action);
+                    let (can_copy, can_cut, can_duplicate) =
+                        (allowed(CardEditAction::Copy), allowed(CardEditAction::Cut), allowed(CardEditAction::Duplicate));
                     items.retain(|item| match item.label.as_str() {
                         "Copy" => can_copy,
                         "Cut" => can_cut,
-                        // A Water-family child has no graph-removal menu
-                        // item; its permanent Hide action writes visible=0.
-                        "Delete" => selected.capabilities.delete,
+                        "Delete" => selected.removable,
                         "Duplicate" => can_duplicate,
                         _ => true,
                     });
-                    if selected.capabilities.hide {
-                        let hide = match self.scene_setup_panel.hide_selection_action() {
-                            Some(action) => DropdownItem::new("Hide").with_action(action),
-                            None => DropdownItem::disabled("Hide"),
-                        };
-                        items.push(hide.with_separator());
+                    if let Some(group) = self.scene_setup_panel.group_selection_action() {
+                        items.push(DropdownItem::new("Group").with_action(group).with_separator());
+                    }
+                    if let Some(ungroup) = self.scene_setup_panel.ungroup_selection_action() {
+                        items.push(DropdownItem::new("Ungroup").with_action(ungroup));
                     }
                     items.push(DropdownItem::new("Rename").with_action(PanelAction::Root(RootAction::SceneItemRename)));
                     items.push(DropdownItem::new("Move Up").with_action(PanelAction::Root(RootAction::SceneItemMove(-1))));
                     items.push(DropdownItem::new("Move Down").with_action(PanelAction::Root(RootAction::SceneItemMove(1))));
-                    if !selected.is_light {
+                    if !matches!(selected.kind, manifold_core::scene_surface::ItemKind::World | manifold_core::scene_surface::ItemKind::Material | manifold_core::scene_surface::ItemKind::Camera) {
                         items.push(DropdownItem::new("Frame Selected").with_action(PanelAction::Root(RootAction::SceneItemFrame)));
                     }
                 } else {
                     // Camera and World remain addressable for navigation; only paste applies.
                     items.retain(|item| item.label.starts_with("Paste"));
                 }
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
-                true
-            }
-            PanelAction::Root(RootAction::ObjectModifierCardRightClicked(address)) => {
-                self.object_cards_have_focus = true;
-                self.scene_setup_panel.select_object_modifier_by_address(
-                    &address.layer_id, &address.owner,
-                    address.node_doc_id, &mut self.tree,
-                );
-                let items = card_edit_menu_items(self.object_modifier_clipboard.is_some(), false, false);
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
-                true
-            }
-            PanelAction::Root(RootAction::SceneModifierCardRightClicked(layer, id)) => {
-                let force = self.scene_setup_panel.force_card_info(id)
-                    .is_some_and(|info| &info.layer_id == layer);
-                self.object_cards_have_focus = force;
-                if force {
-                    self.scene_setup_panel.set_selection(layer.clone(),
-                        manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
-                } else {
-                    self.inspector.select_modifier_for_context_menu(layer, id);
-                    self.inspector.apply_selection_visuals(&mut self.tree);
-                }
-                let target = manifold_ui::view::UiGraphTarget::SceneModifier {
-                    owner: Box::new(manifold_ui::view::UiGraphTarget::Generator(layer.clone())),
-                    modifier_id: id.clone(),
-                };
-                let mut items = card_edit_menu_items(self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0), false, false);
-                let modified = if force {
-                    self.scene_setup_panel.force_cards_mut().iter()
-                        .find(|card| card.modifier_info().is_some_and(|info| &info.instance_id == id))
-                        .is_some_and(|card| card.has_graph_mod())
-                } else { self.inspector.modifier_has_graph_mod(layer, id) };
-                items.extend(preset_menu_items(modified,
-                    |kind| ParamsAction::PresetAction(target.clone(), kind)));
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
@@ -1953,13 +1677,6 @@ impl UIRoot {
                     }
                 }
                 if matches!(gpt, GraphParamTarget::Generator) {
-                    if let Some(layer) = self.inspector.modifier_scope_id().cloned()
-                        && self.scene_modifier_clipboard.as_ref().is_some_and(|clipboard| clipboard.count() > 0)
-                    {
-                        items.push(DropdownItem::new("Paste Modifiers").with_action(
-                            PanelAction::Project(ProjectAction::SceneModifiersPaste(layer)),
-                        ));
-                    }
                     items.push(
                         DropdownItem::new("Copy Generator")
                             .with_action(PanelAction::Params(ParamsAction::CopyGenerator)),
@@ -2038,41 +1755,6 @@ impl UIRoot {
                 }
                 true
             }
-            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D9: click on a 3+-label
-            // enum value cell in the Scene tab opens the shared
-            // dropdown — items = the row's label set, checked at the current
-            // index, each carrying the SAME `SceneSetupParamChanged` write
-            // the tab's steppers already dispatch (no new mutation path).
-            // `cell_node_id` resolves the anchor directly (the panel has no
-            // `&UITree` in `handle_event` to compute it itself).
-            PanelAction::Root(RootAction::SceneSetupEnumClicked {
-                layer_id,
-                scope_path,
-                node_doc_id,
-                param_id,
-                labels,
-                current_index,
-                cell_node_id,
-            }) => {
-                let cell_trigger = self.tree.get_bounds(*cell_node_id);
-                let items: Vec<DropdownItem> = labels
-                    .iter()
-                    .enumerate()
-                    .map(|(i, label)| {
-                        DropdownItem::new(label)
-                            .with_check(i as u32 == *current_index)
-                            .with_action(PanelAction::Project(ProjectAction::SceneSetupParamChanged(
-                                layer_id.clone(),
-                                scope_path.clone(),
-                                *node_doc_id,
-                                param_id.clone(),
-                                i as f32,
-                            )))
-                    })
-                    .collect();
-                self.open_dropdown_typed(items, cell_trigger);
-                true
-            }
             // The shared card row core's enum value-cell click
             // (3+ labels) — same overlay as `SceneSetupEnumClicked`, but
             // generic over `GraphParamTarget` + `ParamId` so inspector card
@@ -2087,9 +1769,12 @@ impl UIRoot {
                 cell_node_id,
             }) => {
                 let cell_trigger = self.tree.get_bounds(*cell_node_id);
+                // An empty label is a value with nothing to pick (a deleted
+                // camera's cut number), so it is not offered.
                 let items: Vec<DropdownItem> = labels
                     .iter()
                     .enumerate()
+                    .filter(|(_, label)| !label.is_empty())
                     .map(|(i, label)| {
                         DropdownItem::new(label)
                             .with_check(i as u32 == *current_index)
@@ -2103,7 +1788,14 @@ impl UIRoot {
                 self.open_dropdown_typed(items, cell_trigger);
                 true
             }
-            _ => self.try_open_scene_setup_menu(action),
+            // The Scene tab's menus (Add, field picks, Material features):
+            // each item carries the action it sends.
+            PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id, items }) => {
+                let button = self.tree.get_bounds(*button_node_id);
+                self.open_dropdown_typed(items.clone(), button);
+                true
+            }
+            _ => false,
         }
     }
 

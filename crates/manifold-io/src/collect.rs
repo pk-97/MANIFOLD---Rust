@@ -2,7 +2,8 @@
 //!
 //! [`collect_asset_paths`] is THE enumeration of every external file a project
 //! references — video library clips, audio clips, layer video folders, image
-//! clips, and every string param whose `stringBinding` targets a file-loading
+//! clips, every file a scene layer's document names, and every string param
+//! whose `stringBinding` targets a file-loading
 //! node type on any generator instance. Path Resolver extension (P2), Collect
 //! All and Save (P4), and any future missing-file report all read it. No
 //! second list anywhere.
@@ -67,6 +68,10 @@ pub enum AssetTarget {
         key: String,
         load: NodeFileLoad,
     },
+    /// A file a scene layer's document names (SCENE_DOCUMENT_DESIGN.md
+    /// section 7.1): a model, an HDRI or a texture. Every document field
+    /// holding the same path re-points together.
+    SceneFile { layer_id: LayerId },
 }
 
 /// One external asset a project references.
@@ -184,7 +189,7 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                     continue;
                 }
                 out.push(AssetRef {
-                    kind: kind_of(*load),
+                    kind: kind_of(*load, value),
                     path: PathBuf::from(value),
                     target: AssetTarget::StringParam {
                         layer_id: layer.layer_id.clone(),
@@ -221,7 +226,7 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                         continue;
                     }
                     out.push(AssetRef {
-                        kind: kind_of(load),
+                        kind: kind_of(load, &default),
                         path: PathBuf::from(default),
                         target: AssetTarget::SceneModifierStringParam {
                             layer_id: layer.layer_id.clone(),
@@ -231,6 +236,25 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                         },
                     });
                 }
+            }
+        }
+
+        // A scene layer's files live in its document, not in string params:
+        // one ref per distinct path.
+        if let Some(doc) = &inst.scene {
+            let mut files: Vec<(AssetKind, String)> = Vec::new();
+            doc.clone().files_mut(|family, path| {
+                let kind = kind_of(NodeFileLoad::File(family), path);
+                if !path.is_empty() && !files.iter().any(|(k, p)| *k == kind && p == path) {
+                    files.push((kind, path.clone()));
+                }
+            });
+            for (kind, path) in files {
+                out.push(AssetRef {
+                    kind,
+                    path: PathBuf::from(path),
+                    target: AssetTarget::SceneFile { layer_id: layer.layer_id.clone() },
+                });
             }
         }
     }
@@ -380,7 +404,12 @@ fn inst_graph(inst: &PresetInstance) -> Option<&EffectGraphDef> {
 /// the same family as their File sibling so a future `Folder(Mesh)` entry
 /// (e.g. a model-drop folder) collects without a red-match refactor — the
 /// family, not the file-vs-folder split, decides the `Media/` subfolder.
-fn kind_of(load: NodeFileLoad) -> AssetKind {
+fn kind_of(load: NodeFileLoad, path: &str) -> AssetKind {
+    // A picture read by a model's texture loader (a Material's File
+    // texture through node.gltf_texture_source) collects with the images.
+    if load == NodeFileLoad::File(AssetFamily::Mesh) && manifold_core::file_loader::is_picture(path) {
+        return AssetKind::Images;
+    }
     match load {
         NodeFileLoad::File(AssetFamily::Mesh) | NodeFileLoad::Folder(AssetFamily::Mesh) => {
             AssetKind::Mesh
@@ -411,6 +440,8 @@ pub struct CollectReport {
     pub bytes_copied: u64,
     pub missing: usize,
     pub re_pointed: usize,
+    /// Each re-pointed ref: where it is stored, its old path, its new one.
+    pub moves: Vec<(AssetTarget, PathBuf, PathBuf)>,
 }
 
 #[derive(Debug)]
@@ -735,11 +766,51 @@ fn re_point(
         AssetTarget::SceneModifierStringParam { .. } => {
             re_point_scene_modifier_asset(project, target, &old_str, &new_str)
         }
+        AssetTarget::SceneFile { layer_id } => re_point_scene_file(project, layer_id, &old_str, &new_str),
     };
 
     if changed {
         report.re_pointed += 1;
+        report.moves.push((target.clone(), old_path.to_path_buf(), new_path.to_path_buf()));
     }
+}
+
+/// Apply a collect's re-points to another copy of the project saved at
+/// `project_path`: the content thread's, after the UI thread collected and
+/// saved its own copy, so a later save keeps the collected paths.
+pub fn re_point_moves(project: &mut Project, moves: &[(AssetTarget, PathBuf, PathBuf)], project_path: &Path) {
+    let Some(project_dir) = project_path.parent() else {
+        return;
+    };
+    let mut report = CollectReport::default();
+    for (target, old, new) in moves {
+        re_point(project, target, old, new, project_dir, &mut report);
+    }
+}
+
+/// Re-point every field of `layer_id`'s scene document that names `old` to
+/// `new`. Only the document changes: a save writes it as is, and a caller
+/// that renders from the project recompiles it ([`PathResolver::resolve_all`]).
+pub(crate) fn re_point_scene_file(project: &mut Project, layer_id: &LayerId, old: &str, new: &str) -> bool {
+    if old == new {
+        return false;
+    }
+    let Some(doc) = project
+        .timeline
+        .find_layer_by_id_mut(layer_id.as_str())
+        .and_then(|(_, layer)| layer.gen_params_mut())
+        .and_then(|inst| inst.scene.as_mut())
+    else {
+        return false;
+    };
+    let mut changed = false;
+    doc.files_mut(|_, path| {
+        if path == old {
+            *path = new.to_owned();
+            changed = true;
+        }
+    });
+    changed
 }
 
 pub(crate) fn re_point_scene_modifier_asset(
@@ -944,7 +1015,7 @@ pub(crate) fn has_calibrated_scene_asset(project: &Project, layer_id: &LayerId, 
         meta.string_bindings.iter().any(|binding| binding.id == key &&
             matches!(&binding.target, BindingTarget::Node { node_id, param }
                 if param == "path" && graph.scene_modifiers.iter().any(|modifier|
-                    modifier.mesh_frames.iter().any(|frame| &frame.source.node == node_id))))
+                    modifier.mesh_frames.iter().any(|frame| frame.source == *node_id))))
     })
 }
 
@@ -1008,7 +1079,7 @@ mod tests {
     #[test]
     fn scene_modifier_v3_asset_binding_follows_the_local_snapshot() {
         use manifold_core::scene_modifier_preset::{
-            SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+            SceneModifierInstanceDef, SceneTargetSelection,
         };
         let local = path_preset(
             "Local", vec![sp("model", "scan.glb", false)],
@@ -1031,7 +1102,7 @@ mod tests {
         );
         host.def.scene_modifiers.push(SceneModifierInstanceDef {
             id: NodeId::new("modifier/a:b"),
-            scene: SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
@@ -1045,7 +1116,7 @@ mod tests {
     fn scene_modifier_asset_project(host_exposes: bool) -> (Project, LayerId, String) {
         use manifold_core::effect_graph_def::{GroupDef, GroupInterface};
         use manifold_core::scene_modifier_preset::{
-            SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+            SceneModifierInstanceDef, SceneTargetSelection,
         };
 
         // Parse the checked-in authored recipe first so these tests exercise
@@ -1102,7 +1173,7 @@ mod tests {
         host.def.version = 3;
         host.def.scene_modifiers.push(SceneModifierInstanceDef {
             id: modifier_id.clone(),
-            scene: SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
+            scene: NodeId::new("scene"),
             targets: SceneTargetSelection::AllObjects,
             mesh_frames: vec![],
             legacy_math_view_carrier: None,
@@ -1698,6 +1769,58 @@ mod tests {
         ));
         project.timeline.layers.push(gen_layer);
 
+        // A scene layer: an import of the same GLB (its Group, part and
+        // Material all name it), an HDRI environment and a texture file.
+        let hdri_src = src_dir.join("sky.hdr");
+        let texture_src = src_dir.join("paint.png");
+        std::fs::write(&hdri_src, b"fake hdr").unwrap();
+        std::fs::write(&texture_src, b"fake png").unwrap();
+        let scene_layer_id = {
+            use manifold_core::scene_doc::{
+                EnvironmentSource, GroupFields, Item, ItemFields, ItemId, LightFields, LightType, MaterialFields,
+                ObjectFields, SceneDoc, Shape, TextureSource,
+            };
+            let hdri = hdri_src.to_string_lossy().to_string();
+            let texture = texture_src.to_string_lossy().to_string();
+            let mut group = Item::new(ItemId::new("scan"), "Scan", ItemFields::Group(GroupFields { source: Some(glb_path.clone()), ..GroupFields::default() }));
+            group.children = vec![
+                Item::new(
+                    ItemId::new("scan-part"),
+                    "Part",
+                    ItemFields::Object(ObjectFields {
+                        shape: Shape::Mesh { file: glb_path.clone(), node_path: "0".into(), vertex_count: 0, primitives: Default::default() },
+                        ..ObjectFields::default()
+                    }),
+                ),
+                Item::new(
+                    ItemId::new("scan-mat"),
+                    "Scan Material",
+                    ItemFields::Material(MaterialFields { texture: TextureSource::Model { file: glb_path.clone(), material: Some(0) }, ..MaterialFields::default() }),
+                ),
+            ];
+            let doc = SceneDoc {
+                items: vec![
+                    group,
+                    Item::new(
+                        ItemId::new("environment"),
+                        "Environment",
+                        ItemFields::Light(LightFields { light: LightType::Environment { source: EnvironmentSource::Hdri { file: hdri } } }),
+                    ),
+                    Item::new(
+                        ItemId::new("paint"),
+                        "Paint",
+                        ItemFields::Material(MaterialFields { texture: TextureSource::File { path: texture }, ..MaterialFields::default() }),
+                    ),
+                ],
+                ..SceneDoc::default()
+            };
+            let mut scene_layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 3);
+            scene_layer.gen_params_mut().unwrap().scene = Some(doc);
+            let id = scene_layer.layer_id.clone();
+            project.timeline.layers.push(scene_layer);
+            id
+        };
+
         let audio_layer_id = project
             .timeline
             .layers
@@ -1716,6 +1839,8 @@ mod tests {
             .clone();
 
         let project_path = proj_dir.join("MyShow.manifold");
+        // The content thread's copy of the same project.
+        let mut twin = project.clone();
         let report = collect_all_and_save(&mut project, &project_path).unwrap();
 
         // On-disk layout: one file per family (video, audio, meshes).
@@ -1723,12 +1848,34 @@ mod tests {
         assert!(proj_dir.join("Media/Audio/loop1.wav").is_file());
         assert!(proj_dir.join("Media/Meshes/azalea.glb").is_file());
 
-        // Report: three unique files copied, none missing, none already local.
-        assert_eq!(report.copied, 3, "one file per family");
-        assert_eq!(report.re_pointed, 3, "all three refs re-pointed");
+
+        // The scene layer's files: copied, and every document field that
+        // named one now names the copy, before and after a reload.
+        assert!(proj_dir.join("Media/HDRIs/sky.hdr").is_file());
+        assert!(proj_dir.join("Media/Images/paint.png").is_file());
+        let scene_files = |project: &Project| {
+            let mut files = Vec::new();
+            let (_, layer) = project.timeline.find_layer_by_id(scene_layer_id.as_str()).unwrap();
+            layer.gen_params().unwrap().scene.clone().unwrap().files_mut(|_, path| files.push(path.clone()));
+            files
+        };
+        let collected = scene_files(&project);
+        assert_eq!(collected.len(), 5, "{collected:?}");
+        // The twin takes the same re-points, so its next save keeps them.
+        re_point_moves(&mut twin, &report.moves, &project_path);
+        assert_eq!(scene_files(&twin), collected);
+        assert_eq!(twin.video_library.clips[0].file_path, project.video_library.clips[0].file_path);
+        for file in &collected {
+            assert!(std::path::Path::new(file).starts_with(&proj_dir), "a scene file still points outside the project: {file}");
+            assert!(std::path::Path::new(file).is_file(), "{file}");
+        }
+
+        // Report: five unique files copied, none missing, none already local.
+        assert_eq!(report.copied, 5, "one file per distinct source: the scene shares the GLB");
+        assert_eq!(report.re_pointed, 6, "every ref re-pointed, the scene's GLB, HDRI and texture included");
         assert_eq!(report.missing, 0);
         assert_eq!(report.already_local, 0);
-        assert_eq!(report.bytes_copied, 28 + glb_bytes.len() as u64, "sum of the three fixture file sizes");
+        assert_eq!(report.bytes_copied, 44 + glb_bytes.len() as u64, "sum of the five fixture file sizes");
 
         // Copy-only invariant: sources untouched.
         assert_eq!(super::sha256_file(&video_src).unwrap(), video_before);
@@ -1791,6 +1938,9 @@ mod tests {
             .get("model_path")
             .unwrap();
         assert!(std::path::Path::new(model2).exists(), "reloaded GLB path resolves: {model2}");
+        for file in scene_files(&reloaded) {
+            assert!(std::path::Path::new(&file).is_file(), "reloaded scene file resolves: {file}");
+        }
 
         let _ = std::fs::remove_dir_all(&base);
     }

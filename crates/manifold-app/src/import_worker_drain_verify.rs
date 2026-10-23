@@ -45,11 +45,9 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
     let mut app = headless_application();
     let layers_before = app.local_project.timeline.layers.len();
 
-    // A real graph — CPU-only parse, no GPU, no `validate_def` call (the
-    // worker's `Validating` stage is deliberately never reached in this
-    // test; validate_def's own correctness is proven by its own tests).
-    let (graph, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
-        .unwrap_or_else(|e| panic!("assemble_import_graph({}) failed: {e}", path.display()));
+    // A real model — CPU-only parse, no GPU.
+    let read = manifold_nodes_scene::node_graph::gltf_import::read_model(&path)
+        .unwrap_or_else(|e| panic!("read_model({}) failed: {e}", path.display()));
 
     // 1. Hand-feed a `Stage` event, exactly as `run_import_worker` would
     //    before its `Parsing` step, and drain it.
@@ -77,11 +75,12 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
     app.import_progress_tx
         .send(ImportProgress::Done {
             path: path.clone(),
-            graph: Box::new(graph),
-            report,
+            file: path.clone(),
+            model: Box::new(read.model),
+            facts: read.facts,
+            warnings: read.warnings,
             conversion_report_line: None,
-            drop_beat: 0.0,
-            layer_under_cursor: None,
+            target: crate::import_worker::ImportTarget::Drop { beat: 0.0, under: None },
         })
         .unwrap();
     app.drain_import_progress();
@@ -92,6 +91,17 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
         "Done must dispatch the new layer exactly once"
     );
     assert!(!app.import_worker_busy, "Done must clear the busy flag");
+    // The worker's facts travel on the new layer's document, so neither
+    // thread's compile opens the file.
+    let file = path.to_string_lossy();
+    let carried = app
+        .local_project
+        .timeline
+        .layers
+        .iter()
+        .filter_map(|layer| layer.gen_params()?.scene.as_ref())
+        .any(|doc| doc.models.contains(&file));
+    assert!(carried, "the new scene layer's document carries the file's facts");
 }
 
 #[test]
@@ -118,7 +128,7 @@ fn failed_event_shows_an_accent_toast_never_silent() {
 fn a_second_drop_while_busy_is_queued_not_run_in_parallel() {
     let mut app = headless_application();
     // Simulate an in-flight worker without actually spawning one (spawning
-    // touches the lazy-fallback GPU device via `validation_gpu_device` —
+    // starts a thread —
     // this test is about the enqueue branch only, which never does).
     app.import_worker_busy = true;
     assert!(app.import_queue.is_empty());
@@ -129,5 +139,39 @@ fn a_second_drop_while_busy_is_queued_not_run_in_parallel() {
     assert!(app.import_worker_busy, "still busy — the queued request didn't spawn");
     assert_eq!(app.import_queue.len(), 1, "the drop while busy must be queued FIFO");
     assert_eq!(app.import_queue[0].path, path);
-    assert_eq!(app.import_queue[0].drop_beat, 4.0);
+    assert_eq!(app.import_queue[0].target, crate::import_worker::ImportTarget::Drop { beat: 4.0, under: None });
+}
+
+/// The import's layer travels by id: a layer removed while the file parsed
+/// drops the import with a toast, never landing it on whatever layer took
+/// its place in the stack.
+#[test]
+fn an_import_whose_layer_went_is_dropped_with_a_toast() {
+    let path = small_fixture_path();
+    let read = manifold_nodes_scene::node_graph::gltf_import::read_model(&path)
+        .unwrap_or_else(|e| panic!("read_model({}) failed: {e}", path.display()));
+    let mut app = headless_application();
+    let layers_before = app.local_project.timeline.layers.len();
+    let gone = manifold_core::LayerId::new("removed-while-parsing");
+    for target in [
+        crate::import_worker::ImportTarget::Drop { beat: 0.0, under: Some(gone.clone()) },
+        crate::import_worker::ImportTarget::Into { layer: gone.clone(), parent: None },
+    ] {
+        app.import_worker_busy = true;
+        app.import_progress_tx
+            .send(ImportProgress::Done {
+                path: path.clone(),
+                file: path.clone(),
+                model: Box::new(read.model.clone()),
+                facts: read.facts.clone(),
+                warnings: Vec::new(),
+                conversion_report_line: None,
+                target,
+            })
+            .unwrap();
+        app.drain_import_progress();
+        assert_eq!(app.local_project.timeline.layers.len(), layers_before, "the import landed although its layer is gone");
+        assert!(app.ws.ui_root.toast.is_open(), "a dropped import says why");
+        assert!(!app.import_worker_busy);
+    }
 }

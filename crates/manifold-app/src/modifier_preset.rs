@@ -5,19 +5,6 @@ use manifold_core::{
     project::Project,
 };
 
-/// Compare local authoring with the same scene-adjusted recipe used at attach.
-/// This runs during structural projection, never live parameter synchronization.
-pub(crate) fn has_graph_mod(owner: &EffectGraphDef, local: &EffectGraphDef) -> bool {
-    match library_baseline(owner, local) {
-        Ok(Some(baseline)) => local.diverges_ignoring_layout(&baseline),
-        Ok(None) => true,
-        Err(error) => {
-            log::error!("[preset] modifier baseline unavailable: {error}");
-            true
-        }
-    }
-}
-
 pub(crate) fn library_baseline(
     owner: &EffectGraphDef,
     local: &EffectGraphDef,
@@ -90,7 +77,7 @@ pub(crate) fn export_def(project: &Project, target: &GraphTarget) -> Option<Effe
             !local.bindings.iter().any(|binding| {
                 captured(&binding.id)
                     && matches!(&binding.target, BindingTarget::Node { node_id, param }
-                if node_id == &initializer.target.node && param == &initializer.param)
+                if node_id == &initializer.target && param == &initializer.param)
             })
         });
     }
@@ -108,62 +95,12 @@ mod tests {
     use manifold_core::macro_bank::MacroCurve;
     use manifold_core::scene_modifier_preset::{
         SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneModifierRecipe,
-        SceneNodeInitializer, SceneNodeRef, SceneScalarExpr, SceneTargetSelection,
+        SceneNodeInitializer, SceneScalarExpr, SceneTargetSelection,
     };
     use manifold_core::{LayerId, NodeId, PresetTypeId};
     use std::collections::BTreeMap;
 
-    #[test]
-    fn modifier_badge_compares_scene_initialized_library_graph() {
-        let mut owner = owner_graph();
-        owner.preset_metadata.as_mut().unwrap().scene_bounds =
-            Some(([-2.0, -3.0, -4.0], [2.0, 3.0, 4.0]));
-        for id in [
-            "SceneLoop",
-            "SceneFog",
-            "ElasticSculpture",
-            "SurfacePeel",
-            "SurfacePeelHit",
-            "VortexFragments",
-        ] {
-            let recipe =
-                manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(id)).unwrap();
-            let local = manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, &recipe).unwrap();
-            assert!(!has_graph_mod(&owner, &local), "fresh {id}");
-            let mut edited = local.clone();
-            edited.nodes[0].title = Some("Edited local graph".into());
-            assert!(has_graph_mod(&owner, &edited), "edited {id}");
-            assert_eq!(library_baseline(&owner, &edited).unwrap().unwrap(), local);
-        }
-        assert!(
-            has_graph_mod(&owner, &local_recipe()),
-            "missing library remains a local snapshot"
-        );
-    }
 
-    #[test]
-    fn modifier_editor_baseline_selects_local_recipe_and_ignores_host_controls() {
-        let (mut project, target) = project();
-        let host = project.graph_target_owner_mut(&target).unwrap();
-        let graph = host.graph.as_mut().unwrap();
-        let recipe =
-            manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("SurfacePeel"))
-                .unwrap();
-        *graph.scene_modifiers[0].graph = (*recipe).clone();
-        let baseline = crate::graph_target::catalog_default(&project, &target).unwrap();
-        assert_eq!(target.graph_in(&baseline).unwrap(), recipe.as_ref());
-        let host = project.graph_target_owner_mut(&target).unwrap();
-        host.params.get_mut("outer_a").unwrap().base = 0.1;
-        let graph = host.graph.as_mut().unwrap();
-        graph.scene_modifiers[0].graph.nodes[0].editor_pos = Some((40.0, 80.0));
-        assert!(!has_graph_mod(graph, &graph.scene_modifiers[0].graph));
-        assert!(
-            !target
-                .graph_in(graph)
-                .unwrap()
-                .diverges_ignoring_layout(target.graph_in(&baseline).unwrap())
-        );
-    }
 
     fn spec(id: &str, default: f32, curve: MacroCurve) -> ParamSpecDef {
         ParamSpecDef {
@@ -259,18 +196,12 @@ mod tests {
                     shatter: None,
                     initializers: vec![
                         SceneNodeInitializer {
-                            target: SceneNodeRef {
-                                scope: Vec::new(),
-                                node: node_id.clone(),
-                            },
+                            target: node_id.clone(),
                             param: "gain".into(),
                             value: SceneScalarExpr::Constant { value: 0.25 },
                         },
                         SceneNodeInitializer {
-                            target: SceneNodeRef {
-                                scope: Vec::new(),
-                                node: node_id,
-                            },
+                            target: node_id,
                             param: "other".into(),
                             value: SceneScalarExpr::Constant { value: 0.4 },
                         },
@@ -304,17 +235,12 @@ mod tests {
     fn owner_graph() -> EffectGraphDef {
         let local = local_recipe();
         let frame = SceneMeshReferenceFrame {
-            target: SceneNodeRef {
-                scope: Vec::new(),
-                node: NodeId::new("object"),
-            },
-            source: SceneNodeRef {
-                scope: Vec::new(),
-                node: NodeId::new("mesh"),
-            },
+            target: NodeId::new("object"),
+            source: NodeId::new("mesh"),
             source_definition_hash: "mesh-hash".into(),
             source_offset: [1.0, 2.0, 3.0],
             scene_radius: 4.0,
+            live_offset: None,
         };
         EffectGraphDef {
             version: 3,
@@ -374,10 +300,7 @@ mod tests {
             scene_modifiers: vec![
                 SceneModifierInstanceDef {
                     id: NodeId::new("a"),
-                    scene: SceneNodeRef {
-                        scope: Vec::new(),
-                        node: NodeId::new("scene"),
-                    },
+                    scene: NodeId::new("scene"),
                     targets: SceneTargetSelection::AllObjects,
                     mesh_frames: vec![frame.clone()],
                     legacy_math_view_carrier: None,
@@ -385,10 +308,7 @@ mod tests {
                 },
                 SceneModifierInstanceDef {
                     id: NodeId::new("b"),
-                    scene: SceneNodeRef {
-                        scope: Vec::new(),
-                        node: NodeId::new("scene"),
-                    },
+                    scene: NodeId::new("scene"),
                     targets: SceneTargetSelection::AllObjects,
                     mesh_frames: vec![frame],
                     legacy_math_view_carrier: None,

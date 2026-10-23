@@ -15,6 +15,9 @@ manifold_core::testkit_visible! { mod mesh_stagger_envelope; }
 manifold_core::testkit_visible! { mod analytic_echo_instances; }
 mod bake_equirect_envmap;
 mod pack_curve_xy;
+mod polygon_curve;
+mod curve_solid_source;
+mod mesh_fragment;
 mod consecutive_edges;
 manifold_core::testkit_visible! { mod copy_positions; }
 mod cylinder_wrap_field;
@@ -26,6 +29,10 @@ mod edges_from_grid_uv;
 mod edges_from_mesh;
 mod edges_from_hypercube;
 mod facet_normals;
+mod smooth_normals;
+mod mesh_texture_weights;
+mod drop_hidden_triangles;
+mod subdivide_mesh;
 mod fold_mesh;
 manifold_core::testkit_visible! { mod generate_cube_mesh; }
 mod generate_grid_mesh;
@@ -34,6 +41,7 @@ pub mod render_mesh_diagram;
 mod generate_grid_uv;
 mod generate_instance_transforms;
 mod plane_mesh;
+mod sphere_mesh;
 mod glitch_jitter;
 pub(crate) mod gltf_anim_shared;
 manifold_core::testkit_visible! { mod gltf_animation_source; }
@@ -91,9 +99,11 @@ mod scene_fx_default_passthrough;
 mod shatter_mesh;
 mod slice_mesh;
 pub mod scatter_on_mesh;
+pub mod merge_meshes;
+pub mod nest_copies;
 mod simplex_per_instance;
 pub(crate) mod camera_orbit;
-mod camera_switch;
+pub(crate) mod camera_switch;
 mod free_camera;
 mod look_at_camera;
 mod camera_lens;

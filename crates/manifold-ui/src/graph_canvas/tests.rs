@@ -2613,63 +2613,7 @@ fn nested_group_row_lives_on_the_currently_viewed_level_only() {
     assert_eq!(inner_group.params[0].label, "Amount");
 }
 
-// ── scene build P5: "+ Object" / "+ Light" action rows, same-pair ribbons ──
-
-#[test]
-fn render_scene_node_gets_add_object_and_add_light_action_rows() {
-    let mut n = node(1, "node.render_scene", Some("render"));
-    n.parameters = vec![float_param("objects", 2.0), float_param("lights", 1.0)];
-    let snap = GraphSnapshot {
-        nodes: vec![n],
-        wires: Vec::new(),
-        outer_routings: Vec::new(),
-    };
-    let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snap);
-
-    let view = canvas.find_node(1).expect("render_scene node view");
-    assert!(view.is_render_scene);
-
-    let objects_row = view
-        .rows
-        .iter()
-        .position(|r| matches!(r, NodeRow::Param { param, .. } if view.params[*param].name == "objects"))
-        .expect("objects param row");
-    assert!(
-        matches!(view.rows[objects_row + 1], NodeRow::Action(NodeActionKind::AddSceneObject)),
-        "+ Object button spliced right after the objects row"
-    );
-
-    let lights_row = view
-        .rows
-        .iter()
-        .position(|r| matches!(r, NodeRow::Param { param, .. } if view.params[*param].name == "lights"))
-        .expect("lights param row");
-    assert!(
-        matches!(view.rows[lights_row + 1], NodeRow::Action(NodeActionKind::AddSceneLight)),
-        "+ Light button spliced right after the lights row"
-    );
-}
-
-#[test]
-fn ordinary_node_gets_no_action_rows() {
-    let mut n = node(1, "node.blur", Some("blur"));
-    n.parameters = vec![float_param("amount", 0.5)];
-    let snap = GraphSnapshot {
-        nodes: vec![n],
-        wires: Vec::new(),
-        outer_routings: Vec::new(),
-    };
-    let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snap);
-
-    let view = canvas.find_node(1).expect("blur node view");
-    assert!(!view.is_render_scene);
-    assert!(
-        !view.rows.iter().any(|r| matches!(r, NodeRow::Action(_))),
-        "only render_scene gets gesture-button rows"
-    );
-}
+// ── same-pair ribbons ──
 
 #[test]
 fn group_wires_by_pair_collapses_shared_endpoints_leaves_singletons_alone() {

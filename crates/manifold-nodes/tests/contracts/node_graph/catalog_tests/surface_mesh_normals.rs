@@ -18,19 +18,6 @@ fn surface_stage_defaults_and_manifest_bindings() {
         manifold_nodes_water::presets::gpu_flip::WaterScene::dam_break(64),
     );
     let metadata = def.preset_metadata.as_ref().unwrap();
-    let scene = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
-    let water = scene
-        .objects
-        .iter()
-        .find_map(|object| match object {
-            manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row)
-                if row.liquid_domain.is_some() =>
-            {
-                Some(row)
-            }
-            _ => None,
-        })
-        .expect("Water object");
     for (id, name, default) in [
         ("mesh_relaxation", "Smoothing Value", 0.5),
         ("surface_smoothing_iterations", "Smoothing Iterations", 2.0),
@@ -41,16 +28,6 @@ fn surface_stage_defaults_and_manifest_bindings() {
         assert_eq!(p.default_value, default);
         assert_eq!(metadata.bindings.iter().filter(|b| b.id == id).count(), 1);
         assert_eq!((p.min, p.max), (0.0, 10.0));
-        let binding = metadata.bindings.iter().find(|b| b.id == id).unwrap();
-        let manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } =
-            &binding.target
-        else {
-            panic!("node binding")
-        };
-        assert!(
-            water.control_nodes().contains(node_id),
-            "Water must own {id}"
-        );
     }
     let flat = manifold_core::flatten::flatten_groups(&def).unwrap();
     assert_eq!(

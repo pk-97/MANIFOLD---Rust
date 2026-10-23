@@ -1237,6 +1237,9 @@ impl RowHost {
     /// anywhere off the track opens it. A switch or pick-list row opens the
     /// same menu from its label and its button. Both the param card and the
     /// Scene tab register their rows here (SCENE_SURFACES_DESIGN.md D10).
+    /// A row with an affordance (a scene item's field, the Scale link) is
+    /// no manifest param, so it has nothing to map and gets no menu
+    /// (SCENE_DOCUMENT_DESIGN.md ruling 3).
     pub(crate) fn register_param_menus(
         &self,
         rows: &[ParamRow],
@@ -1248,7 +1251,7 @@ impl RowHost {
         use crate::slider::BitmapSlider;
         for (pi, buttons) in self.toggle_ids.iter().enumerate() {
             let (Some(ids), Some(row)) = (buttons, rows.get(pi)) else { continue };
-            if !matches!(ids.kind, RowKind::Switch | RowKind::Choice) {
+            if !matches!(ids.kind, RowKind::Switch | RowKind::Choice) || row.affordance.is_some() {
                 continue;
             }
             let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), row.id.clone()));
@@ -1259,6 +1262,9 @@ impl RowHost {
         }
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             let (Some(ids), Some(row)) = (slider, rows.get(pi)) else { continue };
+            if row.affordance.is_some() {
+                continue;
+            }
             let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), row.id.clone()));
             BitmapSlider::register_label_mapping(ids, &menu, intents);
             if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
@@ -1584,6 +1590,9 @@ impl RowHost {
             RowRole::ToggleBtn => {
                 use crate::param_surface::RowKind;
                 let Some(info) = rows.get(row) else { return Vec::new() };
+                if matches!(info.affordance, Some(crate::param_surface::RowAffordance::Field { .. })) {
+                    return field_row_action(&target, info, node);
+                }
                 let pid = info.id.clone();
                 match self.toggle_ids[row].as_ref().map(|ids| ids.kind) {
                     Some(RowKind::Trigger) => vec![PanelAction::Params(ParamsAction::ParamFire(target, pid))],

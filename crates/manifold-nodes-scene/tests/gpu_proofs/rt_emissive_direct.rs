@@ -69,7 +69,7 @@ fn render(json: &str) -> (f64, f64) {
     // frame-0 luma (before accumulation fills in) + converged luma
     let h=manifold_node_engine::testkit::gpu_harness::shared();
     let reg=PrimitiveRegistry::with_builtin();
-    let mut rt=PresetRuntime::from_json_str_with_device(json,&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("scene");
+    let mut rt=PresetRuntime::from_json_str_with_device(&manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("scene");
     let tgt=h.make_target("rs-c");
     let mut f0: Option<f64> = None;
     for fr in 0..ACCUM_FRAMES{
@@ -153,7 +153,7 @@ fn i_rs3_sampler_converges_to_cpu_analytic_gather_misses() {
 #[cfg(feature = "rt-perf-proofs")]
 fn ms(json:&str,label:&str,n:usize)->(f64,f64){
     let h=manifold_node_engine::testkit::gpu_harness::shared();let reg=PrimitiveRegistry::with_builtin();
-    let mut rt=PresetRuntime::from_json_str_with_device(json,&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("tms");
+    let mut rt=PresetRuntime::from_json_str_with_device(&manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("tms");
     let tgt=h.make_target("tms");let mut ts=Vec::with_capacity(n);
     for fr in 0..n{let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr as i64,anim_progress:0.0,trigger_count:0};
         let mut enc=h.device.create_encoder("tms");let t0=Instant::now();
@@ -172,7 +172,7 @@ fn ms(json:&str,label:&str,n:usize)->(f64,f64){
 #[repr(C)]#[derive(Clone,Copy)]struct Pv{pos:[f32;3]}
 fn wb(d:&GpuDevice,v:&[Pv])->GpuBuffer{let b=d.create_buffer_shared(((v.len()*12)as u64).max(16));unsafe{std::ptr::copy_nonoverlapping(v.as_ptr().cast::<u8>(),b.mapped_ptr().unwrap(),v.len()*12);}b}
 const I:[[f32;4];4]=[[1.,0.,0.,0.],[0.,1.,0.,0.],[0.,0.,1.,0.],[0.,0.,0.,1.]];
-fn o<'a>(v:&'a GpuBuffer,n:u32)->RtObjectGeometry<'a>{RtObjectGeometry{material_attributes:Default::default(),vertex_buffer:v,vertex_stride:12,vertex_offset:0,index_buffer:None,triangle_count:n,transform:I,normal_offset:0,uv_offset:0,alpha_mask:false,translucent:false,alpha_cutoff:0.5,base_color_texture:None,mr_texture:None,normal_texture:None,emissive_texture:None,extra_material_textures:[None;15],emissive_uv_m:[1.,0.,0.,1.],emissive_uv_t:[0.,0.],cast_shadows:true,instances_addr:0,instances_buffer:None,instance_slots:1,appearance_weights:None,appearance_gain:1.0,
+fn o<'a>(v:&'a GpuBuffer,n:u32)->RtObjectGeometry<'a>{RtObjectGeometry{instance_inner:RtObjectGeometry::NO_INNER,material_attributes:Default::default(),vertex_buffer:v,vertex_stride:12,vertex_offset:0,index_buffer:None,triangle_count:n,transform:I,normal_offset:0,uv_offset:0,alpha_mask:false,translucent:false,alpha_cutoff:0.5,base_color_texture:None,mr_texture:None,normal_texture:None,emissive_texture:None,extra_material_textures:[None;15],emissive_uv_m:[1.,0.,0.,1.],emissive_uv_t:[0.,0.],cast_shadows:true,instances_addr:0,instances_buffer:None,instance_slots:1,appearance_weights:None,appearance_gain:1.0,
         base_color_uv_transform: [1., 0., 0., 1., 0., 0.],
         mr_uv_transform: [1., 0., 0., 1., 0., 0.],
         normal_uv_transform: [1., 0., 0., 1., 0., 0.],

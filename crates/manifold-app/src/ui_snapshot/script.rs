@@ -235,7 +235,6 @@ fn run_flow(
         || scene == "gltfscene"
         || scene == "mushroomscene"
         || scene == "physicsscene"
-        || scene == "physicsboxes"
         || scene == "newscene"
         // The Scene tab lives in the inspector (SCENE_SURFACES D16).
         || scene == "fluidauthoring"
@@ -712,12 +711,7 @@ impl Runner {
         use manifold_core::GraphTarget;
         use manifold_ui::RootAction;
         match action {
-            RootAction::PreviewSceneModifierObject(layer, modifier_id, _) => self.watch(data, GraphTarget::SceneModifier {
-                owner: Box::new(GraphTarget::Generator(layer.clone())),
-                modifier_id: modifier_id.clone(),
-            }),
             RootAction::OpenGraphTarget(target) => self.watch(data, crate::editing_host::to_graph_target(target)),
-            RootAction::SceneSetupOpenGraphEditor(layer) => self.watch(data, GraphTarget::Generator(layer.clone())),
             RootAction::OpenGeneratorGraphEditor => {
                 if let Some(layer) = self.active_layer.clone() {
                     self.watch(data, GraphTarget::Generator(layer));
@@ -1207,7 +1201,7 @@ impl Runner {
         self.live_frame_once(ui, data, render, scrolled_in_place, settle_tweens);
         if settle_tweens && !self.perform.active {
             let editor_structural = self.editor.as_ref().is_some_and(|ed| ed.ws.ui_root.inspector.structural_motion());
-            if ui.inspector.structural_motion() || ui.scene_setup_panel.cards_structural_motion() || editor_structural {
+            if ui.inspector.structural_motion() || editor_structural {
                 self.live_frame_once(ui, data, render, false, true);
             }
         }
@@ -1253,7 +1247,6 @@ impl Runner {
         // rebuilds the settled layout.
         if settle_tweens {
             ui.inspector.skip_to_settled(&mut ui.tree);
-            ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);
             if let Some(ed) = self.editor.as_mut() {
                 let ed_ui = &mut ed.ws.ui_root;
                 ed_ui.inspector.skip_to_settled(&mut ed_ui.tree);
@@ -1829,13 +1822,13 @@ impl Runner {
         }
     }
 
-    /// A left release: it ends a text drag, clears the selection after a
-    /// click on empty preview space, then ends a preview gizmo drag
-    /// (`window_input`'s release order), else reaches the tree.
+    /// A left release: it ends a text drag, sends a pick after a click on
+    /// the preview, then ends a preview gizmo drag (`window_input`'s release
+    /// order), else reaches the tree.
     fn release(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
         crate::text_session::pointer_up(&mut self.text_input);
-        self.preview_gizmo(ui, data, |host, ctx, _| {
-            host.release_click(ctx, pos);
+        self.preview_gizmo(ui, data, |host, ctx, fit| {
+            host.release_click(ctx, fit, pos);
             false
         });
         if !self.preview_gizmo(ui, data, |host, ctx, _| host.release(ctx)) {
@@ -1914,7 +1907,7 @@ impl Runner {
             let ed_ui = &mut ed.ws.ui_root;
             ed_ui.inspector.skip_to_settled(&mut ed_ui.tree)
         });
-        if ui.inspector.skip_to_settled(&mut ui.tree) | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree) | editor_settled {
+        if ui.inspector.skip_to_settled(&mut ui.tree) | editor_settled {
             self.live_frame(ui, data, render, false, true);
         }
         let tree_before = surfaces_dump(self, ui);
@@ -2114,8 +2107,6 @@ impl Runner {
     /// `data.project` synchronously before sending (mirroring the live
     /// app's `local_project` pattern, module doc), so by the time this runs
     /// the command has already taken effect — `record()`, not `execute()`.
-    /// SceneModifier messages are content-owned requests, so this harness
-    /// executes their shared authoring/admission path exactly once before recording.
     /// Non-editing variants (`SeekTo`, `Undo`, …) are inert here; the
     /// harness's headless `Key` arm drives `self.undo` directly instead of
     /// routing through this channel.
@@ -2141,34 +2132,12 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
-                ContentCommand::ObjectModifier(action) => {
-                    match crate::object_modifier_transfer::build_action(&data.project, action) {
-                        Ok(command) => ContentCommand::ExecuteOnContent(command),
-                        Err(message) => ContentCommand::GraphEditRejected(message),
-                    }
-                }
-                ContentCommand::SceneCameraSetup(layer_id) => {
-                    match crate::scene_camera_edit::build_action(&data.project, layer_id) {
-                        Ok(command) => ContentCommand::ExecuteOnContent(command),
-                        Err(message) => ContentCommand::GraphEditRejected(message),
-                    }
-                }
-                ContentCommand::SceneItem(action) => {
-                    let selection = action.selection_request();
-                    match crate::scene_item_transfer::build_action(&data.project, action) {
-                        Ok(command) => match selection {
-                            Some(request) => ContentCommand::ExecuteSelecting(command, request),
-                            None => ContentCommand::ExecuteOnContent(command),
-                        },
-                        Err(message) => ContentCommand::GraphEditRejected(message),
-                    }
-                }
                 other => other,
             };
             match cmd {
                 ContentCommand::ExecuteSelecting(command, request) => {
                     let pending = request.capture(&data.project);
-                    let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
+                    let applied = self.undo.execute(command, &mut data.project);
                     if applied {
                         self.content_stamps.bump(self.undo.last_written());
                     }
@@ -2179,24 +2148,6 @@ impl Runner {
                     } else if applied && let Some(selection) = pending.resolve(&data.project) {
                         let sequence = data.content.edit_selection_update.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
                         data.content.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
-                    }
-                }
-                ContentCommand::SceneModifier(action) => {
-                    let error = match crate::scene_modifier_edit::build_action(&data.project, action) {
-                        Ok(command) => {
-                            let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
-                            if applied {
-                                self.content_stamps.bump(self.undo.last_written());
-                            }
-                            changed |= applied;
-                            self.undo.take_rejection()
-                        }
-                        Err(error) => Some(error),
-                    };
-                    if let Some(message) = error {
-                        let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
-                        changed = true;
                     }
                 }
                 ContentCommand::GraphEditRejected(message) => {
@@ -2212,7 +2163,7 @@ impl Runner {
                     changed = true;
                 }
                 ContentCommand::ExecuteOnContent(cmd) => {
-                    let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(cmd), &mut data.project);
+                    let applied = self.undo.execute(cmd, &mut data.project);
                     if applied {
                         // After execute, as EditingService reads it.
                         self.content_stamps.bump(self.undo.last_written());
@@ -2742,9 +2693,7 @@ impl Runner {
             if let PanelAction::Root(
                 root @ (manifold_ui::RootAction::OpenGraphEditor(_)
                 | manifold_ui::RootAction::OpenGeneratorGraphEditor
-                | manifold_ui::RootAction::OpenGraphTarget(_)
-                | manifold_ui::RootAction::SceneSetupOpenGraphEditor(_)
-                | manifold_ui::RootAction::PreviewSceneModifierObject(..)),
+                | manifold_ui::RootAction::OpenGraphTarget(_)),
             ) = action
             {
                 self.watch_for_open(ui, data, root);
@@ -2818,9 +2767,9 @@ impl Runner {
             }
             // The live app resolves this in `app_render.rs` from its graph
             // editor's viewport; here the runner's viewport stands in.
-            if let PanelAction::Root(manifold_ui::RootAction::SceneSetupCopyViewportCamera(layer)) = action {
+            if let PanelAction::Root(manifold_ui::RootAction::SceneSetupCopyViewportCamera(layer, camera)) = action {
                 let view = self.viewport.as_ref().filter(|(shown, _)| shown == layer).map(|(_, camera)| *camera);
-                crate::scene_view_copy::run(&mut crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx), ui, layer, view.as_ref());
+                crate::scene_view_copy::run(&mut crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx), ui, layer, camera, view.as_ref());
                 continue;
             }
             if let PanelAction::Params(manifold_ui::ParamsAction::EditCards(edit)) = action {

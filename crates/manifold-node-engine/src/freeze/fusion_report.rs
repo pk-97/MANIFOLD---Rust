@@ -203,7 +203,7 @@ mod tests {
             "version": 3,
             "sceneModifiers": [{
                 "id": "invalid-modifier",
-                "scene": {"node": "scene"},
+                "scene": "scene",
                 "targets": "allObjects",
                 "graph": {
                     "version": 3,

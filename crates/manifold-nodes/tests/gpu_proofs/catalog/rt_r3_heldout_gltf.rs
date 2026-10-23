@@ -3,7 +3,7 @@
 //! map the R3 kernel path was never tuned against (no kernel constant in
 //! this phase is retunable per-asset — if this fails, the fix is a
 //! diagnosis, not a fit). Same real-import-path pattern as
-//! `rt_bug326_fix_gate.rs` (`assemble_import_graph` -> `PresetRuntime`),
+//! `rt_bug326_fix_gate.rs` (`compile_model_scene` -> `PresetRuntime`),
 //! not the raw `RtObjectGeometry` harness.
 //!
 //! No test-visible accessor exposes `RtNormalSource::mr_tex_index` through
@@ -24,7 +24,7 @@
 use manifold_core::flatten::flatten_groups;
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -131,7 +131,7 @@ fn build_variant(
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/khronos/DamagedHelmet.glb");
     assert!(glb.exists(), "held-out fixture missing: {glb:?}");
-    let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
+    let (def, report) = compile_model_scene(&glb).expect("import must succeed");
     eprintln!("[r3-heldout] import report: {report:?}");
 
     let mut flat = flatten_groups(&def).expect("flatten_groups must succeed (no-op if already flat)");
@@ -226,7 +226,10 @@ fn heldout_helmet_mr_map_changes_traced_reflection() {
     // rt=0 baseline (both variants poll against this SAME lit-fraction floor).
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/khronos/DamagedHelmet.glb");
-    let (def0, _) = assemble_import_graph(&glb).expect("import must succeed");
+    let (def0, _) = compile_model_scene(&glb).expect("import must succeed");
+    // The scene's own card values with RT off: every camera, light and
+    // transform value is a card param, so an empty manifest is no scene.
+    let rt_off_params = harness::import_rt_manifest(&def0, false, false);
     let registry = PrimitiveRegistry::with_builtin();
     let mut rt_off = PresetRuntime::from_def_with_device(
         def0,
@@ -247,7 +250,6 @@ fn heldout_helmet_mr_map_changes_traced_reflection() {
     // process (reproduces 0/3 in isolation) — extra frames + one retry
     // absorbs that transient without weakening the check itself (still a
     // hard failure if it never lights up).
-    let rt_off_params = manifold_core::params::ParamManifest::default();
     let mut baseline_frac = 0.0f64;
     for attempt in 0..3 {
         for f in 0..(90 + attempt * 60) {

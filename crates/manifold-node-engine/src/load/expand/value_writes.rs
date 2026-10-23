@@ -74,7 +74,7 @@ impl PreparedGraphValueWrites {
                     .by_ref
                     .keys()
                     .map(|reference| {
-                        let mut copies = vec![reference.node.clone()];
+                        let mut copies = vec![reference.clone()];
                         // Internal Shatter draws retain the authored object's
                         // visibility and other properties under live edits.
                         for modifier in &owner.scene_modifiers {
@@ -82,7 +82,7 @@ impl PreparedGraphValueWrites {
                                 .and_then(|m| m.scene_modifier.as_ref())
                                 .is_none_or(|r| r.shatter.is_none()) { continue; }
                             for piece in 0..32 {
-                                let copy = super::compiler::shatter::copy_id(&modifier.id, &reference.node, "object", piece);
+                                let copy = super::compiler::shatter::copy_id(&modifier.id, reference, "object", piece);
                                 if graph.instance_by_node_id(&copy).is_none() { break; }
                                 copies.push(copy);
                             }

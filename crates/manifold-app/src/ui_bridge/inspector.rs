@@ -38,14 +38,12 @@ mod scene_card_convergence_tests {
     use manifold_core::project::Project;
     use manifold_core::types::LayerType;
     use manifold_core::types::{BeatDivision, DriverWaveform};
-    use manifold_nodes_scene::node_graph::scene_vm::{AtmosphereVm, SceneVm};
     use manifold_ui::{
         AudioSetupAction, EditingAction, MappingAction, ModulationAction, ParamsAction,
     };
     use manifold_ui::{DriverConfigAction, PanelAction, ScrubPhase, ScrubValue, ValueRef};
 
-    /// A fresh Scene generator layer + its `render_scene` node id —
-    /// same starter as `project.rs`, with Fog explicitly added for the
+    /// A fresh Scene generator layer holding the base scene, for the
     /// parameter routing checks below.
     fn scene_layer_project() -> (Project, LayerId) {
         let mut project = Project::default();
@@ -55,41 +53,7 @@ mod scene_card_convergence_tests {
             PresetTypeId::from_string("Scene".to_string()),
         );
         let layer_id = project.timeline.layers[idx].layer_id.clone();
-        add_fixture_fog(&mut project, &layer_id);
         (project, layer_id)
-    }
-
-    fn add_fixture_fog(project: &mut Project, layer_id: &LayerId) {
-        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
-            .unwrap().as_ref().clone();
-        let scene = def.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
-        let mut fog = manifold_editing::commands::graph::AddSceneFogCommand::new(
-            manifold_core::GraphTarget::Generator(layer_id.clone()), Vec::new(), scene,
-            (0.0, 0.0), manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.atmosphere"), def,
-        );
-        manifold_editing::command::Command::execute(&mut fog, project);
-    }
-
-    /// The layer's fog-density write address, read straight off the SAME
-    /// `SceneVm::from_def` production code walks (`state_sync.rs`'s VM
-    /// builder) — never hand-picked.
-    fn fog_density_addr(
-        project: &Project,
-        layer_id: &LayerId,
-    ) -> manifold_core::effect_graph_def::EffectGraphDef {
-        let (_, layer) = project.timeline.find_layer_by_id(layer_id).unwrap();
-        layer.generator_graph().cloned().unwrap_or_else(|| {
-            manifold_nodes::bundled_presets::bundled_preset_def(&layer.generator_type().clone()).map(|def| (*def).clone())
-                .expect("Scene is a bundled preset")
-        })
-    }
-
-    fn density_node_id(def: &manifold_core::effect_graph_def::EffectGraphDef) -> u32 {
-        let vm = SceneVm::from_def(def).expect("Scene resolves as a scene");
-        let AtmosphereVm::Wired(a) = vm.atmosphere else {
-            panic!("Scene's atmosphere must be Wired");
-        };
-        a.node_doc_id
     }
 
     #[allow(clippy::type_complexity)]
@@ -177,49 +141,13 @@ mod scene_card_convergence_tests {
     }
 
     fn material_colour_fixture() -> (Project, LayerId, [manifold_core::effects::ParamId; 3]) {
-        use manifold_core::effect_graph_def::BindingTarget;
-        use manifold_core::effects::ParamId;
         let mut project = Project::default();
-        let index = project.timeline.add_layer(
-            "Material test",
-            LayerType::Generator,
-            PresetTypeId::new("PhysicsSolids"),
-        );
+        let index = project.timeline.add_layer("Material test", LayerType::Generator, PresetTypeId::SCENE);
         let layer_id = project.timeline.layers[index].layer_id.clone();
-        let mut def = fog_density_addr(&project, &layer_id);
-        manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let r = meta
-            .bindings
-            .iter()
-            .find(|b| {
-                matches!(&b.target, BindingTarget::Node {param,..} if param == "color_r")
-                    && meta.params.iter().any(|p| {
-                        p.id == b.id
-                            && matches!(
-                                p.material_role,
-                                Some(
-                                    manifold_core::material_inspector::MaterialParamRole::Colour(
-                                        _,
-                                        manifold_core::material_inspector::MaterialColour::Base,
-                                        _
-                                    )
-                                )
-                            )
-                    })
-            })
-            .expect("scene fixture contains a stamped material colour");
-        let BindingTarget::Node { node_id, .. } = &r.target else {
-            unreachable!()
-        };
-        let ids: [ParamId;3] = ["color_r","color_g","color_b"].map(|name| meta.bindings.iter()
-            .find(|b| matches!(&b.target, BindingTarget::Node {node_id:n,param} if n == node_id && param == name))
-            .unwrap().id.clone().into());
-        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-        project.with_preset_graph_mut(&target, |inst| {
-            inst.graph = Some(def.clone());
-            inst.refresh_manifest_from_graph();
-        });
+        let mut edit = crate::scene_edit::add(&project, &layer_id, "material", None, &[]).expect("a material adds to the base scene");
+        manifold_editing::command::Command::execute(&mut *edit.command, &mut project);
+        let material = edit.select.expect("the add selects the new material");
+        let ids = ["color_r", "color_g", "color_b"].map(|name| manifold_core::effects::ParamId::from(manifold_core::scene_doc::param_id(&material, name)));
         (project, layer_id, ids)
     }
 
@@ -406,7 +334,7 @@ mod scene_card_convergence_tests {
     fn param_gesture_locked_mid_drag_still_releases_its_hold() {
         use manifold_core::effect_graph_def::BindingTarget;
         use manifold_core::scene_modifier_preset::{
-            SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+            SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
         };
         let (mut project, layer_id, ids) = material_colour_fixture();
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
@@ -426,7 +354,7 @@ mod scene_card_convergence_tests {
                     _ => None,
                 })
                 .unwrap();
-            let node = |node| SceneNodeRef { scope: vec![], node };
+            let node = |node| node;
             let modifier = SceneModifierInstanceDef {
                 id: manifold_core::NodeId::new("modifier"),
                 scene: node(manifold_core::NodeId::new("scene")),
@@ -437,13 +365,14 @@ mod scene_card_convergence_tests {
                     source_definition_hash: "hash".into(),
                     source_offset: [0.0; 3],
                     scene_radius: 1.0,
+                    live_offset: None,
                 }],
                 legacy_math_view_carrier: None,
                 graph: Box::new(graph.clone()),
             };
             graph.scene_modifiers.push(modifier);
         });
-        assert!(crate::scene_modifier_edit::macro_parameter_lock_reason(&project, &target, &ids[0]).is_some());
+        assert!(crate::graph_target::macro_parameter_lock_reason(&project, &target, &ids[0]).is_some());
 
         h.dispatch(&PanelAction::Scrub(value_ref, ScrubPhase::Commit), &mut project);
         let commands = h.drain();
@@ -519,7 +448,7 @@ mod scene_card_convergence_tests {
         use crate::ui_bridge::projection::cards::{SurfaceVisibility, gen_params_to_surface};
         use manifold_editing::service::EditingService;
         let mut project = Project::default();
-        project.timeline.add_layer("Lights", LayerType::Generator, PresetTypeId::new("PhysicsSolids"));
+        project.timeline.add_layer("Lights", LayerType::Generator, PresetTypeId::SCENE);
         project.reconcile_param_manifests();
         // The user put the light faders on the card.
         for param in project.timeline.layers[0].gen_params_mut().unwrap().params.iter_mut() {
@@ -895,53 +824,21 @@ mod scene_card_convergence_tests {
             manifold_ui::GraphParamTarget::Generator
         }
 
-        /// Resolve a REAL exposed param id for the scene layer's fog_density
-        /// node. P2 slice 2a (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md):
-        /// fog_density is a P1-stamped exposed card param from creation —
-        /// `migrate_scene_exposures` runs on every bundled generator preset
-        /// at load (`bundled_generator_presets.rs`'s own comment), so
-        /// Scene's atmosphere node is ALREADY exposed, no
-        /// expose-then-arm dance through the scene panel's (now-dead
-        /// this slice, per BUG_BACKLOG.md) synthesized-id path needed —
-        /// this is byte-for-byte the same "real exposed param" every other
-        /// `undo_baseline` fixture below already exercises for effects/
-        /// generators, just using the scene layer's own atmosphere param as
-        /// the specimen. `h` is unused now that no `PanelAction` dispatch is
-        /// needed to arm anything; kept in the signature so every call site
-        /// below reads uniformly.
+        /// A real manifest param of the scene layer: the base scene's cube
+        /// position, armed with an enabled driver, the "before" state
+        /// `driver_toggle_atomic` and the driver-trim case start from.
         fn materialized_param(
             _h: &mut Harness,
             project: &mut Project,
             layer_id: &LayerId,
         ) -> manifold_core::effects::ParamId {
-            let catalog_default = fog_density_addr(project, layer_id);
-            let node_doc_id = density_node_id(&catalog_default);
+            let real = manifold_core::scene_doc::param_id(&manifold_core::scene_doc::ItemId::new("cube"), "pos_x");
             let (_, layer) = project
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .expect("layer resolves");
             let inst = layer.gen_params_mut().unwrap();
-            // A freshly-init'd instance still TRACKS its catalog preset
-            // (`graph: None`) — `binding_id_for_node_param` only resolves
-            // against an instance's OWN graph override, so the effective-def
-            // fallback (the same one BUG-260's `display_value` uses) is
-            // mandatory here, not optional.
-            let real = inst
-                .binding_id_for_node_param(node_doc_id, "fog_density")
-                .or_else(|| {
-                    manifold_core::effects::binding_id_for_node_param_in(
-                        &catalog_default,
-                        node_doc_id,
-                        "fog_density",
-                    )
-                })
-                .expect("Scene's fog_density must already be exposed by P1 stamping");
-            // The OLD synth-id `DriverToggle` dispatch this fixture used to
-            // run did double duty: it exposed AND armed an enabled driver in
-            // one shot (BUG-249's "expose-then-arm"). `driver_toggle_atomic` and the
-            // driver-trim gesture case below assume that
-            // pre-armed driver as their "before" state — reconstruct it
-            // directly (no dispatch needed now that exposure is a given).
+            assert!(inst.params.contains(&real), "the base scene's cube has a position row");
             if inst.drivers.as_ref().is_none_or(|ds| ds.is_empty()) {
                 inst.drivers = Some(vec![manifold_core::effects::ParameterDriver {
                     param_id: std::borrow::Cow::Owned(real.clone()),
@@ -962,8 +859,8 @@ mod scene_card_convergence_tests {
             std::borrow::Cow::Owned(real)
         }
 
-        /// A genuine momentary parameter for ParamFire coverage. The
-        /// SceneStarter card has ordinary continuous controls, so this keeps
+        /// A genuine momentary parameter for ParamFire coverage. The scene
+        /// card has ordinary continuous controls, so this keeps
         /// the fire fixture explicit instead of dispatching an invalid click
         /// against a slider-shaped parameter.
         fn trigger_param(
@@ -1520,8 +1417,6 @@ mod scene_card_convergence_tests {
                 PresetTypeId::from_string("Scene".to_string()),
             );
             let layer_b = project.timeline.layers[idx_b].layer_id.clone();
-            add_fixture_fog(&mut project, &layer_a);
-            add_fixture_fog(&mut project, &layer_b);
             (project, layer_a, layer_b)
         }
 
@@ -2420,15 +2315,11 @@ mod scene_card_convergence_tests {
 
         // ── Card membership (SCENE_SURFACES D6 (attached rows)) ──
 
-        /// A PhysicsSolids layer with an audio send, and its orbit camera's
+        /// A base scene layer with an audio send, and its orbit camera's
         /// roll: a Setup control, off the card until a modulator attaches.
         fn roll_rig() -> (Project, LayerId, manifold_core::effects::ParamId) {
             let mut project = Project::default();
-            project.timeline.layers.push(manifold_core::layer::Layer::new_generator(
-                "PhysicsSolids".into(),
-                PresetTypeId::from_string("PhysicsSolids".to_string()),
-                0,
-            ));
+            project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
             project.reconcile_param_manifests();
             with_send(&mut project);
             let layer_id = project.timeline.layers[0].layer_id.clone();
@@ -2508,6 +2399,26 @@ mod scene_card_convergence_tests {
             assert!(side.service.undo(&mut side.project));
             assert!(!gen_inst(&side.project, &layer_id).modulates(&roll), "the driver is gone");
             assert!(on_card(&side.project, &layer_id, &roll), "the macro keeps roll on the card");
+        }
+
+        /// A scene item's field id (`cube#physics`) is no manifest param:
+        /// neither a macro nor an Ableton macro maps to it (ruling 3).
+        #[test]
+        fn a_field_id_never_maps() {
+            let (project, layer_id, _) = roll_rig();
+            let mut side = ContentSide::new(&project);
+            let mut h = Harness::new(Some(layer_id));
+            let field = manifold_core::effects::ParamId::from("cube#physics");
+            let map = PanelAction::Mapping(MappingAction::MapParamToMacro(gpt(), field.clone(), 0));
+            land(&mut side, &mut h, map);
+            assert!(side.project.settings.macro_bank.slots[0].mappings.is_empty(), "a field id mapped to a macro");
+            let mut local = side.project.clone();
+            let ableton = PanelAction::Mapping(MappingAction::MapParamToAbleton(gpt(), field, Default::default()));
+            h.dispatch(&ableton, &mut local);
+            assert!(
+                !h.drain().iter().any(|command| matches!(command, ContentCommand::AbletonMapParam { .. })),
+                "a field id mapped to an Ableton macro"
+            );
         }
 
         // ── Clip gestures (timeline host path) ───────────────────

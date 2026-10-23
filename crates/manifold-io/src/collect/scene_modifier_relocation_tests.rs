@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use manifold_core::effect_graph_def::BindingTarget;
-use manifold_core::scene_modifier_preset::{SceneMeshReferenceFrame, SceneNodeRef};
+use manifold_core::scene_modifier_preset::SceneMeshReferenceFrame;
 
 const SOURCE_KEY: &str = "calibrated_source";
 const SOURCE_NODE: &str = "scene-source";
@@ -54,14 +54,8 @@ fn calibrated_scene_project(old_path: &str, stale_hash: bool) -> (Project, Layer
     graph.scene_modifiers[0]
         .mesh_frames
         .push(SceneMeshReferenceFrame {
-            target: SceneNodeRef {
-                scope: Vec::new(),
-                node: NodeId::new("scene-object"),
-            },
-            source: SceneNodeRef {
-                scope: Vec::new(),
-                node: NodeId::new(SOURCE_NODE),
-            },
+            target: NodeId::new("scene-object"),
+            source: NodeId::new(SOURCE_NODE),
             source_definition_hash: if stale_hash {
                 "stale-source-hash".into()
             } else {
@@ -69,11 +63,12 @@ fn calibrated_scene_project(old_path: &str, stale_hash: bool) -> (Project, Layer
             },
             source_offset: [-0.75, 0.2, 0.1],
             scene_radius: 3.5,
+            live_offset: None,
         });
     (project, layer_id, modifier_id)
 }
 
-fn frame_snapshot(graph: &EffectGraphDef) -> (SceneNodeRef, SceneNodeRef, [f64; 3], f64, String) {
+fn frame_snapshot(graph: &EffectGraphDef) -> (NodeId, NodeId, [f64; 3], f64, String) {
     let frame = &graph.scene_modifiers[0].mesh_frames[0];
     (
         frame.target.clone(),

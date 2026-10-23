@@ -1,9 +1,10 @@
 //! D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` section 4 P2) — a transient
-//! bottom-center message eased in over `MOTION_SLOW`, held ~1.4s, faded out
-//! over `MOTION_SLOW`. Reduces to one `Transient` (D3's one-shot-timed-event
-//! piece — the anim.rs doc-comment names "toast" explicitly as a `Transient`
-//! use case) whose `progress()` is turned into a three-segment alpha curve
-//! (ramp in / hold / ramp out) instead of a bespoke second mechanism.
+//! bottom-center message eased in over `MOTION_SLOW`, held ~1.4s (longer for
+//! a long message, so it can be read), faded out over `MOTION_SLOW`. Reduces
+//! to one `Transient` (D3's one-shot-timed-event piece — the anim.rs
+//! doc-comment names "toast" explicitly as a `Transient` use case) whose
+//! `progress()` is turned into a three-segment alpha curve (ramp in / hold /
+//! ramp out) instead of a bespoke second mechanism.
 //!
 //! Hosted as a first-class [`Overlay`] (`Modeless`, click-through, so it never
 //! steals input from whatever is under it; `SelfManaged` anchor, computed from
@@ -30,11 +31,14 @@ use std::time::Instant;
 /// Ease-in duration — D1's general `MOTION_SLOW` (240ms), same token the plan
 /// names for "value flash, toast".
 const ENTER_MS: f32 = color::MOTION_SLOW_MS;
-/// Fully-visible hold, per D11 ("~1.4s hold").
+/// Fully-visible hold, per D11 ("~1.4s hold"), for a short message.
 const HOLD_MS: f32 = 1400.0;
+/// A longer message holds long enough to read: this much per character, up
+/// to `MAX_HOLD_MS`.
+const READ_MS_PER_CHAR: f32 = 60.0;
+const MAX_HOLD_MS: f32 = 6000.0;
 /// Fade-out duration — same `MOTION_SLOW` token as the entrance.
 const FADE_MS: f32 = color::MOTION_SLOW_MS;
-const TOTAL_MS: f32 = ENTER_MS + HOLD_MS + FADE_MS;
 
 const TOAST_W: f32 = 300.0;
 const TOAST_H: f32 = 34.0;
@@ -44,6 +48,9 @@ const V_PADDING: f32 = 7.0;
 const LINE_HEIGHT: f32 = 20.0;
 const BOTTOM_MARGIN: f32 = 28.0;
 const FONT: u16 = color::FONT_BODY;
+/// The weight the lines are measured and drawn at: one constant, so a line
+/// measured to fit is drawn the width it was measured.
+const WEIGHT: FontWeight = color::FONT_WEIGHT_DEFAULT;
 const RADIUS: f32 = color::POPUP_RADIUS;
 
 pub struct ToastPanel {
@@ -52,6 +59,8 @@ pub struct ToastPanel {
     /// D17 "export-complete green sweep": the accent this toast's text tints
     /// toward at full opacity. `None` = the neutral undo/redo text color.
     accent: Option<Color32>,
+    /// This toast's hold, from its message length when it was shown.
+    hold_ms: f32,
     bg_id: Option<NodeId>,
     text_ids: Vec<NodeId>,
     /// Wall-clock timestamp `update()` last ticked from — the same
@@ -73,6 +82,7 @@ impl ToastPanel {
             message: String::new(),
             transient: Transient::default(),
             accent: None,
+            hold_ms: HOLD_MS,
             bg_id: None,
             text_ids: Vec::new(),
             last_tick: None,
@@ -84,7 +94,7 @@ impl ToastPanel {
     pub fn show(&mut self, message: impl Into<String>) {
         self.message = message.into();
         self.accent = None;
-        self.transient.fire(TOTAL_MS);
+        self.fire();
         // Reset so the very next `update()` ticks a small real dt, not the
         // (possibly huge) gap since the last toast.
         self.last_tick = None;
@@ -98,13 +108,19 @@ impl ToastPanel {
         self.text_ids.clear();
     }
 
+    /// Start the timeline, holding as long as this message takes to read.
+    fn fire(&mut self) {
+        self.hold_ms = (READ_MS_PER_CHAR * self.message.chars().count() as f32).clamp(HOLD_MS, MAX_HOLD_MS);
+        self.transient.fire(ENTER_MS + self.hold_ms + FADE_MS);
+    }
+
     /// D17 "export-complete green sweep": same one-slot toast, tinted toward
     /// `accent` instead of the neutral text color. Also used for a failed
     /// export in red — still a genuine, distinct-from-undo/redo status event.
     pub fn show_with_accent(&mut self, message: impl Into<String>, accent: Color32) {
         self.message = message.into();
         self.accent = Some(accent);
-        self.transient.fire(TOTAL_MS);
+        self.fire();
         self.last_tick = None;
         // See `show()` — same stale-id reset.
         self.bg_id = None;
@@ -145,13 +161,13 @@ impl ToastPanel {
         let Some(p) = self.transient.progress() else {
             return 0.0;
         };
-        let elapsed = p * TOTAL_MS;
+        let elapsed = p * (ENTER_MS + self.hold_ms + FADE_MS);
         if elapsed < ENTER_MS {
             elapsed / ENTER_MS
-        } else if elapsed < ENTER_MS + HOLD_MS {
+        } else if elapsed < ENTER_MS + self.hold_ms {
             1.0
         } else {
-            (1.0 - (elapsed - ENTER_MS - HOLD_MS) / FADE_MS).max(0.0)
+            (1.0 - (elapsed - ENTER_MS - self.hold_ms) / FADE_MS).max(0.0)
         }
     }
 
@@ -227,11 +243,11 @@ fn message_lines<'a>(tree: &UITree, message: &'a str, max_width: f32) -> Vec<&'a
     let mut lines = Vec::new();
     for paragraph in message.split('\n') {
         let mut rest = paragraph.trim();
-        while tree.measure_text(rest, FONT, FontWeight::Regular).x > max_width {
+        while tree.measure_text(rest, FONT, WEIGHT).x > max_width {
             let mut end = 0;
             for (offset, ch) in rest.char_indices() {
                 let next = offset + ch.len_utf8();
-                if tree.measure_text(&rest[..next], FONT, FontWeight::Regular).x > max_width {
+                if tree.measure_text(&rest[..next], FONT, WEIGHT).x > max_width {
                     break;
                 }
                 end = next;
@@ -281,7 +297,7 @@ impl Overlay for ToastPanel {
         let lines = message_lines(tree, &self.message, (max_width - 2.0 * H_PADDING).max(1.0));
         let text_width = lines
             .iter()
-            .map(|line| tree.measure_text(line, FONT, FontWeight::Regular).x)
+            .map(|line| tree.measure_text(line, FONT, WEIGHT).x)
             .fold(0.0, f32::max);
         let width = (text_width + 2.0 * H_PADDING).max(TOAST_W).min(max_width);
         let height = (lines.len() as f32 * LINE_HEIGHT + 2.0 * V_PADDING).max(TOAST_H);
@@ -312,6 +328,7 @@ impl Overlay for ToastPanel {
                 UIStyle {
                     text_color: with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a),
                     font_size: FONT,
+                    font_weight: WEIGHT,
                     text_align: TextAlign::Center,
                     ..UIStyle::default()
                 },
@@ -418,7 +435,7 @@ mod tests {
         // Simulate a rebuild that runs while the toast is closed (idle between
         // shows) and lands a much smaller tree — the toast's old nodes are
         // gone, but `bg_id`/`text_id` still hold the old (now stale) ids.
-        toast.tick(TOTAL_MS); // finish the toast, back to idle
+        toast.tick(ENTER_MS + HOLD_MS + FADE_MS); // finish the toast, back to idle
         tree.clear();
         tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, UIStyle::default());
 

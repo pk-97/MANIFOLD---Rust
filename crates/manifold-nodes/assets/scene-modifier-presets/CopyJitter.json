@@ -1,0 +1,107 @@
+{
+  "version": 3,
+  "name": "Copy Jitter",
+  "presetMetadata": {
+    "id": "CopyJitter",
+    "displayName": "Copy Jitter",
+    "category": "Geometry",
+    "oscPrefix": "copy_jitter",
+    "available": true,
+    "params": [
+      { "id": "amount", "name": "Amount", "min": 0.0, "max": 10.0, "defaultValue": 0.2 },
+      { "id": "turn", "name": "Turn", "min": 0.0, "max": 6.2831855, "defaultValue": 0.5 },
+      { "id": "scale", "name": "Scale", "min": 0.0, "max": 256.0, "defaultValue": 10.0 },
+      { "id": "drift", "name": "Drift", "min": -100.0, "max": 100.0, "defaultValue": 0.0 },
+      { "id": "evolve", "name": "Evolve", "min": -100.0, "max": 100.0, "defaultValue": 0.0 },
+      { "id": "enabled", "name": "Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "isToggle": true }
+    ],
+    "bindings": [
+      { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "enabled", "param": "value" } },
+      { "id": "amount", "label": "Amount", "defaultValue": 0.2, "target": { "kind": "node", "nodeId": "move", "param": "amplitude" } },
+      { "id": "turn", "label": "Turn", "defaultValue": 0.5, "target": { "kind": "node", "nodeId": "turn", "param": "amplitude" } },
+      { "id": "scale", "label": "Scale", "defaultValue": 10.0, "target": { "kind": "node", "nodeId": "move", "param": "frequency" } },
+      { "id": "drift", "label": "Drift", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "move", "param": "time_uvx_drift" } },
+      { "id": "evolve", "label": "Evolve", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "move", "param": "z_coord" } }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "stages": [
+        {
+          "group": "copy_jitter_stage",
+          "scope": "eachObject",
+          "inputs": [
+            { "port": "instances", "source": { "previous": { "endpoint": "instances" } } }
+          ],
+          "outputs": [
+            { "port": "instances", "endpoint": "instances" }
+          ]
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "copy_jitter_stage",
+      "typeId": "group",
+      "handle": "CopyJitterStage",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" }
+          ],
+          "outputs": [
+            { "name": "instances", "portType": "Array(InstanceTransform)" }
+          ]
+        },
+        "nodes": [
+          { "id": 1, "nodeId": "group_instances", "typeId": "system.group_input", "handle": "instances" },
+          { "id": 10, "nodeId": "group_output", "typeId": "system.group_output", "handle": "output" },
+          {
+            "id": 20,
+            "nodeId": "enabled",
+            "typeId": "node.value",
+            "handle": "enabled",
+            "params": { "value": { "type": "Float", "value": 1.0 } }
+          },
+          {
+            "id": 21,
+            "nodeId": "seeds",
+            "typeId": "node.grid_uv_field",
+            "handle": "seeds",
+            "params": { "grid_size": { "type": "Float", "value": 256.0 } }
+          },
+          {
+            "id": 22,
+            "nodeId": "move",
+            "typeId": "node.position_jitter",
+            "handle": "move",
+            "params": {
+              "frequency": { "type": "Float", "value": 10.0 },
+              "amplitude": { "type": "Float", "value": 0.2 },
+              "time_uvx_drift": { "type": "Float", "value": 0.0 },
+              "z_coord": { "type": "Float", "value": 0.0 },
+              "axis_seed": { "type": "Float", "value": 100.0 }
+            }
+          },
+          {
+            "id": 23,
+            "nodeId": "turn",
+            "typeId": "node.rotation_jitter",
+            "handle": "turn",
+            "params": { "amplitude": { "type": "Float", "value": 0.5 } }
+          }
+        ],
+        "wires": [
+          { "fromNode": 1, "fromPort": "instances", "toNode": 22, "toPort": "instances" },
+          { "fromNode": 21, "fromPort": "uv", "toNode": 22, "toPort": "uv" },
+          { "fromNode": 22, "fromPort": "instances", "toNode": 23, "toPort": "instances" },
+          { "fromNode": 23, "fromPort": "instances", "toNode": 10, "toPort": "instances" }
+        ]
+      }
+    }
+  ],
+  "wires": []
+}

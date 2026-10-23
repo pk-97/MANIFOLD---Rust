@@ -10,8 +10,8 @@
 //! `bundled_generator_presets::tests::every_bundled_preset_executes_one_frame` in the lib.
 
 use manifold_nodes as _;
-mod scene_modifier_legacy;
 mod scene_viewport_session;
+mod scene_pick;
 mod glb_conformance;
 
 mod alpha_contract;
@@ -25,13 +25,10 @@ mod gbuffer_velocity;
 mod motion_blur_visibility;
 mod render_scene_pbr_fidelity;
 mod render_scene_subsurface;
-#[path = "catalog/render_scene_material_upgrade.rs"]
-mod render_scene_material_upgrade;
 mod render_legacy_parity;
 mod render_scene_map_set;
-mod physics_boxes;
-mod swarm;
-mod starter_swarm;
+mod scene_swarm;
+mod scene_loop_copies;
 mod render_scene_ao_mask;
 mod render_scene_shadow_cache;
 mod rt_object_motion_shadow;
@@ -61,7 +58,6 @@ mod rt_r2_clamp;
 mod rt_r3_heldout_gltf;
 mod rt_t38_multibounce;
 mod rt_w0_gbuffer;
-mod scene_object_migration_round_trip;
 mod matter_look;
 mod matter_scene;
 mod matter_transfer;

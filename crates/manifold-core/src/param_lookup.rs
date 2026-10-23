@@ -19,9 +19,105 @@ use ahash::AHashMap;
 use crate::PresetTypeId;
 use crate::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef};
 use crate::params::{ParamChoices, SpecSource};
-use crate::scene_exposure::{
-    NodeParamMetadata, scene_radius_from_bounds, scene_scaled_range, serialized_default_as_f32,
-};
+use crate::effects::ParamConvert;
+use crate::effect_graph_def::SerializedParamValue;
+
+/// Metadata for one inner-node parameter, produced from the primitive's own
+/// `ParamDef` by the registered [`NodeParamSource`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeParamMetadata {
+    pub name: String,
+    pub label: String,
+    pub min: f32,
+    pub max: f32,
+    pub default_value: SerializedParamValue,
+    pub is_angle: bool,
+    /// Whether values outside the declared range wrap back into it.
+    pub wraps: bool,
+    pub whole_numbers: bool,
+    pub is_toggle: bool,
+    pub is_trigger: bool,
+    pub value_labels: Vec<String>,
+    pub convert: ParamConvert,
+    /// Optional material-inspector semantic role supplied by the renderer's
+    /// classifier and copied into the persisted manifest descriptor.
+    pub material_role: Option<crate::material_inspector::MaterialParamRole>,
+    /// Where the param lives on the scene surfaces. `None` outside the scene
+    /// vocabulary.
+    pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,
+    pub unit: Option<manifold_foundation::scene_surface::Unit>,
+    pub limit: manifold_foundation::param_range::HardLimit,
+}
+
+pub(crate) fn serialized_default_as_f32(value: &SerializedParamValue) -> f32 {
+    match value {
+        SerializedParamValue::Float { value } => *value,
+        SerializedParamValue::Int { value } => *value as f32,
+        SerializedParamValue::Bool { value } => {
+            if *value {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        SerializedParamValue::Enum { value } => *value as f32,
+        _ => 0.0,
+    }
+}
+
+/// The bounding-sphere radius of a `(min, max)` bbox: half the diagonal,
+/// floored at 0.01 so a degenerate bbox still yields nonzero slider widths.
+pub fn scene_radius_from_bounds(bounds: ([f32; 3], [f32; 3])) -> f32 {
+    let (min, max) = bounds;
+    let dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(0.01)
+}
+
+/// The single scene-scaled slider range table. Radius in world units; every
+/// band is a multiple of it so a scene twice as big gets sliders twice as wide.
+/// Returns `None` for params not in the table (the generic refresh path).
+///
+/// Why each multiplier:
+/// - Position (`pos_*`, `aim_*`): ±2·radius — one radius covers the model,
+///   two gives the model plus neighbourhood, enough to dock at the edge of
+///   the shot without squeezing the useful band into the first few percent.
+/// - Light range: 0.01..4·radius — the soft falloff half-distance fills the
+///   whole set while keeping fine control in the near half.
+/// - Focus distance: 0..4·radius — 0 is the hyperfocal pin (focus off),
+///   far end reaches two scene-widths out (import camera sits at ~2.2·radius).
+/// - F-stop: 0.5..max(32, 64·radius) — 0.5 is the photographic floor; 64·R
+///   keeps migrated f_stop×R values on-slider; 32 keeps unit-scale default.
+/// - Orbit distance: 0.01..6·radius — ~3× headroom past the 2.2·radius
+///   framing distance so the full orbit range is on-slider.
+/// - Orbit near: 0.001..2·radius — import stamps near at ~0.6·radius, so
+///   2·radius contains it with room.
+/// - Orbit far: 1.0..min(20·radius, 10_000) — 20× covers the import-stamped
+///   far with headroom; 10_000 is the primitive's declared range max.
+/// - Fog density: 0.0..2/radius — fog is per-world-unit (1 - exp(-d·dist)),
+///   so the useful slider range scales inversely with scene size.
+pub fn scene_scaled_range(type_id: &str, param: &str, radius: f32) -> Option<(f32, f32)> {
+    match type_id {
+        "node.transform_3d" if matches!(param, "pos_x" | "pos_y" | "pos_z") => {
+            Some((-2.0 * radius, 2.0 * radius))
+        }
+        "node.light"
+            if matches!(
+                param,
+                "pos_x" | "pos_y" | "pos_z" | "aim_x" | "aim_y" | "aim_z"
+            ) =>
+        {
+            Some((-2.0 * radius, 2.0 * radius))
+        }
+        "node.light" if param == "range" => Some((0.01, 4.0 * radius)),
+        "node.camera_lens" if param == "focus_distance" => Some((0.0, 4.0 * radius)),
+        "node.camera_lens" if param == "f_stop" => Some((0.5, (32.0_f32).max(64.0 * radius))),
+        "node.orbit_camera" if param == "distance" => Some((0.01, 6.0 * radius)),
+        "node.orbit_camera" if param == "near" => Some((0.001, 2.0 * radius)),
+        "node.orbit_camera" if param == "far" => Some((1.0, (20.0 * radius).min(10_000.0))),
+        "node.atmosphere" if param == "fog_density" => Some((0.0, 2.0 / radius)),
+        _ => None,
+    }
+}
 
 /// One control's lookup key.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -665,10 +761,28 @@ mod tests {
         }
     }
 
-    /// The one node source in core's test binary; the `scene_exposure`
-    /// migration tests read their light and transform params from it too.
+    /// The one node source in core's test binary.
     fn test_params(type_id: &str) -> Vec<NodeParamMetadata> {
-        use crate::scene_exposure::tests::float_meta;
+        fn float_meta(name: &str, label: &str) -> NodeParamMetadata {
+            NodeParamMetadata {
+                name: name.to_string(),
+                label: label.to_string(),
+                min: 0.0,
+                max: 1.0,
+                default_value: SerializedParamValue::Float { value: 0.5 },
+                is_angle: false,
+                wraps: false,
+                whole_numbers: false,
+                is_toggle: false,
+                is_trigger: false,
+                value_labels: Vec::new(),
+                convert: ParamConvert::Float,
+                material_role: None,
+                scene: None,
+                unit: None,
+                limit: Default::default(),
+            }
+        }
         match type_id {
             "node.test_lamp" => {}
             "node.light" => return vec![float_meta("intensity", "Intensity")],

@@ -93,6 +93,7 @@ mod tests {
             modulation: manifold_ui::RowMod::default(),
             mapping: manifold_ui::RowMapping { osc_address: None, ableton_display: None, ableton_range: None, mappable: true },
             rgb_members: None,
+            affordance: None,
             modulator_stored: false,
             audio: Default::default(),
             clip_trigger: None,

@@ -99,50 +99,6 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
             gp.sync_values(tree, slots)
         });
     }
-
-    // Modifier cards (SCENE_MODIFIER_FRAMEWORK section 3.7): the modifier
-    // rows ARE the layer's generator manifest rows — the same id-joined slot
-    // stream the generator card syncs from (drivers/envelopes/mappings on
-    // modifier rows update in place, no structural sync).
-    if let Some(idx) = active_layer
-        && let Some(layer) = project.timeline.layers.get(idx)
-        && let Some(gp_state) = layer.gen_params()
-    {
-        if let Some(def) = gp_state.graph.as_ref() {
-            for card in ui
-                .inspector
-                .modifier_cards_mut()
-                .iter_mut()
-            {
-                crate::ui_translate::with_param_slots(&gp_state.params, |slots| {
-                    card.sync_values(tree, slots)
-                });
-                if let Some(instance) = card.modifier_info().and_then(|info|
-                    def.scene_modifiers.iter().find(|instance| instance.id == info.instance_id)) {
-                    card.sync_enabled(tree, modifier_enabled_value(gp_state, def, instance));
-                }
-            }
-        } else {
-            for card in ui.inspector.modifier_cards_mut() {
-                crate::ui_translate::with_param_slots(&gp_state.params, |slots| {
-                    card.sync_values(tree, slots)
-                });
-            }
-        }
-    }
-    if let Some((_, layer)) = ui.scene_setup_panel.live_layer_id()
-        .and_then(|id| project.timeline.find_layer_by_id(id))
-        && let Some(host) = layer.gen_params()
-        && let Some(def) = host.graph.as_ref()
-    {
-        for card in ui.scene_setup_panel.force_cards_mut() {
-            if let Some(instance) = card.modifier_info().and_then(|info|
-                def.scene_modifiers.iter().find(|instance| instance.id == info.instance_id))
-            {
-                card.sync_enabled(tree, modifier_enabled_value(host, def, instance));
-            }
-        }
-    }
 }
 
 /// Stamp the card-level available-send list (labels + ids) onto every card
@@ -317,7 +273,6 @@ fn empty_generator_surface(inst: &PresetInstance) -> ParamSurface {
         supports_envelopes: true,
         has_graph_mod: false,
         layer_id: None,
-        modifier: None,
         rows: vec![],
         string_params: vec![],
         audio_sends: Vec::new(),
@@ -417,15 +372,9 @@ fn param_surface(
     // hands the FULL manifest as an id-keyed channel and the card JOINS by id
     // (BUG-313), so a hidden param simply finds no row — there is no second
     // filter to drift out of alignment.
-    let is_scene_card_candidate = visibility == SurfaceVisibility::CuratedCard && kind == PresetKind::Generator;
-    let catalog_graph = (is_scene_card_candidate && inst.graph.is_none())
-        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(preset_type)).flatten();
-    let scene_graph = is_scene_card_candidate
-        .then(|| inst.graph.as_ref().or(catalog_graph.as_deref()))
-        .flatten()
-        .filter(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some());
+    let scene_doc = (visibility == SurfaceVisibility::CuratedCard && kind == PresetKind::Generator).then_some(inst.scene.as_ref()).flatten();
     let visible_params: Vec<&manifold_core::params::Param> = match visibility {
-        SurfaceVisibility::CuratedCard if scene_graph.is_some() => inst.params.iter().collect(),
+        SurfaceVisibility::CuratedCard if scene_doc.is_some() => inst.params.iter().collect(),
         SurfaceVisibility::CuratedCard => {
             let modifier_bindings = inst.graph.as_ref().and_then(|graph| graph.preset_metadata.as_ref());
             inst.params.iter().filter(|p| p.spec.card_visible && !modifier_bindings.is_some_and(|metadata|
@@ -508,6 +457,7 @@ fn param_surface(
                 modulation: RowMod::default(),
                 mapping: RowMapping { osc_address, ableton_display, ableton_range, mappable: true },
                 rgb_members: None,
+                affordance: None,
                 modulator_stored: stored,
                 audio: Default::default(),
                 clip_trigger: None,
@@ -537,8 +487,13 @@ fn param_surface(
         rows[pi].audio = audio_row_state(am, is_fire);
     }
 
-    if let Some(def) = scene_graph {
-        super::scene_card::scene_card_rows(&mut rows, inst, def);
+    if kind == PresetKind::Generator
+        && let Some(doc) = inst.scene.as_ref()
+    {
+        super::scene_card::name_cuts(&mut rows, doc);
+    }
+    if let Some(doc) = scene_doc {
+        super::scene_card::scene_card_rows(&mut rows, inst, doc);
     }
 
     // String params are sourced from the registry def. Graph-backed audio-send
@@ -559,7 +514,7 @@ fn param_surface(
                                 .cloned()
                                 .unwrap_or_else(|| sp_def.default_value.to_string())
                         };
-                        let display_value = (scene_graph.is_some() && sp_def.is_file_path)
+                        let display_value = (scene_doc.is_some() && sp_def.is_file_path)
                             .then(|| std::path::Path::new(&value).file_name()
                                 .map(|name| name.to_string_lossy().into_owned()))
                             .flatten();
@@ -651,7 +606,6 @@ fn param_surface(
         supports_envelopes: true,
         string_params,
         layer_id: None,
-        modifier: None,
         rows,
         has_graph_mod,
         audio_sends: Vec::new(),
@@ -686,323 +640,9 @@ pub(crate) fn gen_params_to_surface(
 }
 
 /// The folded section titles of a curated generator card when it is a scene
-/// card, read from the same graph its curation read; `None` otherwise.
+/// card; `None` otherwise.
 pub(crate) fn scene_card_folds(gp: &manifold_core::effects::PresetInstance, card: &ParamSurface) -> Option<Vec<String>> {
-    let catalog = gp
-        .graph
-        .is_none()
-        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(gp.effect_type()))
-        .flatten();
-    let def = gp.graph.as_ref().or(catalog.as_deref())?;
-    super::scene_card::folded_sections(gp, def, &card.rows)
-}
-
-fn scene_ref_for_vm(
-    nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
-    scene_doc_id: u32,
-    scope: &[manifold_core::NodeId],
-) -> Option<manifold_core::scene_modifier_preset::SceneNodeRef> {
-    for node in nodes {
-        if node.id == scene_doc_id
-            && node.type_id == manifold_nodes_scene::node_graph::scene_vm::RENDER_SCENE_TYPE_ID
-        {
-            return Some(manifold_core::scene_modifier_preset::SceneNodeRef {
-                scope: scope.to_vec(),
-                node: node.node_id.clone(),
-            });
-        }
-        if let Some(group) = &node.group {
-            let mut child_scope = scope.to_vec();
-            child_scope.push(node.node_id.clone());
-            if let Some(scene) = scene_ref_for_vm(&group.nodes, scene_doc_id, &child_scope) {
-                return Some(scene);
-            }
-        }
-    }
-    None
-}
-
-fn modifier_picker_reason(
-    error: &manifold_node_engine::load::expand::SceneModifierExpandError,
-) -> String {
-    log::debug!("scene modifier picker admission rejected recipe: {error}");
-    use manifold_node_engine::load::expand::SceneModifierExpandError;
-    match error {
-        SceneModifierExpandError::UnsupportedCoordinateFrame { detail, .. }
-            if detail.contains("imported scene bounds") =>
-        {
-            "Requires imported scene bounds".into()
-        }
-        SceneModifierExpandError::UnsupportedCoordinateFrame { detail, .. }
-            if detail.contains("direct static glTF") =>
-        {
-            "Requires an imported static mesh".into()
-        }
-        SceneModifierExpandError::ConflictingSource { .. } => "Conflicting scene source".into(),
-        SceneModifierExpandError::MissingInput { .. } => "Missing scene input".into(),
-        SceneModifierExpandError::UnsupportedEndpoint { .. } => "Unsupported scene output".into(),
-        SceneModifierExpandError::CapacityExceeded { .. } => "Scene exceeds modifier capacity".into(),
-        SceneModifierExpandError::MissingScene { .. } => "Scene target unavailable".into(),
-        _ => "Not applicable to this scene".into(),
-    }
-}
-
-/// The same disk/project catalog supplies picker entries and attached snapshots.
-/// Applicability is checked here with the same preparation and expansion
-/// contract used by the structural add command, so the picker does not promise
-/// recipes that attachment will reject.
-pub(crate) fn modifier_picker_entries(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    vm: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
-) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
-    scene_recipe_picker_entries(def, vm, false)
-}
-
-pub(crate) fn force_picker_entries(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    vm: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
-) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
-    scene_recipe_picker_entries(def, vm, true)
-}
-
-fn scene_recipe_picker_entries(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    vm: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
-    forces: bool,
-) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
-    use manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG;
-    use manifold_ui::param_surface::ModifierPickerEntry;
-    let catalog = SCENE_MODIFIER_CATALOG.load();
-    let mut entries: Vec<_> = catalog.entries().filter_map(|(id, json)| {
-        if !catalog.is_browser_visible(&id) { return None; }
-        let recipe: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&json).ok()?;
-        if manifold_core::scene_modifier_preset::is_force_recipe(&recipe) != forces {
-            return None;
-        }
-        let metadata = recipe.preset_metadata.as_ref()?;
-        if !metadata.available { return None; }
-        let attachment = metadata.scene_modifier.as_ref()?;
-        let disabled = if vm.multiple_scenes {
-            Some("Select a graph with one scene".to_string())
-        } else if attachment.singleton && def.scene_modifiers.iter().any(|instance|
-            instance.graph.preset_metadata.as_ref().is_some_and(|m| m.id == metadata.id)) {
-            Some("Already applied".to_string())
-        } else {
-            let Some(scene) = scene_ref_for_vm(&def.nodes, vm.scene_root_node_id, &[]) else {
-                return Some(ModifierPickerEntry {
-                    preset_id: id.to_string(),
-                    label: metadata.display_name.clone(),
-                    disabled: Some("Scene root is unavailable".to_string()),
-                });
-            };
-            let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-                def,
-                &recipe,
-                manifold_core::NodeId::new(format!("picker:{id}")),
-                scene,
-                manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
-            ).and_then(|instance|
-                manifold_nodes_scene::node_graph::scene_modifier_authoring::validate_new_scene_modifier(def, &instance)
-                    .map(|()| instance)
-            );
-            instance.err().map(|error| modifier_picker_reason(&error))
-        };
-        Some(ModifierPickerEntry { preset_id: id.to_string(), label: metadata.display_name.clone(), disabled })
-    }).collect();
-    entries.sort_by(|a, b| a.label.cmp(&b.label).then(a.preset_id.cmp(&b.preset_id)));
-    entries
-}
-
-/// A card owns rows through stable host-to-instance bindings. Titles and
-/// sections are presentation only; modulation still addresses the generator.
-pub(crate) fn is_force_surface(
-    surface: &ParamSurface,
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-) -> bool {
-    surface.modifier.as_ref().is_some_and(|info| {
-        def.scene_modifiers.iter().any(|instance| instance.id == info.instance_id
-            && manifold_core::scene_modifier_preset::is_force_recipe(&instance.graph))
-    })
-}
-
-pub(crate) fn modifier_surfaces(
-    gp: &manifold_core::effects::PresetInstance,
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    _vm: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
-    layer_id: &str,
-    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
-    timing: (manifold_core::Bpm, f32),
-) -> Vec<ParamSurface> {
-    use manifold_core::effect_graph_def::BindingTarget;
-    use manifold_ui::param_surface::{ModifierCardInfo, ModifierObjectOption};
-    use manifold_core::SceneNodeRef;
-    use manifold_core::scene_modifier_preset::SceneTargetSelection;
-    let full = gen_params_to_surface(gp, layer_id, None, automation_latched,
-        SurfaceVisibility::All, timing);
-    let bindings = def.preset_metadata.as_ref().map(|m| m.bindings.as_slice()).unwrap_or(&[]);
-    def.scene_modifiers.iter().enumerate().filter_map(|(index, instance)| {
-        let metadata = instance.graph.preset_metadata.as_ref()?;
-        let recipe = metadata.scene_modifier.as_ref()?;
-        let local_id = |host_id: &str| bindings.iter().find_map(|binding| {
-            if binding.id != host_id { return None; }
-            match &binding.target {
-                BindingTarget::SceneModifier { modifier_id, param_id } if modifier_id == &instance.id => Some(param_id.as_str()),
-                _ => None,
-            }
-        });
-        let enabled_row = full.rows.iter().find(|row| local_id(row.id.as_ref()) == Some(recipe.enabled_param.as_str()));
-        // Bypass-style controls keep the compact card-header toggle. A
-        // recipe-specific semantic control (SceneLoop's Camera Travel) stays
-        // as an ordinary labeled toggle row so its meaning remains visible.
-        let enabled_row_in_body = enabled_row.is_some_and(|row| row.spec.name != "Enabled");
-        let enabled = modifier_enabled_value_for_binding(gp, bindings, instance, &recipe.enabled_param);
-        let force = manifold_core::scene_modifier_preset::is_force_recipe(&instance.graph);
-        let force_objects = if force {
-            Some(manifold_node_engine::load::expand::force_objects_for_authoring(def, &instance.scene)
-                .unwrap_or_else(|error| {
-                    log::error!("force {} targets unavailable: {error}", instance.id);
-                    Vec::new()
-                }))
-        } else { None };
-        let object_targeting = recipe.stages.iter().any(|stage| {
-            stage.outputs.iter().any(|output| matches!(
-                output.endpoint,
-                manifold_core::scene_modifier_preset::SceneEndpoint::Transform
-                    | manifold_core::scene_modifier_preset::SceneEndpoint::Instances
-                    | manifold_core::scene_modifier_preset::SceneEndpoint::Vertices
-                    | manifold_core::scene_modifier_preset::SceneEndpoint::Acceleration
-            ))
-        });
-        let rows: Vec<_> = full.rows.iter().filter(|row| local_id(row.id.as_ref()).is_some_and(|id|
-            (enabled_row_in_body || id != recipe.enabled_param)
-                && !recipe.preparation_params.iter().any(|p| p == id))).cloned().collect();
-        Some(ParamSurface {
-            kind: ParamCardKind::Effect,
-            title: manifold_nodes_scene::node_graph::scene_items::scene_modifier_display_name(def, instance)
-                .unwrap_or_else(|| metadata.display_name.clone()),
-            rows,
-            string_params: vec![],
-            audio_sends: Vec::new(),
-            modifier: Some(ModifierCardInfo {
-                instance_id: instance.id.clone(),
-                layer_id: manifold_core::LayerId::new(layer_id),
-                params_owner: gp.id.clone(),
-                enabled_label:enabled_row.map(|row| row.spec.name.clone()).unwrap_or_else(|| "Enabled".into()),
-                stack_index: index,
-                stack_len: def.scene_modifiers.len(),
-                targets_all: object_targeting && matches!(instance.targets, SceneTargetSelection::AllObjects),
-                objects: if object_targeting { manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects(def, &instance.scene)
-                    .unwrap_or_else(|error| {
-                        log::error!("scene modifier {} object selection unavailable: {error}", instance.id);
-                        Vec::new()
-                    }).into_iter().map(|object| {
-                        let selected = match &instance.targets {
-                            SceneTargetSelection::AllObjects => true,
-                            SceneTargetSelection::Explicit { objects } => objects.contains(&object),
-                        };
-                        ModifierObjectOption {
-                            label: if force_objects.as_ref().is_some_and(|eligible| !eligible.contains(&object)) {
-                                format!("{} (no physics)", modifier_object_label(def, &object))
-                            } else { modifier_object_label(def, &object) },
-                            object: SceneNodeRef { scope: object.scope, node: object.node },
-                            selected,
-                        }
-                    }).collect() } else { Vec::new() },
-            }),
-            effect_index: 0,
-            effect_id: manifold_core::EffectId::new(format!("scene_modifier:{}", instance.id)),
-            enabled,
-            collapsed: false,
-            supports_envelopes: true,
-            has_graph_mod: crate::modifier_preset::has_graph_mod(def, &instance.graph),
-            layer_id: None,
-        })
-    }).collect()
-}
-
-
-fn modifier_enabled_value(
-    gp: &manifold_core::effects::PresetInstance,
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    instance: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
-) -> bool {
-    let Some(recipe) = instance
-        .graph
-        .preset_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.scene_modifier.as_ref())
-    else {
-        return false;
-    };
-    let bindings = def
-        .preset_metadata
-        .as_ref()
-        .map(|metadata| metadata.bindings.as_slice())
-        .unwrap_or(&[]);
-    modifier_enabled_value_for_binding(gp, bindings, instance, &recipe.enabled_param)
-}
-
-fn modifier_enabled_value_for_binding(
-    gp: &manifold_core::effects::PresetInstance,
-    bindings: &[manifold_core::effect_graph_def::BindingDef],
-    instance: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
-    enabled_param: &str,
-) -> bool {
-    let Some(binding) = bindings.iter().find(|binding| {
-        matches!(
-            &binding.target,
-            manifold_core::effect_graph_def::BindingTarget::SceneModifier {
-                modifier_id,
-                param_id,
-            } if modifier_id == &instance.id && param_id == enabled_param
-        )
-    }) else {
-        let prepared = instance
-            .graph
-            .preset_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.scene_modifier.as_ref())
-            .is_some_and(|recipe| recipe.preparation_params.iter().any(|param| param == enabled_param));
-        if prepared {
-            return instance
-                .graph
-                .preset_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.params.iter().find(|param| param.id == enabled_param))
-                .is_some_and(|param| param.default_value > 0.5);
-        }
-        return false;
-    };
-    let Some(param) = gp.params.get(binding.id.as_str()) else {
-        return false;
-    };
-    manifold_core::effects::apply_card_reshape(
-        param.base,
-        param.spec.min,
-        param.spec.max,
-        param.spec.invert,
-        param.spec.curve,
-        binding.scale,
-        binding.offset,
-    ) > 0.5
-}
-
-fn modifier_object_label(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    object: &manifold_core::scene_modifier_preset::SceneNodeRef,
-) -> String {
-    let mut nodes = def.nodes.as_slice();
-    let mut labels = Vec::new();
-    for id in &object.scope {
-        let Some(node) = nodes.iter().find(|node| &node.node_id == id) else { return object.node.to_string(); };
-        labels.push(node.handle.clone().unwrap_or_else(|| id.to_string()));
-        let Some(group) = node.group.as_ref() else { return object.node.to_string(); };
-        nodes = &group.nodes;
-    }
-    let label = nodes.iter().find(|node| node.node_id == object.node)
-        .and_then(|node| node.handle.clone()).unwrap_or_else(|| object.node.to_string());
-    labels.push(label);
-    labels.join(" / ")
+    Some(super::scene_card::folded_sections(gp, gp.scene.as_ref()?, &card.rows))
 }
 
 /// Write a human-readable description of a macro mapping target over `out`,
@@ -1223,9 +863,6 @@ mod audio_send_projection_tests {
 }
 
 #[cfg(test)]
-mod modifier_audio_projection_tests;
-
-#[cfg(test)]
 mod sync_card_values_tests {
     //! The extraction proof for `sync_card_values`: a param value changed in
     //! the (UI-local) project after the inspector was configured must reach
@@ -1361,131 +998,21 @@ mod sync_card_values_tests {
     }
 }
 
-#[cfg(test)]
-mod consolidation_tests {
-    fn fixture() -> manifold_core::effect_graph_def::EffectGraphDef {
-        serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON)
-        .unwrap()
-    }
 
-    fn picker_entry(
-        def: &manifold_core::effect_graph_def::EffectGraphDef,
-        preset_id: &str,
-    ) -> manifold_ui::param_surface::ModifierPickerEntry {
-        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).unwrap();
-        super::modifier_picker_entries(def, &vm)
-            .into_iter()
-            .find(|entry| entry.preset_id == preset_id)
-            .unwrap_or_else(|| panic!("picker entry {preset_id} missing"))
+/// The display name shared by modifier cards and trigger target groups.
+/// Duplicate recipe names get an occurrence suffix only when the stack needs
+/// disambiguation.
+pub(crate) fn scene_modifier_display_name(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    instance: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
+) -> Option<String> {
+    let base = instance.graph.preset_metadata.as_ref()?.display_name.clone();
+    let same_name = |candidate: &&manifold_core::scene_modifier_preset::SceneModifierInstanceDef| {
+        candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| metadata.display_name == base)
+    };
+    if def.scene_modifiers.iter().filter(same_name).count() <= 1 {
+        return Some(base);
     }
-
-    #[test]
-    fn modifier_picker_omits_retired_factory_combinations() {
-        let def = fixture();
-        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
-        let entries = super::modifier_picker_entries(&def, &vm);
-        for id in ["SurfacePeel", "OrderedRecon", "SurfaceWaves", "SpatialEchoes"] {
-            assert!(entries.iter().any(|entry| entry.preset_id == id), "missing {id}");
-        }
-        for id in ["SurfacePeelHit", "OrderedReconHit", "MaskedPeel", "WavesEchoes"] {
-            assert!(!entries.iter().any(|entry| entry.preset_id == id), "retired {id} still in picker");
-        }
-    }
-
-    #[test]
-    fn picker_distinguishes_procedural_and_imported_calibration_support() {
-        let mut procedural = fixture();
-        procedural
-            .preset_metadata
-            .as_mut()
-            .unwrap()
-            .scene_bounds = None;
-        let procedural_loop = picker_entry(&procedural, "SceneLoop");
-        assert!(procedural_loop
-            .disabled
-            .as_deref()
-            .is_some_and(|reason| reason.contains("imported scene bounds")));
-
-        let imported_loop = picker_entry(&fixture(), "SceneLoop");
-        assert!(imported_loop.disabled.is_none(), "imported bounds admit SceneLoop: {imported_loop:?}");
-    }
-
-    #[test]
-    fn picker_rejects_pre_modified_scene_and_conflicting_source_graph() {
-        let mut modified = fixture();
-        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
-            &manifold_core::PresetTypeId::new("SceneFog"),
-        )
-        .unwrap();
-        let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-            &modified,
-            recipe.as_ref(),
-            "existing-fog".into(),
-            manifold_core::scene_modifier_preset::SceneNodeRef {
-                scope: vec![],
-                node: "scan_render".into(),
-            },
-            manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
-        )
-        .unwrap();
-        modified = manifold_core::scene_modifier_edit::insert_scene_modifier(
-            &modified,
-            0,
-            instance,
-        )
-        .unwrap()
-        .graph;
-        let fog = picker_entry(&modified, "SceneFog");
-        assert_eq!(fog.disabled.as_deref(), Some("Already applied"));
-    }
-
-    #[test]
-    fn modifier_target_chrome_follows_recipe_output_scope() {
-        let mut graph = fixture();
-        for preset_id in ["SceneFog", "SceneLoop"] {
-            let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
-                &manifold_core::PresetTypeId::new(preset_id),
-            )
-            .unwrap();
-            let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-                &graph,
-                recipe.as_ref(),
-                preset_id.into(),
-                manifold_core::scene_modifier_preset::SceneNodeRef {
-                    scope: vec![],
-                    node: "scan_render".into(),
-                },
-                manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
-            )
-            .unwrap();
-            graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
-                &graph,
-                graph.scene_modifiers.len(),
-                instance,
-            )
-            .unwrap()
-            .graph;
-        }
-        let mut gp = manifold_core::effects::PresetInstance::new_generator(
-            manifold_core::PresetTypeId::new("PhotoscanBaseline"),
-        );
-        gp.graph = Some(graph.clone());
-        gp.refresh_manifest_from_graph();
-        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&graph).unwrap();
-        let surfaces = super::modifier_surfaces(
-            &gp,
-            &graph,
-            &vm,
-            "layer",
-            &[],
-            (manifold_core::Bpm(120.0), 0.0),
-        );
-        let fog = surfaces.iter().find(|surface| surface.title == "Scene Fog").unwrap();
-        assert!(!fog.modifier.as_ref().unwrap().targets_all);
-        assert!(fog.modifier.as_ref().unwrap().objects.is_empty());
-        let scene_loop = surfaces.iter().find(|surface| surface.title == "Scene Loop").unwrap();
-        assert!(scene_loop.modifier.as_ref().unwrap().targets_all);
-        assert!(!scene_loop.modifier.as_ref().unwrap().objects.is_empty());
-        assert!(scene_loop.rows.iter().any(|row| row.spec.name == "Camera Travel"));
-    }
+    let occurrence = def.scene_modifiers.iter().take_while(|candidate| candidate.id != instance.id).filter(same_name).count() + 1;
+    Some(format!("{base} #{occurrence}"))
 }

@@ -1,7 +1,9 @@
 //! `node.gltf_texture_source` — read one embedded image out of a
 //! `.glb`/`.gltf` file and emit it as a `Texture2D` wire, so an imported
 //! mesh's baked-in albedo/alpha map can feed `node.render_scene`'s
-//! `base_color_map_N`.
+//! `base_color_map_N`. A picture file (PNG, JPG, EXR and the rest) is read
+//! whole as its one image, so a scene Material's File texture and Displace
+//! by Texture's File source load through the same decode jobs and mips.
 //!
 //! File I/O and image decoding/repacking happen
 //! on bounded reusable CPU workers with shared decode jobs, so the
@@ -79,7 +81,7 @@ struct GltfTextureBlitUniforms {
 manifold_node_engine::primitive! {
     name: GltfTextureSource,
     type_id: "node.gltf_texture_source",
-    purpose: "Read one embedded image out of a glTF/.glb file and emit it as a Texture2D wire, so an imported mesh's baked-in albedo/alpha map can feed node.render_scene's base_color_map_N. texture_index selects among document.textures(); color_space picks sRGB (albedo/base-color — the default) vs Linear (normal/metallic/roughness maps) so the hardware linearizes correctly on sample. width/height set the output resolution: the glTF importer sets these to the source image's exact dimensions (a 1:1 stretch), while manual drops resample to the default 1024² until resized.",
+    purpose: "Read one image as a Texture2D wire: a picture file (PNG, JPG, TGA, BMP, EXR, HDR) whole, or one embedded image out of a glTF/.glb file, so a scene Material's File texture or an imported mesh's baked-in albedo/alpha map can feed node.render_scene's base_color_map_N. The file's own bytes decide which it is. texture_index selects among a glTF document.textures() (a picture is its one image); color_space picks sRGB (albedo/base-color — the default) vs Linear (normal/metallic/roughness maps) so the hardware linearizes correctly on sample. width/height set the output resolution: the glTF importer sets these to the source image's exact dimensions (a 1:1 stretch), while manual drops resample to the default 1024² until resized.",
     inputs: {},
     outputs: {
         out: Texture2D,
@@ -146,11 +148,11 @@ manifold_node_engine::primitive! {
     depth_rule: Inherit,
     composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.image_folder's `folder` and node.gltf_mesh_source's `path`. texture_index selects among document.textures() (not the raw image index — the primitive resolves each texture's image source internally). color_space is the one param that isn't cosmetic: sRGB (default) is correct for anything the eye reads as color — base-color/albedo maps — so the hardware linearizes on sample; Linear is for data maps (normal, metallic-roughness, occlusion) where the raw bytes ARE the value and gamma-decoding them would corrupt the data. width/height set the output resolution — the glTF importer sets them to the source image's exact dimensions so the stretch-blit is a 1:1 copy; manual drops before a File is picked resample (stretch-fill, no aspect-fit) to the 1024² default. mode=gloss_to_roughness (GLB_XFAIL_BURNDOWN_DESIGN.md D2) repacks a KHR_materials_pbrSpecularGlossiness specularGlossinessTexture's alpha (glossiness) into render_scene's glTF metal-rough packing (G=roughness=1-gloss, B=metallic=0) at blit time, so a spec-gloss texture can wire into the same `mrMap` input a real metal-rough texture uses — passthrough (default) is a byte-identical plain copy. Wire `out` into node.render_scene's `base_color_map_N` input.",
     examples: [],
-    picker: { label: "glTF Texture", category: Atom },
-    summary: "Loads an embedded image from a glTF/.glb file as a texture, so an imported model's baked-in albedo/alpha map flows into the render pipeline like any other texture source.",
+    picker: { label: "Texture File", category: Atom },
+    summary: "Loads a picture file, or an image embedded in a glTF/.glb model, as a texture, so a Material's picture or an imported model's baked-in map flows into the render pipeline like any other texture source.",
     category: Generate,
     role: Source,
-    aliases: ["gltf texture", "glb texture", "embedded texture", "import texture", "File In TOP"],
+    aliases: ["texture file", "picture", "image texture", "gltf texture", "glb texture", "embedded texture", "import texture", "File In TOP"],
     boundary_reason: IoBridge,
     extra_fields: {
         // (path, texture_index) last parsed (or in flight). Any change

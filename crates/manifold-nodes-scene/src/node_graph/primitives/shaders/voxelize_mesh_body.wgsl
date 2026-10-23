@@ -1,6 +1,8 @@
 // node.voxelize_mesh — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT `in` + COINCIDENT optional `weights`.
-// mix(pos, round(pos / cell_size) * cell_size, amount * w).
+// p = position + source_offset; mix(p, round(p / cell_size) * cell_size,
+// amount * w), shifted back: the grid sits on the frame's origin, so the
+// parts of a group snap to one shared grid.
 //
 // ABI: e_in = buf_in[idx], e_weights = buf_weights[idx] (both coincident
 // pre-reads by the wrapper). `weights_len` is a DERIVED uniform — run() packs
@@ -15,11 +17,16 @@ fn body(
     e_weights: f32,
     amount: f32,
     cell_size: f32,
+    source_offset_x: f32,
+    source_offset_y: f32,
+    source_offset_z: f32,
     weights_len: u32,
 ) -> Element {
     let w = select(1.0, e_weights, idx < weights_len);
+    let offset = vec3<f32>(source_offset_x, source_offset_y, source_offset_z);
     let cs = max(cell_size, 1e-6);
-    let voxel_pos = round(e_in.position / cs) * cs;
-    let displaced = mix(e_in.position, voxel_pos, amount * w);
+    let pos = e_in.position + offset;
+    let voxel_pos = round(pos / cs) * cs;
+    let displaced = mix(pos, voxel_pos, amount * w) - offset;
     return Element(displaced, e_in.normal, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

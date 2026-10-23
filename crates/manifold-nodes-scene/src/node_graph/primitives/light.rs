@@ -30,6 +30,7 @@
 use std::borrow::Cow;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::scene::light::{Light, LightFalloff, ShadowSoftness};
+use manifold_node_engine::scene::transform::transform_point;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -40,7 +41,7 @@ const SHADOW_SOFTNESS_LABELS: &[&str] = &["Hard", "Soft", "VerySoft", "Contact"]
 manifold_node_engine::primitive! {
     name: LightNode,
     type_id: "node.light",
-    purpose: "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage. shadow_softness's Contact tier (REALTIME_3D_DESIGN section 11 D12) trades the fixed PCF kernel for PCSS contact-hardening: shadows go sharp where the caster touches the receiver and soften with distance, driven by the port-shadowed light_size (world-units light diameter).",
+    purpose: "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage. shadow_softness's Contact tier (REALTIME_3D_DESIGN section 11 D12) trades the fixed PCF kernel for PCSS contact-hardening: shadows go sharp where the caster touches the receiver and soften with distance, driven by the port-shadowed light_size (world-units light diameter). An optional parent Transform places it inside a group: it moves and turns with the group.",
     inputs: {
         pos_x: ScalarF32 optional,
         pos_y: ScalarF32 optional,
@@ -58,6 +59,7 @@ manifold_node_engine::primitive! {
         cast_shadows: ScalarF32 optional,
         shadow_bias: ScalarF32 optional,
         light_size: ScalarF32 optional,
+        parent: Transform optional,
     },
     outputs: {
         out: Light,
@@ -303,6 +305,14 @@ impl Primitive for LightNode {
 
         let pos = [pos_x, pos_y, pos_z];
         let aim = [aim_x, aim_y, aim_z];
+        // Inside a group, the light moves and turns with it.
+        let (pos, aim) = match ctx.inputs.transform("parent") {
+            Some(parent) => {
+                let frame = parent.world();
+                (transform_point(&frame, pos), transform_point(&frame, aim))
+            }
+            None => (pos, aim),
+        };
         let color_rgb = [color_r, color_g, color_b];
 
         let light = match mode_idx {

@@ -370,11 +370,16 @@ impl Application {
 
     /// Menus retain their source focus; direct presses choose the card host.
     fn update_card_keyboard_focus(&mut self) {
+        let on_picture = self.preview_fit().is_some_and(|fit| fit.contains(self.cursor_pos));
         let ui = &mut self.ws.ui_root;
         if ui.background_input_blocked() { return; }
         let in_inspector = ui.layout.inspector().contains(self.cursor_pos);
-        let in_objects = ui.scene_setup_panel.is_open()
-            && ui.inspector.scene_content_rect().contains(self.cursor_pos);
+        // A click on the Scene panel's picture picks its items, so the item
+        // keys (copy, paste, duplicate, delete) follow it there too.
+        let on_scene_picture = on_picture && ui.scene_setup_panel.live_layer_id().is_some() && !ui.overlay_contains_point(self.cursor_pos);
+        let in_objects = (ui.scene_setup_panel.is_open()
+            && ui.inspector.scene_content_rect().contains(self.cursor_pos))
+            || on_scene_picture;
         if !in_inspector && self.input_handler.inspector_has_focus {
             ui.inspector.clear_effect_selection(&mut ui.tree);
         }
@@ -411,9 +416,7 @@ impl Application {
                                 && let Some(node) = self.ws.ui_root.tree.hit_test(self.cursor_pos)
                             {
                                 let ui = &mut self.ws.ui_root;
-                                if !ui.scene_setup_panel.select_outliner_node(node) {
-                                    ui.scene_setup_panel.select_object_modifier_node(node, &mut ui.tree);
-                                }
+                                ui.scene_setup_panel.select_outliner_node(node);
                             }
 
                             if self.ws.ui_root.background_input_blocked() {
@@ -863,17 +866,17 @@ impl Application {
     }
 
     /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): a Left press inside the
-    /// open 3D viewport, tried BEFORE the orbit-drag arm below — a handle
-    /// grab on the selected shape first, then a pick (`scene_gizmo::press`,
-    /// shared with the main preview). Returns `true` if the press was
-    /// consumed (a drag armed, a locked handle refused, or a pick happened) —
-    /// the caller must not also arm an orbit drag. A miss on empty space
-    /// returns `false` so the orbit arm still fires (drag-on-nothing orbits,
-    /// drag-on-an-object doesn't — the usual DCC convention).
+    /// open 3D viewport, tried BEFORE the orbit-drag arm below: a handle grab
+    /// on the Scene panel's selection first, then a helper that draws no
+    /// pixels (`scene_gizmo::press`, shared with the main preview), then a
+    /// pick of what is drawn there through the item-id buffer
+    /// (`scene_pick.rs`). Reads the selection cached at the last present, so
+    /// a press never rebuilds the scene. Returns `true` if the press was
+    /// consumed (a drag armed, a locked handle refused, or a helper picked);
+    /// the caller must not also arm an orbit drag. A pixel pick returns
+    /// `false` so the orbit arm still fires: drag-on-nothing orbits.
     fn editor_viewport_gizmo_press(&mut self, cx: f32, cy: f32) -> bool {
         use crate::scene_gizmo::{GizmoPress, GizmoView};
-        use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
-        use manifold_nodes_scene::node_graph::viewport_gizmo::GizmoSelection;
         let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
             return false;
         };
@@ -883,36 +886,41 @@ impl Application {
         {
             return false;
         }
-        let Some(scene) = self.viewport_def_cloned().as_ref().and_then(SceneVm::from_def) else { return false };
-        let (view, mode, selection) = {
+        let (view, mode, rect) = {
             let Some(ed) = self.graph_editor.as_ref() else { return false };
             let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
                 return false;
             };
-            let view = GizmoView::new(config.camera.to_camera(), config.width, config.height);
-            (view, ed.viewport_gizmo_mode, GizmoSelection::of_ids(&scene, &ed.viewport_selected))
+            let Some(rect) = ed.viewport_rect else { return false };
+            (GizmoView::new(config.camera.to_camera(), config.width, config.height), ed.viewport_gizmo_mode, rect)
         };
-        let Some(rect) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_rect) else { return false };
         let Some((view, point)) = crate::viewport_input::gizmo_pointer(rect, view, (cx, cy)) else { return false };
-        let at = crate::scene_gizmo::PressAt { view: &view, point, extend: self.modifiers.shift };
-        let Some(pressed) = self.with_dispatch_ctx(|ctx| crate::scene_gizmo::press(ctx, &layer_id, &scene, &selection, mode, at)) else {
-            return false;
-        };
+        let extend = self.modifiers.shift;
+        let drawn = self.graph_editor.as_mut().and_then(|ed| ed.viewport_selection.take());
+        let pressed = drawn.as_ref().and_then(|drawn| {
+            let at = crate::scene_gizmo::PressAt { view: &view, point, extend };
+            self.with_dispatch_ctx(|ctx| crate::scene_gizmo::press(ctx, &layer_id, &drawn.scene, &drawn.selection, mode, at))
+        });
         let Some(ed) = self.graph_editor.as_mut() else { return false };
+        ed.viewport_selection = drawn;
         match pressed {
-            GizmoPress::Handle(gesture) => {
+            Some(GizmoPress::Handle(gesture)) => {
                 if gesture.is_some() {
                     ed.viewport_gizmo_drag = gesture.map(|gesture| *gesture);
                 }
                 true
             }
-            GizmoPress::Picked(Some(ids)) => {
-                ed.viewport_selected = ids;
-                true
-            }
-            // The editor viewport clears on the press; a drag from there orbits.
-            GizmoPress::Picked(None) => {
-                ed.viewport_selected.clear();
+            Some(GizmoPress::Picked(true)) => true,
+            // The editor viewport picks on the press, as Blender does; a drag
+            // from there orbits.
+            Some(GizmoPress::Picked(false)) | None => {
+                let pick = crate::scene_pick::ScenePick {
+                    layer: layer_id,
+                    surface: crate::scene_pick::PickSurface::Viewport,
+                    uv: crate::scene_pick::uv_of(&view, point),
+                    extend,
+                };
+                self.send_content_cmd(ContentCommand::PickSceneItem(pick));
                 false
             }
         }
@@ -962,11 +970,11 @@ impl Application {
         self.with_preview_gizmo(|host, ctx| host.press(ctx, fit, pos, extend)).unwrap_or(false)
     }
 
-    /// A left release: a click on empty preview space clears the selection.
+    /// A left release: a click on the preview picks what is drawn there.
     fn preview_gizmo_release_click(&mut self) {
         if self.ws.preview_gizmo.missed() {
-            let pos = self.cursor_pos;
-            self.with_preview_gizmo(|host, ctx| host.release_click(ctx, pos));
+            let (fit, pos) = (self.preview_fit(), self.cursor_pos);
+            self.with_preview_gizmo(|host, ctx| host.release_click(ctx, fit, pos));
         }
     }
 
@@ -982,14 +990,15 @@ impl Application {
         self.ws.preview_gizmo.dragging() && self.with_preview_gizmo(|host, ctx| host.release(ctx)).unwrap_or(false)
     }
 
-    /// "Show gizmos" follows whichever scene the Scene panel shows; the
-    /// content thread reports that layer's rendered view (D7a). Switching it
-    /// off ends a preview drag and preview navigation.
+    /// The content thread reports the rendered view of whichever scene the
+    /// Scene panel shows (D7a), with Show gizmos on or off, so a click on its
+    /// picture picks. Switching Show gizmos off ends a preview drag and
+    /// preview navigation.
     pub(crate) fn sync_gizmo_layer(&mut self) {
         if self.ws.ui_root.scene_setup_panel.gizmo_layer().is_none() {
             self.preview_gizmo_release();
         }
-        let gizmo_layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
+        let gizmo_layer = self.ws.ui_root.scene_setup_panel.live_layer_id();
         if gizmo_layer != self.ws.gizmo_layer_sent.as_ref()
             && let Some(tx) = self.content_tx.as_ref()
         {

@@ -1,8 +1,10 @@
 //! CPU geometry preparation for `node.fluid_role_source`.
 //!
 //! The source node deliberately publishes only immutable, local-space
-//! `TriangleMesh` values.  Simulation state, native handles, and live object
-//! transforms belong to the fluid world consumer.
+//! `TriangleMesh` values: the exact welded surface, closed parts solid and
+//! open parts shells (`manifold_physics::collision_shape::water_lattice`).
+//! Simulation state, native handles, and live object transforms belong to the
+//! fluid world consumer.
 
 use std::path::Path;
 
@@ -11,117 +13,40 @@ use manifold_physics::TriangleMesh;
 
 use super::{CompoundPreparation, WiredPreparation};
 use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::platonic::{platonic_mesh, platonic_points};
+use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_water_rigid::physics_mesh::transform_vertices;
 use manifold_water_rigid::physics_mesh::load_compound_materials;
 use manifold_node_engine::scene::transform::Transform;
-use manifold_water_rigid::physics_mesh::prepare_colliders;
+
+/// What a role with no mesh fills: a unit cube, so its transform's scale is
+/// its size.
+const BUILTIN_CUBE: MeshSource = MeshSource::Cube { size: 1.0 };
 
 manifold_core::testkit_visible! {
-/// The two preparation modes exposed by the source node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GeometryMode {
-    /// Convex hulls cooked by Box3D, the ones rigid colliders use.
-    CollisionProxy,
-    /// The exact welded surface. Closed parts become volumes and open parts
-    /// shells (`manifold_physics::sdf::signed_distance_union`).
-    ExactMesh,
-}
-}
-
-manifold_core::testkit_visible! {
-/// Prepare one or more immutable fluid meshes from an imported source or a
-/// built-in Platonic solid.
+/// Prepare one immutable fluid mesh from an imported source, or the unit cube
+/// when there is no file.
 pub(crate) fn prepare_geometry(
     path: &Path,
     selection: MeshSelection,
-    shape: u32,
-    radius: f32,
     source_transform: Transform,
-    mode: GeometryMode,
     compound: Option<&CompoundPreparation>,
 ) -> Result<Vec<TriangleMesh>, String> {
-    let label = if path.as_os_str().is_empty() {
-        format!("builtin shape {shape}")
-    } else {
-        path.display().to_string()
-    };
+    let label = if path.as_os_str().is_empty() { "builtin cube".to_string() } else { path.display().to_string() };
     if compound.is_some() && path.as_os_str().is_empty() {
         return Err("compound material selection requires an imported mesh path".into());
     }
-    let meshes = match mode {
-        GeometryMode::CollisionProxy => {
-            if path.as_os_str().is_empty() {
-                let points: Vec<_> = platonic_points(shape)
-                    .iter()
-                    .map(|point| [point[0] * radius, point[1] * radius, point[2] * radius])
-                    .collect();
-                vec![
-                    manifold_physics::cook_hull_mesh(&transform_points(&points, source_transform)?)
-                        .map_err(|error| error.to_string())?,
-                ]
-            } else {
-                let mut vertices = if let Some(compound) = compound {
-                    load_compound_materials(
-                        path,
-                        selection,
-                        compound.materials,
-                        compound.part_transforms,
-                    )?
-                } else {
-                    selection.load(path)?
-                };
-                transform_vertices(&mut vertices, source_transform)?;
-                let hulls = prepare_colliders(&vertices, selection.collider_parts)
-                    .map_err(|error| error.to_string())?
-                    .hulls;
-                hulls
-                    .into_iter()
-                    .map(|points| {
-                        manifold_physics::cook_hull_mesh(&points).map_err(|error| error.to_string())
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-        }
-        GeometryMode::ExactMesh => {
-            let vertices = if path.as_os_str().is_empty() {
-                let mut vertices = platonic_mesh(shape).to_vec();
-                for vertex in &mut vertices {
-                    for axis in 0..3 {
-                        vertex.position[axis] *= radius;
-                    }
-                }
-                transform_vertices(&mut vertices, source_transform)?;
-                vertices
-            } else {
-                let mut vertices = if let Some(compound) = compound {
-                    load_compound_materials(
-                        path,
-                        selection,
-                        compound.materials,
-                        compound.part_transforms,
-                    )?
-                } else {
-                    selection.load(path)?
-                };
-                transform_vertices(&mut vertices, source_transform)?;
-                vertices
-            };
-            vec![weld_triangle_list(&vertices)?]
-        }
+    let mut vertices = if path.as_os_str().is_empty() {
+        BUILTIN_CUBE.load_vertices()?
+    } else if let Some(compound) = compound {
+        load_compound_materials(path, selection, compound.materials, compound.part_transforms)?
+    } else {
+        selection.load(path)?
     };
-
-    if mode == GeometryMode::ExactMesh {
-        for mesh in &meshes {
-            manifold_physics::closed_triangles(mesh)
-                .map_err(|error| format!("{label}: {error}"))?;
-        }
-    }
-    if meshes.is_empty() {
-        return Err(format!("{label}: preparation produced no geometry"));
-    }
-    Ok(meshes)
+    transform_vertices(&mut vertices, source_transform)?;
+    let mesh = weld_triangle_list(&vertices)?;
+    manifold_physics::closed_triangles(&mesh).map_err(|error| format!("{label}: {error}"))?;
+    Ok(vec![mesh])
 }
 }
 
@@ -131,8 +56,6 @@ manifold_core::testkit_visible! {
 pub(crate) fn prepare_wired_geometry(
     wired: &WiredPreparation,
     source_transform: Transform,
-    mode: GeometryMode,
-    collider_parts: u32,
 ) -> Result<Vec<TriangleMesh>, String> {
     let mut vertices = Vec::new();
     for (slot, source) in wired.sources.iter().enumerate() {
@@ -144,35 +67,10 @@ pub(crate) fn prepare_wired_geometry(
         vertices.extend(part);
     }
     transform_vertices(&mut vertices, source_transform)?;
-    match mode {
-        GeometryMode::CollisionProxy => prepare_colliders(&vertices, collider_parts)
-            .map_err(|error| error.to_string())?
-            .hulls
-            .iter()
-            .map(|points| {
-                manifold_physics::cook_hull_mesh(points).map_err(|error| error.to_string())
-            })
-            .collect(),
-        GeometryMode::ExactMesh => {
-            let mesh = weld_triangle_list(&vertices)?;
-            manifold_physics::closed_triangles(&mesh).map_err(|error| error.to_string())?;
-            Ok(vec![mesh])
-        }
-    }
+    let mesh = weld_triangle_list(&vertices)?;
+    manifold_physics::closed_triangles(&mesh).map_err(|error| error.to_string())?;
+    Ok(vec![mesh])
 }
-}
-
-fn transform_points(points: &[[f32; 3]], transform: Transform) -> Result<Vec<[f32; 3]>, String> {
-    let mut vertices = points
-        .iter()
-        .copied()
-        .map(|position| MeshVertex {
-            position,
-            ..bytemuck::Zeroable::zeroed()
-        })
-        .collect::<Vec<_>>();
-    transform_vertices(&mut vertices, transform)?;
-    Ok(vertices.into_iter().map(|vertex| vertex.position).collect())
 }
 
 /// Convert an unindexed triangle list to an indexed mesh by welding only
@@ -281,42 +179,9 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn scene_physics_fluid_source_proxy_and_builtin_closed_meshes_are_closed() {
-        let selection = MeshSelection {
-            mesh: -1,
-            primitive: -1,
-            material: -1,
-            fit: false,
-            recenter: true,
-            translate: [0.0; 3],
-            fragment_count: 1,
-            fragment_index: 0,
-            collider_parts: 1,
-        };
-        let proxy = prepare_geometry(
-            Path::new(""),
-            selection,
-            1,
-            1.0,
-            Transform::default(),
-            GeometryMode::CollisionProxy,
-            None,
-        )
-        .unwrap();
-        assert!(!proxy.is_empty());
-        for mesh in &proxy {
-            manifold_fluids::validate_mesh(mesh).unwrap();
-        }
-        let closed = prepare_geometry(
-            Path::new(""),
-            selection,
-            1,
-            1.0,
-            Transform::default(),
-            GeometryMode::ExactMesh,
-            None,
-        )
-        .unwrap();
+    fn scene_physics_fluid_source_builtin_cube_is_closed() {
+        let selection = super::super::default_selection();
+        let closed = prepare_geometry(Path::new(""), selection, Transform::default(), None).unwrap();
         assert_eq!(closed[0].vertices.len(), 8);
         manifold_fluids::validate_mesh(&closed[0]).unwrap();
     }

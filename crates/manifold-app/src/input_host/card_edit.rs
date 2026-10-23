@@ -93,8 +93,6 @@ impl<'a> AppInputHost<'a> {
             let ids: Vec<_> = effects.iter().filter(|effect| selected.contains(&effect.id)).map(|effect| effect.id.clone()).collect();
             if ids.is_empty() { return false; }
             self.ui_root.effect_clipboard.copy_selection(effects, groups, &ids);
-            self.ui_root.scene_modifier_clipboard = None;
-            self.ui_root.object_modifier_clipboard = None;
             self.ui_root.scene_item_clipboard = None;
             true
         }).unwrap_or(false)

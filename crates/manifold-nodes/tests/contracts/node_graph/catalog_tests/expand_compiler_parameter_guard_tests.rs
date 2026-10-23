@@ -235,10 +235,7 @@ fn scene_modifier_parameter_guard_blocks_source_selector_allows_rt_and_keeps_geo
         )
         .is_ok());
 
-    let local = manifold_core::scene_modifier_preset::SceneNodeRef {
-        scope: vec![NodeId::new("elastic_stage")],
-        node: NodeId::new("shear_x"),
-    };
+    let local = NodeId::new("shear_x");
     let copy = runtime
         .modifier_node_copies(&NodeId::new("test_modifier"), &local)
         .and_then(|copies| copies.first())

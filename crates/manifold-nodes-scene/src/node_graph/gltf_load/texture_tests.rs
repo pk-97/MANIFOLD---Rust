@@ -117,26 +117,25 @@ fn webp_dimensions_match_runtime_with_absent_or_different_size_fallback() {
         serde_json::json!({"source":0,"extensions":{"EXT_texture_webp":{"source":1}}}),
     ] {
         fixture.write_document(serde_json::json!([texture]), images.clone(), webp.get_ref());
-        let summary = gltf_import_summary(&fixture.path).unwrap();
+        let (document, buffers) = parse_document_and_buffers(Path::new(&fixture.path)).unwrap();
         let (w, h, _) = load_gltf_texture(&fixture.path, 0).unwrap();
         assert_eq!((w, h), (3, 2));
-        assert_eq!(summary.texture_dims, [(w, h)]);
+        assert_eq!(texture_dims(Path::new(&fixture.path), &document, &buffers), [(w, h)]);
     }
 }
 
 #[test]
-fn missing_texture_source_is_reported_by_summary_and_runtime() {
+fn missing_texture_source_is_reported_by_runtime_and_sized_by_fallback() {
     let fixture = TextureFixture::external_png();
     fixture.write_document(
         serde_json::json!([{}]),
         serde_json::json!([{"uri":"map.png"}]),
         &[],
     );
-    let summary = gltf_import_summary(&fixture.path).unwrap();
+    let (document, buffers) = parse_document_and_buffers(Path::new(&fixture.path)).unwrap();
     let error = load_gltf_texture(&fixture.path, 0).unwrap_err();
     assert_eq!(error, "texture 0 has no image source");
-    assert!(summary.extension_report_lines.contains(&error));
-    assert_eq!(summary.texture_dims, [(2, 2)]);
+    assert_eq!(texture_dims(Path::new(&fixture.path), &document, &buffers), [(2, 2)]);
 }
 
 #[test]
@@ -148,6 +147,8 @@ fn texture_snapshot_owns_selected_dependency_bytes() {
     assert_ne!(original.identity, edited.identity);
     assert_eq!(decode_texture_snapshot(original).unwrap().2[0], 17);
     assert_eq!(decode_texture_snapshot(edited).unwrap().2[0], 201);
+    // A picture file is read whole, as a Material's File texture reads it.
+    assert_eq!(load_gltf_texture(&fixture.image_path(), 0).unwrap().2[0], 201);
     std::fs::remove_file(fixture.image_path()).unwrap();
     assert!(parse_texture_snapshot(&fixture.path, 0).is_err());
     // Restore a valid source and prove failures are not sticky.
@@ -190,11 +191,13 @@ fn malformed_relative_image_uri_reports_error_without_unwinding() {
     let result = std::panic::catch_unwind(|| parse_texture_snapshot(&fixture.path, 0))
         .expect("malformed relative image URI must not panic");
     assert!(result.err().unwrap().contains("invalid resource URI"));
-    let summary = gltf_import_summary(&fixture.path).unwrap();
-    assert!(
-        summary
-            .extension_report_lines
-            .iter()
-            .any(|line| line.contains("invalid resource URI"))
-    );
+}
+
+#[test]
+fn a_picture_files_size_comes_from_its_header() {
+    let fixture = TextureFixture::new();
+    image::RgbaImage::from_pixel(64, 17, image::Rgba([1, 2, 3, 4])).save(fixture.image_path()).unwrap();
+    assert_eq!(picture_file_dims(&fixture.image_path()), Some((64, 17)));
+    std::fs::write(fixture.image_path(), b"not a picture").unwrap();
+    assert_eq!(picture_file_dims(&fixture.image_path()), None);
 }

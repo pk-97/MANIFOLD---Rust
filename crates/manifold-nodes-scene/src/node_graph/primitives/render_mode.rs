@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn mode_scalar_rounds_and_clamps() {
         assert_eq!(run_with(&[("mode", 1.7)], &[]).mode, 2, "continuous wire values round");
-        assert_eq!(run_with(&[("mode", 5.0)], &[]).mode, 3, "out of range clamps to Points");
+        assert_eq!(run_with(&[("mode", 9.0)], &[]).mode, (RENDER_MODE_LABELS.len() - 1) as u32, "out of range clamps to the last mode");
         assert_eq!(run_with(&[("mode", -1.0)], &[]).mode, 0, "negative clamps to Rendered");
         assert_eq!(run_with(&[("mode", 2.0)], &[]).mode, 2);
     }

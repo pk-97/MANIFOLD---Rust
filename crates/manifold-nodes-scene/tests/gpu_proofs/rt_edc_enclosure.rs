@@ -153,7 +153,7 @@ fn build_runtime(json: &str) -> (PresetRuntime, RenderTarget) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let runtime = PresetRuntime::from_json_str_with_device(
-        json,
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,

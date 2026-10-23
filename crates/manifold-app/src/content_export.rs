@@ -482,6 +482,7 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
         | ContentCommand::SetSceneViewport(_)
         | ContentCommand::SetPhysicsOverlay(_)
         | ContentCommand::SetSelectionOutline { .. }
+        | ContentCommand::PickSceneItem(_)
         | ContentCommand::SetGizmoOverlay(_)
         | ContentCommand::SetModifierPreviewContext { .. }
         | ContentCommand::SetNodePreviewNormalize(_)
@@ -540,10 +541,6 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
         | ContentCommand::ExecuteOnContent(_)
         | ContentCommand::FireParameter { .. }
         | ContentCommand::ExecuteSelecting(..)
-        | ContentCommand::SceneModifier(_)
-        | ContentCommand::ObjectModifier(_)
-        | ContentCommand::SceneItem(_)
-        | ContentCommand::SceneCameraSetup(_)
         | ContentCommand::ChangeGeneratorType { .. }
         | ContentCommand::GeneratorTypeChanged { .. }
         | ContentCommand::ExecuteBatch(..)

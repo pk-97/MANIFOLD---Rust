@@ -7,8 +7,7 @@ use manifold_physics::{BodyHandle, FieldValue, PhysicsWorld};
 use manifold_core::scene_surface::{PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_DEFAULT_COPY_GROUPS};
 
 use super::{
-    same_topology_body, AdvancementPolicy, ResolvedRigidImpulse, RigidBody, RigidSimulation, SceneRef,
-    IMPULSE_CAPACITY,
+    same_geometry_body, AdvancementPolicy, NEEDS_NEW_WORLD, ResolvedRigidImpulse, RigidBody, RigidSimulation, SceneRef,
 };
 
 /// The retained scene inputs of one Physics World: one entry per body port,
@@ -114,7 +113,7 @@ impl RigidSceneInputs {
                 .iter()
                 .chain(&self.groups)
                 .zip(other.bodies.iter().chain(&other.groups))
-                .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
+                .all(|(left, right)| same_geometry_body(left.as_ref(), right.as_ref()))
             && self.groups.iter().zip(&other.groups).all(|(left, right)| {
                 left.as_ref().map(|body| super::requested_count(body.spawn))
                     == right.as_ref().map(|body| super::requested_count(body.spawn))
@@ -150,7 +149,7 @@ impl RigidSimulation {
             && (!self.native_topology_matches(inputs)
                 || self.last_time.is_some_and(|last| now.0 < last.0))
         {
-            return Err("Physics worker cannot rebuild native topology within an epoch".into());
+            return Err(NEEDS_NEW_WORLD.into());
         }
 
         let previous_policy = self.advancement_policy;
@@ -158,6 +157,24 @@ impl RigidSimulation {
         let result = self.advance_inner(SceneRef::of(inputs), now, 1.0, 0.0, None, None, coupling);
         self.advancement_policy = previous_policy;
         result
+    }
+
+    /// Take a change of bodies into the running world without stepping it:
+    /// a body or copy group that joined is installed where it stands, a
+    /// copies Count lays out at the next tick start, and everything already
+    /// moving keeps its state. False when the change needs a fresh world (a
+    /// body left or changed its shape); the owner then starts a new epoch.
+    pub fn admit_worker_edits(&mut self, inputs: &RigidSceneInputs) -> Result<bool, String> {
+        let now = self.last_time.unwrap_or(Seconds::ZERO);
+        let previous_policy = self.advancement_policy;
+        self.advancement_policy = AdvancementPolicy::Worker { max_ticks: 0 };
+        let result =
+            self.advance_inner(SceneRef::of(inputs), now, 1.0, 0.0, None, None, &mut manifold_physics::stepping::Uncoupled);
+        self.advancement_policy = previous_policy;
+        match result {
+            Err(error) if error == NEEDS_NEW_WORLD => Ok(false),
+            result => result.map(|()| true),
+        }
     }
 
     /// Consume one batch of events already assigned by the shared worker
@@ -176,7 +193,7 @@ impl RigidSimulation {
             && (!self.native_topology_matches(inputs)
                 || self.last_time.is_some_and(|last| now.0 < last.0))
         {
-            return Err("Physics worker cannot rebuild native topology within an epoch".into());
+            return Err(NEEDS_NEW_WORLD.into());
         }
         self.ensure_worker_tick_is_owed(now)?;
 
@@ -212,7 +229,7 @@ impl RigidSimulation {
         if self.world.is_some()
             && !self.native_topology_matches(inputs)
         {
-            return Err("Physics worker cannot rebuild native topology within an epoch".into());
+            return Err(NEEDS_NEW_WORLD.into());
         }
 
         // The retained authored observation may already bracket beyond this
@@ -270,12 +287,12 @@ impl RigidSimulation {
                 .descriptions
                 .iter()
                 .zip(inputs.bodies.iter())
-                .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
+                .all(|(left, right)| same_geometry_body(left.as_ref(), right.as_ref()))
             && self
                 .groups
                 .iter()
                 .zip(&inputs.groups)
-                .all(|(state, right)| same_topology_body(state.description.as_ref(), right.as_ref()))
+                .all(|(state, right)| same_geometry_body(state.description.as_ref(), right.as_ref()))
     }
 
 
@@ -284,9 +301,6 @@ impl RigidSimulation {
         &self,
         events: &[AppliedEvent<ResolvedRigidImpulse>],
     ) -> Result<(), String> {
-        if events.len() > IMPULSE_CAPACITY {
-            return Err("Physics worker assigned impulse batch exceeds capacity".into());
-        }
         let Some(epoch) = self.impulse_epoch else {
             return Err("Physics worker assigned impulses require an initialized epoch".into());
         };
@@ -315,7 +329,7 @@ impl RigidSimulation {
             {
                 return Err("Physics worker assigned impulse timing is invalid".into());
             }
-            self.validate_impulse_targets(event.value.targets)?;
+            self.validate_impulse_targets(&event.value.targets)?;
         }
         Ok(())
     }
@@ -352,9 +366,6 @@ impl RigidSimulation {
         {
             return Err("Physics worker interval must have finite positive duration".into());
         }
-        if events.len() > IMPULSE_CAPACITY {
-            return Err("Physics worker assigned impulse batch exceeds capacity".into());
-        }
         let Some(epoch) = self.impulse_epoch else {
             return Err("Physics worker assigned impulses require an initialized epoch".into());
         };
@@ -377,7 +388,7 @@ impl RigidSimulation {
             {
                 return Err("Physics worker assigned impulse is outside its interval".into());
             }
-            self.validate_impulse_targets(event.value.targets)?;
+            self.validate_impulse_targets(&event.value.targets)?;
         }
         Ok(())
     }
@@ -567,9 +578,9 @@ mod tests {
         let before_physics_time = simulation.physics_time;
         let before_pending_time = simulation.pending_time;
         let before_history_len = simulation.authored_samples.iter().count();
-        let before_shape = simulation.descriptions[0].as_ref().unwrap().shape;
+        let before_shape = simulation.descriptions[0].as_ref().unwrap().collider.clone().unwrap();
         let mut changed = inputs.clone();
-        changed.bodies[0].as_mut().unwrap().shape = 2;
+        changed.bodies[0].as_mut().unwrap().collider = Some(crate::physics::platonic_solid(2));
         assert!(simulation
             .advance_worker(&changed, Seconds::ZERO, 1, &mut coupling)
             .is_err());
@@ -587,10 +598,10 @@ mod tests {
             simulation.authored_samples.iter().count(),
             before_history_len
         );
-        assert_eq!(
-            simulation.descriptions[0].as_ref().unwrap().shape,
-            before_shape
-        );
+        assert!(std::sync::Arc::ptr_eq(
+            simulation.descriptions[0].as_ref().unwrap().collider.as_ref().unwrap(),
+            &before_shape
+        ));
     }
 
     #[test]
@@ -826,12 +837,7 @@ mod tests {
         let before_pose = simulation.native_world().unwrap().pose(handle).unwrap();
         let before_cursor = simulation.impulse_queue.as_ref().unwrap().next_tick();
         let before_physics_time = simulation.physics_time;
-        let invalid_target = assigned_event(
-            epoch,
-            0,
-            1,
-            RigidImpulseTargets::body(1).unwrap(),
-        );
+        let invalid_target = assigned_event(epoch, 0, 1, RigidImpulseTargets::default());
         assert!(simulation
             .advance_worker_tick(
                 &inputs,

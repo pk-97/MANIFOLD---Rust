@@ -1,6 +1,6 @@
 //! BUG-318 repro through the REAL import path — the app-faithful version of
 //! `rt_t2b_temporal_wiring::live_rt_toggle_with_scene_object_does_not_dangle_mesh_slots`
-//! (which did NOT reproduce Peter's break): `assemble_import_graph` on a real
+//! (which did NOT reproduce Peter's break): `compile_model_scene` on a real
 //! GLB (owned variadic port names, per-object scene_object chains, installed
 //! mesh buffers), rendered through `PresetRuntime`, then `rt_enabled` toggled
 //! LIVE. Peter's symptom: every post-toggle frame magenta-clears with
@@ -8,7 +8,7 @@
 
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -70,7 +70,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/hostile/mixamo_like.glb");
     assert!(glb.exists(), "fixture missing: {glb:?}");
-    let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
+    let (def, report) = compile_model_scene(&glb).expect("import must succeed");
     eprintln!("[bug318] import report: {report:?}");
     // Peter's project plausibly SAVED rt_enabled=true — make the build-time
     // state RT-on so the live toggle exercises the consumed-set SHRINK
@@ -161,12 +161,12 @@ fn live_temporal_upscale_off_from_reduced_import_scene_stays_finite() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/hostile/mixamo_like.glb");
-    let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
+    let (def, report) = compile_model_scene(&glb).expect("import must succeed");
     eprintln!("[bug318-reduced-off] import report: {report:?}");
     let mut manifest = harness::import_rt_manifest(&def, true, false);
     let temporal_id = manifest
         .iter()
-        .find(|p| p.id().ends_with("_temporal_upscale"))
+        .find(|p| p.id().ends_with(".temporal_upscale"))
         .map(|p| p.id().to_string())
         .expect("imported def exposes temporal_upscale card param");
     manifest
@@ -255,7 +255,7 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
         return;
     }
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let (def, report) = assemble_import_graph(&glb).expect("apricot import must succeed");
+    let (def, report) = compile_model_scene(&glb).expect("apricot import must succeed");
     eprintln!("[bug319] import report: {report:?}");
 
     let registry = PrimitiveRegistry::with_builtin();

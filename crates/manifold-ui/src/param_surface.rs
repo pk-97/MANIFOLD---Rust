@@ -23,7 +23,7 @@
 use crate::panels::GraphParamTarget;
 use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RowMod};
 use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioRowState, AudioSendChoice};
-use manifold_foundation::{EffectId, LayerId, ParamId, SceneNodeRef};
+use manifold_foundation::{EffectId, LayerId, ParamId};
 
 /// UI-side copy of the persisted material descriptor vocabulary. The UI crate
 /// deliberately does not depend on core; the app projection performs the
@@ -53,6 +53,33 @@ pub const MATERIAL_FEATURES: &[MaterialFeature] = &[
     MaterialFeature::Translucency,
     MaterialFeature::Subsurface,
 ];
+
+/// A Material's starting looks: a one-click set of features and factors,
+/// not a stored setting. The Material block shows the look its values match,
+/// or Custom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialLook {
+    Default,
+    Matte,
+    Coated,
+    BrushedMetal,
+    Glass,
+}
+
+impl MaterialLook {
+    pub const ALL: [MaterialLook; 5] =
+        [MaterialLook::Default, MaterialLook::Matte, MaterialLook::Coated, MaterialLook::BrushedMetal, MaterialLook::Glass];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MaterialLook::Default => "Default",
+            MaterialLook::Matte => "Matte",
+            MaterialLook::Coated => "Coated",
+            MaterialLook::BrushedMetal => "Brushed Metal",
+            MaterialLook::Glass => "Glass",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialGroup {
@@ -147,10 +174,6 @@ pub enum MaterialParamRole {
     Sampler(MaterialMapFamily, SamplerComponent),
 }
 
-/// Re-export the action vocabulary beside the surface descriptors for callers
-/// that consume the UI projection as one material-inspector API.
-pub use crate::panels::actions::MaterialLook;
-
 /// Descriptor half of a row — sourced verbatim from the manifest's
 /// `ParamSpecDef` fields by the projection. Never from registry re-reads,
 /// never from hand tables (INV-1).
@@ -240,66 +263,6 @@ pub struct RowMapping {
     pub mappable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModifierObjectOption {
-    pub object: SceneNodeRef,
-    pub label: String,
-    pub selected: bool,
-}
-
-/// Card-level facts for one APPLIED scene modifier (SCENE_MODIFIER_FRAMEWORK
-/// section 3.7) — the chrome + write addressing an ordinary effect-shell card
-/// needs to behave as a modifier card. `None` on every non-modifier surface.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModifierCardInfo {
-    /// Stable identity of this applied modifier instance.
-    pub instance_id: manifold_foundation::NodeId,
-    /// The owning layer — every row gesture addresses `GeneratorOf(this)`.
-    pub layer_id: LayerId,
-    /// The generator instance whose host params these rows are. Content-side
-    /// state keyed by instance (the audio-mod meter) resolves through it,
-    /// never through the card's own `scene_modifier:` identity.
-    pub params_owner: EffectId,
-    /// Authored enabled-parameter label shown by the common card toggle.
-    pub enabled_label: String,
-    /// Position in the owning layer's ordered modifier stack.
-    pub stack_index: usize,
-    /// Number of entries in the owning layer's modifier stack.
-    pub stack_len: usize,
-    /// Whether this modifier currently applies to every object in its scope.
-    pub targets_all: bool,
-    /// Available target objects and their explicit-selection state.
-    pub objects: Vec<ModifierObjectOption>,
-}
-
-/// Stable address for one object-owned modifier card in Scene Setup.
-///
-/// The object and the chain owner are scene addresses; `node_doc_id`
-/// identifies the modifier within that owner's ordered chain. The card uses
-/// all three for UI identity; the modifier actions name the owner by address
-/// and the modifier by its id inside the owner.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ObjectModifierCardInfo {
-    pub layer_id: LayerId,
-    /// The object the card belongs to, by address.
-    pub object: SceneNodeRef,
-    /// The node the modifier chain hangs off: the object's group, else the
-    /// object. The modifier commands name it.
-    pub owner: SceneNodeRef,
-    pub node_doc_id: u32,
-}
-
-/// One catalog recipe in the modifier picker. Applicability and singleton
-/// restrictions are projected from the scene by the app; the UI reads no graph.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModifierPickerEntry {
-    pub preset_id: String,
-    pub label: String,
-    /// `None` = clickable (applies the kind); `Some(reason)` = disabled with
-    /// the reason appended ("applied", "not applicable").
-    pub disabled: Option<String>,
-}
-
 /// Stable parameter owner and current clip source label for the shared drawer.
 #[derive(Debug, Clone)]
 pub struct ClipTriggerRow {
@@ -331,6 +294,22 @@ pub struct ParamRow {
     /// material feature visibility and seed writes read it. Filled by the
     /// app projection.
     pub modulator_stored: bool,
+    /// What the row is when it is not a manifest param: a scene item's
+    /// structural field or a card editing helper. Such a row has no manifest
+    /// slot, so no value sync and no modulation drawer.
+    pub affordance: Option<RowAffordance>,
+}
+
+/// A row that carries an action instead of a manifest value
+/// (SCENE_DOCUMENT_DESIGN.md section 8): the capability-driven action rows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowAffordance {
+    /// A structural field of a scene item. A pick sends
+    /// `ProjectAction::SceneFieldSet`.
+    Field { item: manifold_foundation::ItemId, field: String, control: crate::panels::scene_setup_panel::FieldControlVm },
+    /// The Scale link switch of an item's Transform section (section 7.17):
+    /// a card editing helper, never a param.
+    ScaleLink { item: manifold_foundation::ItemId },
 }
 
 /// How a row draws. Decided once, by [`ParamRow::kind`]; every row builder,
@@ -370,6 +349,11 @@ impl ParamRow {
     /// row, modulated or not: its fold keeps each channel's slider and lane.
     pub fn kind(&self, scene: bool) -> RowKind {
         let spec = &self.spec;
+        match self.affordance {
+            Some(RowAffordance::Field { .. }) => return RowKind::Choice,
+            Some(RowAffordance::ScaleLink { .. }) => return RowKind::Switch,
+            None => {}
+        }
         if spec.is_trigger {
             return RowKind::Trigger;
         }
@@ -438,13 +422,6 @@ pub struct ParamSurface {
 
     // ── Generator-only identity ──
     pub layer_id: Option<LayerId>,
-
-    /// SCENE_MODIFIER_FRAMEWORK section 3.7: `Some` on a scene modifier card
-    /// (an effect-shell card whose rows are the kind's stamped exposures).
-    /// Drives the chrome differences (no drag handle, the
-    /// common enable toggle, ordered-stack controls, and remove ×) and the
-    /// `GeneratorOf(layer)` write addressing. `None` everywhere else.
-    pub modifier: Option<ModifierCardInfo>,
 
     /// The rows, manifest order == render order.
     pub rows: Vec<ParamRow>,

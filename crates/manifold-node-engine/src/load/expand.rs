@@ -41,7 +41,7 @@ pub use compiler::{
 };
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
-pub use frames::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
+pub use frames::{TargetPlacement, capture_mesh_frames, resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
 
 use manifold_core::scene_modifier_preset::SceneModifierSchemaError;
 
@@ -105,8 +105,8 @@ impl From<SceneModifierSchemaError> for SceneModifierExpandError {
 
 pub fn scene_objects_for_authoring(
     owner: &manifold_core::effect_graph_def::EffectGraphDef,
-    scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
-) -> Result<Vec<manifold_core::scene_modifier_preset::SceneNodeRef>, SceneModifierExpandError> {
+    scene: &manifold_core::NodeId,
+) -> Result<Vec<manifold_core::NodeId>, SceneModifierExpandError> {
     Ok(FlatSceneIndex::build(owner)?.scene_objects(scene)?)
 }
 
@@ -134,8 +134,8 @@ impl From<SceneIndexError> for SceneModifierExpandError {
 /// physical recipients when expanding a force recipe.
 pub fn force_objects_for_authoring(
     owner: &manifold_core::effect_graph_def::EffectGraphDef,
-    scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
-) -> Result<Vec<manifold_core::scene_modifier_preset::SceneNodeRef>, SceneModifierExpandError> {
+    scene: &manifold_core::NodeId,
+) -> Result<Vec<manifold_core::NodeId>, SceneModifierExpandError> {
     acceleration::authoring_objects(
         owner,
         scene,

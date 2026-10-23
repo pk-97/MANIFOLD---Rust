@@ -21,6 +21,9 @@
 
 use std::borrow::Cow;
 use std::sync::mpsc;
+use std::sync::Arc;
+use manifold_node_engine::scene::mesh_selection::MeshSelection;
+use manifold_node_engine::scene::mesh_source::MeshSource;
 
 use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -43,12 +46,13 @@ fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) ->
 manifold_node_engine::primitive! {
     name: GltfSkinnedMeshSource,
     type_id: "node.gltf_skinned_mesh_source",
-    purpose: "Read a glTF/.glb file's sole skinned mesh-owning node contributing `material_index` and emit its LOCAL-space (bind-pose) geometry as Array(MeshVertex), plus coincident per-vertex JOINTS_0 (as f32 indices) and WEIGHTS_0 arrays. NO node transform is applied (glTF skinning ignores the mesh node's own transform) — wire `vertices`/`joints`/`weights` into node.skin_mesh along with a node.gltf_skeleton_pose's joint-matrix palette to deform the mesh per frame.",
+    purpose: "Read a glTF/.glb file's sole skinned mesh-owning node contributing `material_index` and emit its LOCAL-space (bind-pose) geometry as Array(MeshVertex), plus coincident per-vertex JOINTS_0 (as f32 indices) and WEIGHTS_0 arrays. NO node transform is applied (glTF skinning ignores the mesh node's own transform) — wire `vertices`/`joints`/`weights` into node.skin_mesh along with a node.gltf_skeleton_pose's joint-matrix palette to deform the mesh per frame. `source` describes the same node's mesh as the model file places it at rest, for a rigid body's collision shape.",
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
         joints: Array(Vec4Vertex),
         weights: Array(Vec4Vertex),
+        source: MeshSource,
     },
     params: [
         ParamDef {
@@ -56,6 +60,14 @@ manifold_node_engine::primitive! {
             label: "File",
             ty: ParamType::String,
             default: ParamValue::Float(0.0), // String default supplied via stringBindings; this slot is never read.
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("node_path"),
+            label: "File Node",
+            ty: ParamType::String,
+            default: ParamValue::Float(0.0), // String default supplied by the node param; this slot is never read.
             range: None,
             enum_values: &[],
         },
@@ -90,10 +102,9 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         // BUG-194/BUG-195 (SCENE_SETUP_PANEL_DESIGN.md D4/D5): import-time
-        // provenance, never read by `evaluate()`/`run()` — stamped by
-        // `gltf_import.rs` at import/merge time and read back by
-        // `SceneVm::from_def` (the header's vertex-count row) and
-        // `merge_import_into_graph` (scale-sanity's reference-radius pick).
+        // provenance, never read by `evaluate()`/`run()` — stamped by the
+        // scene compiler and read back by the scene table's vertex-count
+        // row and by Shatter.
         // -1 / -1.0 mean "unknown" (a hand-built node never touched by the
         // importer) — never a fabricated non-negative default.
         ParamDef {
@@ -123,8 +134,10 @@ manifold_node_engine::primitive! {
     aliases: ["gltf skinned", "skinned mesh source", "rig mesh"],
     boundary_reason: IoBridge,
     extra_fields: {
-        // (path, material_index, vertex_colors) last parsed (or in flight).
-        last_key: (String, i32, bool) = (String::new(), i32::MIN, false),
+        // (path, material_index, vertex_colors, node_path) last parsed (or in flight).
+        last_key: (String, i32, bool, String) = (String::new(), i32::MIN, false, String::new()),
+        // The rest shape for `last_key` once loaded, built once per load.
+        rest_source: Option<MeshSource> = None,
         cached_verts: Vec<MeshVertex> = Vec::new(),
         cached_joints: Vec<[f32; 4]> = Vec::new(),
         cached_weights: Vec<[f32; 4]> = Vec::new(),
@@ -153,8 +166,8 @@ manifold_node_engine::primitive! {
 impl Primitive for GltfSkinnedMeshSource {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let path = match ctx.params.get("path") {
-            Some(ParamValue::String(s)) => s.as_str().to_owned(),
-            _ => String::new(),
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
         };
         let material_index = match ctx.params.get("material_index") {
             Some(ParamValue::Float(n)) => n.round() as i32,
@@ -162,9 +175,18 @@ impl Primitive for GltfSkinnedMeshSource {
         };
         let vertex_colors = matches!(ctx.params.get("vertex_colors"), Some(ParamValue::Bool(true)));
 
-        let key = (path.clone(), material_index, vertex_colors);
-        if key != self.last_key && self.pending_load.is_none() {
-            self.last_key = key;
+        let node_path = match ctx.params.get("node_path") {
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
+        };
+        // Compared borrowed, so a steady frame allocates nothing.
+        let same_key = self.last_key.0 == path
+            && self.last_key.1 == material_index
+            && self.last_key.2 == vertex_colors
+            && self.last_key.3 == node_path;
+        if !same_key && self.pending_load.is_none() {
+            self.last_key = (path.to_owned(), material_index, vertex_colors, node_path.to_owned());
+            self.rest_source = None;
             self.cached_verts.clear();
             self.cached_joints.clear();
             self.cached_weights.clear();
@@ -183,10 +205,11 @@ impl Primitive for GltfSkinnedMeshSource {
                 } else {
                     material_index as u32
                 };
-                let path_buf = std::path::PathBuf::from(&path);
+                let path_buf = std::path::PathBuf::from(path);
+                let node_path = node_path.to_owned();
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = load_gltf_skinned_mesh(&path_buf, load_material_index)
+                    let result = load_gltf_skinned_mesh(&path_buf, load_material_index, &node_path)
                         .map(|(verts, joints, weights)| {
                             (apply_vertex_color_compat(verts, vertex_colors), joints, weights)
                         });
@@ -218,6 +241,27 @@ impl Primitive for GltfSkinnedMeshSource {
             }
         }
 
+        // The rest shape a body collides with: the node's mesh, loaded by
+        // the body when it asks. Built once per load; each frame hands out
+        // a clone of its shared names.
+        if !self.cached_verts.is_empty() {
+            let source = self.rest_source.get_or_insert_with(|| MeshSource::Gltf {
+                path: Arc::from(self.last_key.0.as_str()),
+                node_path: (!self.last_key.3.is_empty()).then(|| Arc::from(self.last_key.3.as_str())),
+                selection: MeshSelection {
+                    mesh: -1,
+                    primitive: -1,
+                    material: self.last_key.1,
+                    fit: false,
+                    recenter: false,
+                    translate: [0.0; 3],
+                    fragment_count: 1,
+                    fragment_index: 0,
+                },
+            });
+            ctx.outputs.set_mesh_source("source", source.clone());
+        }
+
         let Some(dst_verts) = ctx.outputs.array("vertices") else {
             return;
         };
@@ -230,6 +274,11 @@ impl Primitive for GltfSkinnedMeshSource {
         let capacity = dst_verts.size / std::mem::size_of::<MeshVertex>() as u64;
 
         if self.cached_verts.is_empty() {
+            // Nothing parsed yet (or the path is empty or failed): the
+            // buffers are allocation, not content. Pending holds every
+            // consumer (the skin, a swarm's merged seed mesh, the render)
+            // until the mesh lands, as node.gltf_mesh_source does.
+            ctx.mark_outputs_pending();
             return;
         }
 
@@ -421,6 +470,21 @@ mod gpu_tests {
         params: &ParamValues,
         time: FrameTime,
     ) -> bool {
+        run_frame(prim, backend, device, verts_slot, joints_slot, weights_slot, params, time).0
+    }
+
+    /// One run: whether it declared its outputs unchanged, and pending.
+    #[allow(clippy::too_many_arguments)]
+    fn run_frame(
+        prim: &mut GltfSkinnedMeshSource,
+        backend: &MetalBackend,
+        device: &TestDevice,
+        verts_slot: Slot,
+        joints_slot: Slot,
+        weights_slot: Slot,
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> (bool, bool) {
         let output_scratch: Vec<(&'static str, Slot)> =
             vec![("vertices", verts_slot), ("joints", joints_slot), ("weights", weights_slot)];
         let mut scalar_ws = Vec::new();
@@ -446,16 +510,36 @@ mod gpu_tests {
             &mut object_ws,
         );
         let mut native_enc = device.create_encoder("gltf-skinned-mesh-source-test");
-        let unchanged;
+        let ran;
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
             let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu))
                 .with_outputs_retained(true);
             prim.run(&mut ctx);
-            unchanged = ctx.outputs_unchanged;
+            ran = (ctx.outputs_unchanged, ctx.outputs_pending);
         }
         native_enc.commit_and_wait_completed();
-        unchanged
+        ran
+    }
+
+    /// With no mesh the outputs are pending, so nothing downstream (the skin,
+    /// a swarm seeding from a merged group, the render) reads unwritten
+    /// buffers; once the mesh lands they are content. Whether the first frame
+    /// races the parse is not deterministic, so the no-file case proves pending.
+    #[test]
+    fn outputs_are_pending_until_the_mesh_lands() {
+        let path = cesium_man_fixture_path();
+        assert!(path.exists(), "fixture missing at {}", path.display());
+        let device = manifold_gpu::testkit::test_device();
+        let (backend, vs, js, ws) = make_buffer_backend(&device);
+        let params = params_at(path.to_str().unwrap(), 0.0);
+        let mut prim = GltfSkinnedMeshSource::new();
+        settle(&mut prim, &backend, &device, vs, js, ws, &params);
+        let (_, pending) = run_frame(&mut prim, &backend, &device, vs, js, ws, &params, frame_time_at(0.0));
+        assert!(!pending, "a landed mesh is content");
+        let mut missing = GltfSkinnedMeshSource::new();
+        let (_, pending) = run_frame(&mut missing, &backend, &device, vs, js, ws, &params_at("", 0.0), frame_time_at(0.0));
+        assert!(pending, "no file is no content");
     }
 
     fn readback(backend: &MetalBackend, slot: Slot) -> Vec<u8> {
@@ -583,7 +667,7 @@ mod gpu_tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/khronos/BoxVertexColors.glb");
         assert!(path.exists(), "required colored fixture missing: {}", path.display());
-        let (authored, _, _) = load_gltf_skinned_mesh(&path, DEFAULT_MATERIAL_SENTINEL)
+        let (authored, _, _) = load_gltf_skinned_mesh(&path, DEFAULT_MATERIAL_SENTINEL, "")
             .expect("load BoxVertexColors.glb through rigid fallback");
         assert!(!authored.is_empty());
         assert!(

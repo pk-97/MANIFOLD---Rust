@@ -206,15 +206,15 @@ impl Application {
         #[cfg(not(target_os = "macos"))]
         let compositor_tex: Option<&manifold_gpu::GpuTexture> = None;
         let video_source_dims = self.video_source_dims();
-        // The Scene panel's gizmos, only for the exact frame being shown.
-        // The preview host remembers it, so input picks against what the eye
-        // sees.
+        // The Scene panel's scene as rendered, only for the exact frame being
+        // shown, with Show gizmos on or off. The preview host remembers it, so
+        // input picks against what the eye sees.
         #[cfg(target_os = "macos")]
         let gizmo_frame = preview_lease
             .zip(self.preview_texture_bridge.as_ref())
             .and_then(|(lease, bridge)| bridge.leased_frame(lease))
             .and_then(|published| {
-                let layer = self.ws.ui_root.scene_setup_panel.gizmo_layer();
+                let layer = self.ws.ui_root.scene_setup_panel.live_layer_id();
                 self.content_state.physics_overlay_frames[preview_slot].as_ref()
                     .filter(|frame| frame.matches(layer, published))
             });

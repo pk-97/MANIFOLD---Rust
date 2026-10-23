@@ -1,15 +1,16 @@
 //! `node.scene_array` — camera-windowed `Array<InstanceTransform>` generator
 //! for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D1/D4/D5/D6).
 //!
-//! Slot `w` ↔ corridor cell `c = base_cell − BEHIND + w`; the cell's transform
+//! Slot `w` ↔ corridor cell `c = base_cell − behind + w`; the cell's transform
 //! is a translation `c · cell_size` along `axis` plus deterministic jitter
 //! keyed on the Euclidean `c mod pattern_length`. `base_cell` and the live
-//! window span (`ahead`) resolve each frame from the optional `camera: Camera`
-//! input — unwired, the corridor runs from the origin (base_cell 0, ahead 22).
-//! Capacity is the constant [`WINDOW_CAPACITY`] (32), never a param: the old
-//! live `count` sized buffers at plan time and made every live write inert
-//! (BUG-757c), and the window span derives from the camera's far plane, so
-//! there is nothing left for a count to decide.
+//! window (`behind`, `ahead`) resolve each frame from the optional `camera:
+//! Camera` input: every cell the camera's view reaches, whichever way it
+//! looks (`window`). Unwired, the corridor runs from the origin (base_cell 0,
+//! behind 8, ahead 22). Capacity is the constant [`WINDOW_CAPACITY`] (32),
+//! never a param: the old live `count` sized buffers at plan time and made
+//! every live write inert (BUG-757c), and the window derives from the
+//! camera's view, so there is nothing left for a count to decide.
 //!
 //! Wrap purity is arithmetic, not a coupling (D3/D4): travel per loop is
 //! `patterns_per_loop · pattern_length` cells and the jitter keys on the same
@@ -31,6 +32,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 pub const AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
@@ -41,31 +43,89 @@ const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMM
 /// (BUG-757c class: a capacity that follows a live value deadens the card row).
 pub const WINDOW_CAPACITY: u32 = 32;
 
-/// Cells behind the camera's cell kept live in the window — shadow-map
+/// Cells kept on the side the camera faces away from — shadow-map
 /// look-behind (D1; ~16 object-depths under the D4 gap rule).
 const BEHIND: u32 = 8;
 
-/// `ahead` ceiling: BEHIND + ahead + 1 ≤ WINDOW_CAPACITY with two margin
-/// cells reserved (D5). A hand-set far past the curated 20·cell band clamps
-/// here and the distant hole returns past that — stated, not hidden.
-const MAX_AHEAD: u32 = WINDOW_CAPACITY - BEHIND - 2; // 22
+/// Live cells either side of the camera's own: BEHIND + ahead + 1 ≤
+/// WINDOW_CAPACITY - 1 (D5). A view reaching past this many cells shows the
+/// corridor end beyond them — stated, not hidden.
+const REACH: u32 = WINDOW_CAPACITY - 2; // 30
 
 /// Unwired-camera default window span: corridor from the origin (D1 run()).
-const STANDALONE_AHEAD: u32 = MAX_AHEAD; // 22
+const STANDALONE_AHEAD: u32 = REACH - BEHIND; // 22
 
-/// D5 window span from the wired camera's far plane: every cell that can
-/// render exists in the buffer, with +2 margin cells beyond far that clip
-/// without rasterizing. Floors at 4 (a far shorter than one cell still sees
-/// the current cell and its neighbors); clamps at MAX_AHEAD.
-fn window_ahead(far: f32, cell_size: f32) -> u32 {
-    // f32 arithmetic end to end — no i32 cast to overflow on hand-edited
-    // absurd values: far huge → inf → the clamp arm; NaN → f32::max's
-    // NaN-rejection → the floor.
-    let cells = (far / cell_size).ceil() + 2.0;
-    if cells >= MAX_AHEAD as f32 {
-        MAX_AHEAD
+/// Cells past the visible span on each side, so a cell whose contents reach
+/// into view from next door exists.
+const MARGIN: f32 = 2.0;
+
+/// The widest output the side view is sized for: the camera carries no
+/// aspect, so the window assumes one this wide (4:1 covers LED walls). A
+/// wider output may show the corridor end at its side edges.
+const WIDEST_ASPECT: f32 = 4.0;
+
+/// The live window around the wired camera: its cell, and how many cells
+/// behind and ahead of it along `axis` exist. The span covers every cell the
+/// camera's view reaches up to its far plane, whichever way it looks (an
+/// orbit camera looking back down the corridor sees as far as a flyer
+/// looking ahead), plus [`MARGIN`] cells each side, and at least [`BEHIND`]
+/// cells on the side it faces away from for the shadow maps. Past [`REACH`]
+/// cells in all, the side seen further is cut first; a camera that sees far
+/// both ways splits the cells evenly.
+fn window(cam: &Camera, axis: u32, cell_size: f32) -> (i32, u32, u32) {
+    let (k, sign) = match axis {
+        0 => (0, 1.0),
+        1 => (0, -1.0),
+        2 => (1, 1.0),
+        3 => (1, -1.0),
+        4 => (2, 1.0),
+        _ => (2, -1.0),
+    };
+    // The camera's place and view along the corridor, in cells.
+    let at = sign * cam.pos[k] / cell_size;
+    let forward = sign * cam.fwd[k];
+    let far = cam.far / cell_size;
+    let across = |v: [f32; 3]| v[k].abs();
+    // How far along the axis the view reaches, each way, from the eye to
+    // the far plane's corners.
+    let (back, front) = match cam.mode {
+        CameraMode::Perspective { fov_y } => {
+            let up = (fov_y * 0.5).tan();
+            let spread = up * WIDEST_ASPECT * across(cam.right) + up * across(cam.up);
+            (far * (spread - forward).max(0.0), far * (forward + spread).max(0.0))
+        }
+        CameraMode::Orthographic { half_height } => {
+            let lateral = half_height * (WIDEST_ASPECT * across(cam.right) + across(cam.up)) / cell_size;
+            (lateral + far * (-forward).max(0.0), lateral + far * forward.max(0.0))
+        }
+    };
+    let base = at.floor();
+    // Whole cells, counted from the camera's own, NaN and overflow safe.
+    let cells = |x: f32| if x.is_nan() { 0 } else { x.clamp(0.0, REACH as f32) as u32 };
+    let behind_seen = cells(base - (at - back).floor() + MARGIN);
+    let ahead_seen = cells((at + front).floor() - base + MARGIN);
+    let looks_ahead = forward >= 0.0;
+    let (toward, away) = if looks_ahead { (ahead_seen, behind_seen) } else { (behind_seen, ahead_seen) };
+    let (toward, away) = fit(toward, away.max(BEHIND));
+    let (behind, ahead) = if looks_ahead { (away, toward) } else { (toward, away) };
+    let base = if base.is_nan() { 0 } else { base.clamp(i32::MIN as f32, i32::MAX as f32) as i32 };
+    (base, behind, ahead)
+}
+
+/// Fit the cells wanted toward and away from the view into [`REACH`]: the
+/// larger side gives way first, never the away side below [`BEHIND`], and
+/// two sides both past half share it evenly.
+fn fit(toward: u32, away: u32) -> (u32, u32) {
+    if toward + away <= REACH {
+        return (toward, away);
+    }
+    let half = REACH / 2;
+    if toward >= half && away >= half {
+        (REACH - half, half)
+    } else if toward > away {
+        (REACH - away, away)
     } else {
-        cells.max(4.0) as u32
+        (toward, REACH - toward)
     }
 }
 
@@ -106,6 +166,7 @@ struct SceneArrayUniforms {
 pub struct SceneArrayStasisKey {
     pub use_camera: bool,
     pub base_cell: i32,
+    pub behind: u32,
     pub ahead: u32,
     pub pattern_length: u32,
     pub axis: u32,
@@ -118,7 +179,7 @@ pub struct SceneArrayStasisKey {
 manifold_node_engine::primitive! {
     name: SceneArray,
     type_id: "node.scene_array",
-    purpose: "Camera-windowed Array<InstanceTransform> for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md). Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), ahead = clamp(ceil(camera.far / cell_size) + 2, 4, 22) — every cell that can render exists in the buffer, so the far-edge hole is gone by construction. Unwired, the corridor runs from the origin (base_cell 0, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
+    purpose: "Camera-windowed Array<InstanceTransform> for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md). Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), and the window spans every cell the camera's view reaches up to its far plane, ahead, behind and across (whichever way it looks), plus a margin, keeping a few cells on the side it faces away from for the shadow maps; past the buffer the side seen further is cut first. Every cell that can render exists in the buffer, so no edge hole opens. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
     inputs: {
         // D2: the camera arrives as one Camera port — the atom picks the axis
         // component from its own axis param, so axis and position can never
@@ -175,7 +236,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Optional camera: Camera port drives the window (D2) — wire node.loop_camera.out here for the corridor; the atom resolves the axis component itself so axis and position cannot desync. Unwired, the corridor runs from the origin (base_cell 0, ahead 22). Output capacity is the constant 32, never a param: the buffer is fixed at plan pre-allocation (BUG-757c), and the live window span derives from the wired camera's far plane (D5) — the body masks slots at or beyond behind+ahead+1 to zero-scale. The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction. pattern_length is both the pattern period and the jitter period (D4); the loop camera's travel (patterns_per_loop * pattern_length cells) is an integer multiple of it, so the wrap is pure for any integers. jitter_seed stays an internal re-roll knob the plan stamps at 0.",
+    composition_notes: "Optional camera: Camera port drives the window (D2) — wire node.loop_camera.out here for the corridor; the atom resolves the axis component itself so axis and position cannot desync. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32, never a param: the buffer is fixed at plan pre-allocation (BUG-757c), and the live window span derives from what the wired camera sees, every way it looks — the body masks slots at or beyond behind+ahead+1 to zero-scale. The same cell_size value feeds both this node and node.loop_camera — the plan builder computes it once from scene_bounds so camera travel per loop equals instance spacing by construction. pattern_length is both the pattern period and the jitter period (D4); the loop camera's travel (patterns_per_loop * pattern_length cells) is an integer multiple of it, so the wrap is pure for any integers. jitter_seed stays an internal re-roll knob the plan stamps at 0.",
     examples: [],
     picker: { label: "Scene Array", category: Atom },
     summary: "Generates the corridor of instances around the camera — cells repeat by pattern, forever.",
@@ -235,17 +296,9 @@ impl Primitive for SceneArray {
         // desync. Unwired: the standalone corridor from the origin.
         let cam = ctx.inputs.camera("camera");
         let use_camera = cam.is_some();
-        let (base_cell, ahead) = match cam {
-            Some(c) => {
-                let axis_pos = match axis {
-                    0 | 1 => c.pos[0],
-                    2 | 3 => c.pos[1],
-                    _ => c.pos[2],
-                };
-                let base_cell = (axis_pos / cell_size).floor() as i32;
-                (base_cell, window_ahead(c.far, cell_size))
-            }
-            None => (0, STANDALONE_AHEAD),
+        let (base_cell, behind, ahead) = match cam {
+            Some(c) => window(&c, axis, cell_size),
+            None => (0, BEHIND, STANDALONE_AHEAD),
         };
 
         let Some(out_buf) = ctx.outputs.array("out") else {
@@ -255,7 +308,7 @@ impl Primitive for SceneArray {
         let capacity = (out_buf.size / item_size) as u32;
 
         // INV-RTI4 stasis: every frame-varying input is in the key — params,
-        // the resolved window (base_cell/ahead), AND use_camera (D6: the
+        // the resolved window (base_cell/behind/ahead), AND use_camera (D6: the
         // unwired run and a wired camera parked at cell 0 with far >=
         // 20*cell collide on every other field; without use_camera the
         // buffer would go stale on (re)wire). Camera motion inside a cell
@@ -263,6 +316,7 @@ impl Primitive for SceneArray {
         let stasis = SceneArrayStasisKey {
             use_camera,
             base_cell,
+            behind,
             ahead,
             pattern_length,
             axis,
@@ -287,7 +341,7 @@ impl Primitive for SceneArray {
             jitter_seed: jitter_seed as i32,
             jitter_amount,
             base_cell,
-            behind: BEHIND,
+            behind,
             ahead,
             use_camera: use_camera as u32,
             dispatch_count: capacity,
@@ -356,44 +410,34 @@ mod tests {
         );
     }
 
-    /// INV-EC3: the D5 window span covers the visible range over the real far
-    /// band — the row curation `min(1.0, default)` .. `(20*cell).min(10000)`
-    /// (scene_modifier.rs), plan default 4*cell — plus the far < cell floor
-    /// and the beyond-band clamp. The bound demanded: ahead >= ceil(far/cell)
-    /// + 1 (every renderable cell exists) and BEHIND + ahead + 1 <= CAPACITY.
+    /// BUG-0jqrh: the live window covers what the camera sees whichever way
+    /// it looks down the corridor, and keeps the shadow look-behind on the
+    /// side it faces away from. A flyer looking ahead keeps the D5 window:
+    /// BEHIND cells back, ceil(far/cell) + 2 ahead.
     #[test]
-    fn window_ahead_covers_the_real_far_band() {
-        for cell_size in [0.5f32, 2.0, 10.0, 100.0, 500.0] {
-            let far_max = (20.0 * cell_size).min(10000.0);
-            let mut far = 1.0f32;
-            while far <= far_max {
-                let ahead = window_ahead(far, cell_size);
-                let need = ((far / cell_size).ceil() as i32) + 1;
-                assert!(
-                    (ahead as i32) >= need,
-                    "far {far} cell {cell_size}: ahead {ahead} must cover ceil(far/cell)+1 = {need}"
-                );
-                assert!(
-                    BEHIND + ahead < WINDOW_CAPACITY,
-                    "far {far} cell {cell_size}: BEHIND + ahead + 1 = {} exceeds capacity",
-                    BEHIND + ahead + 1
-                );
-                far *= 1.7;
-            }
-            // Plan default: far = 4*cell sits comfortably inside the band.
-            let ahead = window_ahead(4.0 * cell_size, cell_size);
-            assert_eq!(ahead, 6, "far = 4*cell: ahead = ceil(4)+2 = 6 (cell {cell_size})");
+    fn window_covers_every_way_the_camera_looks() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let cell = 10.0;
+        let at = [0.0, 0.0, 35.0];
+        // yaw PI looks along +Z, yaw 0 along -Z.
+        let ahead = Camera::from_pos_euler(at, PI, 0.0, 0.0, 0.8, 0.05, 40.0);
+        assert_eq!(window(&ahead, 4, cell), (3, BEHIND, 6));
+        let back = Camera::from_pos_euler(at, 0.0, 0.0, 0.0, 0.8, 0.05, 40.0);
+        assert_eq!(window(&back, 4, cell), (3, 6, BEHIND));
+        // Seeing past the window: the seen side takes what the shadows leave.
+        let far_back = Camera { far: 10_000.0, ..back };
+        assert_eq!(window(&far_back, 4, cell), (3, REACH - BEHIND, BEHIND));
+        // Looking across a long corridor: both ways, evenly.
+        let across = Camera::from_pos_euler(at, FRAC_PI_2, 0.0, 0.0, 0.8, 0.05, 10_000.0);
+        let (_, behind, ahead_cells) = window(&across, 4, cell);
+        assert_eq!((behind, ahead_cells), (REACH / 2, REACH / 2));
+        // A -Z corridor counts its cells the other way.
+        assert_eq!(window(&back, 5, cell).0, -4);
+        // Absurd values still fit the capacity.
+        for far in [f32::INFINITY, f32::NAN, 0.0] {
+            let (_, behind, ahead_cells) = window(&Camera { far, ..back }, 4, cell);
+            assert!(behind + ahead_cells < WINDOW_CAPACITY, "far {far}");
         }
-
-        // far shorter than one cell: the +2 margin floors ahead at 4 — the
-        // current cell and its near neighbors always exist.
-        assert_eq!(window_ahead(0.5, 10.0), 4, "far < cell floors ahead at 4");
-        // A hand-set far beyond the curated band clamps at MAX_AHEAD — the
-        // distant hole past that is D5's stated honest cost, and the window
-        // still fits the capacity.
-        assert_eq!(window_ahead(10000.0, 10.0), MAX_AHEAD);
-        assert_eq!(window_ahead(f32::MAX, 10.0), MAX_AHEAD);
-        assert_eq!(BEHIND + MAX_AHEAD + 1, WINDOW_CAPACITY - 1);
     }
 }
 
@@ -546,8 +590,8 @@ mod gpu_tests {
         let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
 
         for base_cell in [0i32, 5, -1, -7, -22] {
-            let gpu_data = dispatch(&device, &pipeline, 3, 4, 10.0, 0, 0.0, base_cell, BEHIND, MAX_AHEAD);
-            let expected = cpu_scene_array_window(3, 4, 10.0, 0, 0.0, base_cell, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
+            let gpu_data = dispatch(&device, &pipeline, 3, 4, 10.0, 0, 0.0, base_cell, BEHIND, STANDALONE_AHEAD);
+            let expected = cpu_scene_array_window(3, 4, 10.0, 0, 0.0, base_cell, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
             assert_matches_cpu(&gpu_data, &expected, "base {base_cell}");
 
             // Slot 8 (w = behind) is the base cell: pos z = c * cell_size.
@@ -611,8 +655,8 @@ mod gpu_tests {
         let period = 4u32;
         for (seed, amount) in [(0u32, 0.6f32), (7, 1.0), (1234, 0.25)] {
             let base_cell = -9i32; // cells -17..+13 cross zero twice
-            let gpu_data = dispatch(&device, &pipeline, period, 4, 10.0, seed, amount, base_cell, BEHIND, MAX_AHEAD);
-            let expected = cpu_scene_array_window(period, 4, 10.0, seed, amount, base_cell, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
+            let gpu_data = dispatch(&device, &pipeline, period, 4, 10.0, seed, amount, base_cell, BEHIND, STANDALONE_AHEAD);
+            let expected = cpu_scene_array_window(period, 4, 10.0, seed, amount, base_cell, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
             assert_matches_cpu(&gpu_data, &expected, "seed {seed} amount {amount}");
 
             if amount == 1.0 {
@@ -637,7 +681,7 @@ mod gpu_tests {
             };
             for (w, transform) in gpu_data
                 .iter()
-                .take((BEHIND + MAX_AHEAD) as usize)
+                .take((BEHIND + STANDALONE_AHEAD) as usize)
                 .enumerate()
             {
                 let c = base_cell - BEHIND as i32 + w as i32;
@@ -654,15 +698,15 @@ mod gpu_tests {
         let same = |a: &[InstanceTransform], b: &[InstanceTransform]| {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| field_eq(x, y))
         };
-        let a = cpu_scene_array_window(4, 4, 10.0, 0, 1.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
-        let b = cpu_scene_array_window(4, 4, 10.0, 0, 1.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
-        let c = cpu_scene_array_window(4, 4, 10.0, 1, 1.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
+        let a = cpu_scene_array_window(4, 4, 10.0, 0, 1.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
+        let b = cpu_scene_array_window(4, 4, 10.0, 0, 1.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
+        let c = cpu_scene_array_window(4, 4, 10.0, 1, 1.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
         assert!(same(&a, &b), "same seed must re-roll identically");
         assert!(!same(&a, &c), "a different seed must change the instance transforms");
 
         // Zero amount is byte-identical to the no-jitter oracle.
-        let zero = cpu_scene_array_window(4, 4, 10.0, 99, 0.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
-        let plain = cpu_scene_array_window(4, 4, 10.0, 0, 0.0, -3, BEHIND, MAX_AHEAD, WINDOW_CAPACITY);
+        let zero = cpu_scene_array_window(4, 4, 10.0, 99, 0.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
+        let plain = cpu_scene_array_window(4, 4, 10.0, 0, 0.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
         assert!(same(&zero, &plain), "amount 0 must keep identity TRS");
     }
 
@@ -688,14 +732,14 @@ mod gpu_tests {
         for p in 2u32..=8u32 {
             for k in [1i32, 2, 3, 5, 8] {
                 for base_cell in [-7i32, -1, 0, 5] {
-                    let phase_0 = dispatch(&device, &pipeline, p, 4, 10.0, 7, 0.8, base_cell, BEHIND, MAX_AHEAD);
+                    let phase_0 = dispatch(&device, &pipeline, p, 4, 10.0, 7, 0.8, base_cell, BEHIND, STANDALONE_AHEAD);
                     // Phase ~1: the camera has travelled exactly K·P cells, so
                     // base_cell has advanced by K·P.
-                    let phase_1 = dispatch(&device, &pipeline, p, 4, 10.0, 7, 0.8, base_cell + k * p as i32, BEHIND, MAX_AHEAD);
+                    let phase_1 = dispatch(&device, &pipeline, p, 4, 10.0, 7, 0.8, base_cell + k * p as i32, BEHIND, STANDALONE_AHEAD);
                     for (w, (a, b)) in phase_0.iter().zip(phase_1.iter()).enumerate() {
                         // Surplus slots mask to zero-scale in BOTH windows —
                         // no translation demand there.
-                        if w as u32 > BEHIND + MAX_AHEAD {
+                        if w as u32 > BEHIND + STANDALONE_AHEAD {
                             assert_eq!(a.pos_scale, [0.0; 4], "slot {w} must be masked at phase 0");
                             assert_eq!(b.pos_scale, [0.0; 4], "slot {w} must be masked at phase ~1");
                             continue;
@@ -742,8 +786,8 @@ mod gpu_tests {
         // Vacuity guard: different pattern lengths genuinely change the
         // window content (a constant buffer would pass the equality above
         // trivially).
-        let p2 = dispatch(&device, &pipeline, 2, 4, 10.0, 7, 0.8, -1, BEHIND, MAX_AHEAD);
-        let p5 = dispatch(&device, &pipeline, 5, 4, 10.0, 7, 0.8, -1, BEHIND, MAX_AHEAD);
+        let p2 = dispatch(&device, &pipeline, 2, 4, 10.0, 7, 0.8, -1, BEHIND, STANDALONE_AHEAD);
+        let p5 = dispatch(&device, &pipeline, 5, 4, 10.0, 7, 0.8, -1, BEHIND, STANDALONE_AHEAD);
         assert!(
             p2.iter().zip(p5.iter()).any(|(a, b)| !field_eq(a, b)),
             "pattern_length 2 vs 5 must change the window content"

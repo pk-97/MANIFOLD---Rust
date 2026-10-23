@@ -16,7 +16,6 @@ use manifold_core::project::Project;
 use crate::command::Command;
 use crate::commands::preset::RevertToLibraryCommand;
 
-mod modifier;
 
 use super::card_owned_write::card_owned_write_warning;
 use super::{
@@ -82,6 +81,9 @@ impl AddGraphNodeCommand {
 }
 
 impl Command for AddGraphNodeCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Level));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
@@ -184,9 +186,6 @@ pub struct RemoveGraphNodeCommand {
     /// (binding + spec + value slot + automation). Empty when the node backed
     /// no exposed params. Captured for undo; restored before the node is.
     removed_exposures: Vec<manifold_core::effects::RemovedExposure>,
-    /// Scene-modifier targets snapshot their owning graph and instance layer
-    /// because the edited graph is nested inside the generator owner.
-    modifier_removed: Option<modifier::RemovedNode>,
     applied: bool,
 }
 
@@ -228,7 +227,6 @@ impl RemoveGraphNodeCommand {
             scope_path: Vec::new(),
             removed: None,
             removed_exposures: Vec::new(),
-            modifier_removed: None,
             applied: false,
         }
     }
@@ -241,6 +239,9 @@ impl RemoveGraphNodeCommand {
 }
 
 impl Command for RemoveGraphNodeCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.node_id])));
+    }
     /// Removing a node drops the card params bound to it with their controls.
     fn touches(&self) -> ChangeSet {
         crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_CONTROLS)
@@ -253,11 +254,7 @@ impl Command for RemoveGraphNodeCommand {
         let node_u32 = self.node_id;
         let scope = self.scope_path.clone();
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            let state = modifier::execute(project, &self.target, node_u32, &scope);
-            if self.modifier_removed.is_none() {
-                self.modifier_removed = state.clone();
-            }
-            self.applied = state.is_some();
+            self.applied = false;
             return;
         }
         let catalog_default = &self.catalog_default;
@@ -310,14 +307,6 @@ impl Command for RemoveGraphNodeCommand {
     }
 
     fn do_undo(&mut self, project: &mut Project) {
-        if let Some(state) = self.modifier_removed.as_ref()
-            && self.applied
-        {
-            if modifier::undo(project, &self.target, state) {
-                self.applied = false;
-            }
-            return;
-        }
         let Some(removed) = self.removed.clone() else {
             return;
         };
@@ -436,6 +425,10 @@ impl ConnectPortsCommand {
 }
 
 impl Command for ConnectPortsCommand {
+    /// Wiring from the Scene node is the user's; wiring into it is not.
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.to_node])));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
@@ -540,6 +533,9 @@ impl DisconnectPortsCommand {
 }
 
 impl Command for DisconnectPortsCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.to_node])));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
@@ -622,6 +618,9 @@ impl MoveGraphNodeCommand {
 }
 
 impl Command for MoveGraphNodeCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Level));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn do_execute(&mut self, project: &mut Project) {
         let node_id = self.node_id;
@@ -710,6 +709,9 @@ impl LayoutGraphNodesCommand {
 }
 
 impl Command for LayoutGraphNodesCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Level));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn do_execute(&mut self, project: &mut Project) {
         let prev_already_captured = self.previous.is_some();
@@ -946,6 +948,9 @@ impl SetGraphNodeParamCommand {
 }
 
 impl Command for SetGraphNodeParamCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.node_id])));
+    }
     fn touches(&self) -> manifold_core::change::ChangeSet {
         if self.sets_rows() {
             ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values, Part::Effects])
@@ -1108,6 +1113,9 @@ impl SetWgslSourceCommand {
 }
 
 impl Command for SetWgslSourceCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.node_id])));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
@@ -1219,6 +1227,11 @@ impl RevertEffectGraphCommand {
 }
 
 impl Command for RevertEffectGraphCommand {
+    fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
+        sites.push(super::GraphEditSite::new(&self.target, &[], super::SiteReach::SceneLayer(
+            "A scene layer's graph has no library version to revert to; the Scene panel builds its scene.",
+        )));
+    }
     fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());

@@ -13,21 +13,21 @@
 //! beat-addressable" gap: an LFO wired to `rot_y` is a spinning object; a
 //! `beat_ramp` into `pos_z` is a drop hit.
 //!
-//! CPU-only — no GPU dispatch. The wire carries plain TRS; matrices are
-//! composed by consumers (`render_scene`'s existing `model_matrix`), never
-//! on the wire itself.
+//! CPU-only — no GPU dispatch. The wire carries the TRS plus, when `parent`
+//! is wired, the parent chain's world matrix (`Transform::parent`), so a
+//! chain composes one matrix product per transform per frame.
 
 use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::transform::Transform;
+use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Transform};
 
 manifold_node_engine::primitive! {
     name: Transform3D,
     type_id: "node.transform_3d",
-    purpose: "TRS (position/rotation/scale) producer for scene objects. Nine scalar params — position X/Y/Z, rotation X/Y/Z (radians), scale X/Y/Z — each port-shadowed by a same-named optional scalar input port so the transform can be driven by an LFO, MIDI, a beat_ramp, or any other control-rate source. Plus a `billboard` bool param: when on, the consumer (e.g. node.render_scene) ignores the rotation and instead keeps the object's local +Z axis pointing at the camera each frame, so a plane mesh always faces the viewer; position and scale stay user-controlled and roll stays zero. Outputs a single Transform struct (pos/rot_euler/scale/billboard) consumed by render_scene's transform_n ports (replacing nine per-object params) or any future TRS consumer. Matrices are composed by consumers — the wire carries plain TRS, never a matrix.",
+    purpose: "TRS (position/rotation/scale) producer for scene objects. Nine scalar params — position X/Y/Z, rotation X/Y/Z (radians), scale X/Y/Z — each port-shadowed by a same-named optional scalar input port so the transform can be driven by an LFO, MIDI, a beat_ramp, or any other control-rate source. Plus a `billboard` bool param: when on, the consumer (e.g. node.render_scene) ignores the rotation and instead keeps the object's local +Z axis pointing at the camera each frame, so a plane mesh always faces the viewer; position and scale stay user-controlled and roll stays zero. Outputs a single Transform struct (pos/rot_euler/scale/billboard) consumed by render_scene's transform_n ports (replacing nine per-object params) or any future TRS consumer. An optional `parent` Transform input places this TRS inside the parent's world frame, so groups nest: the output carries the parent chain's composed matrix beside its own TRS, and consumers read parent times TRS.",
     inputs: {
         pos_x: ScalarF32 optional,
         pos_y: ScalarF32 optional,
@@ -38,6 +38,7 @@ manifold_node_engine::primitive! {
         scale_x: ScalarF32 optional,
         scale_y: ScalarF32 optional,
         scale_z: ScalarF32 optional,
+        parent: Transform optional,
     },
     outputs: {
         transform: Transform,
@@ -125,7 +126,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire `transform` into render_scene's transform_n port (unwired = identity: pos 0, rot 0, scale 1). Rotation is XYZ Euler in radians, matching render_scene's existing model_matrix. Each of the nine params is independently port-shadowed — wire only the axes you want to animate; the rest fall back to their static param values.",
+    composition_notes: "Wire `transform` into render_scene's transform_n port (unwired = identity: pos 0, rot 0, scale 1). Rotation is XYZ Euler in radians, matching render_scene's existing model_matrix. Each of the nine params is independently port-shadowed — wire only the axes you want to animate; the rest fall back to their static param values. Wire a group's transform into `parent` to move this one with the group; the params then read inside the group's frame.",
     examples: [],
     picker: { label: "Transform 3D", category: Driver },
     summary: "Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live.",
@@ -153,6 +154,7 @@ impl Primitive for Transform3D {
             rot_euler: [rot_x, rot_y, rot_z],
             scale: [scale_x, scale_y, scale_z],
             billboard,
+            parent: ctx.inputs.transform("parent").map_or(IDENTITY_MAT4, |parent| parent.world()),
         };
 
         ctx.outputs.set_transform("transform", transform);
@@ -183,7 +185,7 @@ mod tests {
     /// name not overridden) and no wired scalar ports, returning the
     /// resulting `Transform`.
     fn run_with_params(overrides: &[(&'static str, f32)]) -> Transform {
-        run_with_params_and_wires(overrides, &[], false)
+        run_with_params_and_wires(overrides, &[], false, None)
     }
 
     /// Runs `Transform3D` with the given params and the given wired scalar
@@ -193,6 +195,7 @@ mod tests {
         overrides: &[(&'static str, f32)],
         wires: &[(&'static str, f32)],
         billboard: bool,
+        parent: Option<Transform>,
     ) -> Transform {
         let defaults: &[(&str, f32)] = &[
             ("pos_x", 0.0),
@@ -232,6 +235,11 @@ mod tests {
             next_id += 1;
             backend.set_scalar(slot, ParamValue::Float(value));
             wire_slots.push((name, slot));
+        }
+        if let Some(parent) = parent {
+            let slot = backend.acquire(ResourceId(next_id), PortType::Transform, None, (0, 0));
+            backend.set_transform(slot, parent);
+            wire_slots.push(("parent", slot));
         }
 
         let mut prim = Transform3D::new();
@@ -296,7 +304,7 @@ mod tests {
     fn wired_pos_x_overrides_its_same_named_param() {
         // Param says 10.0; the wire says 99.0 — the wire must win
         // (port-shadows-param).
-        let t = run_with_params_and_wires(&[("pos_x", 10.0)], &[("pos_x", 99.0)], false);
+        let t = run_with_params_and_wires(&[("pos_x", 10.0)], &[("pos_x", 99.0)], false, None);
         assert_eq!(t.pos[0], 99.0, "wired pos_x should override the pos_x param");
         // Untouched siblings keep their param/default values.
         assert_eq!(t.pos[1], 0.0);
@@ -305,7 +313,7 @@ mod tests {
 
     #[test]
     fn wired_rot_y_overrides_its_same_named_param() {
-        let t = run_with_params_and_wires(&[("rot_y", 1.0)], &[("rot_y", 2.5)], false);
+        let t = run_with_params_and_wires(&[("rot_y", 1.0)], &[("rot_y", 2.5)], false, None);
         assert_eq!(t.rot_euler[1], 2.5, "wired rot_y should override the rot_y param");
         assert_eq!(t.rot_euler[0], 0.0);
         assert_eq!(t.rot_euler[2], 0.0);
@@ -313,7 +321,7 @@ mod tests {
 
     #[test]
     fn wired_scale_z_overrides_its_same_named_param() {
-        let t = run_with_params_and_wires(&[("scale_z", 3.0)], &[("scale_z", 7.0)], false);
+        let t = run_with_params_and_wires(&[("scale_z", 3.0)], &[("scale_z", 7.0)], false, None);
         assert_eq!(t.scale[2], 7.0, "wired scale_z should override the scale_z param");
         assert_eq!(t.scale[0], 1.0);
         assert_eq!(t.scale[1], 1.0);
@@ -327,7 +335,38 @@ mod tests {
 
     #[test]
     fn billboard_param_is_read() {
-        let t = run_with_params_and_wires(&[], &[], true);
+        let t = run_with_params_and_wires(&[], &[], true, None);
         assert!(t.billboard);
+    }
+
+    #[test]
+    fn an_unwired_parent_is_the_world_frame() {
+        let t = run_with_params(&[("pos_x", 2.0)]);
+        assert_eq!(t.parent, IDENTITY_MAT4);
+    }
+
+    #[test]
+    fn a_wired_parent_places_the_trs_inside_the_parents_world() {
+        let grandparent = Transform { pos: [0.0, 1.0, 0.0], scale: [2.0, 1.0, 1.0], ..Transform::default() };
+        let parent = Transform { pos: [1.0, 0.0, 0.0], rot_euler: [0.0, 0.5, 0.0], parent: grandparent.world(), ..Transform::default() };
+        let t = run_with_params_and_wires(&[("pos_z", 3.0)], &[], false, Some(parent));
+        assert_eq!(t.pos, [0.0, 0.0, 3.0], "the node's own params stay its own TRS");
+        assert_eq!(t.parent, parent.world(), "the parent frame is the whole chain above");
+        // The local TRS composes after the chain, in the renderer's own
+        // model matrix.
+        let local = crate::node_graph::primitives::render_scene::model_matrix(t.pos, t.rot_euler, t.scale);
+        assert_eq!(t.world(), manifold_node_engine::mesh::pipeline::mat4_mul(parent.world(), local));
+    }
+
+    #[test]
+    fn the_engine_trs_matrix_matches_the_renderers_model_matrix() {
+        let (pos, rot, scale) = ([1.0, -2.0, 0.5], [0.3, -1.1, 2.4], [0.5, 2.0, 1.5]);
+        let engine = manifold_node_engine::scene::transform::trs_matrix(pos, rot, scale);
+        let renderer = crate::node_graph::primitives::render_scene::model_matrix(pos, rot, scale);
+        for c in 0..4 {
+            for r in 0..4 {
+                assert!((engine[c][r] - renderer[c][r]).abs() < 1e-6, "[{c}][{r}]: {} vs {}", engine[c][r], renderer[c][r]);
+            }
+        }
     }
 }

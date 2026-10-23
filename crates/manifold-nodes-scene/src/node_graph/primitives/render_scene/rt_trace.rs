@@ -222,7 +222,8 @@ impl RenderScene {
                 // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
                 // normal/gi-material reads land in the slot rows [N, N+Σ).
                 .with_slot_row_base(objects.len() as u32)
-                .with_lights(pre.light_count, self.light_buffers[self.light_frame].gpu_address());
+                .with_lights(pre.light_count, self.light_buffers[self.light_frame].gpu_address())
+                .with_env_rotation(pre.env_rotation);
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
                 // RT_INSTANCING_DESIGN.md D11: canonical per-object rows at
@@ -521,7 +522,7 @@ impl RenderScene {
                 // + svt slot). Gesture detection: two consecutive changes arm
                 // a hold counter.
                 let lighting_key =
-                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_content, &pre.light_data);
+                    compute_rt_lighting_key(&rt_casters, &atmosphere.ambient_tint, envmap_content, pre.env_rotation, &pre.light_data);
                 let (lighting_changed, lighting_gesture, _new_prev, new_gesture) =
                     gesture_detect(
                         self.rt_lighting_key,

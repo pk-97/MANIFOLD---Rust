@@ -253,6 +253,9 @@ struct ShadowRayParams {
     // sun caster whose rgb tint goes to out_svt; SVT_SLOT_NONE = no designated
     // sun (u32::MAX on the Rust side — every slot index is below that).
     uint   svt_slot;
+    // Radians every environment lookup turns by (`refl_env_sample`), the
+    // render's `env_rotation`. The float4x4 below still aligns to 336.
+    float  env_rotation;
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
@@ -432,6 +435,12 @@ struct RtNormalSource {
     float  model_handedness;
     RtMaterialAttributes material_attributes;
     uint extra_tex_indices[15];
+    // Instance space: upper-left 3x3 of the inner matrix, applied to local
+    // directions before the instance fold (identity in Object space).
+    packed_float3 inner_matrix_col0;
+    packed_float3 inner_matrix_col1;
+    packed_float3 inner_matrix_col2;
+    uint   _pad_inner;
 };
 
 // RT_INSTANCING_DESIGN.md D3/D4: manual MSL mirror of the renderer's
@@ -507,6 +516,26 @@ static float rti_instance_handedness(device RtNormalSource& src) {
         (device const RtInstanceTransform*)src.instance_addr;
     uint marker = uint(inst->rot_pad.w + 0.5);
     return ((marker == 1u) || (marker == 2u) || (marker == 3u)) ? -1.0 : 1.0;
+}
+
+// Instance space: the inner matrix applies to local geometry before the
+// instance fold (world = model · T · inner). Directions take its 3x3;
+// normals take its cofactor with the determinant sign, as the raster's
+// scene_vs_body does. Identity rows (Object space) pass through exactly.
+static float3x3 rti_inner(device RtNormalSource& src) {
+    return float3x3(float3(src.inner_matrix_col0), float3(src.inner_matrix_col1),
+        float3(src.inner_matrix_col2));
+}
+
+static float3 rti_apply_inner_normal(device RtNormalSource& src, float3 n) {
+    float3x3 b = rti_inner(src);
+    float3x3 cof = float3x3(cross(b[1], b[2]), cross(b[2], b[0]), cross(b[0], b[1]));
+    return cof * n * (dot(b[0], cof[0]) < 0.0 ? -1.0 : 1.0);
+}
+
+static float rti_inner_handedness(device RtNormalSource& src) {
+    float3x3 b = rti_inner(src);
+    return dot(b[0], cross(b[1], b[2])) < 0.0 ? -1.0 : 1.0;
 }
 
 static float2 rt_apply_uv_transform(float2 uv, device const float* m) {
@@ -821,7 +850,7 @@ static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
     // normal with rot·(n·msign) BEFORE the row's object-level normal_matrix.
     // Unwired rows pass through unchanged —
     // byte-identical to the pre-instancing fetch.
-    n_local = rti_apply_instance_dir(src, n_local);
+    n_local = rti_apply_instance_dir(src, rti_apply_inner_normal(src, n_local));
     float3x3 normal_matrix = float3x3(float3(src.normal_matrix_col0),
         float3(src.normal_matrix_col1), float3(src.normal_matrix_col2));
     return normal_matrix * n_local;
@@ -1020,8 +1049,9 @@ static bool tangent_frame_at_hit(
     // edges on an instanced (especially mirrored) surface is off by the
     // instance rotation/reflection. Degrades to the pre-instancing edges
     // exactly when the row is unwired.
-    float3 edge1 = model * rti_apply_instance_dir(src, float3(*p1_ptr) - float3(*p0_ptr));
-    float3 edge2 = model * rti_apply_instance_dir(src, float3(*p2_ptr) - float3(*p0_ptr));
+    float3x3 inner = rti_inner(src);
+    float3 edge1 = model * rti_apply_instance_dir(src, inner * (float3(*p1_ptr) - float3(*p0_ptr)));
+    float3 edge2 = model * rti_apply_instance_dir(src, inner * (float3(*p2_ptr) - float3(*p0_ptr)));
     uint uv_set = src.material_attributes.sampling[frame_map][0];
     float2 uv0 = fetch_uv_set(src, v0, uv_set);
     float2 uv1 = fetch_uv_set(src, v1, uv_set);
@@ -1035,8 +1065,9 @@ static bool tangent_frame_at_hit(
     float3 b;
     if (!use_derived_frame) {
         authored_tangent.w = authored_tangent.w < 0.0 ? -1.0 : 1.0;
-        t = model * rti_apply_instance_dir(src, authored_tangent.xyz);
-        float handedness = authored_tangent.w * src.model_handedness * rti_instance_handedness(src);
+        t = model * rti_apply_instance_dir(src, inner * authored_tangent.xyz);
+        float handedness = authored_tangent.w * src.model_handedness * rti_instance_handedness(src)
+            * rti_inner_handedness(src);
         t -= n * dot(n, t);
         b = cross(n, t) * handedness;
     } else {
@@ -1623,16 +1654,16 @@ static float3 anisotropic_env_dir(float3 n, float3 v, float3 aniso_b, float stre
 
 // RT-R1 (section 9.3 RD4): the SAME equirect mapping + roughness mip selection
 // `render_scene.wgsl`'s split-sum IBL applies to `prefiltered_specular`
-// (lines 1506-1510) — miss radiance and the RD7 cutoff/band env value
+// (`env_lookup_uv`, turned by the same `env_rotation`) — miss radiance and the RD7 cutoff/band env value
 // MUST equal what the raster would have fetched, or the substitution
 // changes pixels the ray never wanted to (I-R1's empty-scene equality
 // gate). RT_REFL_PREFILTER_MAX_MIP mirrors WGSL's `PREFILTER_MAX_MIP`
 // (= PREFILTER_MIP_COUNT - 1) — keep in sync (same cross-mirror
 // discipline as the WGSL constant's own comment).
 constant float RT_REFL_PREFILTER_MAX_MIP = 5.0;
-static float3 refl_env_sample(texture2d<float> env, float3 dir, float roughness) {
+static float3 refl_env_sample(float turn, texture2d<float> env, float3 dir, float roughness) {
     constexpr sampler env_sampler(coord::normalized, s_address::repeat, t_address::clamp_to_edge, filter::linear, mip_filter::linear);
-    float azimuth = atan2(dir.z, dir.x);
+    float azimuth = atan2(dir.z, dir.x) + turn;
     float elevation = asin(clamp(dir.y, -1.0, 1.0));
     float2 uv = float2(azimuth / 6.2831853 + 0.5, elevation / 3.14159265 + 0.5);
     return env.sample(env_sampler, uv, level(roughness * RT_REFL_PREFILTER_MAX_MIP)).rgb;
@@ -1862,26 +1893,26 @@ static float rt_sheen_scale(thread const RtSurface& m,float3 v,texture2d<float> 
     return 1.0f-max(m.sheen.r,max(m.sheen.g,m.sheen.b))*energy;
 }
 static float3 rt_environment_surface(thread const RtSurface& m,float3 v,texture2d<float> env,
-    texture2d<float> irradiance,texture2d<float> lut,texture2d<float> sheen_env,bool complete) {
+    texture2d<float> irradiance,texture2d<float> lut,texture2d<float> sheen_env,bool complete,float turn) {
     float nv=max(dot(m.n,v),0.001f);
     float3 f=rt_surface_fresnel(m,nv);
     float kd=(1.0f-max(f.x,max(f.y,f.z)))*(1.0f-m.metallic);
     float3 dir=reflect(-v,m.n);
     if(m.anisotropy>0.0f)dir=anisotropic_env_dir(m.n,v,m.b,m.anisotropy);
-    float3 reflection=refl_env_sample(env,dir,m.roughness);
-    if(!complete)return kd*m.albedo*refl_env_sample(env,m.n,1.0f)+f*reflection;
+    float3 reflection=refl_env_sample(turn,env,dir,m.roughness);
+    if(!complete)return kd*m.albedo*refl_env_sample(turn,env,m.n,1.0f)+f*reflection;
     constexpr sampler s(coord::normalized,address::clamp_to_edge,filter::linear);
     float2 brdf=lut.sample(s,float2(nv,m.roughness),level(0)).rg;
     float weight=pow(1.0f-nv,5.0f);
     float3 f0=clamp((f-m.f90*weight)/max(1.0f-weight,0.0001f),0.0f,1.0f);
     float3 spec=reflection*(f0*brdf.x+m.f90*brdf.y);
-    float3 diffuse=kd*m.occlusion*(m.albedo*(1.0f-m.translucency.x)*refl_env_sample(irradiance,m.n,0.0f)
-        +m.translucency.yzw*m.translucency.x*refl_env_sample(irradiance,-m.n,0.0f));
+    float3 diffuse=kd*m.occlusion*(m.albedo*(1.0f-m.translucency.x)*refl_env_sample(turn,irradiance,m.n,0.0f)
+        +m.translucency.yzw*m.translucency.x*refl_env_sample(turn,irradiance,-m.n,0.0f));
     float cnv=max(dot(m.nc,v),0.001f);
     float2 cb=lut.sample(s,float2(cnv,m.coat.y),level(0)).rg;
-    float3 coat=refl_env_sample(env,reflect(-v,m.nc),m.coat.y)*(0.04f*cb.x+cb.y);
+    float3 coat=refl_env_sample(turn,env,reflect(-v,m.nc),m.coat.y)*(0.04f*cb.x+cb.y);
     float energy=clamp(lut.sample(s,float2(nv,m.sheen.a),level(0)).b,0.0f,1.0f);
-    float3 sheen=m.sheen.rgb*refl_env_sample(sheen_env,reflect(-v,m.n),m.sheen.a)*energy;
+    float3 sheen=m.sheen.rgb*refl_env_sample(turn,sheen_env,reflect(-v,m.n),m.sheen.a)*energy;
     float coat_f=0.04f+0.96f*pow(1.0f-cnv,5.0f);
     return ((diffuse*(1.0f-m.transmission.x)+spec)*rt_sheen_scale(m,v,lut)+sheen)*(1.0f-m.coat.x*coat_f)+m.coat.x*coat;
 }
@@ -2416,7 +2447,7 @@ kernel void trace_shadow_rays(
         // ED5: one anchor per pixel. Inert for a scene with no env chain
         // (the dummy/zeroed chain gives anchor 0 and cap ~0, so the
         // clamp never fires — env samples there are 0 too).
-        float3 env_anchor = refl_env_sample(prefiltered_env, shading_n, 1.0);
+        float3 env_anchor = refl_env_sample(p.env_rotation, prefiltered_env, shading_n, 1.0);
         float env_cap = RT_GI_ENV_FIREFLY_GAIN * max(luma(env_anchor), 1e-6);
         for (uint s = 0; s < p.gi_spp; s++) {
             ray gr;
@@ -2434,7 +2465,7 @@ kernel void trace_shadow_rays(
                 if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_GI + s * 4u + bounce, gi_brightness)) {
                     // ED1: env radiance in the ray's own direction, mip 0,
                     // scaled by the path's throughput at extension depths.
-                    float3 env_miss = refl_env_sample(prefiltered_env, gr.direction, 0.0);
+                    float3 env_miss = refl_env_sample(p.env_rotation, prefiltered_env, gr.direction, 0.0);
                     float env_l = luma(env_miss);
                     gi += throughput * ((env_l > env_cap && env_l > 1e-6)
                         ? env_miss * (env_cap / env_l) : env_miss);
@@ -2721,7 +2752,7 @@ kernel void trace_shadow_rays(
         }
         // RD7's env value: direction R at this pixel's roughness mip —
         // byte-equal to what fs_pbr would have fetched (I-R1).
-        float3 env = refl_env_sample(prefiltered_env, env_dir, roughness);
+        float3 env = refl_env_sample(p.env_rotation, prefiltered_env, env_dir, roughness);
         if (roughness > p.refl_max_roughness + p.refl_rough_band) {
             // RD7: above the cutoff+band the prefiltered env IS the
             // approximation — no ray cast.
@@ -2779,14 +2810,14 @@ kernel void trace_shadow_rays(
                     bool complete = p.light_data_addr != 0ul;
                     float sheen_scale = complete ? rt_sheen_scale(surface,view,secondary_brdf) : 1.0f;
                     traced = (surface.emission + rt_environment_surface(surface,view,prefiltered_env,
-                        secondary_irradiance,secondary_brdf,secondary_sheen,complete)
+                        secondary_irradiance,secondary_brdf,secondary_sheen,complete,p.env_rotation)
                         + rt_direct_lights(accel,slot_sources,slot_materials,material_textures,p,
                             surface,position,view,bias_eps,tid,500u,sheen_scale,diagnostics))*refl_hit_brightness;
                 }
             } else {
                 // RD4: miss returns the env at the ray's actual (possibly
                 // GGX-perturbed) direction, roughness mip.
-                traced = refl_env_sample(prefiltered_env, rdir, roughness);
+                traced = refl_env_sample(p.env_rotation, prefiltered_env, rdir, roughness);
             }
             rsamples[rs] = traced;
             if (hit_dist > RT_REFL_MISS_HIT_DIST) { hit_dist_sum += hit_dist; hit_count += 1u; }
@@ -4478,7 +4509,7 @@ kernel void debug_atrous_post(
 // provably never intersected (D2).
 
 // Field-for-field mirror of the Rust `RtInstanceBuildObj` — see its doc
-// comment for the layout (96-byte stride both sides, asserted on the Rust
+// comment for the layout (160-byte stride both sides, asserted on the Rust
 // side).
 struct RtInstanceBuildObj {
     float4x4 model;
@@ -4487,6 +4518,8 @@ struct RtInstanceBuildObj {
     uint     slot_count;
     uint     cast_shadows;
     float2   _pad;
+    // Instance space: slot world = model · T_instance · inner.
+    float4x4 inner;
 };
 
 static void rti_write_descriptor(
@@ -4526,9 +4559,10 @@ kernel void build_instance_descriptors(
         // D7: unwired object — one slot at the object's MODEL transform (an
         // identity INSTANCE: world = model·I = model, exactly where the
         // raster draws it). NOT the identity matrix — the model matrix.
+        float4x4 world = o.model * o.inner;
         rti_write_descriptor(
             out, tid.y, mask,
-            o.model[0].xyz, o.model[1].xyz, o.model[2].xyz, o.model[3].xyz
+            world[0].xyz, world[1].xyz, world[2].xyz, world[3].xyz
         );
         return;
     }
@@ -4562,9 +4596,14 @@ kernel void build_instance_descriptors(
     // world 4x3 = model_obj · (A | t): linear part model3x3·A, translation
     // model3x3·t + model's translation column. MTLPackedFloat4x3 columns
     // are [linear c0, linear c1, linear c2, translation].
+    // Instance space: the inner matrix applies first, so world =
+    // model · (A | t) · inner = model3x3·A·inner3x3 with translation
+    // model3x3·(A·inner_t + t) + model_t. An identity inner reproduces the
+    // Object-space product exactly.
     float3x3 m3 = float3x3(o.model[0].xyz, o.model[1].xyz, o.model[2].xyz);
-    float3x3 w = m3 * a;
-    float3 t = m3 * inst->pos_scale.xyz + o.model[3].xyz;
+    float3x3 b3 = float3x3(o.inner[0].xyz, o.inner[1].xyz, o.inner[2].xyz);
+    float3x3 w = m3 * (a * b3);
+    float3 t = m3 * (a * o.inner[3].xyz + inst->pos_scale.xyz) + o.model[3].xyz;
     out->t0 = packed_float3(w[0]);
     out->t1 = packed_float3(w[1]);
     out->t2 = packed_float3(w[2]);

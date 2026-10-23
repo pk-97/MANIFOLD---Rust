@@ -1,16 +1,19 @@
-//! Native convex collider preparation for imported mesh geometry.
+//! Loading and placing a body's source geometry before it becomes a
+//! collision shape (`manifold_physics::collision_shape`).
 
+use std::borrow::Cow;
 use std::path::Path;
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::ports::{NodeInput, PortKind, PortType};
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::ParamValue;
-use manifold_node_engine::scene::mesh_selection::{MeshSelection, fragments};
+use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_node_engine::scene::transform::Transform;
-use crate::physics::ColliderGeometry;
 
-/// One `part_k` input per compound part; its length is the editing cap.
-pub const PART_PORTS: [&str; manifold_core::scene_surface::RIGID_BODY_MAX_PARTS as usize] = [
+/// A fluid role source's fixed part inputs (`part_k`); a scene Water
+/// Source wires only `mesh_0`. A rigid body's parts grow ([`PartPorts`]).
+pub const PART_PORTS: [&str; 64] = [
     "part_0", "part_1", "part_2", "part_3", "part_4", "part_5", "part_6", "part_7", "part_8",
     "part_9", "part_10", "part_11", "part_12", "part_13", "part_14", "part_15", "part_16",
     "part_17", "part_18", "part_19", "part_20", "part_21", "part_22", "part_23", "part_24",
@@ -19,6 +22,18 @@ pub const PART_PORTS: [&str; manifold_core::scene_surface::RIGID_BODY_MAX_PARTS 
     "part_41", "part_42", "part_43", "part_44", "part_45", "part_46", "part_47", "part_48",
     "part_49", "part_50", "part_51", "part_52", "part_53", "part_54", "part_55", "part_56",
     "part_57", "part_58", "part_59", "part_60", "part_61", "part_62", "part_63",
+];
+
+/// A fluid role source's `mesh_k` inputs, paired with `part_k`.
+pub const MESH_PORTS: [&str; 64] = [
+    "mesh_0", "mesh_1", "mesh_2", "mesh_3", "mesh_4", "mesh_5", "mesh_6", "mesh_7", "mesh_8",
+    "mesh_9", "mesh_10", "mesh_11", "mesh_12", "mesh_13", "mesh_14", "mesh_15", "mesh_16",
+    "mesh_17", "mesh_18", "mesh_19", "mesh_20", "mesh_21", "mesh_22", "mesh_23", "mesh_24",
+    "mesh_25", "mesh_26", "mesh_27", "mesh_28", "mesh_29", "mesh_30", "mesh_31", "mesh_32",
+    "mesh_33", "mesh_34", "mesh_35", "mesh_36", "mesh_37", "mesh_38", "mesh_39", "mesh_40",
+    "mesh_41", "mesh_42", "mesh_43", "mesh_44", "mesh_45", "mesh_46", "mesh_47", "mesh_48",
+    "mesh_49", "mesh_50", "mesh_51", "mesh_52", "mesh_53", "mesh_54", "mesh_55", "mesh_56",
+    "mesh_57", "mesh_58", "mesh_59", "mesh_60", "mesh_61", "mesh_62", "mesh_63",
 ];
 
 pub fn parse_compound_materials(
@@ -77,66 +92,8 @@ pub fn load_compound_materials(
     Ok(vertices)
 }
 
-/// Spatially fitted convex parts. This is approximate collision geometry; the
-/// scan itself is unchanged. Thin/open scan surfaces get a small explicit shell
-/// (0.1% of the selected mesh's longest dimension) so native solid hulls have volume.
-pub fn prepare_colliders(vertices: &[MeshVertex], count: u32) -> Result<ColliderGeometry, String> {
-    let count = (count as usize).min(vertices.len() / 3);
-    let pieces = fragments(vertices, count)?;
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in vertices {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(vertex.position[axis]);
-            max[axis] = max[axis].max(vertex.position[axis]);
-        }
-    }
-    let thickness = (0..3).map(|i| max[i] - min[i]).fold(0.0_f32, f32::max) * 0.001;
-    if !thickness.is_finite() || thickness <= 0.0 {
-        return Err("Physics mesh has no usable extent".into());
-    }
-    let hulls = pieces
-        .into_iter()
-        .map(|piece| {
-            let mut points = Vec::with_capacity(piece.triangle_ids.len() * 6);
-            for triangle in piece.triangle_ids {
-                let tri = &vertices[triangle * 3..triangle * 3 + 3];
-                let a = tri[0].position;
-                let b: [f32; 3] = std::array::from_fn(|i| tri[1].position[i] - a[i]);
-                let c: [f32; 3] = std::array::from_fn(|i| tri[2].position[i] - a[i]);
-                let normal = [
-                    b[1] * c[2] - b[2] * c[1],
-                    b[2] * c[0] - b[0] * c[2],
-                    b[0] * c[1] - b[1] * c[0],
-                ];
-                let length = normal.iter().map(|v| v * v).sum::<f32>().sqrt();
-                let shell = normal.map(|v| {
-                    if length > 0.0 {
-                        v / length * thickness * 0.5
-                    } else {
-                        0.0
-                    }
-                });
-                for vertex in tri {
-                    points.push(std::array::from_fn(|i| vertex.position[i] + shell[i]));
-                    points.push(std::array::from_fn(|i| vertex.position[i] - shell[i]));
-                }
-            }
-            points.sort_unstable_by(|a, b| {
-                a[0].total_cmp(&b[0])
-                    .then(a[1].total_cmp(&b[1]))
-                    .then(a[2].total_cmp(&b[2]))
-            });
-            points.dedup();
-            manifold_physics::cook_hull(&points).map_err(|e| e.to_string())
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    Ok(ColliderGeometry { hulls })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::prepare_colliders;
     use manifold_node_engine::mesh::MeshVertex;
     use manifold_node_engine::scene::mesh_selection::select_fragment;
     use bytemuck::Zeroable;
@@ -172,38 +129,18 @@ mod tests {
         }
         found.sort_unstable();
         assert_eq!(found, (0..12).collect::<Vec<_>>());
-        let colliders = prepare_colliders(&vertices, 4).unwrap();
-        assert_eq!(colliders.hulls.len(), 4);
-        assert!(colliders.hulls.iter().all(|h| h.len() >= 4));
     }
 }
 
-/// Apply a fixed authored transform to source vertices before native cooking.
-/// Billboard transforms are camera-relative and therefore invalid for static
-/// collider geometry.
+/// Apply a fixed authored transform, its parent frame included, to source
+/// vertices before they become a collision shape. Billboard transforms are
+/// camera-relative and therefore invalid for collider geometry.
 pub fn transform_vertices(vertices: &mut [MeshVertex], transform: Transform) -> Result<(), String> {
     validate_transform(transform)?;
-    let (cx, sx) = (transform.rot_euler[0].cos(), transform.rot_euler[0].sin());
-    let (cy, sy) = (transform.rot_euler[1].cos(), transform.rot_euler[1].sin());
-    let (cz, sz) = (transform.rot_euler[2].cos(), transform.rot_euler[2].sin());
-    // Column-major Rz * Ry * Rx, matching render_scene's model_matrix.
-    let r = [
-        [cz * cy, sz * cy, -sy],
-        [cz * sy * sx - sz * cx, sz * sy * sx + cz * cx, cy * sx],
-        [cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx],
-    ];
+    let m = transform.world();
     for vertex in vertices {
         let p = vertex.position;
-        let scaled = [
-            p[0] * transform.scale[0],
-            p[1] * transform.scale[1],
-            p[2] * transform.scale[2],
-        ];
-        vertex.position = [
-            transform.pos[0] + r[0][0] * scaled[0] + r[1][0] * scaled[1] + r[2][0] * scaled[2],
-            transform.pos[1] + r[0][1] * scaled[0] + r[1][1] * scaled[1] + r[2][1] * scaled[2],
-            transform.pos[2] + r[0][2] * scaled[0] + r[1][2] * scaled[1] + r[2][2] * scaled[2],
-        ];
+        vertex.position = std::array::from_fn(|row| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row]);
     }
     Ok(())
 }
@@ -243,6 +180,7 @@ mod transform_tests {
                 rot_euler: [0.0, 0.0, std::f32::consts::FRAC_PI_2],
                 scale: [2.0, 1.0, 1.0],
                 billboard: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -265,4 +203,61 @@ mod transform_tests {
         .is_err());
     }
 
+}
+
+/// The `parts` param: how many compound parts (`mesh_k` with `part_k`) a
+/// rigid body takes. A Group body has one per object inside it.
+pub fn part_count(params: &ParamValues) -> usize {
+    params
+        .get("parts")
+        .and_then(ParamValue::as_scalar)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map_or(0, |value| value.round() as usize)
+}
+
+/// Whether `port` is one of a body's `mesh_k` part inputs.
+pub fn is_part_mesh(port: &str) -> bool {
+    port.strip_prefix("mesh_").is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// A rigid body's part inputs, sized by its `parts` param: the node's fixed
+/// inputs, then `part_k` and `mesh_k` for each part. Sized when the param
+/// changes, never per frame, so a group of any size is one body.
+#[derive(Default)]
+pub struct PartPorts {
+    inputs: Vec<NodeInput>,
+    meshes: Vec<String>,
+    parts: Vec<String>,
+}
+
+impl PartPorts {
+    /// Size the part inputs to the `parts` param after `fixed`.
+    pub fn configure(&mut self, fixed: &'static [NodeInput], params: &ParamValues) {
+        let count = part_count(params);
+        if !self.inputs.is_empty() && self.meshes.len() == count {
+            return;
+        }
+        self.meshes = (0..count).map(|index| format!("mesh_{index}")).collect();
+        self.parts = (0..count).map(|index| format!("part_{index}")).collect();
+        self.inputs.clear();
+        self.inputs.extend(fixed.iter().cloned());
+        let port = |name: &String, ty| NodeInput { name: Cow::Owned(name.clone()), ty, kind: PortKind::Input, required: false };
+        self.inputs.extend(self.parts.iter().map(|name| port(name, PortType::Transform)));
+        self.inputs.extend(self.meshes.iter().map(|name| port(name, PortType::MeshSource)));
+    }
+
+    /// The node's inputs, once configured.
+    pub fn inputs(&self) -> Option<&[NodeInput]> {
+        (!self.inputs.is_empty()).then_some(self.inputs.as_slice())
+    }
+
+    /// The parts this body takes.
+    pub fn count(&self) -> usize {
+        self.meshes.len()
+    }
+
+    /// Part `index`'s mesh and transform inputs.
+    pub fn ports(&self, index: usize) -> (&str, &str) {
+        (&self.meshes[index], &self.parts[index])
+    }
 }

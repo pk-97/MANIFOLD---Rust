@@ -5,9 +5,24 @@ use manifold_core::NodeId;
 /// existing frame tests; these frames exercise the saved-project path.
 #[cfg(test)]
 pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
+    test_owner_with(
+        serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/scene-modifier-presets/VortexFragments.json"
+        )))
+        .unwrap(),
+    )
+}
+
+/// [`test_owner`] with `recipe` as the modifier before the view.
+#[cfg(test)]
+pub(crate) fn test_owner_with(
+    recipe: manifold_core::effect_graph_def::EffectGraphDef,
+) -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+    use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
     use manifold_core::scene_modifier_preset::{
-        SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
+        SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
     };
     let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -32,11 +47,6 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
             );
         }
     }
-    let recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/scene-modifier-presets/VortexFragments.json"
-    )))
-    .unwrap();
     let view_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/scene-modifier-presets/MathView.json"
@@ -62,16 +72,9 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
             .iter()
             .find(|node| node.type_id == "node.transform_3d")
             .unwrap();
-        let scope = vec![container.node_id.clone()];
         frames.push(SceneMeshReferenceFrame {
-            target: SceneNodeRef {
-                scope: scope.clone(),
-                node: object.node_id.clone(),
-            },
-            source: SceneNodeRef {
-                scope,
-                node: source.node_id.clone(),
-            },
+            target: object.node_id.clone(),
+            source: source.node_id.clone(),
             source_definition_hash:
                 manifold_core::scene_source_identity::scene_source_definition_hash(&owner, source)
                     .unwrap(),
@@ -82,42 +85,27 @@ pub(crate) fn test_owner() -> manifold_core::effect_graph_def::EffectGraphDef {
                 }
             }),
             scene_radius: 3.0,
+            live_offset: None,
         });
     }
-    owner.scene_modifiers.push(SceneModifierInstanceDef {
+    let owner = attach_scene_modifier(&owner, SceneModifierInstanceDef {
         id: NodeId::new("vortex_a"),
-        scene: SceneNodeRef {
-            scope: vec![],
-            node: NodeId::new("scan_render"),
-        },
+        scene: NodeId::new("scan_render"),
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: frames.clone(),
         legacy_math_view_carrier: None,
         graph: Box::new(recipe),
-    });
-    owner.scene_modifiers.push(SceneModifierInstanceDef {
+    })
+    .unwrap();
+    attach_scene_modifier(&owner, SceneModifierInstanceDef {
         id: NodeId::new("math_view"),
-        scene: SceneNodeRef {
-            scope: vec![],
-            node: NodeId::new("scan_render"),
-        },
+        scene: NodeId::new("scan_render"),
         targets: SceneTargetSelection::AllObjects,
         mesh_frames: frames,
         legacy_math_view_carrier: None,
         graph: Box::new(view_recipe),
-    });
-    let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-        &owner,
-        &NodeId::new("vortex_a"),
-    )
+    })
     .unwrap()
-    .graph;
-    manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-        &owner,
-        &NodeId::new("math_view"),
-    )
-    .unwrap()
-    .graph
 }
 
 /// The standalone fixture plus a SpatialEchoes instance (instances-only
@@ -146,9 +134,8 @@ pub(crate) fn test_owner_with_instance_echoes() -> manifold_core::effect_graph_d
             view.mesh_frames.clone(),
         )
     };
-    let mut owner = owner;
-    owner.scene_modifiers.insert(
-        1,
+    let mut owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+        &owner,
         SceneModifierInstanceDef {
             id: NodeId::new("spatial_echoes"),
             scene: view_scene,
@@ -157,22 +144,12 @@ pub(crate) fn test_owner_with_instance_echoes() -> manifold_core::effect_graph_d
             legacy_math_view_carrier: None,
             graph: Box::new(echo_recipe),
         },
-    );
-    let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-        &owner,
-        &NodeId::new("spatial_echoes"),
     )
-    .unwrap()
-    .graph;
-    // Host bindings from the original fixture still target vortex_a and
-    // math_view only; reconcile the view again so its control values settle
-    // after the chain order change.
-    manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-        &owner,
-        &NodeId::new("math_view"),
-    )
-    .unwrap()
-    .graph
+    .unwrap();
+    // The echoes run between the vertex modifier and the view.
+    let echoes = owner.scene_modifiers.pop().unwrap();
+    owner.scene_modifiers.insert(1, echoes);
+    owner
 }
 
 /// The same owner with its Math View and the view's card removed: the

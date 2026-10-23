@@ -81,16 +81,16 @@ mod graph_dump;
 mod graph_snapshot;
 mod graph_target;
 mod scene_gizmo;
+mod scene_pick;
 mod setup_check;
-mod scene_insert;
 mod gizmo_overlay;
 mod selection_outline;
-mod scene_modifier_edit;
-mod scene_modifier_transfer;
-mod scene_item_transfer;
-mod scene_camera_edit;
+mod scene_clipboard;
+mod scene_edit;
+mod scene_material_look;
+mod scene_models;
+mod scene_tree_move;
 mod scene_view_copy;
-mod object_modifier_transfer;
 mod generator_change;
 mod modifier_preset;
 // Shared headless `ContentThread` construction (PERF_BUDGET_GATE_DESIGN.md
@@ -104,6 +104,7 @@ mod modifier_preset;
 pub(crate) mod headless_harness;
 mod import_responsiveness_verify;
 mod import_worker;
+mod scene_import;
 mod import_worker_drain_verify;
 mod input_handler;
 mod input_host;
@@ -194,18 +195,12 @@ mod content_reaction_budget;
 // D8.4 acceptance — deliberate native GPU journey with external reference projects.
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
 mod corridor_acceptance;
-#[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
-mod scene_modifier_journey;
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 mod rt_dynamic_export_tests;
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 mod gpu_flip_export_demo;
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
-mod scene_modifier_performance;
-#[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
 mod blob_v2_performance;
-#[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
-mod rt_dynamic_held_out;
 mod window_registry;
 mod workspace;
 

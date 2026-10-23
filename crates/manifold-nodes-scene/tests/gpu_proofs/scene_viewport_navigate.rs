@@ -116,7 +116,7 @@ fn render_show_frame(
 fn viewport_render_is_isolated_and_produces_overlay_png() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
-    let json = scene_json();
+    let json = manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(&scene_json());
 
     // ── 1. The show, rendered through its own long-lived runtime ──
     let mut show_runtime = PresetRuntime::from_json_str_with_device(

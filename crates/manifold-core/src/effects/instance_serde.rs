@@ -115,6 +115,11 @@ impl ParamEntryWire {
     /// descriptor first; then value/base/exposed; then a `calibration` block
     /// overrides the range (setting `calibrated`). Returns whether the entry
     /// carried a `base` (folds into the instance `base_tracked` bit).
+    /// Whether the entry carries its own description.
+    fn has_spec(&self) -> bool {
+        self.spec.is_some()
+    }
+
     fn apply_to(&self, p: &mut crate::params::Param) -> bool {
         // A described control ignores a saved copy; the lookup is the authority.
         if let Some(spec) = &self.spec
@@ -414,6 +419,37 @@ fn gather_known_params(
     out
 }
 
+/// A scene layer's descriptors: its compiled graph's `meta.params`, as the
+/// (kind, property) table wrote them. A control the user exposed from a node
+/// around the Scene node is theirs (user-added), described by its binding. The table is the one authority for a
+/// scene row (SCENE_DOCUMENT_DESIGN.md section 8 (Cards by kind)), so no
+/// lookup joins over it.
+fn compiled_scene_params(
+    graph: &Option<EffectGraphDef>,
+) -> Vec<(
+    crate::effect_graph_def::ParamSpecDef,
+    crate::params::ParamOrigin,
+    crate::params::SpecSource,
+    crate::params::ParamChoices,
+)> {
+    use crate::params::{ParamChoices, ParamOrigin, SpecSource};
+    graph
+        .as_ref()
+        .and_then(|g| g.preset_metadata.as_ref())
+        .map(|meta| {
+            meta.params
+                .iter()
+                .map(|spec| {
+                    let user = meta.bindings.iter().any(|binding| binding.user_added && binding.id == spec.id);
+                    let (origin, source) =
+                        if user { (ParamOrigin::UserAdded, SpecSource::Authored) } else { (ParamOrigin::Bundled, SpecSource::Lookup) };
+                    (spec.clone(), origin, source, ParamChoices::default())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Whether a descriptor authority resolves for this instance right now: an
 /// inline generator graph's own `meta.params`, or a registry template.
 /// Shared by [`build_param_manifest`] (decides informed-drop vs
@@ -456,14 +492,25 @@ pub(super) enum ManifestPass {
 /// warning.
 pub(super) fn build_param_manifest(
     is_generator: bool,
+    scene: bool,
     effect_type: &PresetTypeId,
     graph: &Option<EffectGraphDef>,
     wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
     pass: ManifestPass,
 ) -> (crate::params::ParamManifest, bool) {
     use crate::params::{Param, ParamOrigin};
+    // A scene layer's graph is compiled after the file is read; its values
+    // wait in the stash until then (`reconcile_manifest`).
+    if scene && graph.is_none() {
+        return (crate::params::ParamManifest::default(), false);
+    }
     let is_reconcile_pass = pass == ManifestPass::Reconcile;
-    let mut entries: Vec<Param> = gather_known_params(is_generator, effect_type, graph, pass != ManifestPass::Refresh)
+    let known = if scene {
+        compiled_scene_params(graph)
+    } else {
+        gather_known_params(is_generator, effect_type, graph, pass != ManifestPass::Refresh)
+    };
+    let mut entries: Vec<Param> = known
         .into_iter()
         .map(|(spec, origin, source, choices)| {
             let mut p = match origin {
@@ -797,7 +844,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
         // presets have been installed.
         let pending_wire = raw.params.clone();
         let (params, base_tracked) =
-            build_param_manifest(false, &raw.effect_type, &raw.graph, raw.params, ManifestPass::Deserialize);
+            build_param_manifest(false, false, &raw.effect_type, &raw.graph, raw.params, ManifestPass::Deserialize);
 
         let mut audio_mods = raw.audio_mods;
         if let Some(legacy) = raw.legacy_audio_trigger {
@@ -824,6 +871,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             graph_structure_version: 0,
             folded_sections: raw.folded_sections,
             unfolded_sections: raw.unfolded_sections,
+            scene: None,
         })
     }
 }
@@ -865,17 +913,45 @@ struct GeneratorInstanceRaw {
     folded_sections: Vec<String>,
     #[serde(default)]
     unfolded_sections: Vec<String>,
+    /// A scene layer's document. On load it compiles into the saved graph's
+    /// empty Scene node.
+    #[serde(default)]
+    scene: Option<crate::scene_doc::SceneDoc>,
 }
 
 impl GeneratorInstanceRaw {
+    /// A scene layer's file is closed (SCENE_DOCUMENT_DESIGN.md section 7.1
+    /// (The scene document)): its graph is only what the user wired around an
+    /// empty Scene node, and it saves no param description; the compiled
+    /// table describes every param but the card controls the user exposed
+    /// from nodes around the Scene node.
+    fn check_scene(&self) -> Result<(), String> {
+        if self.scene.is_none() {
+            return Ok(());
+        }
+        if let Some(graph) = &self.graph {
+            crate::scene_node::check_saved(graph)?;
+        }
+        let user = |id: &str| {
+            self.graph.as_ref().and_then(|graph| graph.preset_metadata.as_ref()).is_some_and(|meta| meta.bindings.iter().any(|binding| binding.user_added && binding.id == id))
+        };
+        if let Some(id) = self.params.iter().flatten().find_map(|(id, entry)| (entry.has_spec() && !user(id)).then_some(id)) {
+            return Err(format!("scene param {id:?} carries a description; a scene layer's params are described by its kind tables"));
+        }
+        Ok(())
+    }
+
     fn into_instance(mut self) -> PresetInstance {
         // V1.4 section 4 reconcile: a graph-backed generator's own `meta.params` is
         // the descriptor authority (else the registry); overlay the incoming
         // `params` map by id. Stash a copy of the wire map first (D1) — see
         // the effect-kind `Deserialize` impl above for the same pattern.
         let pending_wire = self.params.clone();
+        // A scene layer's saved graph describes no params; its manifest waits
+        // for the compile (`PresetInstance::reconcile_manifest`).
+        let described = if self.scene.is_some() { &None } else { &self.graph };
         let (params, base_tracked) =
-            build_param_manifest(true, &self.generator_type, &self.graph, self.params, ManifestPass::Deserialize);
+            build_param_manifest(true, self.scene.is_some(), &self.generator_type, described, self.params, ManifestPass::Deserialize);
         normalize_meta_params(&mut self.graph, &params);
         let mut audio_mods = self.audio_mods;
         if let Some(legacy) = self.legacy_audio_trigger {
@@ -901,6 +977,7 @@ impl GeneratorInstanceRaw {
             graph_structure_version: 0,
             folded_sections: self.folded_sections,
             unfolded_sections: self.unfolded_sections,
+            scene: self.scene,
         }
     }
 }
@@ -911,7 +988,9 @@ pub fn deserialize_generator_instance<'de, D>(deserializer: D) -> Result<PresetI
 where
     D: serde::Deserializer<'de>,
 {
-    Ok(GeneratorInstanceRaw::deserialize(deserializer)?.into_instance())
+    let raw = GeneratorInstanceRaw::deserialize(deserializer)?;
+    raw.check_scene().map_err(serde::de::Error::custom)?;
+    Ok(raw.into_instance())
 }
 
 /// `deserialize_with` for an `Option<PresetInstance>` field that holds a
@@ -923,7 +1002,11 @@ pub fn deserialize_opt_generator_instance<'de, D>(
 where
     D: serde::Deserializer<'de>,
 {
-    Ok(Option::<GeneratorInstanceRaw>::deserialize(deserializer)?.map(|raw| raw.into_instance()))
+    let Some(raw) = Option::<GeneratorInstanceRaw>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    raw.check_scene().map_err(serde::de::Error::custom)?;
+    Ok(Some(raw.into_instance()))
 }
 
 #[cfg(test)]

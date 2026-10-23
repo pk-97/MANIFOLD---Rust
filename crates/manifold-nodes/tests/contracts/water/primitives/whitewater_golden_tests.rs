@@ -33,7 +33,7 @@ use manifold_nodes_water::testkit::conformance::json_node_mut;
 /// The shipped def with these whitewater params and, when given, this
 /// whitewater budget (the card's node, which sizes stage and boundary alike).
 fn variant(params: &[(&str, Value)], budget: Option<f64>) -> EffectGraphDef {
-    let mut def = serde_json::to_value(whitewater_render_def(WaterScene::dam_break(64))).expect("def serialises");
+    let mut def = serde_json::to_value(whitewater_render_def(WaterScene::dam_break(64).with_obstacle())).expect("def serialises");
     let node = json_node_mut(&mut def, WHITEWATER).expect("whitewater node in Water group");
     assert_eq!(node["typeId"], "node.whitewater_step");
     for (name, value) in params {

@@ -1,28 +1,24 @@
 //! Background model-import worker + its progress channel.
 //! `docs/IMPORT_RESPONSIVENESS_DESIGN.md` D3+D4.
 //!
-//! `Application::import_model_file` (`app_lifecycle.rs`) used to run Blender
-//! conversion → `assemble_import_graph` → `validate_def` synchronously on
-//! the UI thread — a multi-second stall on a large model. [`run_import_worker`]
-//! is the SAME sequence of blocking calls, unchanged, moved onto one
+//! `Application::import_model_file` (`app_lifecycle.rs`) would run Blender
+//! conversion and the glTF parse on the UI thread — a multi-second stall on
+//! a large model. [`run_import_worker`] runs those blocking calls on one
 //! background `std::thread`; it sends [`ImportProgress`] events over a
 //! `crossbeam_channel` the UI thread drains once per frame
 //! (`Application::drain_import_progress`, `app_render.rs`) at the same site
 //! `tick_import_failures` already drains BUG-133's probe-failure channel.
 //!
-//! What stays on the UI thread, deliberately: everything AFTER validation
-//! succeeds — minting the embedded-preset id, installing the project-preset
-//! overlay, and dispatching `ImportModelLayerCommand`/`AddClipCommand`. That
-//! tail mutates `local_project` and reads the process-global preset
-//! registry; per `CLAUDE.md`, all project mutation stays UI/content-thread
-//! only, never a bare background thread. This module never sends a
+//! What stays on the UI thread, deliberately: everything AFTER the parse
+//! succeeds — adding the model to a scene layer (`app_lifecycle.rs`,
+//! `finish_import_model`). That tail mutates `local_project`; per
+//! `CLAUDE.md`, all project mutation stays UI/content-thread only, never a
+//! bare background thread. This module never sends a
 //! `ContentCommand` — see the negative gate in the design's section 3.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_nodes_scene::node_graph::gltf_import::ImportReport;
+use manifold_core::scene_doc::{ImportedModel, ModelFacts};
 
 use crate::blender_import;
 use crate::user_prefs::UserPrefs;
@@ -34,7 +30,6 @@ use crate::user_prefs::UserPrefs;
 pub(crate) enum ImportStage {
     Converting,
     Parsing,
-    Validating,
 }
 
 impl ImportStage {
@@ -43,9 +38,23 @@ impl ImportStage {
         match self {
             ImportStage::Converting => "converting",
             ImportStage::Parsing => "parsing",
-            ImportStage::Validating => "validating",
         }
     }
+}
+
+/// Where a parsed model goes. Layers and items travel by id, never by
+/// position: the stack can change while the file parses.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ImportTarget {
+    /// A drop at `beat`: the scene layer `under` the cursor, else the active
+    /// one, takes the model; with neither, a new scene layer sits above
+    /// `under` (at the top when the drop missed the tracks).
+    Drop { beat: f32, under: Option<manifold_core::LayerId> },
+    /// Add > Mesh from file: into scene layer `layer`, under `parent` when it
+    /// is a Group.
+    Into { layer: manifold_core::LayerId, parent: Option<manifold_core::scene_doc::ItemId> },
+    /// Model File swap: `item` of scene layer `layer` reads the new file.
+    Swap { layer: manifold_core::LayerId, item: manifold_core::scene_doc::ItemId },
 }
 
 /// One event on the background-import channel (D3's committed shape).
@@ -59,17 +68,28 @@ pub(crate) enum ImportProgress {
     },
     Done {
         path: PathBuf,
-        graph: Box<EffectGraphDef>,
-        report: ImportReport,
+        /// The `.glb` the model was read from: the original, or the one Blender
+        /// converted it to. It is the import Group.s Source.
+        file: PathBuf,
+        model: Box<ImportedModel>,
+        /// What the compiler reads from the file, from the same parse.
+        facts: ModelFacts,
+        /// What the file's materials hold that the surface cannot draw.
+        warnings: Vec<String>,
         /// Set only when the source needed Blender conversion — folded into
         /// the UI-thread success log line exactly as the old inline code did.
         conversion_report_line: Option<String>,
-        drop_beat: f32,
-        layer_under_cursor: Option<usize>,
+        target: ImportTarget,
     },
     Failed {
         path: PathBuf,
         message: String,
+    },
+    /// A model file's facts, read for a document that names the file
+    /// without them (`crate::scene_models`), and its material warnings.
+    Facts {
+        path: String,
+        read: Result<(ModelFacts, Vec<String>), String>,
     },
 }
 
@@ -81,8 +101,7 @@ pub(crate) enum ImportProgress {
 /// only field the conversion path touches.
 pub(crate) struct ImportRequest {
     pub(crate) path: PathBuf,
-    pub(crate) drop_beat: f32,
-    pub(crate) layer_under_cursor: Option<usize>,
+    pub(crate) target: ImportTarget,
     pub(crate) blender_path_pref: String,
 }
 
@@ -92,14 +111,12 @@ pub(crate) struct ImportRequest {
 /// `Done`/`Failed` at the end; never sends a `ContentCommand`.
 pub(crate) fn run_import_worker(
     req: ImportRequest,
-    device: Arc<manifold_gpu::GpuDevice>,
     repo_root: PathBuf,
     progress_tx: crossbeam_channel::Sender<ImportProgress>,
 ) {
     let ImportRequest {
         path,
-        drop_beat,
-        layer_under_cursor,
+        target,
         blender_path_pref,
     } = req;
 
@@ -151,58 +168,30 @@ pub(crate) fn run_import_worker(
         _ => path.clone(),
     };
 
-    // Parse + assemble. Errors (no geometry with materials, unreadable
-    // file) abort the drop with a Failed event rather than leaving a
-    // half-built layer behind.
+    // Parse. Errors (no meshes, unreadable file) abort the drop with a
+    // Failed event rather than leaving a half-built layer behind.
     let _ = progress_tx.send(ImportProgress::Stage {
         path: path.clone(),
         stage: ImportStage::Parsing,
     });
-    let (graph, report) =
-        match manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&import_path) {
-            Ok(pair) => pair,
-            Err(e) => {
-                let _ = progress_tx.send(ImportProgress::Failed {
-                    path,
-                    message: format!("glTF import failed: {e}"),
-                });
-                return;
-            }
-        };
-
-    // The assembler is code and has bugs (GRAPH_TOOLING_DESIGN D6): run its
-    // output through the same validate_def pipeline the runtime loader
-    // takes, and abort on failure rather than let a malformed def surface
-    // later as wrong pixels far from the cause. Never a silent partial
-    // import. IMPORT_RESPONSIVENESS_DESIGN.md D2: the device is the app's
-    // shared handle, passed in — never a fresh `GpuDevice::new()` here.
-    let _ = progress_tx.send(ImportProgress::Stage {
-        path: path.clone(),
-        stage: ImportStage::Validating,
-    });
-    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let validation = manifold_node_engine::validate::validate_def(
-        &graph,
-        &registry,
-        manifold_node_engine::validate::ValidateKind::Generator,
-        &device,
-    );
-    if !validation.is_valid() {
-        let messages: Vec<String> =
-            validation.errors.iter().map(|issue| issue.message.clone()).collect();
-        let _ = progress_tx.send(ImportProgress::Failed {
-            path,
-            message: format!("assembled graph failed validation: {}", messages.join("; ")),
-        });
-        return;
-    }
+    let read = match manifold_nodes_scene::node_graph::gltf_import::read_model(&import_path) {
+        Ok(read) => read,
+        Err(e) => {
+            let _ = progress_tx.send(ImportProgress::Failed {
+                path,
+                message: format!("glTF import failed: {e}"),
+            });
+            return;
+        }
+    };
 
     let _ = progress_tx.send(ImportProgress::Done {
         path,
-        graph: Box::new(graph),
-        report,
+        file: import_path,
+        model: Box::new(read.model),
+        facts: read.facts,
+        warnings: read.warnings,
         conversion_report_line,
-        drop_beat,
-        layer_under_cursor,
+        target,
     });
 }

@@ -120,16 +120,12 @@ pub struct Workspace {
     /// The main output preview's preview-only navigation (main window
     /// only).
     pub preview_navigation: crate::preview_navigation::PreviewNavigation,
-    /// The gizmo layer last sent to the content thread (`SetPhysicsOverlay`).
+    /// The Scene panel's layer last sent to the content thread
+    /// (`SetPhysicsOverlay`): it reports that layer's overlay frames, with
+    /// Show gizmos on or off, so a click on its picture can pick.
     pub gizmo_layer_sent: Option<manifold_core::LayerId>,
-    /// The shapes selected in the editor viewport this session, in pick
-    /// order, set by a viewport pick (Shift adds or removes one) and cleared
-    /// by a press on empty space; a shape the def no longer declares drops
-    /// out. A pick also selects the owners in the Scene Setup panel
-    /// (`window_input.rs`), so Properties follows a viewport click.
-    pub viewport_selected: Vec<manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetId>,
-    /// The selection drawn over the viewport, rebuilt when its scene or
-    /// `viewport_selected` changes.
+    /// The Scene panel's selection drawn over the viewport, rebuilt when
+    /// its scene or the selection changes.
     pub viewport_selection: Option<crate::viewport_selection::ViewportSelection>,
     /// The gizmo drag in progress, a knob scrub ended on release or
     /// cancellation.
@@ -184,7 +180,6 @@ impl Workspace {
             preview_gizmo: Default::default(),
             preview_navigation: Default::default(),
             gizmo_layer_sent: None,
-            viewport_selected: Vec::new(),
             viewport_selection: None,
             viewport_gizmo_drag: None,
             viewport_outline: Vec::new(),

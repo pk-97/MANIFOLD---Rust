@@ -32,6 +32,8 @@ mod mesh;
 pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
 use mesh::triangle_mesh_mass_properties;
 pub mod sdf;
+pub mod collision_shape;
+use collision_shape::{validate_hull, validate_position};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -128,9 +130,20 @@ mod ffi {
             point_counts: *const i32,
             hull_count: i32,
             max_vertex_count: i32,
+            mass: f32,
             friction: f32,
             restitution: f32,
             hull_out: *mut usize,
+        ) -> i32;
+        pub fn manifold_box3d_body_replace_mesh(
+            body: u64,
+            vertices: *const f32,
+            vertex_count: i32,
+            indices: *const i32,
+            triangle_count: i32,
+            friction: f32,
+            restitution: f32,
+            mesh_out: *mut usize,
         ) -> i32;
         pub fn manifold_box3d_body_set_bullet(body: u64, enabled: i32) -> i32;
         pub fn manifold_box3d_body_set_wall(body: u64, wall: i32) -> i32;
@@ -223,13 +236,25 @@ mod ffi {
             impulse: *const f32,
         ) -> i32;
         pub fn manifold_box3d_destroy_mesh(mesh: usize);
+        pub fn manifold_box3d_assert_count() -> u32;
+        pub fn manifold_box3d_install_assert_handler();
     }
+}
+
+/// How many Box3D internal checks have failed in this process. A failed
+/// check is logged and counted, never an abort. The gate in
+/// [`collision_shape`] keeps non-finite and degenerate input from reaching
+/// the checks at all.
+pub fn native_assert_count() -> u32 {
+    unsafe { ffi::manifold_box3d_assert_count() }
 }
 
 static NATIVE_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_WORLD_PROVENANCE: AtomicU64 = AtomicU64::new(1);
 
 fn native_lock() -> MutexGuard<'static, ()> {
+    static ASSERT_HANDLER: std::sync::Once = std::sync::Once::new();
+    ASSERT_HANDLER.call_once(|| unsafe { ffi::manifold_box3d_install_assert_handler() });
     NATIVE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -347,7 +372,6 @@ pub struct BodyImpulse {
     pub angular: [f32; 3],
 }
 
-const MAX_BODY_HULLS: usize = 64;
 const COOKED_HULL_MAX_VERTICES: i32 = 42;
 
 /// An opaque body reference tied to the world that created it.
@@ -360,6 +384,9 @@ pub struct BodyHandle {
 struct BodyRecord {
     native: u64,
     owned_geometry: OwnedGeometry,
+    /// Bumped by each in-place shape swap, so a reader that keeps derived
+    /// geometry by handle knows when it went stale.
+    shape_revision: u32,
 }
 
 struct FieldApplication {
@@ -471,12 +498,7 @@ impl PhysicsWorld {
                 "hull needs between 4 and 255 points",
             ));
         }
-        if points
-            .iter()
-            .any(|point| !point.iter().all(|value| value.is_finite()))
-        {
-            return Err(PhysicsError::InvalidInput("hull points must be finite"));
-        }
+        validate_hull(points)?;
         self.add_hull_batch(&[points], config, 255)
     }
 
@@ -485,7 +507,7 @@ impl PhysicsWorld {
     /// Each input hull is cooked by Box3D's standard convex hull builder. The
     /// batch form accepts large point clouds; the native builder retains at
     /// most 128 output vertices per hull while preserving the original point
-    /// positions used for cooking. A body may contain at most 64 hull shapes.
+    /// positions used for cooking. A body takes any number of hulls.
     pub fn add_hulls(
         &mut self,
         hulls: &[Vec<[f32; 3]>],
@@ -495,16 +517,8 @@ impl PhysicsWorld {
         if hulls.is_empty() {
             return Err(PhysicsError::InvalidInput("body needs at least one hull"));
         }
-        if hulls.len() > MAX_BODY_HULLS {
-            return Err(PhysicsError::InvalidInput("body supports at most 64 hulls"));
-        }
         for hull in hulls {
-            if hull.len() < 4 {
-                return Err(PhysicsError::InvalidInput("hull needs at least 4 points"));
-            }
-            if hull.iter().any(|point| !point.iter().all(|value| value.is_finite())) {
-                return Err(PhysicsError::InvalidInput("hull points must be finite"));
-            }
+            validate_hull(hull)?;
         }
         let hull_refs: Vec<&[[f32; 3]]> = hulls.iter().map(Vec::as_slice).collect();
         self.add_hull_batch(&hull_refs, config, 128)
@@ -576,6 +590,7 @@ impl PhysicsWorld {
         self.bodies.push(BodyRecord {
             native,
             owned_geometry: OwnedGeometry::Hulls(owned_hulls),
+            shape_revision: 0,
         });
         self.field_seen.push(false);
         self.field_scratch
@@ -605,6 +620,9 @@ impl PhysicsWorld {
             return Err(PhysicsError::InvalidInput(
                 "triangle meshes only support fixed bodies",
             ));
+        }
+        for vertex in vertices {
+            validate_position(*vertex)?;
         }
         let (center, inertia) = triangle_mesh_mass_properties(vertices, triangles, config.mass)?;
         if vertices.len() > i32::MAX as usize {
@@ -667,6 +685,7 @@ impl PhysicsWorld {
         self.bodies.push(BodyRecord {
             native,
             owned_geometry: OwnedGeometry::Mesh(owned_mesh),
+            shape_revision: 0,
         });
         self.field_seen.push(false);
         self.field_scratch
@@ -777,6 +796,22 @@ impl PhysicsWorld {
         'field: 'slice,
         I: IntoIterator<Item = (BodyHandle, &'slice [FieldInput<'field>])>,
     {
+        self.apply_fields_each(dt, |target| {
+            for (handle, fields) in targets {
+                target(handle, fields)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// [`Self::apply_fields_by_target`] with the targets handed to `each`'s
+    /// sink one at a time, so a caller builds each target's fields on its own
+    /// stack and nothing is collected, whatever the target count.
+    pub fn apply_fields_each(
+        &mut self,
+        dt: Seconds,
+        each: impl FnOnce(&mut dyn FnMut(BodyHandle, &[FieldInput<'_>]) -> Result<(), PhysicsError>) -> Result<(), PhysicsError>,
+    ) -> Result<(), PhysicsError> {
         let dt_f32 = dt.0 as f32;
         if !dt.0.is_finite() || dt.0 <= 0.0 || !dt_f32.is_finite() || dt_f32 <= 0.0 {
             return Err(PhysicsError::InvalidInput("dt must be finite and positive"));
@@ -788,98 +823,7 @@ impl PhysicsWorld {
         self.field_scratch.clear();
         let result = (|| {
             let _lock = native_lock();
-            for (handle, fields) in targets {
-                for input in fields {
-                    validate_field_input(*input)?;
-                }
-                self.body_record(handle)?;
-                let seen = &mut self.field_seen[handle.index as usize];
-                if *seen {
-                    return Err(PhysicsError::InvalidInput("duplicate field body handle"));
-                }
-                *seen = true;
-
-                let native = self.body_record(handle)?.native;
-                let mut center = [0.0; 3];
-                let mut mass = 0.0;
-                let mut body_type = 0;
-                let mut enabled = 0;
-                let state_result = unsafe {
-                    ffi::manifold_box3d_body_field_state(
-                        native,
-                        center.as_mut_ptr(),
-                        &mut mass,
-                        &mut body_type,
-                        &mut enabled,
-                    )
-                };
-                if state_result != 0 {
-                    return Err(PhysicsError::NativeFailure);
-                }
-                if body_type != BodyKind::Dynamic.native_value() || enabled == 0 {
-                    continue;
-                }
-                if !center.iter().all(|component| component.is_finite())
-                    || !mass.is_finite()
-                    || mass <= 0.0
-                {
-                    return Err(PhysicsError::NativeFailure);
-                }
-
-                let mut air = ForceSample::default();
-                let mut acceleration = [0.0; 3];
-                let mut delta_velocity = [0.0; 3];
-                for input in fields {
-                    let force = input.field.sample_force(center);
-                    let sample = force.push;
-                    air = air + ForceSample { push: [0.0; 3], ..force }.scaled(input.acceleration);
-                    if !sample.iter().all(|component| component.is_finite()) {
-                        return Err(PhysicsError::InvalidInput("field sample must be finite"));
-                    }
-                    for component in 0..3 {
-                        acceleration[component] += sample[component] * input.acceleration;
-                        delta_velocity[component] += sample[component] * input.delta_velocity;
-                    }
-                    if !acceleration
-                        .iter()
-                        .chain(delta_velocity.iter())
-                        .all(|component| component.is_finite())
-                    {
-                        return Err(PhysicsError::InvalidInput("field result must be finite"));
-                    }
-                }
-
-                if !air.is_finite() || air.drag < 0.0 {
-                    return Err(PhysicsError::InvalidInput("field air must be finite"));
-                }
-                if air.drag > 0.0 {
-                    let mut velocity = [0.0; 3];
-                    if unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) } != 0 {
-                        return Err(PhysicsError::NativeFailure);
-                    }
-                    let drag = air.drag_delta_velocity(velocity, dt_f32);
-                    for component in 0..3 {
-                        delta_velocity[component] += drag[component];
-                    }
-                }
-                let force = acceleration.map(|component| component * mass);
-                let impulse = delta_velocity.map(|component| component * mass);
-                if !force
-                    .iter()
-                    .chain(impulse.iter())
-                    .all(|component| component.is_finite())
-                {
-                    return Err(PhysicsError::InvalidInput(
-                        "mass-scaled field result must be finite",
-                    ));
-                }
-                self.field_scratch.push(FieldApplication {
-                    native,
-                    force,
-                    impulse,
-                });
-            }
-
+            each(&mut |handle, fields| self.sample_field_target(handle, fields, dt_f32))?;
             for application in &self.field_scratch {
                 let apply_result = unsafe {
                     ffi::manifold_box3d_body_apply_field(
@@ -896,6 +840,101 @@ impl PhysicsWorld {
         })();
         self.field_scratch.clear();
         result
+    }
+
+    /// Sample one target's fields at its centre of mass into the pending
+    /// applications. The caller holds the native lock.
+    fn sample_field_target(&mut self, handle: BodyHandle, fields: &[FieldInput<'_>], dt_f32: f32) -> Result<(), PhysicsError> {
+        for input in fields {
+            validate_field_input(*input)?;
+        }
+        self.body_record(handle)?;
+        let seen = &mut self.field_seen[handle.index as usize];
+        if *seen {
+            return Err(PhysicsError::InvalidInput("duplicate field body handle"));
+        }
+        *seen = true;
+
+        let native = self.body_record(handle)?.native;
+        let mut center = [0.0; 3];
+        let mut mass = 0.0;
+        let mut body_type = 0;
+        let mut enabled = 0;
+        let state_result = unsafe {
+            ffi::manifold_box3d_body_field_state(
+                native,
+                center.as_mut_ptr(),
+                &mut mass,
+                &mut body_type,
+                &mut enabled,
+            )
+        };
+        if state_result != 0 {
+            return Err(PhysicsError::NativeFailure);
+        }
+        if body_type != BodyKind::Dynamic.native_value() || enabled == 0 {
+            return Ok(());
+        }
+        if !center.iter().all(|component| component.is_finite())
+            || !mass.is_finite()
+            || mass <= 0.0
+        {
+            return Err(PhysicsError::NativeFailure);
+        }
+
+        let mut air = ForceSample::default();
+        let mut acceleration = [0.0; 3];
+        let mut delta_velocity = [0.0; 3];
+        for input in fields {
+            let force = input.field.sample_force(center);
+            let sample = force.push;
+            air = air + ForceSample { push: [0.0; 3], ..force }.scaled(input.acceleration);
+            if !sample.iter().all(|component| component.is_finite()) {
+                return Err(PhysicsError::InvalidInput("field sample must be finite"));
+            }
+            for component in 0..3 {
+                acceleration[component] += sample[component] * input.acceleration;
+                delta_velocity[component] += sample[component] * input.delta_velocity;
+            }
+            if !acceleration
+                .iter()
+                .chain(delta_velocity.iter())
+                .all(|component| component.is_finite())
+            {
+                return Err(PhysicsError::InvalidInput("field result must be finite"));
+            }
+        }
+
+        if !air.is_finite() || air.drag < 0.0 {
+            return Err(PhysicsError::InvalidInput("field air must be finite"));
+        }
+        if air.drag > 0.0 {
+            let mut velocity = [0.0; 3];
+            if unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) } != 0 {
+                return Err(PhysicsError::NativeFailure);
+            }
+            let drag = air.drag_delta_velocity(velocity, dt_f32);
+            for component in 0..3 {
+                delta_velocity[component] += drag[component];
+            }
+        }
+        let force = acceleration.map(|component| component * mass);
+        let impulse = delta_velocity.map(|component| component * mass);
+        if !force
+            .iter()
+            .chain(impulse.iter())
+            .all(|component| component.is_finite())
+        {
+            return Err(PhysicsError::InvalidInput(
+                "mass-scaled field result must be finite",
+            ));
+        }
+        self.field_scratch.push(FieldApplication {
+            native,
+            force,
+            impulse,
+        });
+        Ok(())
     }
 
     pub fn update_body(
@@ -933,14 +972,14 @@ impl PhysicsWorld {
         };
         match result {
             0 => native_set_wall(native, config.wall),
-            4 => Err(PhysicsError::InvalidInput("body supports at most 64 shapes")),
             _ => Err(PhysicsError::NativeFailure),
         }
     }
 
-    /// Swap the collision hulls of a fixed body for `hulls`, leaving the body,
-    /// its pose and every other body in the world as they are. The new hulls
-    /// are cooked first, so on `Err` the body keeps its old shape.
+    /// Swap a body's collision hulls for `hulls`, leaving its pose, its
+    /// velocity and every other body in the world as they are; a moving body
+    /// takes `config.mass` over its new hulls. The new hulls are cooked first,
+    /// so on `Err` the body keeps its old shape.
     pub fn replace_hulls(
         &mut self,
         handle: BodyHandle,
@@ -948,16 +987,11 @@ impl PhysicsWorld {
         config: BodyConfig,
     ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
-        if config.kind != BodyKind::Fixed {
-            return Err(PhysicsError::InvalidInput("only a fixed body's hulls can be replaced"));
-        }
-        if hulls.is_empty() || hulls.len() > MAX_BODY_HULLS {
-            return Err(PhysicsError::InvalidInput("body needs between 1 and 64 hulls"));
+        if hulls.is_empty() {
+            return Err(PhysicsError::InvalidInput("body needs at least one hull"));
         }
         for hull in hulls {
-            if hull.len() < 4 || hull.iter().any(|point| !point.iter().all(|value| value.is_finite())) {
-                return Err(PhysicsError::InvalidInput("hulls need at least 4 finite points"));
-            }
+            validate_hull(hull)?;
         }
         if !matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Hulls(_)) {
             return Err(PhysicsError::InvalidInput("only a hull body can have its hulls replaced"));
@@ -974,6 +1008,7 @@ impl PhysicsWorld {
                 point_counts.as_ptr(),
                 hulls.len() as i32,
                 128,
+                config.mass,
                 config.friction,
                 config.restitution,
                 new_hulls.as_mut_ptr(),
@@ -983,12 +1018,78 @@ impl PhysicsWorld {
             return Err(PhysicsError::NativeFailure);
         }
         let record = &mut self.bodies[handle.index as usize];
+        record.shape_revision = record.shape_revision.wrapping_add(1);
         if let OwnedGeometry::Hulls(old) = std::mem::replace(&mut record.owned_geometry, OwnedGeometry::Hulls(new_hulls)) {
             for hull in old {
                 unsafe { ffi::manifold_box3d_destroy_hull(hull) };
             }
         }
         native_set_wall(native, config.wall)
+    }
+
+    /// Swap a fixed mesh body's triangle mesh for `vertices` and `triangles`,
+    /// leaving its pose and every other body in the world as they are. The
+    /// new mesh is built first, so on `Err` the body keeps its old shape.
+    pub fn replace_triangle_mesh(
+        &mut self,
+        handle: BodyHandle,
+        vertices: &[[f32; 3]],
+        triangles: &[[u32; 3]],
+        config: BodyConfig,
+    ) -> Result<(), PhysicsError> {
+        let config = validate_config(config)?;
+        if config.kind != BodyKind::Fixed {
+            return Err(PhysicsError::InvalidInput("triangle meshes only support fixed bodies"));
+        }
+        if !matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Mesh(_)) {
+            return Err(PhysicsError::InvalidInput("only a mesh body can have its mesh replaced"));
+        }
+        for vertex in vertices {
+            validate_position(*vertex)?;
+        }
+        if vertices.len() > i32::MAX as usize || triangles.len() > i32::MAX as usize {
+            return Err(PhysicsError::InvalidInput("too many mesh vertices or triangles"));
+        }
+        let mut indices = Vec::with_capacity(triangles.len() * 3);
+        for triangle in triangles {
+            for &index in triangle {
+                if index as usize >= vertices.len() {
+                    return Err(PhysicsError::InvalidInput("mesh index is out of range"));
+                }
+                indices.push(i32::try_from(index).map_err(|_| PhysicsError::InvalidInput("mesh index is too large"))?);
+            }
+        }
+        let mut new_mesh = 0usize;
+        let native = self.native_body(handle)?;
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_replace_mesh(
+                native,
+                vertices.as_ptr().cast::<f32>(),
+                vertices.len() as i32,
+                indices.as_ptr(),
+                triangles.len() as i32,
+                config.friction,
+                config.restitution,
+                &mut new_mesh,
+            )
+        };
+        match result {
+            0 if new_mesh != 0 => {}
+            3 => return Err(PhysicsError::InvalidInput("Box3D discarded degenerate mesh triangles")),
+            _ => return Err(PhysicsError::NativeFailure),
+        }
+        let record = &mut self.bodies[handle.index as usize];
+        record.shape_revision = record.shape_revision.wrapping_add(1);
+        if let OwnedGeometry::Mesh(old) = std::mem::replace(&mut record.owned_geometry, OwnedGeometry::Mesh(new_mesh)) {
+            unsafe { ffi::manifold_box3d_destroy_mesh(old) };
+        }
+        native_set_wall(native, config.wall)
+    }
+
+    /// How many times `handle`'s shape has been swapped in place.
+    pub fn shape_revision(&self, handle: BodyHandle) -> Result<u32, PhysicsError> {
+        Ok(self.body_record(handle)?.shape_revision)
     }
 
     /// Enable or disable continuous collision detection for a dynamic body.
@@ -1539,7 +1640,7 @@ fn native_set_wall(native: u64, wall: bool) -> Result<(), PhysicsError> {
 }
 
 fn validate_config(mut config: BodyConfig) -> Result<BodyConfig, PhysicsError> {
-    validate_vec3(config.position, "position")?;
+    validate_position(config.position)?;
     if !config.mass.is_finite() || config.mass < 0.0 {
         return Err(PhysicsError::InvalidInput(
             "mass must be finite and non-negative",
@@ -1817,10 +1918,8 @@ mod tests {
             )
             .unwrap();
         assert!(world.add_hulls(&[vec![[0.0; 3]; 3]], BodyConfig::default()).is_err());
-        assert_eq!(
-            world.add_hulls(&vec![cube(0.1); MAX_BODY_HULLS + 1], BodyConfig::default()),
-            Err(PhysicsError::InvalidInput("body supports at most 64 hulls"))
-        );
+        let past_the_stack = BodyConfig { kind: BodyKind::Fixed, mass: 0.0, position: [50.0, 0.0, 0.0], ..BodyConfig::default() };
+        assert!(world.add_hulls(&vec![cube(0.1); 65], past_the_stack).is_ok(), "a body takes any number of hulls");
 
         let left = cube(0.5)
             .into_iter()

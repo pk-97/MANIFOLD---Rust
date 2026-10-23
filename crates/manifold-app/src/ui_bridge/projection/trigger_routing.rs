@@ -46,25 +46,12 @@ pub(crate) fn to_core_source(source: &UiClipTriggerSource) -> ClipTriggerSource 
 }
 
 /// Resolve navigation against the same curated generator surface the inspector
-/// builds. Scene-owned properties and forces open in Scene Setup instead.
+/// builds. Scene-owned properties open in Scene Setup instead.
 pub(crate) fn response_uses_scene_panel(project: &Project, target: &GraphTarget, param_id: &str) -> bool {
     let GraphTarget::Generator(layer_id) = target else { return false; };
     let Some(instance) = project.graph_target_owner(target) else { return false; };
-    let bundled = instance.graph.is_none()
-        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(instance.generator_type())).flatten();
-    let Some(graph) = instance.graph.as_ref().or(bundled.as_deref()) else { return false; };
-    if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(graph).is_none() {
+    if instance.scene.is_none() {
         return false;
-    }
-    if let Some(modifier_id) = graph.preset_metadata.as_ref().and_then(|metadata| {
-        metadata.bindings.iter().find_map(|binding| match &binding.target {
-            manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, .. }
-                if binding.id == param_id => Some(modifier_id),
-            _ => None,
-        })
-    }) {
-        return graph.scene_modifiers.iter().any(|modifier| modifier.id == *modifier_id
-            && manifold_core::scene_modifier_preset::is_force_recipe(&modifier.graph));
     }
     let surface = super::cards::gen_params_to_surface(instance, layer_id.as_str(), None, &[],
         super::cards::SurfaceVisibility::CuratedCard, (project.settings.bpm, project.settings.frame_rate));
@@ -89,26 +76,24 @@ pub(crate) fn modifier_label_for_param(
         }
     })?;
     graph.scene_modifiers.iter().find(|modifier| modifier.id == *modifier_id)
-        .and_then(|modifier| manifold_nodes_scene::node_graph::scene_items::scene_modifier_display_name(graph, modifier))
+        .and_then(|modifier| super::cards::scene_modifier_display_name(graph, modifier))
 }
 
-/// The scene item that owns each generator control, by the one ownership
-/// rule the card and the Scene tab use (`scene_items::owner_of`). Built once
-/// per generator.
-fn scene_item_group_labels(
-    instance: &manifold_core::effects::PresetInstance,
-) -> Option<ahash::AHashMap<String, String>> {
-    let catalog = (instance.graph.is_none())
-        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(instance.generator_type()))
-        .flatten();
-    let graph = instance.graph.as_ref().or(catalog.as_deref())?;
-    use manifold_nodes_scene::node_graph::scene_items::{owner_of, scene_items};
-    let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(graph)?;
-    let meta = graph.preset_metadata.as_ref()?;
-    let items = scene_items(graph, &vm);
-    Some(meta.params.iter().filter_map(|spec| {
-        owner_of(&items, meta, &spec.id).map(|owner| (spec.id.clone(), items[owner].name.clone()))
-    }).collect())
+/// The scene item that owns each generator control, by the item id every
+/// scene param id starts with. Built once per generator.
+fn scene_item_group_labels(instance: &manifold_core::effects::PresetInstance) -> Option<ahash::AHashMap<String, String>> {
+    let doc = instance.scene.as_ref()?;
+    Some(
+        instance
+            .params
+            .iter()
+            .filter_map(|param| {
+                let (item, _) = manifold_core::scene_doc::split_param_id(param.id())?;
+                let owner = doc.find(&manifold_core::scene_doc::ItemId::new(item))?;
+                Some((param.id().to_owned(), owner.name.clone()))
+            })
+            .collect(),
+    )
 }
 
 fn source_label(project: &Project, target: &GraphTarget, param_id: &str, source: &ClipTriggerSource) -> String {
@@ -179,7 +164,7 @@ impl TriggerRoutingCatalog {
     ) {
         if param.spec.is_trigger_gate
             || !project.can_assign_clip_trigger_source(target, param.id(), &ClipTriggerSource::Disabled)
-            || crate::scene_modifier_edit::macro_parameter_lock_reason(project, target, param.id()).is_some()
+            || crate::graph_target::macro_parameter_lock_reason(project, target, param.id()).is_some()
         {
             return;
         }
@@ -212,9 +197,7 @@ impl TriggerRoutingCatalog {
 /// function; modifier rows keep their manifest parameter identity.
 pub(crate) fn attach_trigger_sources(configs: &mut [ParamSurface], project: &Project) {
     for config in configs {
-        let target = if let Some(modifier) = &config.modifier {
-            GraphTarget::Generator(modifier.layer_id.clone())
-        } else if let Some(layer) = &config.layer_id {
+        let target = if let Some(layer) = &config.layer_id {
             GraphTarget::Generator(layer.clone())
         } else {
             GraphTarget::Effect(config.effect_id.clone())
@@ -225,7 +208,7 @@ pub(crate) fn attach_trigger_sources(configs: &mut [ParamSurface], project: &Pro
             let Some(param) = instance.params.get(row.id.as_ref()) else { continue; };
             if param.spec.is_trigger_gate
                 || !project.can_assign_clip_trigger_source(&target, param.id(), &ClipTriggerSource::Disabled)
-                || crate::scene_modifier_edit::macro_parameter_lock_reason(project, &target, param.id()).is_some()
+                || crate::graph_target::macro_parameter_lock_reason(project, &target, param.id()).is_some()
                 || row.spec.disabled.is_some()
             { continue; }
             let source_label = source_label(project, &target, param.id(), &param.clip_trigger_source);
@@ -332,60 +315,13 @@ pub(crate) mod tests {
 
     #[test]
     fn scene_generator_groups_controls_by_scene_item_owner() {
-        let mut generator = PresetInstance::new_generator(PresetTypeId::from_string("PhysicsSolids".into()));
-        generator.init_defaults();
-        let mut graph = manifold_nodes::bundled_presets::bundled_preset_def(generator.generator_type())
-            .expect("PhysicsSolids scene graph").as_ref().clone();
-        manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut graph);
-        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&graph)
-            .expect("PhysicsSolids scene VM");
-        let object_ids: Vec<_> = vm.objects.iter().filter_map(|object| {
-            let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { return None; };
-            let ids = super::super::scene::parameter_ids_for_nodes(
-                Some(&graph),
-                super::super::scene::owned_nodes(
-                    &manifold_nodes_scene::node_graph::scene_items::scene_items(&graph, &vm),
-                    &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Object(row.object.clone()),
-                ),
-            );
-            (!ids.is_empty()).then_some((row.name.clone(), ids))
-        }).take(2).collect();
-        assert_eq!(object_ids.len(), 2, "PhysicsSolids fixture must expose two scene objects");
-        let shared_ids: std::collections::HashSet<_> = object_ids.iter()
-            .flat_map(|(_, ids)| ids.iter().cloned()).collect();
-        generator.graph = Some(graph);
-        generator.refresh_manifest_from_graph();
-        // A section override is the user's choice on the control (D7), laid
-        // over whatever the lookup describes.
-        for param in generator.params.iter_mut() {
-            if shared_ids.contains(param.id()) {
-                param.choices.section = Some(Some("Shared object section".into()));
-            }
-        }
-        generator.refresh_manifest_from_graph();
         let mut project = Project::default();
-        let mut layer = Layer::new_generator(
-            "Physics Solids".into(),
-            PresetTypeId::from_string("PhysicsSolids".into()),
-            0,
-        );
-        layer.layer_id = LayerId::new("physics");
-        *layer.gen_params_mut().unwrap() = generator;
+        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::SCENE, 0);
+        layer.layer_id = LayerId::new("scene");
         project.timeline.layers.push(layer);
         let catalog = TriggerRoutingCatalog::project(&project);
-        let generator = project.timeline.layers[0].gen_params().unwrap();
-
-        for (name, ids) in &object_ids {
-            let target = ids.iter().filter(|id| {
-                !object_ids.iter().any(|(other, ids)| other != name && ids.contains(id))
-            }).find_map(|id| catalog.targets.iter().find(|target| target.param_id.as_ref() == id))
-                .expect("each object has a distinct assignable control");
-            assert_eq!(generator.params.get(target.param_id.as_ref()).unwrap().spec.section.as_deref(),
-                Some("Shared object section"));
-            assert_eq!(target.group_label, format!("Physics Solids / {name}"));
-        }
-        for name in ["Camera", "World"] {
-            assert!(catalog.targets.iter().any(|target| target.group_label == format!("Physics Solids / {name}")));
+        for name in ["Camera", "Cube"] {
+            assert!(catalog.targets.iter().any(|target| target.group_label == format!("Scene / {name}")), "{name} has no group");
         }
     }
 
@@ -407,12 +343,10 @@ pub(crate) mod tests {
                 &graph,
                 recipe.as_ref(),
                 id.into(),
-                manifold_core::scene_modifier_preset::SceneNodeRef { scope: vec![], node: "scan_render".into() },
+                "scan_render".into(),
                 manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
             ).unwrap();
-            graph = manifold_core::scene_modifier_edit::insert_scene_modifier(
-                &graph, graph.scene_modifiers.len(), modifier,
-            ).unwrap().graph;
+            graph = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&graph, modifier).unwrap();
         }
         let mut host = PresetInstance::new_generator(PresetTypeId::new("PhotoscanBaseline"));
         host.graph = Some(graph);
@@ -426,18 +360,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn duplicate_force_catalog_groups_and_cards_use_occurrence_names() {
+    fn duplicate_force_catalog_groups_use_occurrence_names() {
         let project = duplicate_force_project();
         let layer = &project.timeline.layers[0];
         let host = layer.gen_params().unwrap();
         let graph = host.graph.as_ref().unwrap();
-        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(graph).unwrap();
-        let surfaces = super::super::cards::modifier_surfaces(
-            host, graph, &vm, "scene", &[], (manifold_core::Bpm(120.0), 0.0),
-        );
-        assert_eq!(surfaces.iter().map(|surface| surface.title.as_str()).collect::<Vec<_>>(),
-            vec!["Radial Force #1", "Radial Force #2"]);
-
         let catalog = TriggerRoutingCatalog::project(&project);
         for (index, modifier) in graph.scene_modifiers.iter().enumerate() {
             let (binding_id, _) = graph.preset_metadata.as_ref().unwrap().bindings.iter()

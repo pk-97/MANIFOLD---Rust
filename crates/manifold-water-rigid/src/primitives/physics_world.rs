@@ -16,15 +16,16 @@
 //! groups share the world's copy budget: later groups make what fits.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 
 use manifold_core::scene_impulse::ImpulseTarget;
+use manifold_core::scene_schema::SPEED_RANGE;
 use manifold_core::scene_surface::{
     PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_DEFAULT_COPY_GROUPS,
 };
 use manifold_node_engine::exec::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
 };
+use manifold_node_engine::bindings::NodeInputs;
 use manifold_node_engine::exec::instance_upload::InstanceSnapshotUpload;
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -35,7 +36,7 @@ use manifold_physics::FieldValue;
 use crate::coupled_frame::CoupledRigidFrame;
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
 use crate::physics::{
-    MAX_BODIES, MAX_COPIES, MAX_COPY_GROUPS, ResolvedRigidImpulse, RigidBody, RigidSceneInputs,
+    MAX_COPIES, ResolvedRigidImpulse, RigidSceneInputs,
     RigidSceneObservation, RigidSimulation,
 };
 use crate::physics_events::{map_rigid_receipt, ResolvedNodeImpulse};
@@ -47,8 +48,9 @@ const ZERO_INSTANCE: InstanceTransform = InstanceTransform {
     rot_pad: [0.0; 4],
 };
 
-/// Every port name the world can expose, built once so a live port list
-/// borrows `'static` names and a tick never formats one.
+/// The world's port names, made when its counts grow, so a tick never
+/// formats one. They grow with the world and never shrink.
+#[derive(Default)]
 struct PortNames {
     body: Vec<String>,
     body_acceleration: Vec<String>,
@@ -59,18 +61,23 @@ struct PortNames {
     active_count: Vec<String>,
 }
 
-static PORT_NAMES: LazyLock<PortNames> = LazyLock::new(|| {
-    let family = |prefix: &str, count: usize| (0..count).map(|index| format!("{prefix}{index}")).collect();
-    PortNames {
-        body: family("body_", MAX_BODIES),
-        body_acceleration: family("body_acceleration_", MAX_BODIES),
-        pose: family("pose_", MAX_BODIES),
-        copies: family("copies_", MAX_COPY_GROUPS),
-        copies_acceleration: family("copies_acceleration_", MAX_COPY_GROUPS),
-        instances: family("instances_", MAX_COPY_GROUPS),
-        active_count: family("active_count_", MAX_COPY_GROUPS),
+impl PortNames {
+    /// Make sure every name of `bodies` bodies and `groups` groups exists.
+    fn grow(&mut self, bodies: usize, groups: usize) {
+        let grow = |names: &mut Vec<String>, prefix: &str, count: usize| {
+            for index in names.len()..count {
+                names.push(format!("{prefix}{index}"));
+            }
+        };
+        grow(&mut self.body, "body_", bodies);
+        grow(&mut self.body_acceleration, "body_acceleration_", bodies);
+        grow(&mut self.pose, "pose_", bodies);
+        grow(&mut self.copies, "copies_", groups);
+        grow(&mut self.copies_acceleration, "copies_acceleration_", groups);
+        grow(&mut self.instances, "instances_", groups);
+        grow(&mut self.active_count, "active_count_", groups);
     }
-});
+}
 
 const SCALAR_INPUTS: [&str; 7] = ["gravity_x", "gravity_y", "gravity_z", "speed", "reset", "air_drag", "air_resistance"];
 
@@ -82,12 +89,12 @@ static PARAMS: [ParamDef; 9] = [
     ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("air_drag"), label: "Air Drag", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
     ParamDef { name: Cow::Borrowed("air_resistance"), label: "Air Resistance", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("bodies"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_BODIES as f32), range: Some((1.0, MAX_BODIES as f32)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("copy_groups"), label: "Copy Groups", ty: ParamType::Int, default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_COPY_GROUPS as f32), range: Some((0.0, MAX_COPY_GROUPS as f32)), enum_values: &[] },
+    ParamDef { name: Cow::Borrowed("bodies"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_BODIES as f32), range: None, enum_values: &[] },
+    ParamDef { name: Cow::Borrowed("copy_groups"), label: "Copy Groups", ty: ParamType::Int, default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_COPY_GROUPS as f32), range: None, enum_values: &[] },
 ];
 
-fn port(name: &'static str, ty: PortType, kind: PortKind) -> NodePort {
-    NodePort { name: Cow::Borrowed(name), ty, kind, required: false }
+fn port(name: impl Into<Cow<'static, str>>, ty: PortType, kind: PortKind) -> NodePort {
+    NodePort { name: name.into(), ty, kind, required: false }
 }
 
 fn instances_type() -> PortType {
@@ -169,6 +176,11 @@ pub struct PhysicsWorldNode {
     coupled_mode: bool,
     coupled_frame: Option<CoupledRigidFrame>,
     coupled_frame_ready: bool,
+    names: PortNames,
+    /// The refusals the card shows, as world input and reason, rebuilt only
+    /// when `refusals_shown` stops matching the world's.
+    refusal_rows: Vec<(std::sync::Arc<str>, std::sync::Arc<str>)>,
+    refusals_shown: Vec<crate::physics::BodyRefusal>,
 }
 
 impl Default for PhysicsWorldNode {
@@ -196,9 +208,31 @@ impl PhysicsWorldNode {
             coupled_mode: false,
             coupled_frame: None,
             coupled_frame_ready: false,
+            names: PortNames::default(),
+            refusal_rows: Vec::new(),
+            refusals_shown: Vec::new(),
         };
         node.rebuild(PHYSICS_WORLD_DEFAULT_BODIES as usize, PHYSICS_WORLD_DEFAULT_COPY_GROUPS as usize);
         node
+    }
+
+    /// Bring the card's refusal rows in line with the world's refusals. A
+    /// standing refusal allocates nothing; only a change rebuilds the rows.
+    fn sync_refusal_rows(&mut self) {
+        let refusals = self.simulation.refusals();
+        if refusals == self.refusals_shown.as_slice() {
+            return;
+        }
+        self.refusals_shown.clear();
+        self.refusals_shown.extend_from_slice(refusals);
+        self.refusal_rows.clear();
+        self.refusal_rows.extend(refusals.iter().map(|refusal| {
+            let input = match refusal.member {
+                crate::physics::Member::Body(k) => format!("body_{k}"),
+                crate::physics::Member::Copies(k) => format!("copies_{k}"),
+            };
+            (std::sync::Arc::from(input), std::sync::Arc::from(refusal.reason.to_string()))
+        }));
     }
 
     /// Body ports this world exposes.
@@ -214,21 +248,22 @@ impl PhysicsWorldNode {
     /// Size the port families and every per-body and per-group buffer for
     /// `bodies` bodies and `groups` copy groups.
     fn rebuild(&mut self, bodies: usize, groups: usize) {
-        let names: &'static PortNames = &PORT_NAMES;
+        self.names.grow(bodies, groups);
+        let names = &self.names;
         let field = PortType::VectorField;
         let scalar = PortType::Scalar(ScalarType::F32);
         self.inputs.clear();
-        self.inputs.extend(names.body[..bodies].iter().map(|name| port(name, PortType::RigidBody, PortKind::Input)));
-        self.inputs.extend(names.copies[..groups].iter().map(|name| port(name, PortType::RigidBody, PortKind::Input)));
-        self.inputs.extend(SCALAR_INPUTS.iter().map(|name| port(name, scalar, PortKind::Input)));
+        self.inputs.extend(names.body[..bodies].iter().map(|name| port(name.clone(), PortType::RigidBody, PortKind::Input)));
+        self.inputs.extend(names.copies[..groups].iter().map(|name| port(name.clone(), PortType::RigidBody, PortKind::Input)));
+        self.inputs.extend(SCALAR_INPUTS.iter().map(|name| port(*name, scalar, PortKind::Input)));
         self.inputs.push(port("acceleration_field", field, PortKind::Input));
-        self.inputs.extend(names.body_acceleration[..bodies].iter().map(|name| port(name, field, PortKind::Input)));
-        self.inputs.extend(names.copies_acceleration[..groups].iter().map(|name| port(name, field, PortKind::Input)));
+        self.inputs.extend(names.body_acceleration[..bodies].iter().map(|name| port(name.clone(), field, PortKind::Input)));
+        self.inputs.extend(names.copies_acceleration[..groups].iter().map(|name| port(name.clone(), field, PortKind::Input)));
         self.outputs.clear();
-        self.outputs.extend(names.pose[..bodies].iter().map(|name| port(name, PortType::Transform, PortKind::Output)));
+        self.outputs.extend(names.pose[..bodies].iter().map(|name| port(name.clone(), PortType::Transform, PortKind::Output)));
         for group in 0..groups {
-            self.outputs.push(port(&names.instances[group], instances_type(), PortKind::Output));
-            self.outputs.push(port(&names.active_count[group], scalar, PortKind::Output));
+            self.outputs.push(port(names.instances[group].clone(), instances_type(), PortKind::Output));
+            self.outputs.push(port(names.active_count[group].clone(), scalar, PortKind::Output));
         }
         self.outputs.push(port("physics_ms", scalar, PortKind::Output));
         self.bodies = bodies;
@@ -246,41 +281,29 @@ impl PhysicsWorldNode {
         InstanceSnapshotUpload::prewarm(device);
     }
 
-    /// Refill `self.observation` from this frame's inputs. `Ok(false)` while
-    /// any wired input is pending.
+    /// Refill `self.observation` from this frame's inputs. A wired input
+    /// still pending keeps its last value, and one never seen is absent: a
+    /// body whose shape is still being built joins when it is ready, and the
+    /// world never pauses for it. Speed clamps to its range.
     fn resolve_rigid_scene_observation(
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         validate_controls: bool,
-    ) -> Result<bool, String> {
-        let names: &'static PortNames = &PORT_NAMES;
+    ) -> Result<(), String> {
+        let names = &self.names;
         let inputs = &mut self.observation.inputs;
-        let mut pending = ctx.inputs.any_pending();
-        for (body, port) in inputs.bodies.iter_mut().zip(&names.body) {
-            *body = None;
-            if ctx.inputs.slot(port).is_some() {
-                *body = ctx.inputs.cpu_value::<RigidBody>(port);
-                pending |= body.is_none();
-            }
+        for (body, port) in inputs.bodies.iter_mut().zip(&names.body).chain(inputs.groups.iter_mut().zip(&names.copies)) {
+            latest(body, &ctx.inputs, port);
         }
-        for (group, port) in inputs.groups.iter_mut().zip(&names.copies) {
-            *group = ctx.inputs.cpu_value::<RigidBody>(port);
-            if ctx.inputs.slot(port).is_some() {
-                pending |= group.is_none();
-            }
-        }
-        inputs.acceleration_field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
-        if ctx.inputs.slot("acceleration_field").is_some() {
-            pending |= inputs.acceleration_field.is_none();
-        }
+        latest(&mut inputs.acceleration_field, &ctx.inputs, "acceleration_field");
         let bodies = self.bodies;
         let targeted_ports = names.body_acceleration[..bodies]
             .iter()
             .zip(&names.body)
             .chain(names.copies_acceleration[..self.groups].iter().zip(&names.copies));
         for (field, (port, matching)) in inputs.targeted_fields.iter_mut().zip(targeted_ports) {
-            *field = None;
             if ctx.inputs.slot(port).is_none() {
+                *field = None;
                 continue;
             }
             if ctx.inputs.slot(matching).is_none() {
@@ -288,11 +311,7 @@ impl PhysicsWorldNode {
                     "Physics World `{port}` requires its matching body input to be wired"
                 ));
             }
-            *field = ctx.inputs.cpu_value::<FieldValue>(port);
-            pending |= field.is_none();
-        }
-        if pending {
-            return Ok(false);
+            latest(field, &ctx.inputs, port);
         }
         // Every field as the bodies feel it: the air it carries scaled by Air
         // Drag (0 ignores the air). The World's still air reaches every body
@@ -313,25 +332,20 @@ impl PhysicsWorldNode {
             ctx.scalar_or_param("gravity_y", -9.81),
             ctx.scalar_or_param("gravity_z", 0.0),
         ];
-        let speed = ctx.scalar_or_param("speed", 1.0);
+        let speed = ctx.scalar_or_param("speed", 1.0).clamp(SPEED_RANGE.0, SPEED_RANGE.1);
         let reset = ctx.scalar_or_param("reset", 0.0);
-        if validate_controls {
-            if !ctx.played().is_finite()
+        if validate_controls
+            && (!ctx.played().is_finite()
                 || !speed.is_finite()
-                || !(0.0..=4.0).contains(&speed)
                 || !reset.is_finite()
-                || inputs.gravity.iter().any(|value| !value.is_finite())
-            {
-                return Err("Physics: non-finite clock/control or speed outside 0–4".into());
-            }
-            for prototype in inputs.groups.iter().flatten() {
-                crate::physics::validate_spawn(prototype.spawn)?;
-            }
+                || inputs.gravity.iter().any(|value| !value.is_finite()))
+        {
+            return Err("Physics: non-finite clock or control".into());
         }
         self.observation.transport = ctx.played();
         self.observation.speed = speed;
         self.observation.reset = reset;
-        Ok(true)
+        Ok(())
     }
 
     fn publish_coupled_frame(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -353,7 +367,7 @@ impl PhysicsWorldNode {
         };
         ctx.sim_metrics.record_frame(0.0, (body_count + frame.copies.len()) as u32, 0.0);
         ctx.outputs.set_scalar("physics_ms", ParamValue::Float(0.0));
-        let names: &'static PortNames = &PORT_NAMES;
+        let names = &self.names;
         for (port, pose) in names.pose.iter().zip(&frame.poses) {
             ctx.outputs.set_transform(port, *pose);
         }
@@ -375,9 +389,9 @@ impl PhysicsWorldNode {
 
     fn reset_coupled_storage(&mut self) {
         self.coupled_frame = Some(CoupledRigidFrame {
-            poses: Vec::with_capacity(MAX_BODIES),
+            poses: Vec::with_capacity(self.bodies),
             copies: Vec::with_capacity(MAX_COPIES),
-            group_copies: Vec::with_capacity(MAX_COPY_GROUPS),
+            group_copies: Vec::with_capacity(self.groups),
             ..CoupledRigidFrame::default()
         });
     }
@@ -388,12 +402,12 @@ fn cached_type_id() -> &'static EffectNodeType {
     CELL.get_or_init(|| EffectNodeType::new(PHYSICS_WORLD_TYPE_ID))
 }
 
-fn count_param(params: &ParamValues, name: &str, default: u32, max: usize) -> usize {
+fn count_param(params: &ParamValues, name: &str, default: u32) -> usize {
     params
         .get(name)
         .and_then(|value| value.as_scalar())
         .filter(|value| value.is_finite())
-        .map_or(default as usize, |value| value.round().clamp(0.0, max as f32) as usize)
+        .map_or(default as usize, |value| value.round().max(0.0) as usize)
 }
 
 impl EffectNode for PhysicsWorldNode {
@@ -421,24 +435,24 @@ impl EffectNode for PhysicsWorldNode {
         Some(manifold_node_engine::freeze::classify::BoundaryReason::NonGpu)
     }
 
-    /// `bodies` and `copy_groups` size the live port lists; `reconfigure`
-    /// clamps both to the world's caps before slicing the name table.
+    /// `bodies` and `copy_groups` size the live port lists, as many as the
+    /// scene has: neither is capped.
     fn param_contract(&self, param_name: &str) -> Option<manifold_core::effects::RangeContract> {
-        let (min, max) = match param_name {
-            "bodies" => (1.0, MAX_BODIES as f32),
-            "copy_groups" => (0.0, MAX_COPY_GROUPS as f32),
+        let min = match param_name {
+            "bodies" => 1.0,
+            "copy_groups" => 0.0,
             _ => return None,
         };
         Some(manifold_core::effects::RangeContract {
             min: Some(min),
-            max: Some(max),
+            max: None,
             reason: manifold_core::effects::RangeReason::Count,
         })
     }
 
     fn reconfigure(&mut self, params: &ParamValues) {
-        let bodies = count_param(params, "bodies", PHYSICS_WORLD_DEFAULT_BODIES, MAX_BODIES).max(1);
-        let groups = count_param(params, "copy_groups", PHYSICS_WORLD_DEFAULT_COPY_GROUPS, MAX_COPY_GROUPS);
+        let bodies = count_param(params, "bodies", PHYSICS_WORLD_DEFAULT_BODIES).max(1);
+        let groups = count_param(params, "copy_groups", PHYSICS_WORLD_DEFAULT_COPY_GROUPS);
         if bodies != self.bodies || groups != self.groups {
             self.rebuild(bodies, groups);
         }
@@ -450,7 +464,7 @@ impl EffectNode for PhysicsWorldNode {
         _params: &ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        PORT_NAMES.instances[..self.groups]
+        self.names.instances[..self.groups]
             .iter()
             .any(|name| name == port_name)
             .then_some(MAX_COPIES as u32)
@@ -458,12 +472,13 @@ impl EffectNode for PhysicsWorldNode {
 
     fn clear_state(&mut self) {
         self.simulation = RigidSimulation::default();
+        self.sync_refusal_rows();
         self.observation_valid = false;
         self.coupled_frame_ready = false;
     }
 
-    // While a body is pending the simulation clock holds instead of jumping
-    // when the body lands; coupled mode publishes the liquid's frame.
+    // A pending body keeps its last description and the world keeps
+    // stepping; coupled mode publishes the liquid's frame.
     fn runs_with_pending_inputs(&self) -> bool {
         true
     }
@@ -475,19 +490,10 @@ impl EffectNode for PhysicsWorldNode {
             return;
         }
         self.observation_valid = false;
-        match self.resolve_rigid_scene_observation(ctx, false) {
-            Ok(true) => {}
-            Ok(false) => {
-                self.simulation.hold_pending(ctx.played());
-                ctx.mark_outputs_pending();
-                return;
-            }
-            Err(error) => {
-                ctx.error(error);
-                self.simulation.hold_pending(ctx.played());
-                ctx.mark_outputs_pending();
-                return;
-            }
+        if let Err(error) = self.resolve_rigid_scene_observation(ctx, false) {
+            ctx.error(error);
+            ctx.mark_outputs_pending();
+            return;
         }
         let observation = &self.observation;
         let body_count = observation.inputs.bodies.iter().flatten().count();
@@ -497,8 +503,9 @@ impl EffectNode for PhysicsWorldNode {
             observation.speed,
             observation.reset,
         );
+        self.sync_refusal_rows();
         ctx.sim_metrics.merge(&self.simulation.take_metrics());
-        if result.is_ok() && self.simulation.impulse_stamp(observation.transport, 0).is_ok() {
+        if result.is_ok() && self.simulation.impulse_stamp(self.observation.transport, 0).is_ok() {
             self.observation_valid = true;
         }
         if ctx.sim_step.authored_sample_only {
@@ -519,7 +526,7 @@ impl EffectNode for PhysicsWorldNode {
             ctx.outputs
                 .set_scalar("physics_ms", ParamValue::Float(self.simulation.physics_ms));
         }
-        let names: &'static PortNames = &PORT_NAMES;
+        let names = &self.names;
         for (port, pose) in names.pose.iter().zip(&self.simulation.poses) {
             ctx.outputs.set_transform(port, *pose);
         }
@@ -535,7 +542,23 @@ impl EffectNode for PhysicsWorldNode {
     }
 }
 
+/// Take a wired input's value when it has one; a wired input still pending
+/// keeps its last value, and an unwired one is absent.
+fn latest<T: Clone + Send + 'static>(slot: &mut Option<T>, inputs: &NodeInputs<'_>, port: &str) {
+    if inputs.slot(port).is_none() {
+        *slot = None;
+    } else if !inputs.port_pending(port)
+        && let Some(value) = inputs.cpu_value::<T>(port)
+    {
+        *slot = Some(value);
+    }
+}
+
 impl PhysicsNode for PhysicsWorldNode {
+    fn body_refusals(&self) -> &[(std::sync::Arc<str>, std::sync::Arc<str>)] {
+        &self.refusal_rows
+    }
+
     // A coupled world steps inside its liquid, on the liquid's samples.
     fn request_physics_samples(&mut self, from: manifold_core::PlayedTime, until: manifold_core::PlayedTime, out: &mut Vec<manifold_core::PlayedTime>) {
         if !self.coupled_mode {
@@ -549,6 +572,7 @@ impl PhysicsNode for PhysicsWorldNode {
         }
         self.coupled_mode = enabled;
         self.simulation = RigidSimulation::default();
+        self.sync_refusal_rows();
         self.observation_valid = false;
         self.coupled_frame_ready = false;
         self.coupled_frame = None;
@@ -567,7 +591,7 @@ impl PhysicsNode for PhysicsWorldNode {
         if !self.observation_valid {
             return 0;
         }
-        let (_, not_made) = crate::physics::copy_pool(self.observation.inputs.groups.iter().map(Option::as_ref));
+        let not_made = crate::physics::copy_pool_each(self.observation.inputs.groups.iter().map(Option::as_ref), |_| {});
         u32::try_from(not_made).unwrap_or(u32::MAX)
     }
 
@@ -646,10 +670,7 @@ impl PhysicsNode for PhysicsWorldNode {
         self.simulation.set_step(ctx.sim_step);
         self.observation_valid = false;
         self.coupled_frame_ready = false;
-        if !self.resolve_rigid_scene_observation(ctx, true)? {
-            ctx.mark_outputs_pending();
-            return Ok(());
-        }
+        self.resolve_rigid_scene_observation(ctx, true)?;
         self.observation_valid = true;
         Ok(())
     }
@@ -763,7 +784,13 @@ mod tests {
         let mut wire_slots: Vec<(&'static str, Slot)> = Vec::new();
         let mut pending = Vec::new();
         let mut next_resource = 0;
-        let mut body = RigidBody { shape: body_shape, ..RigidBody::default() };
+        // Shape 0 is the body switched off: a structural edit that rebuilds.
+        // Any other shape swaps in place.
+        let mut body = RigidBody {
+            collider: Some(crate::physics::platonic_solid(body_shape.max(1))),
+            enabled: body_shape != 0,
+            ..RigidBody::default()
+        };
         body.transform.pos = [0.0, 8.0, 0.0];
         let body_slot = acquire_mock_wire(
             &mut backend,
@@ -990,8 +1017,8 @@ mod tests {
         )
         .expect("fixed tick complete rigid observation");
 
-        assert_eq!(first.inputs.bodies[0].as_ref().unwrap().shape, 1);
-        assert_eq!(first.inputs.groups[0].as_ref().unwrap().shape, 1);
+        assert_eq!(first.inputs.bodies[0].as_ref().unwrap().collider, Some(crate::physics::platonic_solid(1)));
+        assert_eq!(first.inputs.groups[0].as_ref().unwrap().collider, Some(crate::physics::platonic_solid(1)));
         assert_eq!(
             first.inputs.groups[0].as_ref().unwrap().spawn,
             crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0, turn: [0.0; 3] },
@@ -1036,32 +1063,19 @@ mod tests {
     }
 
     #[test]
-    fn effect_node_observation_clears_for_unavailable_or_invalid_inputs() {
-        for (field_state, invalid_speed) in [
-            (MockFieldState::MissingTarget, false),
-            (MockFieldState::PendingGlobal, false),
-            (MockFieldState::Complete, true),
-        ] {
+    fn effect_node_observation_keeps_late_fields_and_clears_for_invalid_controls() {
+        for field_state in [MockFieldState::MissingTarget, MockFieldState::PendingGlobal] {
             let mut node = PhysicsWorldNode::new();
-            assert!(evaluate_mock_world(
-                &mut node,
-                0.0,
-                1,
-                MockFieldState::Complete,
-                false,
-                false,
-            )
-            .is_some());
-            assert!(evaluate_mock_world(
-                &mut node,
-                1.0 / 60.0,
-                1,
-                field_state,
-                invalid_speed,
-                false,
-            )
-            .is_none());
+            let complete = evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false)
+                .expect("complete rigid observation");
+            let late = evaluate_mock_world(&mut node, 1.0 / 60.0, 1, field_state, false, false)
+                .expect("a late field never stops the world");
+            assert_eq!(late.inputs.acceleration_field, complete.inputs.acceleration_field, "a late field keeps its last value");
+            assert_eq!(late.inputs.targeted_fields, complete.inputs.targeted_fields, "a late field keeps its last value");
         }
+        let mut node = PhysicsWorldNode::new();
+        assert!(evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false).is_some());
+        assert!(evaluate_mock_world(&mut node, 1.0 / 60.0, 1, MockFieldState::Complete, true, false).is_none());
     }
 
     #[test]
@@ -1079,7 +1093,7 @@ mod tests {
         assert!(evaluate_mock_world_under(
             &mut node,
             0.0,
-            2,
+            0,
             MockFieldState::Complete,
             false,
             false,
@@ -1089,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn coupled_capture_has_no_native_owner_and_clears_pending_or_invalid_observations() {
+    fn coupled_capture_has_no_native_owner_keeps_late_fields_and_clears_invalid_observations() {
         let mut node = PhysicsWorldNode::new();
         let observation = evaluate_mock_world(
             &mut node,
@@ -1118,8 +1132,7 @@ mod tests {
             false,
             true,
         )
-        .is_none());
-        assert!(PhysicsNode::rigid_scene_observation(&node).is_none());
+        .is_some_and(|late| late.inputs.acceleration_field == observation.inputs.acceleration_field), "a late field keeps its last value");
         assert!(evaluate_mock_world(
             &mut node,
             1.0 / 60.0,
@@ -1133,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn coupled_pending_capture_keeps_reserved_copies_and_publishes_nothing() {
+    fn coupled_capture_of_a_late_field_keeps_reserved_copies_and_publishes_nothing() {
         let mut node = PhysicsWorldNode::new();
         PhysicsNode::set_coupled_physics(&mut node, true);
         let capacity = node
@@ -1153,7 +1166,7 @@ mod tests {
             false,
             true,
         )
-        .is_none());
+        .is_some_and(|first| first.inputs.acceleration_field.is_none()), "a field never seen is absent");
         let retained = node.coupled_frame.as_ref().expect("retained storage");
         assert_eq!(retained.copies.capacity(), capacity);
         assert!(!node.coupled_frame_ready);
@@ -1388,7 +1401,7 @@ mod port_tests {
     }
 
     #[test]
-    fn reconfigure_sizes_every_port_family_and_clamps_to_the_caps() {
+    fn reconfigure_sizes_every_port_family_to_any_count() {
         let mut node = PhysicsWorldNode::new();
         node.reconfigure(&counts(256.0, 32.0));
         assert_eq!((node.body_count(), node.copy_group_count()), (256, 32));
@@ -1399,7 +1412,8 @@ mod port_tests {
         assert_eq!(node.array_output_capacity("instances_31", &ParamValues::default(), &[]), Some(MAX_COPIES as u32));
 
         node.reconfigure(&counts(9_999.0, 999.0));
-        assert_eq!((node.body_count(), node.copy_group_count()), (MAX_BODIES, MAX_COPY_GROUPS));
+        assert_eq!((node.body_count(), node.copy_group_count()), (9_999, 999), "no count is capped");
+        assert!(has_input(&node, "body_9998") && has_output(&node, "instances_998"));
 
         node.reconfigure(&counts(3.0, 0.0));
         assert_eq!((node.body_count(), node.copy_group_count()), (3, 0));

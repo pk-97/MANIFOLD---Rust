@@ -77,7 +77,7 @@ manifold_node_engine::primitive! {
             // 0.5–32: the cinematic working band is f/1–f/8; the old 0.5–1000
             // span made the slider read as an on/off toggle (Peter 2026-08-26).
             // A stored 1000 from pre-fix projects is rewritten to 32 on load
-            // (the renderer scene_exposure legacy repair).
+            // (the load-time repair).
             range: Some((0.5, 32.0)),
             enum_values: &[],
         },

@@ -12,13 +12,15 @@
 //! its values follow the shape kind alone; no target kind has handle code
 //! of its own.
 //!
-//! **Picking is geometric, not an ID-buffer pass.** [`pick_target`]
+//! **Only what draws no pixels is picked here** (SCENE_DOCUMENT_DESIGN.md
+//! section 7.14): lamps, forces, water domains and sources. Everything that
+//! draws is picked by the scene's item-id buffer (`render_scene/item_pick.rs`),
+//! and its shape only carries the selected item's handles. [`pick_target`]
 //! projects each pickable target through the camera the frame was rendered
 //! with and takes the nearest: its own drawn edges within
 //! [`EDGE_PICK_TOLERANCE_PT`], or its origin within [`PICK_RADIUS_PT`]. A
 //! domain box is picked by its edges, not only at its centre, where its
-//! fill column sits too. An object has no edges here (its declared box is
-//! its transform, not its mesh), so it is picked at its origin.
+//! fill column sits too. A lamp has no edges, so it is picked at its origin.
 //!
 //! A handle whose param is wired reports locked: the host refuses the drag
 //! and the handle draws in [`LOCKED_COLOR`]. The viewport never fights the
@@ -36,7 +38,7 @@
 
 use std::sync::LazyLock;
 
-use manifold_core::{NodeId, SceneNodeRef};
+use manifold_core::NodeId;
 use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_foundation::param_range::HardLimit;
@@ -45,7 +47,7 @@ use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 use crate::node_graph::primitives::render_scene::model_matrix;
 use crate::node_graph::scene_vm::{
-    FluidRole, SceneObjectVm, SceneShapeVm, SceneVm, SetupProblem, ShapeOwner, ShapeParamVm, ShapeWrite,
+    FluidRole, SceneShapeVm, SceneVm, SetupProblem, ShapeOwner, ShapeParamVm, ShapeWrite,
 };
 use crate::node_graph::viewport_overlay::{
     DOMAIN_BOX_COLOR, PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, box_lines, clip_to_near, fluid_domain_lines, fluid_lattice_lines,
@@ -53,7 +55,7 @@ use crate::node_graph::viewport_overlay::{
 };
 
 mod selection;
-pub use selection::{GizmoSelection, SelectionWrite, selection_writes, toggle_pick};
+pub use selection::{GizmoSelection, SelectionWrite, selection_writes};
 
 /// Hit-test radius around a target's origin, screen points.
 pub const PICK_RADIUS_PT: f32 = 22.0;
@@ -144,7 +146,6 @@ pub enum GizmoTargetKind {
     InitialFill,
     Inflow,
     Drain,
-    Collider,
     Swarm,
 }
 
@@ -152,13 +153,12 @@ impl GizmoTargetKind {
     pub fn of(owner: &ShapeOwner) -> Self {
         match owner {
             // A world declares no shape, so no target is ever one.
-            ShapeOwner::Object(_) | ShapeOwner::World(_) => Self::Object,
+            ShapeOwner::Item(_) | ShapeOwner::World(_) => Self::Object,
             ShapeOwner::LiquidDomain(_) => Self::FluidDomain,
             ShapeOwner::RoleSource { role, .. } => match role {
                 FluidRole::InitialFill => Self::InitialFill,
                 FluidRole::Inflow => Self::Inflow,
                 FluidRole::Outflow => Self::Drain,
-                FluidRole::Collider => Self::Collider,
             },
             ShapeOwner::Force(_) => Self::Force,
             ShapeOwner::Swarm(_) => Self::Swarm,
@@ -238,7 +238,7 @@ pub struct GizmoTarget {
     pub unplaced: bool,
     pub pickable: bool,
     /// The scene panel row this target selects, if any.
-    pub row: Option<SceneNodeRef>,
+    pub row: Option<manifold_foundation::ItemId>,
     /// The declared direction, drawn as a line from the origin.
     pub direction: Option<[f32; 3]>,
     /// The shape's own edges in world space: what draws and what is picked.
@@ -425,7 +425,6 @@ impl GizmoTarget {
             GizmoTargetKind::InitialFill => physics_gizmo_color(PhysicsGizmoFamily::Fill),
             GizmoTargetKind::Inflow => physics_gizmo_color(PhysicsGizmoFamily::Source),
             GizmoTargetKind::Drain => physics_gizmo_color(PhysicsGizmoFamily::Drain),
-            GizmoTargetKind::Collider => physics_gizmo_color(PhysicsGizmoFamily::Collider),
             GizmoTargetKind::Force => physics_gizmo_color(PhysicsGizmoFamily::Force),
             GizmoTargetKind::Swarm => SWARM_COLOR,
             GizmoTargetKind::Object => UNIFORM_COLOR,
@@ -1047,31 +1046,6 @@ pub fn rotate_drag_delta(
         d += std::f32::consts::TAU;
     }
     Some(d)
-}
-
-/// The render slots that draw the scene objects `objects`, for
-/// their selection outline (D-102): each one's own slot, plus every part's
-/// for a group row. A Water row is a group and a real render slot, its looks
-/// the parts; an imported model's group row shares its first part's slot.
-/// Written into `out`, sorted and deduplicated.
-pub fn outline_slots<'a>(scene: &SceneVm, objects: impl IntoIterator<Item = &'a SceneNodeRef>, out: &mut Vec<u32>) {
-    let rows = || {
-        scene.objects.iter().filter_map(|object| match object {
-            SceneObjectVm::Known(row) => Some(row),
-            SceneObjectVm::Custom { .. } => None,
-        })
-    };
-    out.clear();
-    for object in objects {
-        for row in rows().filter(|row| &row.address == object) {
-            out.push(row.index as u32);
-            if row.is_group {
-                out.extend(rows().filter(|part| part.parent.as_ref() == Some(object) && !part.is_group).map(|part| part.index as u32));
-            }
-        }
-    }
-    out.sort_unstable();
-    out.dedup();
 }
 
 #[cfg(test)]

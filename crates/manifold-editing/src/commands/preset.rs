@@ -16,7 +16,6 @@ use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 
 use crate::command::Command;
 
-mod modifier;
 
 /// Fork the preset behind the instance at `target`: register `source_def` as a
 /// new project-embedded preset (id minted from its current id) and retarget the
@@ -44,7 +43,6 @@ pub struct ForkPresetCommand {
     /// The created embedded preset (with its minted id), captured on first
     /// execute so redo re-inserts the SAME preset deterministically.
     forked: Option<EmbeddedPreset>,
-    modifier_reverse: Option<modifier::ForkReverse>,
 }
 
 impl ForkPresetCommand {
@@ -58,7 +56,6 @@ impl ForkPresetCommand {
             old_type: None,
             old_param_values: None,
             forked: None,
-            modifier_reverse: None,
         }
     }
 
@@ -74,7 +71,6 @@ impl ForkPresetCommand {
             old_type: None,
             old_param_values: None,
             forked: None,
-            modifier_reverse: None,
         }
     }
 
@@ -101,7 +97,6 @@ impl Command for ForkPresetCommand {
 
     fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::fork_execute(self, project);
             return;
         }
         if self.forked.is_none() {
@@ -145,7 +140,6 @@ impl Command for ForkPresetCommand {
 
     fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::fork_undo(self, project);
             return;
         }
         if let Some(fp) = &self.forked
@@ -168,11 +162,7 @@ impl Command for ForkPresetCommand {
     }
 
     fn was_applied(&self) -> bool {
-        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::fork_was_applied(self)
-        } else {
-            true
-        }
+        !matches!(self.target, GraphTarget::SceneModifier { .. })
     }
 }
 
@@ -282,7 +272,6 @@ pub struct RevertToLibraryCommand {
     /// A resolved catalog recipe is required when the target is a scene
     /// modifier. The renderer-aware caller supplies it before dispatch.
     resolved_def: Option<EffectGraphDef>,
-    modifier_reverse: Option<modifier::RevertReverse>,
 }
 
 impl RevertToLibraryCommand {
@@ -292,7 +281,6 @@ impl RevertToLibraryCommand {
             resolves_in_catalog,
             old_graph: None,
             resolved_def: None,
-            modifier_reverse: None,
         }
     }
 
@@ -316,7 +304,6 @@ impl Command for RevertToLibraryCommand {
 
     fn do_execute(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::revert_execute(self, project);
             return;
         }
         if !self.resolves_in_catalog {
@@ -338,7 +325,6 @@ impl Command for RevertToLibraryCommand {
 
     fn do_undo(&mut self, project: &mut Project) {
         if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::revert_undo(self, project);
             return;
         }
         // `execute` was a no-op fail-loud refusal — the graph was never
@@ -359,11 +345,7 @@ impl Command for RevertToLibraryCommand {
     }
 
     fn was_applied(&self) -> bool {
-        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
-            modifier::revert_was_applied(self)
-        } else {
-            true
-        }
+        !matches!(self.target, GraphTarget::SceneModifier { .. })
     }
 }
 

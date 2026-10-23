@@ -2,7 +2,10 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <math.h>
+#include <stdatomic.h>
+#include <stdio.h>
 
 _Static_assert( sizeof( b3Vec3 ) == sizeof( float ) * 3, "unexpected b3Vec3 layout" );
 _Static_assert( sizeof( b3Quat ) == sizeof( float ) * 4, "unexpected b3Quat layout" );
@@ -13,9 +16,35 @@ enum
 	BOX3D_BRIDGE_ERROR = 1,
 	BOX3D_BRIDGE_NO_SHAPE = 2,
 	BOX3D_BRIDGE_NO_HIT = 3,
-	BOX3D_BRIDGE_TOO_MANY_SHAPES = 4,
-	BOX3D_MAX_BODY_SHAPES = 64,
+	BOX3D_STACK_SHAPES = 64,
 };
+
+// One body's shape ids. A body takes any number of shapes: up to
+// BOX3D_STACK_SHAPES live on the stack, more on the heap. NULL when the
+// heap is out of memory.
+typedef struct
+{
+	b3ShapeId stack[BOX3D_STACK_SHAPES];
+	b3ShapeId* ids;
+} box3d_shape_list;
+
+static b3ShapeId* box3d_shapes_of( box3d_shape_list* list, b3BodyId body_id, int count )
+{
+	list->ids = count <= BOX3D_STACK_SHAPES ? list->stack : (b3ShapeId*)malloc( sizeof( b3ShapeId ) * (size_t)count );
+	if ( list->ids == NULL || b3Body_GetShapes( body_id, list->ids, count ) != count )
+	{
+		return NULL;
+	}
+	return list->ids;
+}
+
+static void box3d_shapes_free( box3d_shape_list* list )
+{
+	if ( list->ids != list->stack )
+	{
+		free( list->ids );
+	}
+}
 
 static b3BodyType box3d_body_type( int kind )
 {
@@ -192,6 +221,30 @@ static float manifold_friction( float friction_a, uint64_t material_a, float fri
 		return friction_a;
 	}
 	return sqrtf( friction_a * friction_b );
+}
+
+// A failed Box3D check is logged and counted, never a trap: a check that
+// aborted the app would end the show. Box3D guards what follows its checks
+// (the tree query stops pushing at its stack limit), and the Rust install
+// gate keeps non-finite and degenerate input from reaching them. Rust
+// installs the handler before its first native call.
+static atomic_uint manifold_assert_failures;
+
+static int manifold_assert( const char* condition, const char* fileName, int lineNumber )
+{
+	atomic_fetch_add( &manifold_assert_failures, 1u );
+	fprintf( stderr, "[box3d-assert] %s, %s, line %d\n", condition, fileName, lineNumber );
+	return 0;
+}
+
+uint32_t manifold_box3d_assert_count( void )
+{
+	return atomic_load( &manifold_assert_failures );
+}
+
+void manifold_box3d_install_assert_handler( void )
+{
+	b3SetAssertFcn( manifold_assert );
 }
 
 uint32_t manifold_box3d_world_create( float gx, float gy, float gz )
@@ -469,10 +522,6 @@ int manifold_box3d_body_update(
 	{
 		return BOX3D_BRIDGE_NO_SHAPE;
 	}
-	if ( shape_count > BOX3D_MAX_BODY_SHAPES )
-	{
-		return BOX3D_BRIDGE_TOO_MANY_SHAPES;
-	}
 
 	// Box3D's bullet flag is meaningful only for dynamic bodies, but it is
 	// stored on the body independently of its type. Clear it before changing a
@@ -488,10 +537,11 @@ int manifold_box3d_body_update(
 		b3Body_SetType( body_id, body_type );
 	}
 
-	b3ShapeId shape_ids[BOX3D_MAX_BODY_SHAPES];
-	int stored_shape_count = b3Body_GetShapes( body_id, shape_ids, shape_count );
-	if ( stored_shape_count != shape_count )
+	box3d_shape_list shapes;
+	b3ShapeId* shape_ids = box3d_shapes_of( &shapes, body_id, shape_count );
+	if ( shape_ids == NULL )
 	{
+		box3d_shapes_free( &shapes );
 		return BOX3D_BRIDGE_NO_SHAPE;
 	}
 	for ( int i = 0; i < shape_count; ++i )
@@ -499,6 +549,7 @@ int manifold_box3d_body_update(
 		b3Shape_SetFriction( shape_ids[i], friction );
 		b3Shape_SetRestitution( shape_ids[i], restitution );
 	}
+	box3d_shapes_free( &shapes );
 	box3d_set_mass( body_id, mass );
 	if ( move_pose != 0 )
 	{
@@ -507,23 +558,25 @@ int manifold_box3d_body_update(
 	return BOX3D_BRIDGE_OK;
 }
 
-// Swap a static body's collision hulls for `hull_count` new ones in place:
-// the body, its pose and the rest of the world are untouched. The new hulls
-// are cooked before any old shape is destroyed, so a failure leaves the body
-// as it was. The caller frees the old hulls after this returns.
+// Swap a body's collision hulls for `hull_count` new ones in place: the
+// body, its pose, its velocity and the rest of the world are untouched, and a
+// moving body takes `mass` over its new hulls. Every new shape is built before
+// any old shape is destroyed, so a failure leaves the body as it was and frees
+// the new hulls. The caller frees the old hulls after this returns.
 int manifold_box3d_body_replace_hulls(
 	uint64_t body_value,
 	const float* points,
 	const int32_t* point_counts,
 	int hull_count,
 	int max_vertex_count,
+	float mass,
 	float friction,
 	float restitution,
 	uintptr_t* hull_out )
 {
 	b3BodyId body_id = b3LoadBodyId( body_value );
-	if ( points == NULL || point_counts == NULL || hull_out == NULL || hull_count < 1 || hull_count > BOX3D_MAX_BODY_SHAPES ||
-		 max_vertex_count < 4 || b3Body_GetType( body_id ) != b3_staticBody )
+	if ( points == NULL || point_counts == NULL || hull_out == NULL || hull_count < 1 ||
+		 max_vertex_count < 4 )
 	{
 		return BOX3D_BRIDGE_ERROR;
 	}
@@ -544,32 +597,123 @@ int manifold_box3d_body_replace_hulls(
 		point_offset += (size_t)point_counts[i];
 	}
 
-	b3ShapeId old_shapes[BOX3D_MAX_BODY_SHAPES];
+	// The new shapes go on beside the old ones and the old ones go only once
+	// every new one is in, so a failure removes the new ones and leaves the
+	// body, its mass included, as it was.
+	box3d_shape_list old;
 	int old_count = b3Body_GetShapeCount( body_id );
-	if ( old_count > BOX3D_MAX_BODY_SHAPES || b3Body_GetShapes( body_id, old_shapes, old_count ) != old_count )
+	b3ShapeId* old_shapes = box3d_shapes_of( &old, body_id, old_count );
+	b3ShapeId* new_shapes = (b3ShapeId*)malloc( sizeof( b3ShapeId ) * (size_t)hull_count );
+	if ( old_shapes == NULL || new_shapes == NULL )
 	{
+		box3d_shapes_free( &old );
+		free( new_shapes );
 		for ( int i = 0; i < hull_count; ++i )
 		{
 			b3DestroyHull( (b3HullData*)hull_out[i] );
 		}
-		return BOX3D_BRIDGE_TOO_MANY_SHAPES;
-	}
-	for ( int i = 0; i < old_count; ++i )
-	{
-		b3DestroyShape( old_shapes[i], false );
+		return BOX3D_BRIDGE_ERROR;
 	}
 
 	b3ShapeDef shape_definition = b3DefaultShapeDef();
 	shape_definition.density = 1.0f;
 	shape_definition.baseMaterial.friction = friction;
 	shape_definition.baseMaterial.restitution = restitution;
+	shape_definition.updateBodyMass = false;
 	for ( int i = 0; i < hull_count; ++i )
 	{
-		if ( b3CreateHullShape( body_id, &shape_definition, (b3HullData*)hull_out[i] ).index1 == 0 )
+		new_shapes[i] = b3CreateHullShape( body_id, &shape_definition, (b3HullData*)hull_out[i] );
+		if ( new_shapes[i].index1 == 0 )
 		{
+			for ( int j = 0; j < i; ++j )
+			{
+				b3DestroyShape( new_shapes[j], false );
+			}
+			for ( int j = 0; j < hull_count; ++j )
+			{
+				b3DestroyHull( (b3HullData*)hull_out[j] );
+			}
+			box3d_shapes_free( &old );
+			free( new_shapes );
 			return BOX3D_BRIDGE_ERROR;
 		}
 	}
+	for ( int i = 0; i < old_count; ++i )
+	{
+		b3DestroyShape( old_shapes[i], false );
+	}
+	box3d_shapes_free( &old );
+	free( new_shapes );
+	b3Body_ApplyMassFromShapes( body_id );
+	box3d_set_mass( body_id, mass );
+	return BOX3D_BRIDGE_OK;
+}
+
+// Swap a static body's triangle mesh for a new one in place: the body, its
+// pose and the rest of the world are untouched. The new mesh is built before
+// the old shapes go, so a failure leaves the body as it was. Returns
+// BOX3D_BRIDGE_NO_HIT when Box3D discards degenerate triangles. The caller
+// frees the old mesh after this returns.
+int manifold_box3d_body_replace_mesh(
+	uint64_t body_value,
+	const float* vertices,
+	int vertex_count,
+	const int32_t* indices,
+	int triangle_count,
+	float friction,
+	float restitution,
+	uintptr_t* mesh_out )
+{
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( vertices == NULL || indices == NULL || mesh_out == NULL || vertex_count < 3 || triangle_count < 1 ||
+		 b3Body_GetType( body_id ) != b3_staticBody )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	b3MeshDef mesh_definition = { 0 };
+	mesh_definition.vertices = (b3Vec3*)vertices;
+	mesh_definition.indices = (int32_t*)indices;
+	mesh_definition.vertexCount = vertex_count;
+	mesh_definition.triangleCount = triangle_count;
+	mesh_definition.useMedianSplit = true;
+	mesh_definition.identifyEdges = true;
+	b3MeshData* mesh = b3CreateMesh( &mesh_definition, NULL, 0 );
+	if ( mesh == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	if ( mesh->triangleCount != triangle_count )
+	{
+		b3DestroyMesh( mesh );
+		return BOX3D_BRIDGE_NO_HIT;
+	}
+
+	box3d_shape_list old;
+	int old_count = b3Body_GetShapeCount( body_id );
+	b3ShapeId* old_shapes = box3d_shapes_of( &old, body_id, old_count );
+	if ( old_shapes == NULL )
+	{
+		box3d_shapes_free( &old );
+		b3DestroyMesh( mesh );
+		return BOX3D_BRIDGE_ERROR;
+	}
+	for ( int i = 0; i < old_count; ++i )
+	{
+		b3DestroyShape( old_shapes[i], false );
+	}
+	box3d_shapes_free( &old );
+
+	b3ShapeDef shape_definition = b3DefaultShapeDef();
+	shape_definition.density = 0.0f;
+	shape_definition.baseMaterial.friction = friction;
+	shape_definition.baseMaterial.restitution = restitution;
+	if ( b3CreateMeshShape( body_id, &shape_definition, mesh, b3Vec3_one ).index1 == 0 )
+	{
+		b3DestroyMesh( mesh );
+		return BOX3D_BRIDGE_ERROR;
+	}
+	*mesh_out = (uintptr_t)mesh;
 	return BOX3D_BRIDGE_OK;
 }
 
@@ -587,10 +731,16 @@ int manifold_box3d_body_set_bullet( uint64_t body_value, int enabled )
 int manifold_box3d_body_set_wall( uint64_t body_value, int wall )
 {
 	b3BodyId body_id = b3LoadBodyId( body_value );
-	b3ShapeId shape_ids[BOX3D_MAX_BODY_SHAPES];
-	int shape_count = b3Body_GetShapes( body_id, shape_ids, BOX3D_MAX_BODY_SHAPES );
+	int shape_count = b3Body_GetShapeCount( body_id );
 	if ( shape_count < 1 )
 	{
+		return BOX3D_BRIDGE_NO_SHAPE;
+	}
+	box3d_shape_list shapes;
+	b3ShapeId* shape_ids = box3d_shapes_of( &shapes, body_id, shape_count );
+	if ( shape_ids == NULL )
+	{
+		box3d_shapes_free( &shapes );
 		return BOX3D_BRIDGE_NO_SHAPE;
 	}
 	uint64_t tag = wall != 0 ? MANIFOLD_WALL_MATERIAL : 0u;
@@ -599,6 +749,7 @@ int manifold_box3d_body_set_wall( uint64_t body_value, int wall )
 	{
 		if ( b3Shape_GetType( shape_ids[i] ) == b3_compoundShape )
 		{
+			box3d_shapes_free( &shapes );
 			return BOX3D_BRIDGE_ERROR;
 		}
 		b3SurfaceMaterial material = b3Shape_GetSurfaceMaterial( shape_ids[i] );
@@ -609,6 +760,7 @@ int manifold_box3d_body_set_wall( uint64_t body_value, int wall )
 			changed = 1;
 		}
 	}
+	box3d_shapes_free( &shapes );
 	/* A recycled contact never re-reads its materials (physics_world.c contact
 	 * recycling), so a live retag must drop the body's contacts. Disabling
 	 * destroys them; enabling lets the broadphase rebuild them with the new

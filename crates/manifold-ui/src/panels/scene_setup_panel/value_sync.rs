@@ -4,27 +4,19 @@ use super::*;
 
 impl ScenePanel {
     /// Per-frame VALUE sync (sibling of `ui_bridge::sync_card_values`): push
-    /// the unified properties card's row values from the layer's full generator
+    /// the properties card's row values from the layer's full generator
     /// manifest, without a structural rebuild. `slots` is the id-keyed channel
     /// `ui_translate::with_param_slots(&gp.params, …)` hands out for the SAME
     /// layer `full_params` was built from. Each slot JOINS onto the built row
-    /// carrying the same id (BUG-313) via `row_id_index` — never by position,
-    /// so no retained-index list can drift. A manifest param the current
-    /// outliner selection isn't showing (not in this section's rows) simply
-    /// misses the join and is ignored; a built row with no manifest entry is
+    /// carrying the same id (BUG-313) via `row_id_index` — never by position.
+    /// A manifest param the current selection isn't showing simply misses the
+    /// join and is ignored; a built manifest row with no manifest entry is
     /// caught by the INV-6 coverage check.
-    pub fn sync_properties_values(
-        &mut self,
-        tree: &mut UITree,
-        slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>,
-    ) {
+    pub fn sync_properties_values(&mut self, tree: &mut UITree, slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>) {
         if !self.open {
             return;
         }
-        let target = self
-            .live_layer_id()
-            .cloned()
-            .map(GraphParamTarget::GeneratorOf);
+        let target = self.live_layer_id().cloned().map(GraphParamTarget::GeneratorOf);
         let full_params = &mut self.full_params;
         let full_param_id_index = &self.full_param_id_index;
         let card = &mut self.properties_card;
@@ -38,16 +30,24 @@ impl ScenePanel {
                 row.value.base = slot.base;
                 row.value.effective = slot.value;
             }
+            // An eye follows its item's Visible.
+            if id.ends_with(".visible")
+                && let Some(&eye) = self.outliner_eye_index.get(id)
+                && let Some((eye_id, _, shown)) = self.outliner_eye_ids.get_mut(eye)
+            {
+                if (slot.base > 0.5) != (*shown > 0.5) {
+                    tree.set_text(*eye_id, if slot.base > 0.5 { "\u{1F441}" } else { "\u{2013}" });
+                }
+                *shown = slot.base;
+            }
             let Some(&i) = card.row_id_index.get(id) else {
                 continue;
             };
             // Dirty-check on change only — same shape as
-            // `ParamCardPanel::sync_param_value` (param_card/render.rs): an
-            // unconditional push formats the value String and touches the
-            // tree for every row every frame, even when nothing moved. The
-            // key is `last_pushed_values` (single-writer, this sync only) —
-            // NOT `current_values`, which the drag/type-in paths write
-            // mid-gesture; gating on that skipped the post-commit push.
+            // `ParamCardPanel::sync_param_value`. The key is
+            // `last_pushed_values` (single-writer, this sync only) — NOT
+            // `current_values`, which the drag/type-in paths write
+            // mid-gesture.
             let value = target
                 .as_ref()
                 .and_then(|target| card.row_host.active_param_value(target, &card.rows[i].id))
@@ -59,62 +59,17 @@ impl ScenePanel {
                 if card.row_host.toggle_ids[i].is_some() {
                     card.row_host.push_button_value(tree, i, value, &card.rows[i].spec);
                 } else {
-                    card.row_host
-                        .push_slider_value(tree, i, value, &card.rows[i].spec, None);
+                    card.row_host.push_slider_value(tree, i, value, &card.rows[i].spec, None);
                 }
             }
             if let Some(c) = card.row_value_synced.get_mut(i) {
                 *c = true;
             }
         }
-        // Object modifier cards share the same layer manifest channel. Their
-        // retained rows join by the unchanged ParamId; rebuilding a second
-        // value store here would let object-card order drift from the graph.
-        if let Some(surface) = full_params.as_ref() {
-            for card in &mut self.object_modifier_cards {
-                if card.node_count() == 0 { continue; }
-                let mut modifier_slots = surface.rows.iter().map(|row| {
-                    (
-                        row.id.as_ref(),
-                        crate::view::UiParamSlot {
-                            value: row.value.effective,
-                            base: row.value.base,
-                            exposed: row.value.exposed,
-                            min: row.spec.min,
-                            max: row.spec.max,
-                        },
-                    )
-                });
-                card.sync_values(tree, &mut modifier_slots);
-            }
-            for card in &mut self.force_cards {
-                if card.node_count() == 0 { continue; }
-                let mut force_slots = surface.rows.iter().map(|row| {
-                    (
-                        row.id.as_ref(),
-                        crate::view::UiParamSlot {
-                            value: row.value.effective,
-                            base: row.value.base,
-                            exposed: row.value.exposed,
-                            min: row.spec.min,
-                            max: row.spec.max,
-                        },
-                    )
-                });
-                card.sync_values(tree, &mut force_slots);
-            }
-        }
-        for &(node, slot) in &self.material_mode_ids {
-            let label = match card.current_values[slot].round() as i32 { 1 => "Off", 2 => "On", _ => "Auto" };
-            tree.set_text(node, label);
-        }
         for (i, synced) in card.row_value_synced.iter().enumerate() {
-            if !*synced {
-                debug_assert!(
-                    false,
-                    "BUG-313/INV-6: built scene row {} (id {:?}) has no live manifest entry",
-                    i, card.rows[i].id,
-                );
+            // A field or helper row has no manifest slot to sync.
+            if !*synced && card.rows[i].affordance.is_none() {
+                debug_assert!(false, "BUG-313/INV-6: built scene row {} (id {:?}) has no live manifest entry", i, card.rows[i].id,);
                 crate::panels::param_slider_shared::warn_join_gap_once(card.rows[i].id.as_ref());
             }
         }
@@ -137,32 +92,23 @@ impl ScenePanel {
         self.properties_card.row_host.paint_swatches(tree);
     }
 
-    /// The live-scalar push (UI_INVALIDATION D22) for every row card the panel
-    /// shows: the properties card, the object modifier cards and the force
-    /// cards. `shapes_of` answers for a row's param id on the live layer.
-    pub fn sync_live_shapes(
-        &mut self,
-        tree: &mut UITree,
-        shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes,
-    ) {
+    /// The live-scalar push (UI_INVALIDATION D22) for every row the panel
+    /// shows. `shapes_of` answers for a row's param id on the live layer.
+    pub fn sync_live_shapes(&mut self, tree: &mut UITree, shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes) {
         if !self.open {
             return;
         }
         let card = &mut self.properties_card;
         for (row, param) in card.rows.iter_mut().enumerate() {
+            if param.affordance.is_some() {
+                continue;
+            }
             let shapes = shapes_of(param.id.as_ref());
             card.row_host.sync_row_shapes(tree, &mut card.mod_state, param, row, &shapes);
         }
-        for card in self.object_modifier_cards.iter_mut().chain(self.force_cards.iter_mut()) {
-            card.sync_live_shapes(tree, shapes_of);
-        }
     }
 
-    pub fn sync_driver_frame_rates(
-        &mut self,
-        tree: &mut UITree,
-        rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
-    ) {
+    pub fn sync_driver_frame_rates(&mut self, tree: &mut UITree, rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>) {
         let card = &mut self.properties_card;
         for (row, param) in card.rows.iter_mut().enumerate() {
             if !card.mod_state.driver_frame_aligned.get(row).copied().unwrap_or(false) {

@@ -12,9 +12,7 @@
 //! `WaterDamBreakParticles.json`. Every node reads the domain's lattice off
 //! its wires, so a Resolution change reaches the running graph; the params
 //! only seed the planned sizes.
-
-use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, find_node};
+use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 #[cfg(any(test, feature = "testkit"))]
 use manifold_core::effect_graph_def::find_node_mut;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
@@ -23,7 +21,6 @@ use serde_json::{Value, json};
 
 use manifold_water_gpu_flip::primitives::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
 use manifold_water_gpu_flip::primitives::gpu_flip_step::FACE_VALID_LAYERS;
-use manifold_node_engine::load::catalog_source::preset_json as bundled_preset_json;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
@@ -69,19 +66,13 @@ pub(crate) const DAM_FILL_HEIGHT: f64 = 0.16;
 manifold_core::testkit_visible! {
 pub(crate) const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
 }
-
 manifold_core::testkit_visible! {
-/// The Dam Break's box obstacle, the transform of `WaterDamBreak.json`'s
-/// `obstacle_transform`: a unit cube scaled to 0.6 × 1.16 × 0.85 m standing
-/// on the floor in the column's path. Position, then scale.
+/// The Dam Break's box obstacle, `WaterDamBreak.json`'s `obstacle_transform`:
+/// a unit cube scaled to 0.6 × 1.16 × 0.85 m standing on the floor in the
+/// column's path. Position, then scale.
 pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
 }
 
-/// Fluid role Collider and the role source's built-in cube, whose circumradius
-/// 0.866 makes it a unit cube before the transform.
-const COLLIDER_ROLE: usize = 3;
-const CUBE_SHAPE: usize = 1;
-const UNIT_CUBE_RADIUS: f64 = 0.866_025_4;
 
 manifold_core::testkit_visible! {
 /// A liquid in a cubic tank: a pool `fill_height` deep plus one box, both
@@ -115,12 +106,13 @@ pub(crate) struct WaterScene {
     /// default: matched-input motion is closer to native without its extra
     /// solve. Explicit saved opt-ins remain supported.
     pub volume_projection: bool,
-    /// The Dam Break's box as a Collider role (`obstacle_transform` into
-    /// `obstacle_collider` into the domain's `role_0`).
-    pub obstacle: bool,
     /// The tank's closed faces, bit 2d the low face of axis d and bit 2d + 1
     /// the high one; an open face's Closed param is off on the domain.
     pub closed_faces: u32,
+    /// The Dam Break's box as a scene Collider ([`DAM_OBSTACLE`]): a Fixed
+    /// body in a Physics World the render scene couples to the water. Only
+    /// [`render_def`] draws it, since the coupling is the render scene's.
+    pub obstacle: bool,
 }
 }
 
@@ -142,7 +134,8 @@ pub(crate) const STEP_NODE: &str = "step";
 pub const REST_PER_CELL: f64 = 8.0;
 
 impl WaterScene {
-    /// The engine's Dam Break, its box obstacle standing in the column's path.
+    /// The engine's Dam Break; its box obstacle is a scene Collider
+    /// (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision shapes)).
     pub fn dam_break(n: usize) -> Self {
         Self {
             pressure: PressureShape::at(n),
@@ -156,8 +149,8 @@ impl WaterScene {
             faces: false,
             ghost_fluid: true,
             volume_projection: false,
-            obstacle: true,
             closed_faces: 63,
+            obstacle: false,
         }
     }
 
@@ -167,24 +160,23 @@ impl WaterScene {
         Self { closed_faces: mask, ..self }
     }
 
-    /// The Dam Break the FLIP engine races: no obstacle, as `race_probe` and
-    /// the race clips run the engine.
-    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-    pub fn race_dam_break(n: usize) -> Self {
-        Self { obstacle: false, ..Self::dam_break(n) }
-    }
-
-    /// The scene with the Dam Break's box obstacle.
+    /// The scene with the Dam Break's box obstacle as a scene Collider.
     #[cfg(any(test, feature = "testkit"))]
     pub fn with_obstacle(self) -> Self {
         Self { obstacle: true, ..self }
     }
 
-    /// A pool 1 m deep and nothing else (I5). Every scene built from it
-    /// leaves the box out unless it asks with [`Self::with_obstacle`].
+    /// The Dam Break the FLIP engine races, as `race_probe` and the race
+    /// clips run the engine.
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn race_dam_break(n: usize) -> Self {
+        Self::dam_break(n)
+    }
+
+    /// A pool 1 m deep and nothing else (I5).
     #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
     pub fn still_pool(n: usize) -> Self {
-        Self { fill_height: 1.0, column: [[0.0; 2]; 3], obstacle: false, ..Self::dam_break(n) }
+        Self { fill_height: 1.0, column: [[0.0; 2]; 3], ..Self::dam_break(n) }
     }
 
     /// A pool `fill` deep in a tank `size` on a side at `n` cells: the
@@ -213,7 +205,7 @@ impl WaterScene {
     /// standing wave.
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn slosh(n: usize) -> Self {
-        Self { fill_height: 0.9, column: [[-2.0, 0.0], [0.9, 1.1], [-2.0, 2.0]], obstacle: false, ..Self::dam_break(n) }
+        Self { fill_height: 0.9, column: [[-2.0, 0.0], [0.9, 1.1], [-2.0, 2.0]], ..Self::dam_break(n) }
     }
 
     /// A 1 m block of water high in the tank, clear of every wall.
@@ -366,8 +358,7 @@ impl Builder {
         );
         let column = self.nodes.pop().expect("just added");
         let mut taken = self.nodes.iter().map(|node| node.node_id.to_string()).collect();
-        add_initial_fill(&mut self.nodes, &mut self.wires, domain as u32, FillBox::Node(Box::new(column)), &mut taken)
-            .expect("the domain has a free role input");
+        add_initial_fill(&mut self.nodes, &mut self.wires, domain as u32, FillBox::Node(Box::new(column)), &mut taken);
     }
 
     fn from_def(def: EffectGraphDef) -> Self {
@@ -437,10 +428,6 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         }
     }
     let domain = b.node("domain", GPU_FLIP_DOMAIN_TYPE_ID, params);
-    if scene.obstacle {
-        let (_, collider) = obstacle_source(&mut b);
-        b.wire((collider, "role"), domain, "role_0");
-    }
     if let Some(volume) = scene.initial_volume() {
         b.initial_fill(domain, volume);
     }
@@ -557,47 +544,22 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
 }
 }
 
-/// The collider and its visible box share this one transform in the preset.
-fn obstacle_source(b: &mut Builder) -> (usize, usize) {
-    let [pos, scale] = DAM_OBSTACLE;
-    let transform = b.node(
-        "obstacle_transform",
-        "node.transform_3d",
-        json!({
-            "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
-            "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
-        }),
-    );
-    let collider = b.node(
-        "obstacle_collider",
-        "node.fluid_role_source",
-        json!({
-            "role": {"type": "Enum", "value": COLLIDER_ROLE},
-            "shape": {"type": "Enum", "value": CUBE_SHAPE},
-            "radius": float(UNIT_CUBE_RADIUS),
-        }),
-    );
-    b.wire((transform, "transform"), collider, "transform");
-    (transform, collider)
-}
-
 manifold_core::testkit_visible! {
-/// The shipped GPU FLIP Dam Break supplies the authored camera, lights,
-/// environment, tank and tone map, plus the shared Liquid Surface group.
-/// The family itself is constructed by the recipe below.
+/// The GPU FLIP Dam Break engine scene (`manifold-nodes/tests/fixtures/presets`) supplies the authored camera, lights,
+/// environment, tank and tone map. The family itself is constructed by
+/// the recipe below.
 pub(crate) const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
 }
 
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 fn shipped_preset() -> Value {
-    let json = bundled_preset_json(&PresetTypeId::new(SHIPPED_PRESET)).expect("the GPU FLIP preset is bundled");
-    serde_json::from_str(&json).expect("the GPU FLIP preset parses")
+    let json = include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakGpuFlip.json");
+    serde_json::from_str(json).expect("the GPU FLIP preset parses")
 }
 
-/// Reuse the existing nested surface verbatim.
+/// The liquid surface group, kept with the solver that feeds it.
 fn surface_group() -> Value {
-    let preset: EffectGraphDef = serde_json::from_value(shipped_preset()).expect("preset");
-    serde_json::to_value(find_node(&preset.nodes, "surface").expect("liquid surface group"))
-        .expect("surface group")
+    serde_json::from_str(include_str!("../../assets/liquid_surface_group.json")).expect("the liquid surface group parses")
 }
 
 /// Stage and capture populations, including the unrendered dust oracle.
@@ -629,21 +591,10 @@ impl WaterScene {
     /// The shared insertion body: simulation, captured display and four looks.
     /// Preset colliders enter through the ordinary domain role interface.
     fn family_def(self) -> EffectGraphDef {
-        let mut b = Builder::from_def(water_def(Self { obstacle: false, ..self.with_surface() }));
+        let mut b = Builder::from_def(water_def(self.with_surface()));
         b.remove(&["mesh_sink", "output"]);
         let [domain, state, step, frame, solid, source, surface] =
             ["domain", "state", STEP_NODE, "frame", "mesh_solid", "whitewater_obstacle_source", "surface"].map(|n| b.id(n));
-        if self.obstacle {
-            // The collider keeps role_0 and the Initial Fill moves to the
-            // next free role, as a migrated show with both has them.
-            let taken = |port: &str| b.wires.iter().any(|w| w.to_node == domain as u32 && w.to_port == port);
-            let free = (1..).map(|k| format!("role_{k}")).find(|port| !taken(port)).expect("a free role");
-            if let Some(fill) = b.wires.iter_mut().find(|w| w.to_node == domain as u32 && w.to_port == "role_0") {
-                fill.to_port = free;
-            }
-            let input = b.node("fluid_input", "system.group_input", json!({}));
-            b.wire((input, "role_0"), domain, "role_0");
-        }
         let whitewater = b.node("whitewater", "node.whitewater_step", json!({
             "capacity": int(100_000), "wavecrest_emission": float(175.0),
             "min_energy": float(0.1), "max_energy": float(60.0), "amount": float(1.0),
@@ -675,36 +626,7 @@ impl WaterScene {
             b.wire((state, &format!("{kind}_particles")), frame, &format!("{kind}_in"));
         }
 
-        let particles = b.node("particle_blend", "node.interpolate_particle_frames", json!({}));
-        let blend = b.node("solid_blend", "node.mix_arrays", json!({}));
-        let push_out = b.node("particle_push_out", "node.push_out_of_solid", json!({}));
-        let lattice_box = b.node("display_lattice_box", "node.transform_components", json!({}));
-        b.wires(frame, particles, &["particles_a", "particles_b", "count_a", "count_b", "identity_a", "identity_b", "blend", "span"]);
-        b.wire((frame, "solid_a"), blend, "a");
-        b.wire((frame, "solid_b"), blend, "b");
-        b.wire((frame, "blend"), blend, "amount");
-        b.wire((particles, "out"), push_out, "particles");
-        b.wire((blend, "out"), push_out, "solid");
-        b.wire((frame, "grid_bounds"), lattice_box, "transform");
-        for axis in ["x", "y", "z"] {
-            b.wire((lattice_box, &format!("pos_{axis}")), push_out, &format!("center_{axis}"));
-            b.wire((lattice_box, &format!("scale_{axis}")), push_out, &format!("size_{axis}"));
-            b.wire((frame, &format!("grid_nodes_{axis}")), push_out, &format!("nodes_{axis}"));
-        }
-        b.wires.retain(|w| w.to_node != surface as u32 || !["particles", "solid"].contains(&w.to_port.as_str()));
-        b.wire((push_out, "out"), surface, "particles");
-        b.wire((blend, "out"), surface, "solid");
-
-        let material = b.node("water_material", "node.pbr_material", json!({
-            "ambient": float(0.0), "color_r": float(0.37254903), "color_g": float(0.7294118), "color_b": float(1.0),
-            "metallic": float(0.0), "roughness": float(0.5540391), "ior": float(1.333), "transmission": float(1.0),
-            "volume_attenuation_color_r": float(0.35), "volume_attenuation_color_g": float(0.72), "volume_attenuation_color_b": float(0.8),
-            "volume_attenuation_distance": float(0.1), "volume_geometry": float(1.0), "volume_thickness": float(0.09),
-            "volume_scattering_color_r": float(0.68), "volume_scattering_color_g": float(0.86), "volume_scattering_color_b": float(0.92),
-            "volume_scattering_density": float(0.08826533),
-        }));
-        let water = b.node("water_object", "node.scene_object", json!({}));
-        b.wire((material, "out"), water, "material");
+        let water = display_head(&mut b, frame, surface);
         let output = b.node(LIQUID_BODY_OUTPUT, "system.group_output", json!({}));
         b.wire((water, "object"), output, FAMILY_OUTPUTS[0]);
         for (index, kind) in RENDERED_KINDS.into_iter().enumerate() {
@@ -739,43 +661,7 @@ impl WaterScene {
                 }
             }
         }
-        // Physics View: the surface sits on in_0 of its switches and the
-        // dots on in_1 of theirs, so the card prunes whichever side is off.
-        // An unwired choice draws nothing; dots_visible hides the object.
-        for (switch, type_id, port) in [(VERTICES_SWITCH, "node.switch_mesh", "vertices"),
-            (INDICES_SWITCH, "node.switch_indices", "indices")] {
-            let switch = b.node(switch, type_id, json!({"selector": float(0.0)}));
-            b.wire((surface, port), switch, "in_0");
-            b.wire((switch, "out"), water, port);
-        }
-        let dots_mesh = b.node("dots_mesh", "node.platonic_solid_mesh",
-            json!({"radius": float(1.0), "shape": {"type": "Enum", "value": TETRAHEDRON}}));
-        let dots_material = b.node("dots_material", "node.unlit_material", json!({
-            "color_r": float(0.37254903), "color_g": float(0.7294118), "color_b": float(1.0),
-        }));
-        // Their own display blend, so the surface's push-out keeps its one
-        // consumer and its fusion; no push-out, so dots may touch solids.
-        let dots_blend = b.node("dots_blend", "node.interpolate_particle_frames", json!({}));
-        b.wires(frame, dots_blend, &["particles_a", "particles_b", "count_a", "count_b", "identity_a", "identity_b", "blend", "span"]);
-        let dots_copies = b.node("dots_copies", "node.particles_to_copies", json!({}));
-        let dots = b.node("dots_object", "node.scene_object", json!({"cast_shadows": float(0.0)}));
-        let dots_visible = b.node(DOTS_VISIBLE, "node.switch_value",
-            json!({"selector": float(0.0), "in_0": float(0.0), "in_1": float(1.0)}));
-        let mesh_switch = b.node(DOTS_MESH_SWITCH, "node.switch_mesh", json!({"selector": float(0.0)}));
-        let instances_switch = b.node(DOTS_INSTANCES_SWITCH, "node.switch_instances", json!({"selector": float(0.0)}));
-        for (from, to) in [
-            ((dots_blend, "out"), (dots_copies, "particles")),
-            ((frame, "count_b"), (dots_copies, "live_count")),
-            ((dots_copies, "copies"), (instances_switch, "in_1")),
-            ((instances_switch, "out"), (dots, "instances")),
-            ((frame, "count_b"), (dots, "instance_count")),
-            ((dots_mesh, "vertices"), (mesh_switch, "in_1")),
-            ((mesh_switch, "out"), (dots, "vertices")),
-            ((dots_material, "out"), (dots, "material")),
-            ((dots_visible, "out"), (dots, "visible")),
-        ] {
-            b.wire(from, to.0, to.1);
-        }
+        let dots = display_dots(&mut b, frame, surface, water);
         b.wire((dots, "object"), output, DOTS_OUTPUT);
         // Resolve durations inside the domain-owning scope before it is wrapped.
         feed_intervals(&b.nodes, &mut b.wires, domain as u32);
@@ -840,43 +726,15 @@ impl WaterScene {
                 "min":0.0, "max":1.0, "isToggle":true, "section":"Water"}],
             "bindings":bindings
         })).expect("family visibility metadata"));
-        let metadata = def.preset_metadata.as_mut().expect("family metadata");
-        let look_metadata: Vec<_> = manifold_core::param_lookup::stamped_node_params("node.platonic_solid_mesh")
-            .into_iter().filter(|param| param.name == "radius").collect();
-        let visible_metadata: Vec<_> = manifold_core::param_lookup::stamped_node_params("node.scene_object")
-            .into_iter().filter(|param| param.name == "visible").collect();
-        for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
-            for (suffix, param_id, descriptors) in [
-                ("mesh", format!("{kind}_size"), &look_metadata),
-                ("object", format!("{kind}_visible"), &visible_metadata),
-            ] {
-                let node = def.nodes.iter().find(|node| node.node_id.as_str() == format!("{kind}_{suffix}"))
-                    .expect("family look node");
-                let mut params = Vec::new();
-                let mut bindings = Vec::new();
-                manifold_core::scene_exposure::stamp_scene_node_exposures_into(
-                    &mut params, &mut bindings, node.id, &node.node_id,
-                    section, descriptors, &node.params,
-                );
-                assert_eq!(params.len(), 1, "one authored look control");
-                for param in &mut params { param.id = param_id.clone(); }
-                for binding in &mut bindings { binding.id = param_id.clone(); }
-                // The look size is this preset's own control, named here.
-                if suffix == "mesh" {
-                    for param in &mut params { param.name = "Size".into(); }
-                    for binding in &mut bindings { binding.label = "Size".into(); }
-                }
-                metadata.params.extend(params);
-                metadata.bindings.extend(bindings);
-            }
-        }
         def
     }
 }
 
-/// The insertion body is the same family used by both presets, without a collider.
+mod scene_family;
+
+/// The insertion body is the same family used by both presets.
 pub fn gpu_flip_liquid_body() -> EffectGraphDef {
-    let mut body = WaterScene { obstacle: false, ..WaterScene::dam_break(64) }.family_def();
+    let mut body = WaterScene::dam_break(64).family_def();
     for (id, handle) in [("water_object", ""), ("domain", "Simulation")] {
         body.nodes.iter_mut().find(|node| node.node_id.as_str() == id)
             .expect("insertion body node").handle = Some(handle.into());
@@ -884,6 +742,7 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
     body
 }
 
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 /// The five scene objects the Water family declares: water, foam, spray,
 /// bubbles, then Physics View's dots.
 fn family_group_outputs() -> Vec<manifold_core::effect_graph_def::InterfacePortDef> {
@@ -895,24 +754,21 @@ fn family_group_outputs() -> Vec<manifold_core::effect_graph_def::InterfacePortD
 }
 
 /// The water family group's stable node id in the bundled presets.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 const FAMILY_NODE_ID: &str = "water_family";
 
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 /// The family `body` wrapped as one group node: its interface declares every
 /// object output, so a host routes them by port type.
-fn wrap_family(body: EffectGraphDef, role_input: bool) -> EffectGraphNode {
+fn wrap_family(body: EffectGraphDef) -> EffectGraphNode {
     let local_id = body.nodes.iter().map(|node| node.id).max().map_or(1, |max| max + 1);
     let mut group: EffectGraphNode = serde_json::from_value(json!({
         "id": local_id, "nodeId": FAMILY_NODE_ID, "typeId": "group", "handle": "{handle} Graph",
     }))
     .expect("family group node");
-    let inputs = if role_input {
-        vec![manifold_core::effect_graph_def::InterfacePortDef { name: "role_0".into(), port_type: "FluidRole".into() }]
-    } else {
-        Vec::new()
-    };
     group.group = Some(Box::new(manifold_core::effect_graph_def::GroupDef {
         interface: manifold_core::effect_graph_def::GroupInterface {
-            inputs,
+            inputs: Vec::new(),
             outputs: family_group_outputs(),
             params: Vec::new(),
         },
@@ -921,65 +777,6 @@ fn wrap_family(body: EffectGraphDef, role_input: bool) -> EffectGraphNode {
         tint: None,
     }));
     group
-}
-
-/// What Add Water inserts: the GPU FLIP family as one group plus the card
-/// rows of its own nodes. Handles carry the template's name token: a node
-/// handled `""` takes the bare numbered name ("Water 1"), any other suffix
-/// follows it.
-pub fn gpu_flip_family_template() -> manifold_core::scene_template::SceneTemplate {
-    use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
-    use manifold_core::scene_template::{HANDLE_TOKEN, SceneTemplate};
-    const SHARED_WORLD_CONTROLS: [&str; 5] = ["gravity_x", "gravity", "gravity_z", "speed", "reset"];
-    let mut body = gpu_flip_liquid_body();
-    let mut metadata = body.preset_metadata.take().expect("family recipe metadata");
-    for node in &mut body.nodes {
-        node.handle = node.handle.take().map(|suffix| {
-            if suffix.is_empty() { HANDLE_TOKEN.to_owned() } else { format!("{HANDLE_TOKEN} {suffix}") }
-        });
-    }
-    let stable = |name: &str| find_node(&body.nodes, name).unwrap_or_else(|| panic!("the family has no {name}")).clone();
-    for spec in &mut metadata.params {
-        spec.section = Some(match spec.section.as_deref() {
-            None | Some("Water") => HANDLE_TOKEN.to_owned(),
-            Some(section) => format!("{HANDLE_TOKEN} - {section}"),
-        });
-    }
-    let stamped = |type_id: &str, keep: &dyn Fn(&str) -> bool| -> Vec<_> {
-        manifold_core::param_lookup::stamped_node_params(type_id).into_iter().filter(|meta| keep(&meta.name)).collect()
-    };
-    let domain = stable("domain");
-    let mut rows: Vec<(EffectGraphNode, Option<&str>, Vec<_>)> = vec![
-        (
-            domain.clone(),
-            Some("Simulation"),
-            stamped(&domain.type_id, &|name| {
-                !SHARED_WORLD_CONTROLS.contains(&name) && !matches!(name, "emission" | "inflow_speed")
-            }),
-        ),
-        (
-            stable("initial_column"),
-            Some("Initial Fill"),
-            stamped("node.transform_3d", &|name| {
-                matches!(name, "pos_x" | "pos_y" | "pos_z" | "rot_x" | "rot_y" | "rot_z" | "scale_x" | "scale_y" | "scale_z")
-            }),
-        ),
-        (stable("water_material"), Some("Material"), stamped("node.pbr_material", &|_| true)),
-        (stable("water_object"), None, stamped("node.scene_object", &|_| true)),
-        (stable("whitewater"), Some("Whitewater"), stamped("node.whitewater_step", &|_| true)),
-    ];
-    for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
-        rows.push((stable(&format!("{kind}_material")), Some(section), stamped("node.pbr_material", &|_| true)));
-    }
-    for (node, section, descriptors) in rows {
-        let label = match section {
-            Some(section) => format!("{HANDLE_TOKEN} - {section}"),
-            None => HANDLE_TOKEN.to_owned(),
-        };
-        stamp_scene_node_exposures_into(&mut metadata.params, &mut metadata.bindings, node.id, &node.node_id, &label, &descriptors, &node.params);
-    }
-    metadata.display_name = "Water".into();
-    SceneTemplate { group: wrap_family(body, false), metadata, physics: Default::default() }
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
@@ -1001,6 +798,39 @@ fn assert_preset_root(nodes: &[EffectGraphNode]) {
     }
 }
 
+/// The render slot the obstacle draws in: the one the tank layout leaves free.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+const OBSTACLE_RENDER_SLOT: &str = "object_1";
+
+/// The Dam Break's box as the scene compiler makes a Collider
+/// (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision shapes)): a
+/// Fixed rigid body of a unit cube in a Physics World, drawn at the body's
+/// pose in the render scene, which pairs that world with the water.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+fn dam_obstacle(b: &mut Builder, render: usize) {
+    let [pos, scale] = DAM_OBSTACLE;
+    let transform = b.node(
+        "obstacle_transform",
+        "node.transform_3d",
+        json!({
+            "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
+            "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
+        }),
+    );
+    let mesh = b.node("obstacle_mesh", "node.cube_mesh", json!({}));
+    let body = b.node("obstacle_body", "node.rigid_body", json!({"motion": {"type": "Enum", "value": 0}}));
+    let world = b.node("obstacle_world", "node.physics_world", json!({"bodies": int(1)}));
+    let material = b.node("obstacle_material", "node.pbr_material", json!({"roughness": float(0.6)}));
+    let object = b.node("obstacle_object", "node.scene_object", json!({}));
+    b.wire((material, "out"), object, "material");
+    b.wire((transform, "transform"), body, "transform");
+    b.wire((mesh, "source"), body, "source");
+    b.wire((body, "body"), world, "body_0");
+    b.wire((world, "pose_0"), object, "transform");
+    b.wire((mesh, "vertices"), object, "vertices");
+    b.wire((object, "object"), render, OBSTACLE_RENDER_SLOT);
+}
+
 /// Only authored environment/camera/tank dressing is read from the preset.
 /// The family is always constructed by WaterScene::family_def.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
@@ -1018,13 +848,15 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
     let family = b.node(FAMILY_NODE_ID, "group", json!({}));
     let node = b.nodes.last_mut().expect("family");
     node.handle = Some("Water".into());
-    node.group = wrap_family(body, scene.obstacle).group;
+    node.group = wrap_family(body).group;
     // Preserve the existing physical render order: water, foam, spray, bubbles.
     for (output, slot) in FAMILY_OUTPUTS.into_iter().zip(["object_0", "object_7", "object_9", "object_8"]) {
         b.wire((family, output), render, slot);
     }
     b.wire((family, DOTS_OUTPUT), render, DOTS_RENDER_SLOT);
-    if scene.obstacle { add_obstacle_render(&mut b, family, render); }
+    if scene.obstacle {
+        dam_obstacle(&mut b, render);
+    }
     let render_node = b.nodes.iter_mut().find(|n| n.id == render as u32).expect("render");
     // Physical slots span 0 through 9; slot 6 holds Physics View's dots.
     render_node.params.insert("objects".into(), serde_json::from_value(int(10)).expect("object count"));
@@ -1087,28 +919,6 @@ fn author_mesher_scene(params: &mut [manifold_core::effect_graph_def::ParamSpecD
     }
 }
 
-/// The obstacle remains an external scene object; its one transform drives
-/// both the visible box and the collider role entering the family.
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-fn add_obstacle_render(b: &mut Builder, family: usize, render: usize) {
-    let (transform, collider) = obstacle_source(b);
-    b.wire((collider, "role"), family, "role_0");
-    let mesh = b.node("obstacle_mesh", "node.cube_mesh", json!({}));
-    let material = b.node("obstacle_material", "node.pbr_material", json!({
-        "color_r": float(0.52), "color_g": float(0.23), "color_b": float(0.073),
-        "metallic": float(0.94), "roughness": float(0.19), "ambient": float(0.0),
-    }));
-    let object = b.node("obstacle_object", "node.scene_object", json!({}));
-    b.wire((mesh, "vertices"), object, "vertices");
-    b.wire((material, "out"), object, "material");
-    b.wire((transform, "transform"), object, "transform");
-    b.wire((object, "object"), render, "object_1");
-    for (id, handle) in [(mesh, "Obstacle Mesh"), (material, "Obstacle Material"), (object, "Obstacle")] {
-        b.nodes.iter_mut().find(|node| node.id == id as u32).expect("obstacle node")
-            .handle = Some(handle.into());
-    }
-}
-
 /// The shipped Particle View, which [`particle_view_def`] builds from the
 /// shipped Dam Break (`gpu_flip_particle_view_is_built_from_the_dam_break`).
 #[cfg(any(test, feature = "testkit"))]
@@ -1119,11 +929,6 @@ const PARTICLE_VIEW_NAME: &str = "Water — Dam Break (Particle View)";
 
 #[cfg(any(test, feature = "testkit"))]
 const PARTICLE_VIEW_DESCRIPTION: &str = "GPU FLIP dam break drawn as small sphere copies of the blended, solid-clamped liquid particles, with the same display-time whitewater as the surface preset.";
-
-/// The Platonic shape the Particle View draws each particle with, scaled by
-/// the particle's radius.
-#[cfg(any(test, feature = "testkit"))]
-const ICOSAHEDRON: usize = 3;
 
 /// The Particle View: the shipped Dam Break's render, simulation, scene,
 /// whitewater, with the Liquid Surface replaced by
@@ -1137,24 +942,10 @@ pub fn particle_view_def() -> EffectGraphDef {
     let group = family.group.as_mut().expect("family group");
     let mut b = Builder { nodes: std::mem::take(&mut group.nodes), wires: std::mem::take(&mut group.wires) };
     // The particles are already the picture: no surface and no Physics View.
-    b.remove(&["surface", "dots_mesh", "dots_material", "dots_blend", "dots_copies", "dots_object"]);
-    b.remove(&PHYSICS_VIEW_SWITCHES);
     group.interface.outputs.retain(|output| output.name != DOTS_OUTPUT);
     let family_id = family.id;
     def.wires.retain(|wire| wire.from_node != family_id || wire.from_port != DOTS_OUTPUT);
-    let copies = b.node("liquid_particle_copies", "node.particles_to_copies", json!({}));
-    let sphere = b.node("liquid_particle_mesh", "node.platonic_solid_mesh",
-        json!({"radius": float(1.0), "shape": {"type": "Enum", "value": ICOSAHEDRON}}));
-    let [frame, particles, water] = ["frame", "particle_push_out", "water_object"].map(|name| b.id(name));
-    for (from, to) in [
-        ((particles, "out"), (copies, "particles")),
-        ((frame, "count_b"), (copies, "live_count")),
-        ((copies, "copies"), (water, "instances")),
-        ((sphere, "vertices"), (water, "vertices")),
-        ((frame, "count_b"), (water, "instance_count")),
-    ] {
-        b.wire(from, to.0, to.1);
-    }
+    scene_family::particles_draw(&mut b);
     group.nodes = b.nodes;
     group.wires = b.wires;
     def.name = Some(PARTICLE_VIEW_NAME.into());
@@ -1368,3 +1159,83 @@ pub fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
 #[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
 pub mod testkit;
+
+/// The water drawn from frame B through the push-out: blended particles
+/// and solids, the surface fed from them, and the water object with its
+/// material. Returns the water object.
+fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
+    let particles = b.node("particle_blend", "node.interpolate_particle_frames", json!({}));
+    let blend = b.node("solid_blend", "node.mix_arrays", json!({}));
+    let push_out = b.node("particle_push_out", "node.push_out_of_solid", json!({}));
+    let lattice_box = b.node("display_lattice_box", "node.transform_components", json!({}));
+    b.wires(frame, particles, &["particles_a", "particles_b", "count_a", "count_b", "identity_a", "identity_b", "blend", "span"]);
+    b.wire((frame, "solid_a"), blend, "a");
+    b.wire((frame, "solid_b"), blend, "b");
+    b.wire((frame, "blend"), blend, "amount");
+    b.wire((particles, "out"), push_out, "particles");
+    b.wire((blend, "out"), push_out, "solid");
+    b.wire((frame, "grid_bounds"), lattice_box, "transform");
+    for axis in ["x", "y", "z"] {
+        b.wire((lattice_box, &format!("pos_{axis}")), push_out, &format!("center_{axis}"));
+        b.wire((lattice_box, &format!("scale_{axis}")), push_out, &format!("size_{axis}"));
+        b.wire((frame, &format!("grid_nodes_{axis}")), push_out, &format!("nodes_{axis}"));
+    }
+    b.wires.retain(|w| w.to_node != surface as u32 || !["particles", "solid"].contains(&w.to_port.as_str()));
+    b.wire((push_out, "out"), surface, "particles");
+    b.wire((blend, "out"), surface, "solid");
+
+    let material = b.node("water_material", "node.pbr_material", json!({
+        "ambient": float(0.0), "color_r": float(0.37254903), "color_g": float(0.7294118), "color_b": float(1.0),
+        "metallic": float(0.0), "roughness": float(0.5540391), "ior": float(1.333), "transmission": float(1.0),
+        "volume_attenuation_color_r": float(0.35), "volume_attenuation_color_g": float(0.72), "volume_attenuation_color_b": float(0.8),
+        "volume_attenuation_distance": float(0.1), "volume_geometry": float(1.0), "volume_thickness": float(0.09),
+        "volume_scattering_color_r": float(0.68), "volume_scattering_color_g": float(0.86), "volume_scattering_color_b": float(0.92),
+        "volume_scattering_density": float(0.08826533),
+    }));
+    let water = b.node("water_object", "node.scene_object", json!({}));
+    b.wire((material, "out"), water, "material");
+    water
+}
+
+/// Physics View: the switches between the surface and the particle dots,
+/// and the dots object. Returns the dots object.
+fn display_dots(b: &mut Builder, frame: usize, surface: usize, water: usize) -> usize {
+    // Physics View: the surface sits on in_0 of its switches and the
+    // dots on in_1 of theirs, so the card prunes whichever side is off.
+    // An unwired choice draws nothing; dots_visible hides the object.
+    for (switch, type_id, port) in [(VERTICES_SWITCH, "node.switch_mesh", "vertices"),
+        (INDICES_SWITCH, "node.switch_indices", "indices")] {
+        let switch = b.node(switch, type_id, json!({"selector": float(0.0)}));
+        b.wire((surface, port), switch, "in_0");
+        b.wire((switch, "out"), water, port);
+    }
+    let dots_mesh = b.node("dots_mesh", "node.platonic_solid_mesh",
+        json!({"radius": float(1.0), "shape": {"type": "Enum", "value": TETRAHEDRON}}));
+    let dots_material = b.node("dots_material", "node.unlit_material", json!({
+        "color_r": float(0.37254903), "color_g": float(0.7294118), "color_b": float(1.0),
+    }));
+    // Their own display blend, so the surface's push-out keeps its one
+    // consumer and its fusion; no push-out, so dots may touch solids.
+    let dots_blend = b.node("dots_blend", "node.interpolate_particle_frames", json!({}));
+    b.wires(frame, dots_blend, &["particles_a", "particles_b", "count_a", "count_b", "identity_a", "identity_b", "blend", "span"]);
+    let dots_copies = b.node("dots_copies", "node.particles_to_copies", json!({}));
+    let dots = b.node("dots_object", "node.scene_object", json!({"cast_shadows": float(0.0)}));
+    let dots_visible = b.node(DOTS_VISIBLE, "node.switch_value",
+        json!({"selector": float(0.0), "in_0": float(0.0), "in_1": float(1.0)}));
+    let mesh_switch = b.node(DOTS_MESH_SWITCH, "node.switch_mesh", json!({"selector": float(0.0)}));
+    let instances_switch = b.node(DOTS_INSTANCES_SWITCH, "node.switch_instances", json!({"selector": float(0.0)}));
+    for (from, to) in [
+        ((dots_blend, "out"), (dots_copies, "particles")),
+        ((frame, "count_b"), (dots_copies, "live_count")),
+        ((dots_copies, "copies"), (instances_switch, "in_1")),
+        ((instances_switch, "out"), (dots, "instances")),
+        ((frame, "count_b"), (dots, "instance_count")),
+        ((dots_mesh, "vertices"), (mesh_switch, "in_1")),
+        ((mesh_switch, "out"), (dots, "vertices")),
+        ((dots_material, "out"), (dots, "material")),
+        ((dots_visible, "out"), (dots, "visible")),
+    ] {
+        b.wire(from, to.0, to.1);
+    }
+    dots
+}

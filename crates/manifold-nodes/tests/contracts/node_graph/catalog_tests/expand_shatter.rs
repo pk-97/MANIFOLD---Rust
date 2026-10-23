@@ -2,7 +2,7 @@ use manifold_core::effect_graph_def::*;
     use manifold_core::scene_modifier_preset::SceneTargetSelection;
 
     fn fixture() -> EffectGraphDef {
-        let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/PhysicsSolids.json")))
+        let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")))
         .unwrap();
         owner.version = 3;
         let mesh = owner.nodes.iter_mut().find(|n| n.id == 112).unwrap();
@@ -35,15 +35,9 @@ use manifold_core::effect_graph_def::*;
         .unwrap();
         let mut modifier = SceneModifierInstanceDef {
             id: NodeId::new("shatter-test"),
-            scene: SceneNodeRef {
-                scope: vec![],
-                node: NodeId::new("scene"),
-            },
+            scene: NodeId::new("scene"),
             targets: SceneTargetSelection::Explicit {
-                objects: vec![SceneNodeRef {
-                    scope: vec![],
-                    node: NodeId::new("physics_demo_114"),
-                }],
+                objects: vec![NodeId::new("physics_demo_114")],
             },
             mesh_frames: vec![],
             legacy_math_view_carrier: None,
@@ -261,7 +255,7 @@ use manifold_core::effect_graph_def::*;
         );
     }
 
-use manifold_core::{NodeId, scene_modifier_preset::{SceneModifierInstanceDef, SceneNodeRef}};
+use manifold_core::{NodeId, scene_modifier_preset::SceneModifierInstanceDef};
 use std::collections::BTreeSet;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::load::expand::{prepare_scene_modifiers, resolve_modifier_mesh_frames};

@@ -26,8 +26,8 @@
   "parameter-gesture-undo": {
     "triggers": ["crates/manifold-ui/", "crates/manifold-app/src/ui_bridge/", "scripts/ui-flows/"],
     "kind": "ui-flow",
-    "source": "scripts/ui-flows/scene-card-convergence-c-p1d-roughness-scrub-drawer-undo.json",
-    "tests": ["scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"]
+    "source": "scripts/ui-flows/rack-wet-dry.json",
+    "tests": ["rack-wet-dry"]
   },
   "generator-fusion": {
     "triggers": ["crates/manifold-nodes-image/src/node_graph/", "crates/manifold-nodes-scene/src/node_graph/", "crates/manifold-nodes/tests/contracts/node_graph/", "crates/manifold-app/tests/contracts/node_graph/", "crates/manifold-node-engine/src/", "crates/manifold-gpu/"],

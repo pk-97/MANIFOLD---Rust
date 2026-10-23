@@ -24,7 +24,8 @@ const LAYERS: &[Layer] = &[
     Layer {
         package: "manifold-nodes",
         normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-physics", "manifold-nodes-scene", "manifold-nodes-water", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-whitewater"],
-        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-surface", "manifold-water-whitewater"],
+        // manifold-editing: the scene document crash test drives editing commands through the compiler.
+        dev: &["manifold-editing", "manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-surface", "manifold-water-whitewater"],
     },
     Layer {
         package: "manifold-app",
@@ -179,7 +180,10 @@ fn workspace_dependencies_obey_layering() {
 /// down. Lower it when a move lands; never raise it. Obsolete when the engine
 /// names no water words at all.
 const ENGINE_WATER_WORD_FILES: usize = 53;
-const ENGINE_WATER_WORD_EXEMPT: &[&str] = &["atomic/fluid_sim_2d", "param_tooltips", "trigger_shadow_lint"];
+/// Files that name a water word and hold no water behaviour: the render
+/// menu's labels name its Physics View mode.
+const ENGINE_WATER_WORD_EXEMPT: &[&str] =
+    &["atomic/fluid_sim_2d", "param_tooltips", "trigger_shadow_lint", "scene/render_mode"];
 
 fn engine_water_word_files(dir: &Path, root: &Path, hits: &mut Vec<String>) {
     for entry in std::fs::read_dir(dir).unwrap() {

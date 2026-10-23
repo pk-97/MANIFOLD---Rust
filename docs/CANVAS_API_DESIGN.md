@@ -111,7 +111,7 @@ shared state, no `Arc<Mutex>`; the canvas is still fed `GraphSnapshot`s and stil
 emits commands drained each frame.
 
 ```
-crates/manifold-app/src/graph_canvas/        (4.2 — the monolith, split)
+crates/manifold-ui/src/graph_canvas/        (4.2 — the monolith, split)
 ├── mod.rs          GraphCanvas: fields, new(), public API, Rect, re-exports
 ├── model.rs        NodeView/PortView/ParamView/WireView/PortHit + geometry +
 │                   snapshot ingestion (set_snapshot/apply_live_values) +

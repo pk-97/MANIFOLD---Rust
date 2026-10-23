@@ -74,26 +74,6 @@ pub(crate) enum NodeRow {
     /// A non-param input port (texture / array / any input with no same-named
     /// param): dot on the left edge, name. Field indexes `NodeView::inputs`.
     Input { port: usize },
-    /// A one-click gesture button occupying its own row
-    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D7/D7a) — currently
-    /// only "+ Object" / "+ Light" on `render_scene`'s face, spliced in right
-    /// after the `objects`/`lights` param rows by `GraphCanvas::rebuild_rows`.
-    /// No port, no param index; a click anywhere on the row fires the
-    /// gesture. Never produced by [`compute_node_rows`] itself (which knows
-    /// nothing of node type) — see the render_scene-specific splice.
-    Action(NodeActionKind),
-}
-
-/// Which one-click scene-build gesture a [`NodeRow::Action`] row triggers.
-/// Copy so `NodeRow` (which derives Copy) can carry it directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NodeActionKind {
-    /// D7: bump `objects` + build a placeholder cube+material+transform
-    /// group wired into the new `mesh_k`/`material_k`/`transform_k` ports.
-    AddSceneObject,
-    /// D7a: bump `lights` + spawn a bare `node.light` wired into the new
-    /// `light_k` port.
-    AddSceneLight,
 }
 
 #[derive(Debug, Clone)]
@@ -184,14 +164,6 @@ pub(crate) struct NodeView {
     /// chip was toggled on). Mirrors `GraphCanvas::revealed_ports` for this node
     /// so render/hit read it off the view. Set by [`GraphCanvas::rebuild_rows`].
     pub(crate) revealed: bool,
-    /// `true` when `type_id == "node.render_scene"` — drives the "+ Object" /
-    /// "+ Light" gesture-button rows spliced onto this node's face
-    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D7/D7a). The literal
-    /// mirrors `manifold_nodes::node_graph::primitives::render_scene::RENDER_SCENE_TYPE_ID`
-    /// — `manifold-ui` doesn't depend on `manifold-nodes`, so this is a
-    /// same-string re-derivation, not a shared constant. Resolved once on the
-    /// topology rebuild — it never changes for a given node id.
-    pub(crate) is_render_scene: bool,
 }
 
 /// Whether a port carries an image (the only kind the thumbnail atlas captures).
@@ -459,28 +431,6 @@ pub(crate) fn compute_node_rows(
         }
     }
     rows
-}
-
-/// Insert the "+ Object" / "+ Light" [`NodeRow::Action`] rows right after
-/// `render_scene`'s `objects`/`lights` param rows (D7/D7a). Pure over its
-/// input (row list + param list only, no node/wire access), so it's
-/// unit-tested directly rather than only through the full `rebuild_rows`
-/// pipeline. Lights spliced first (higher row index) so its insertion
-/// doesn't shift the objects row's index out from under the second splice.
-/// A no-op (both rows absent) if `rows` carries no `objects`/`lights` param
-/// row — callers gate on `NodeView::is_render_scene` first, so this should
-/// always find both, but the function stays defensive either way.
-pub(crate) fn splice_render_scene_action_rows(rows: &mut Vec<NodeRow>, params: &[ParamView]) {
-    let row_for = |rows: &[NodeRow], name: &str| {
-        rows.iter()
-            .position(|r| matches!(r, NodeRow::Param { param, .. } if params[*param].name == name))
-    };
-    if let Some(li) = row_for(rows, "lights") {
-        rows.insert(li + 1, NodeRow::Action(NodeActionKind::AddSceneLight));
-    }
-    if let Some(oi) = row_for(rows, "objects") {
-        rows.insert(oi + 1, NodeRow::Action(NodeActionKind::AddSceneObject));
-    }
 }
 
 /// Group `wires` by their `(from_node, to_node)` pair, preserving first-seen
@@ -1376,7 +1326,6 @@ impl GraphCanvas {
                 // Filled by `rebuild_rows` below (needs the level's wires).
                 hideable_ports: 0,
                 revealed: false,
-                is_render_scene: n.type_id == "node.render_scene",
                 }
             })
             .collect();
@@ -1562,12 +1511,6 @@ impl GraphCanvas {
                 &output_visible,
                 &input_visible,
             );
-            // D7/D7a: splice the "+ Object" / "+ Light" gesture-button rows
-            // onto `render_scene`'s face. `compute_node_rows` is generic
-            // (knows nothing of node type), so this is a targeted post-pass.
-            if node.is_render_scene {
-                splice_render_scene_action_rows(&mut node.rows, &node.params);
-            }
             // Reveal-independent count of sockets the node CAN hide (for the chip):
             // an unwired output whose sibling is wired, plus an unwired *leftover*
             // input (one that doesn't ride a param row) whose sibling is wired.

@@ -12,7 +12,7 @@ use crate::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
     GroupInterface, InterfacePortDef, SerializedParamValue,
 };
-use crate::fluid_domain::MAX_FLUID_ROLES;
+use crate::fluid_domain::DEFAULT_ROLE_PORTS;
 use crate::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 use crate::NodeId;
 
@@ -20,11 +20,8 @@ use crate::NodeId;
 pub const INITIAL_VOLUME_PORT: &str = "initial_volume";
 pub const FLUID_ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 pub const TRANSFORM_3D_TYPE_ID: &str = "node.transform_3d";
-/// `node.fluid_role_source`'s Initial Fill role and Cube shape.
+/// `node.fluid_role_source`'s Initial Fill role. With no mesh it fills a unit cube, so the transform's scale is the box.
 pub const INITIAL_FILL_ROLE: u32 = 0;
-pub const CUBE_SHAPE: u32 = 1;
-/// A unit cube's circumradius, so the transform's scale is the box.
-pub const UNIT_CUBE_RADIUS: f32 = 0.866_025_4;
 /// The name an Initial Fill group and its role source carry.
 pub const INITIAL_FILL_NAME: &str = "Initial Fill";
 
@@ -135,11 +132,7 @@ fn migrate_level(
             interface.inputs.iter_mut().find(|input| input.name == column.from_port && matches!(input.port_type.as_str(), "Transform" | "FluidRole"))
         });
         let target = if column.to_port == INITIAL_VOLUME_PORT {
-            let Some(port) = free_role(wires, column.to_node) else {
-                log::warn!("initial fill: the water has no free role input, so its old column is gone");
-                continue;
-            };
-            port
+            free_role(nodes, wires, column.to_node)
         } else {
             column.to_port.clone()
         };
@@ -173,11 +166,23 @@ fn migrate_level(
     (changed, inputs)
 }
 
-/// The first role input of `domain` no wire feeds.
-fn free_role(wires: &[EffectGraphWire], domain: u32) -> Option<String> {
-    (0..MAX_FLUID_ROLES)
-        .map(|k| format!("role_{k}"))
-        .find(|port| !wires.iter().any(|wire| wire.to_node == domain && &wire.to_port == port))
+/// The first role input of `domain` no wire feeds; the domain's `roles`
+/// param grows to hold it.
+fn free_role(nodes: &mut [EffectGraphNode], wires: &[EffectGraphWire], domain: u32) -> String {
+    let free = (0..)
+        .find(|k| !wires.iter().any(|wire| wire.to_node == domain && wire.to_port == format!("role_{k}")))
+        .expect("an unwired role input");
+    if let Some(node) = nodes.iter_mut().find(|node| node.id == domain) {
+        let held = match node.params.get("roles") {
+            Some(SerializedParamValue::Int { value }) => usize::try_from(*value).unwrap_or(0),
+            Some(SerializedParamValue::Float { value }) => value.max(0.0) as usize,
+            _ => DEFAULT_ROLE_PORTS,
+        };
+        if free >= held {
+            node.params.insert("roles".into(), SerializedParamValue::Int { value: free as i32 + 1 });
+        }
+    }
+    format!("role_{free}")
 }
 
 /// Where an Initial Fill's box comes from.
@@ -199,16 +204,16 @@ pub fn document_node_ids(def: &EffectGraphDef) -> BTreeSet<String> {
 
 /// Puts an Initial Fill group over `fill_box` beside `domain` (a doc id in
 /// this level) and wires it into the domain's first free role input.
-/// Returns the group's doc id, or `None` when every role input is taken.
+/// Returns the group's doc id.
 pub fn add_initial_fill(
     nodes: &mut Vec<EffectGraphNode>,
     wires: &mut Vec<EffectGraphWire>,
     domain: u32,
     fill_box: FillBox,
     taken: &mut BTreeSet<String>,
-) -> Option<u32> {
-    let port = free_role(wires, domain)?;
-    Some(place_initial_fill(nodes, wires, (domain, port), fill_box, taken))
+) -> u32 {
+    let port = free_role(nodes, wires, domain);
+    place_initial_fill(nodes, wires, (domain, port), fill_box, taken)
 }
 
 /// An Initial Fill group over `fill_box`, its role wired into `to` (a node
@@ -264,8 +269,6 @@ fn initial_fill_body(transform: Option<EffectGraphNode>, domain_id: &str, taken:
     let mut role = bare_node(role_id, FLUID_ROLE_SOURCE_TYPE_ID, fresh_id(&format!("{domain_id}_initial_fill_role"), taken), Some(INITIAL_FILL_NAME));
     role.params = BTreeMap::from([
         ("role".to_owned(), SerializedParamValue::Enum { value: INITIAL_FILL_ROLE }),
-        ("shape".to_owned(), SerializedParamValue::Enum { value: CUBE_SHAPE }),
-        ("radius".to_owned(), SerializedParamValue::Float { value: UNIT_CUBE_RADIUS }),
     ]);
     let output = bare_node(output_id, GROUP_OUTPUT_TYPE_ID, fresh_id(&format!("{domain_id}_initial_fill_output"), taken), None);
     let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire {
@@ -365,7 +368,6 @@ mod tests {
         assert_eq!((&moved.params, &moved.handle), (&saved.params, &saved.handle));
         let role = body.nodes.iter().find(|node| node.type_id == FLUID_ROLE_SOURCE_TYPE_ID).unwrap();
         assert_eq!(role.params["role"], SerializedParamValue::Enum { value: INITIAL_FILL_ROLE });
-        assert_eq!(role.params["shape"], SerializedParamValue::Enum { value: CUBE_SHAPE });
         assert!(body.wires.contains(&wire(moved.id, "transform", role.id, "transform")));
         let ids = document_node_ids(&graph);
         assert_eq!(ids.len(), graph.nodes.len() + body.nodes.len(), "every stable id is unique");
@@ -482,7 +484,7 @@ mod tests {
         let mut graph = def(json!({"version": 3, "nodes": nodes,
             "wires": [wire(2, "transform", 1, INITIAL_VOLUME_PORT), wire(4, "transform", 3, INITIAL_VOLUME_PORT)]}));
         let modifier = graph.clone();
-        let force = json!({"id": "force", "scene": {"scope": [], "node": "scene"}, "targets": "allObjects", "graph": modifier});
+        let force = json!({"id": "force", "scene": "scene", "targets": "allObjects", "graph": modifier});
         graph.scene_modifiers.push(serde_json::from_value(force).expect("modifier"));
         assert!(migrate_initial_volume(&mut graph));
         let handles: BTreeSet<_> = graph.nodes.iter().filter_map(|node| node.handle.clone()).collect();

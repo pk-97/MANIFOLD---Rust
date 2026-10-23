@@ -16,10 +16,6 @@ pub(crate) struct UnboundNodeParamDrag {
     pub(super) param_name: String,
     pub(super) scope_path: Vec<u32>,
     pub(super) catalog_default: EffectGraphDef,
-    /// Preparation-only local controls are held in the same draft slot but
-    /// commit through the content-owned modifier action instead of a live
-    /// graph write.
-    pub(super) preparation: Option<(manifold_core::NodeId, String)>,
     /// Value before the drag started. `None` means the key was absent —
     /// the same `Option<SerializedParamValue>` shape `with_previous` takes.
     pub(super) pre_drag_value: Option<SerializedParamValue>,
@@ -39,7 +35,7 @@ impl UnboundNodeParamDrag {
         pre_drag_value: Option<SerializedParamValue>,
         current_value: SerializedParamValue,
     ) -> Self {
-        Self { target, node_id, param_name, scope_path, catalog_default, preparation: None, pre_drag_value, current_value }
+        Self { target, node_id, param_name, scope_path, catalog_default, pre_drag_value, current_value }
     }
 
     /// The live, non-undoable write of the current value.

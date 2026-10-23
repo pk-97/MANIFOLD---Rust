@@ -308,6 +308,26 @@ hand_descriptor!(
     aliases: ["switch", "mux", "mux texture", "selector", "Switch TOP"],
 );
 
+// Camera routing (camera_switch.rs)
+hand_descriptor!(
+    "node.camera_switch",
+    "Dynamic N-way Camera selector. `num_inputs` sets how many Camera ports exist (a, b, c, …) and the `select` enum forwards the matching input; an unwired pick falls back to the first wired input. With `select` as a param the unpicked cameras are pruned. A scene's live camera cut is one of these with every camera's lens wired in, so a cut is a param write, never a rebuild; camera-path scene modifiers mint the two-input form.",
+    summary: "Picks which of several cameras is shown. Switching is live and never rebuilds the graph, so a camera cut lands on the frame it is asked for.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["camera switch", "camera mux", "mux camera", "camera cut"],
+);
+
+// Mesh merging (merge_meshes.rs)
+hand_descriptor!(
+    "node.merge_meshes",
+    "Concatenate N triangle-list meshes into one Array<MeshVertex>, each placed by its own transform (`place_k`) inside the frame it is drawn in (`within_k`) and brought into a shared `frame` (each unwired transform is identity): position by the full matrix, normals by its inverse transpose, UVs and colours copied. `parts` sets how many mesh_k/place_k/within_k triples exist, with no cap; output capacity is the sum of the wired meshes. Wire `reset_trigger` to merge only on its integer edges.",
+    summary: "Joins several meshes into one, each where its own transform puts it. The way a whole group becomes one shape to scatter particles over.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["merge meshes", "combine meshes", "join meshes", "mesh union"],
+);
+
 // 3D scene rendering (render_scene.rs)
 hand_descriptor!(
     "node.render_scene",

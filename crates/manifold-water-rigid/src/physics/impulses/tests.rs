@@ -90,7 +90,7 @@ fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
 }
 
 #[test]
-fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
+fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild() {
     let mut bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     simulation
@@ -98,11 +98,7 @@ fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
         .unwrap();
     assert!(simulation.impulse_stamp(PlayedTime::ZERO, 0).is_ok());
 
-    simulation.hold_pending(PlayedTime::from_played(1.0));
-    assert!(simulation.impulse_stamp(PlayedTime::from_played(1.0), 1).is_err());
-
-    let body = bodies[0].as_mut().unwrap();
-    body.shape = (body.shape + 1) % 5;
+    bodies[0].as_mut().unwrap().enabled = false;
     simulation.set_step(SimStep::default().authored_sample());
     simulation
         .advance(&bodies, [0.0; 3], PlayedTime::from_played(2.0), 1.0, 0.0)
@@ -393,29 +389,19 @@ fn rigid_impulses_high_velocity_applies_once_across_microsteps() {
 }
 
 #[test]
-fn rigid_impulses_full_history_refuses_one_hit_and_keeps_stepping() {
+fn rigid_impulses_a_burst_past_the_history_grows_it_and_every_hit_lands_once() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
     initialize(&mut simulation, &bodies);
     let epoch = simulation.impulse_epoch().unwrap();
     let targets = targets(1, false);
-    for sequence in 0..256 {
-        simulation.enqueue_impulse(stamp(epoch, 0.0, sequence), payload([0.0; 3], targets)).unwrap();
+    for sequence in 0..600 {
+        simulation.enqueue_impulse(stamp(epoch, 0.0, sequence), payload([0.0; 3], targets.clone())).unwrap();
     }
-    let error = simulation.enqueue_impulse(stamp(epoch, 0.0, 256), payload([0.0; 3], targets)).unwrap_err();
-    assert!(error.contains("refused"), "{error}");
-    // One refusal latches nothing: the world keeps stepping and every
-    // admitted hit lands once.
     simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(DT), 1.0, 0.0).unwrap();
     assert_eq!(simulation.impulse_readiness(), Ok(true));
-    // Undrained receipts still hold their slots.
-    assert!(simulation.enqueue_impulse(stamp(epoch, DT, 257), payload([0.0; 3], targets)).is_err());
-    assert_eq!(receipts(&mut simulation).len(), 256);
-    // Drained, the history frees and the next hit is admitted and lands once.
-    simulation.enqueue_impulse(stamp(epoch, DT, 258), payload([0.0; 3], targets)).unwrap();
-    simulation.advance(&bodies, [0.0; 3], PlayedTime::from_played(2.0 * DT), 1.0, 0.0).unwrap();
     let landed: Vec<_> = receipts(&mut simulation).iter().map(|event| event.source.sequence).collect();
-    assert_eq!(landed, [258]);
+    assert_eq!(landed, (0..600).collect::<Vec<_>>());
 }
 
 #[test]
@@ -429,7 +415,7 @@ fn rigid_impulses_invalid_target_preserves_producer_sequence() {
             stamp(epoch, 0.0, 7),
             payload(
                 [1.0, 0.0, 0.0],
-                targets(1 << 1, false)
+                targets(0, false)
             ),
         )
         .is_err());

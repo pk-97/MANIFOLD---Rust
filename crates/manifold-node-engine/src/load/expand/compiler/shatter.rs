@@ -3,6 +3,56 @@ use super::super::{SceneModifierNodeRoute, bindings::SceneModifierBindingSource}
 use super::*;
 use manifold_core::effect_graph_def::BindingTarget;
 use manifold_core::physics_members::{ACCELERATION_ALIAS, BODY_TYPE_ID, Family, world_member};
+use manifold_foundation::mesh_partition::MAX_PIECES;
+
+/// An imported mesh's source: its pieces are cut by its own fragment params.
+const GLTF_SOURCE: &str = "node.gltf_mesh_source";
+
+/// The shape `body` collides `part` with: its single `source`, or the
+/// `mesh_k` whose `part_k` places the part (the transform the part draws by).
+fn body_shape(def: &EffectGraphDef, body: u32, part: u32) -> Option<PortAddress> {
+    if let Some(source) = input(def, body, "source") {
+        return Some(source);
+    }
+    let placed = input(def, part, "transform")?;
+    (0..)
+        .map_while(|k| input(def, body, &format!("part_{k}")).map(|at| (k, at)))
+        .find(|(_, at)| *at == placed)
+        .and_then(|(k, _)| input(def, body, &format!("mesh_{k}")))
+}
+
+/// The rigid body that poses `object`: wired straight to its pose, or
+/// through the transforms it is placed in (a body's pose frame, the groups
+/// inside a group body).
+fn posing_body(def: &EffectGraphDef, object: u32) -> Option<u32> {
+    let mut at = input(def, object, "parent_transform").or_else(|| input(def, object, "transform"))?;
+    for _ in 0..def.nodes.len() {
+        let producer = def.nodes.iter().find(|n| n.id == at.0)?;
+        if producer.type_id == BODY_TYPE_ID {
+            return (at.1 == "pose").then_some(at.0);
+        }
+        if producer.type_id != TRANSFORM_TYPE_ID {
+            return None;
+        }
+        at = input(def, at.0, "parent")?;
+    }
+    None
+}
+
+const TRANSFORM_TYPE_ID: &str = "node.transform_3d";
+
+/// A `node.mesh_fragment` cutting piece `index` of `count`.
+fn fragment_node(def: &mut EffectGraphDef, id: NodeId, count: usize, index: usize) -> Result<u32, SceneModifierExpandError> {
+    let template = EffectGraphNode {
+        id: 0,
+        node_id: NodeId::default(),
+        type_id: "node.mesh_fragment".into(),
+        params: [("fragment_count".into(), float(count as f32)), ("fragment_index".into(), float(index as f32))].into_iter().collect(),
+        ..serde_json::from_value(serde_json::json!({"id": 0, "typeId": "node.mesh_fragment"}))
+            .map_err(|error| invalid("shatter", error.to_string()))?
+    };
+    clone_node(def, &template, id)
+}
 
 pub(crate) fn copy_id(modifier: &NodeId, source: &NodeId, role: &str, index: usize) -> NodeId {
     namespace::namespace_node_id(&[
@@ -77,7 +127,7 @@ fn generated<'a>(
 ) -> Result<&'a EffectGraphNode, SceneModifierExpandError> {
     let route = routes
         .iter()
-        .find(|r| r.modifier_id == *modifier && r.local.node == *local)
+        .find(|r| r.modifier_id == *modifier && r.local == *local)
         .ok_or_else(|| invalid("shatter", "control has no prepared route"))?;
     if route.copies.len() != 1 {
         return Err(invalid("shatter", "controls must have scene scope"));
@@ -133,41 +183,36 @@ pub(super) fn prepare(
             continue;
         }
         let count = control(def, routes, instance, &shatter.fragments_param)?;
-        if !count.is_finite() || !(2.0..=32.0).contains(&count) {
-            return Err(invalid("shatter", "Pieces must be between 2 and 32"));
+        if !count.is_finite() || !(2.0..=MAX_PIECES as f32).contains(&count) {
+            return Err(invalid("shatter", format!("Pieces must be between 2 and {MAX_PIECES}")));
         }
         let count = count.round() as usize;
         let release = (
             generated(def, routes, &instance.id, &shatter.trigger_node)?.id,
             shatter.trigger_port.clone(),
         );
-        let scene = def.nodes.iter().find(|n| n.node_id == instance.scene.node)
+        let scene = def.nodes.iter().find(|n| n.node_id == instance.scene)
             .ok_or_else(|| invalid("shatter", "prepared scene is missing"))?.id;
         let targets = frames::selected_objects(index, instance)?;
         if targets.is_empty() {
             return Err(invalid(
                 "shatter",
-                "select an imported object with Physics enabled",
+                "select an object whose Physics is Body",
             ));
         }
         let mut assemblies: BTreeMap<(u32, usize), (u32, Vec<u32>)> = BTreeMap::new();
         for target in targets {
-            let object = def.nodes.iter().find(|n| n.node_id == target.node)
+            let object = def.nodes.iter().find(|n| n.node_id == target)
                 .ok_or_else(|| invalid("shatter", "prepared object is missing"))?.id;
-            let pose = input(def, object, "parent_transform").or_else(|| input(def, object, "transform"))
-                .ok_or_else(|| invalid("shatter", "object needs Physics before Shatter"))?;
-            if node(def, pose.0)?.type_id != BODY_TYPE_ID || pose.1 != "pose" {
-                return Err(invalid(
-                    "shatter",
-                    "enable Physics on the object before adding Shatter",
-                ));
-            }
-            let member = world_member(&def.nodes, &def.wires, pose.0)
+            let body = posing_body(def, object).ok_or_else(|| {
+                invalid("shatter", "enable Physics on the object before adding Shatter")
+            })?;
+            let member = world_member(&def.nodes, &def.wires, body)
                 .filter(|member| member.family == Family::Body)
                 .ok_or_else(|| invalid("shatter", "object has no rigid body pose"))?;
             assemblies
                 .entry((member.world, member.k as usize))
-                .or_insert_with(|| (pose.0, Vec::new()))
+                .or_insert_with(|| (body, Vec::new()))
                 .1
                 .push(object);
         }
@@ -207,26 +252,25 @@ pub(super) fn prepare(
                 .free_slots()
                 .take(count)
                 .collect();
-            if slots.len() != count {
-                return Err(invalid(
-                    "shatter",
-                    "not enough physics body slots for these Pieces",
-                ));
-            }
             // Distribute the total across materials; every original triangle
             // and its attributes belong to exactly one resulting fragment.
             let mut allocation = vec![1usize; parts.len()];
             let mut sources = Vec::with_capacity(parts.len());
+            // An imported part breaks in its file source; any other part
+            // breaks from the shape its body collides with.
+            let mut shapes = Vec::with_capacity(parts.len());
             for &part in &parts {
-                let source = input(def, part, "vertices")
+                let drawn = input(def, part, "vertices")
                     .ok_or_else(|| invalid("shatter", "mesh source is missing"))?;
-                let source = node(def, source.0)?.clone();
-                if source.type_id != "node.gltf_mesh_source" {
-                    return Err(invalid(
-                        "shatter",
-                        "Shatter currently needs an undeformed static imported mesh",
-                    ));
-                }
+                let source = node(def, drawn.0)?.clone();
+                let shape = if source.type_id == GLTF_SOURCE {
+                    None
+                } else {
+                    Some(body_shape(def, parent_body, part).ok_or_else(|| {
+                        invalid("shatter", "the object's body has no shape to break")
+                    })?)
+                };
+                shapes.push((drawn, shape));
                 sources.push(source);
             }
             for _ in parts.len()..count {
@@ -242,7 +286,7 @@ pub(super) fn prepare(
                 allocation[biggest] += 1;
             }
             let mut slot = slots.into_iter();
-            for ((part, source), pieces) in parts.into_iter().zip(sources).zip(allocation) {
+            for (((part, source), pieces), (drawn, shape)) in parts.into_iter().zip(sources).zip(allocation).zip(shapes) {
                 let original = node(def, part)?.clone();
                 let nested = input(def, part, "parent_transform").is_some();
                 let local = nested.then(|| input(def, part, "transform")).flatten();
@@ -273,32 +317,7 @@ pub(super) fn prepare(
                 });
                 for piece in 0..pieces {
                     let body_slot = slot.next().expect("checked slot count");
-                    let source_copy = clone_node(
-                        def,
-                        &source,
-                        copy_id(&instance.id, &original.node_id, "mesh", piece),
-                    )?;
-                    let mesh = def.nodes.last_mut().expect("cloned mesh");
-                    if let Some(path) = parent.params.get("path") {
-                        mesh.params.insert("path".into(), path.clone());
-                    }
-                    mesh.params
-                        .insert("fragment_count".into(), float(pieces as f32));
-                    mesh.params
-                        .insert("fragment_index".into(), float(piece as f32));
-                    if let Some(vertices) = number(source.params.get("max_capacity")) {
-                        // The existing partitioner repeatedly halves the largest
-                        // triangle set. Bound every piece without allocating a
-                        // full scan-sized GPU buffer for each of them.
-                        let divisor = 1usize << pieces.ilog2();
-                        let triangles = (vertices as usize).div_ceil(3);
-                        mesh.params.insert(
-                            "max_capacity".into(),
-                            SerializedParamValue::Int {
-                                value: (triangles.div_ceil(divisor) * 3).max(3) as i32,
-                            },
-                        );
-                    }
+                    let mesh_id = copy_id(&instance.id, &original.node_id, "mesh", piece);
                     let body_copy = clone_node(
                         def,
                         &parent,
@@ -306,21 +325,8 @@ pub(super) fn prepare(
                     )?;
                     let body = def.nodes.last_mut().expect("cloned body");
                     body.params.remove("compound_materials");
-                    for key in [
-                        "path",
-                        "mesh_index",
-                        "primitive_index",
-                        "material_index",
-                        "fit",
-                        "recenter",
-                        "translate_x",
-                        "translate_y",
-                        "translate_z",
-                    ] {
-                        if let Some(value) = source.params.get(key) {
-                            body.params.insert(key.into(), value.clone());
-                        }
-                    }
+                    // A piece is one shape, not the parent's parts.
+                    body.params.remove("parts");
                     body.params
                         .insert("enabled".into(), SerializedParamValue::Bool { value: true });
                     body.params.insert("motion".into(), SerializedParamValue::Enum { value: 1 });
@@ -330,10 +336,61 @@ pub(super) fn prepare(
                         .insert("fragment_index".into(), float(piece as f32));
                     body.params
                         .insert("fragment_parent".into(), float(parent_slot as f32));
-                    body.params.insert("collider_parts".into(), float(1.0));
                     // A piece is the parent's material: on release the world gives
                     // it the parent's density over its own hull; this is the placeholder.
                     body.params.insert("mass".into(), float(mass));
+                    let source_copy = match &shape {
+                        // The piece is cut from the shape on the CPU; its body
+                        // collides with the same piece.
+                        Some(shape) => {
+                            let fragment = fragment_node(def, mesh_id, pieces, piece)?;
+                            wire(def, shape.clone(), fragment, "shape");
+                            wire(def, drawn.clone(), fragment, "in");
+                            wire(def, (fragment, "source".into()), body_copy, "source");
+                            fragment
+                        }
+                        None => {
+                            let source_copy = clone_node(def, &source, mesh_id)?;
+                            let mesh = def.nodes.last_mut().expect("cloned mesh");
+                            if let Some(path) = parent.params.get("path") {
+                                mesh.params.insert("path".into(), path.clone());
+                            }
+                            mesh.params
+                                .insert("fragment_count".into(), float(pieces as f32));
+                            mesh.params
+                                .insert("fragment_index".into(), float(piece as f32));
+                            if let Some(vertices) = number(source.params.get("max_capacity")) {
+                                // The existing partitioner repeatedly halves the largest
+                                // triangle set. Bound every piece without allocating a
+                                // full scan-sized GPU buffer for each of them.
+                                let divisor = 1usize << pieces.ilog2();
+                                let triangles = (vertices as usize).div_ceil(3);
+                                mesh.params.insert(
+                                    "max_capacity".into(),
+                                    SerializedParamValue::Int {
+                                        value: (triangles.div_ceil(divisor) * 3).max(3) as i32,
+                                    },
+                                );
+                            }
+                            let body = def.nodes.iter_mut().find(|n| n.id == body_copy).expect("cloned body");
+                            for key in [
+                                "path",
+                                "mesh_index",
+                                "primitive_index",
+                                "material_index",
+                                "fit",
+                                "recenter",
+                                "translate_x",
+                                "translate_y",
+                                "translate_z",
+                            ] {
+                                if let Some(value) = source.params.get(key) {
+                                    body.params.insert(key.into(), value.clone());
+                                }
+                            }
+                            source_copy
+                        }
+                    };
                     wire(def, authored_pose.clone(), body_copy, "transform");
                     if let Some(local) = &local {
                         wire(def, local.clone(), body_copy, "source_transform");

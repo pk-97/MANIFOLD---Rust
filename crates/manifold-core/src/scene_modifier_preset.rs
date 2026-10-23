@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef, SerializedParamValue,
-    StringBindingDef,
+    StringBindingDef, leaf_scope,
 };
 use crate::id::NodeId;
 
@@ -21,99 +21,6 @@ pub use crate::effect_graph_def::EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS;
 /// Version of the scene-modifier recipe ABI.
 pub const SCENE_MODIFIER_RECIPE_VERSION: u32 = 1;
 
-pub use manifold_foundation::scene_surface::SceneNodeRef;
-
-/// The graph-side half of [`SceneNodeRef`]: the reference type lives in
-/// foundation so the UI can hold it; resolving it against a graph lives here.
-pub trait SceneNodeRefExt {
-    /// The node this reference names in `def`, walking the scope group by
-    /// group.
-    fn resolve<'a>(&self, def: &'a EffectGraphDef) -> Option<&'a EffectGraphNode>;
-
-    /// Resolve this scoped reference against a node slice.
-    fn resolve_nodes<'a>(&self, nodes: &'a [EffectGraphNode]) -> Option<&'a EffectGraphNode>;
-
-    /// Resolve this scoped reference mutably against a node slice.
-    fn resolve_nodes_mut<'a>(&self, nodes: &'a mut [EffectGraphNode]) -> Option<&'a mut EffectGraphNode>;
-
-    /// The reference as document ids: the group path, then the node's own id.
-    /// The form the id-addressed editing commands and panel rows take; a
-    /// reference that no longer names a node gives `None`.
-    fn resolve_doc_path(&self, def: &EffectGraphDef) -> Option<(Vec<u32>, u32)>;
-
-    /// The scoped reference to the node whose stable id is `node`, anywhere
-    /// in `def`. Stable ids are unique across the whole document.
-    fn locate(def: &EffectGraphDef, node: &NodeId) -> Option<SceneNodeRef>;
-
-    /// Locate a stable node id in a node slice, including nested groups.
-    fn locate_nodes(nodes: &[EffectGraphNode], node: &NodeId) -> Option<SceneNodeRef>;
-}
-
-impl SceneNodeRefExt for SceneNodeRef {
-    fn resolve<'a>(&self, def: &'a EffectGraphDef) -> Option<&'a EffectGraphNode> {
-        self.resolve_nodes(&def.nodes)
-    }
-
-    fn resolve_nodes<'a>(&self, nodes: &'a [EffectGraphNode]) -> Option<&'a EffectGraphNode> {
-        let mut nodes = nodes;
-        for group in &self.scope {
-            nodes = &nodes.iter().find(|node| &node.node_id == group)?.group.as_deref()?.nodes;
-        }
-        nodes.iter().find(|node| node.node_id == self.node)
-    }
-
-    fn resolve_nodes_mut<'a>(&self, nodes: &'a mut [EffectGraphNode]) -> Option<&'a mut EffectGraphNode> {
-        fn descend<'a>(nodes: &'a mut [EffectGraphNode], scope: &[NodeId], node: &NodeId) -> Option<&'a mut EffectGraphNode> {
-            if let Some((group, rest)) = scope.split_first() {
-                let group = nodes.iter_mut().find(|candidate| candidate.node_id == *group)?.group.as_deref_mut()?;
-                return descend(&mut group.nodes, rest, node);
-            }
-            nodes.iter_mut().find(|candidate| candidate.node_id == *node)
-        }
-        descend(nodes, &self.scope, &self.node)
-    }
-
-    fn resolve_doc_path(&self, def: &EffectGraphDef) -> Option<(Vec<u32>, u32)> {
-        let mut nodes = def.nodes.as_slice();
-        let mut scope = Vec::with_capacity(self.scope.len());
-        for group in &self.scope {
-            let group = nodes.iter().find(|node| &node.node_id == group)?;
-            scope.push(group.id);
-            nodes = &group.group.as_deref()?.nodes;
-        }
-        let node = nodes.iter().find(|node| node.node_id == self.node)?;
-        Some((scope, node.id))
-    }
-
-    fn locate(def: &EffectGraphDef, node: &NodeId) -> Option<SceneNodeRef> {
-        Self::locate_nodes(&def.nodes, node)
-    }
-
-    fn locate_nodes(nodes: &[EffectGraphNode], node: &NodeId) -> Option<SceneNodeRef> {
-        fn visit(nodes: &[EffectGraphNode], wanted: &NodeId, scope: &mut Vec<NodeId>) -> Option<SceneNodeRef> {
-            for candidate in nodes {
-                if &candidate.node_id == wanted {
-                    return Some(SceneNodeRef { scope: scope.clone(), node: wanted.clone() });
-                }
-                if let Some(group) = candidate.group.as_deref()
-                    && !candidate.node_id.is_empty()
-                {
-                    scope.push(candidate.node_id.clone());
-                    let found = visit(&group.nodes, wanted, scope);
-                    scope.pop();
-                    if found.is_some() {
-                        return found;
-                    }
-                }
-            }
-            None
-        }
-        if node.is_empty() {
-            return None;
-        }
-        visit(nodes, node, &mut Vec::new())
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,34 +28,15 @@ pub enum SceneTargetSelection {
     AllObjects,
     Explicit {
         #[serde(default)]
-        objects: Vec<SceneNodeRef>,
+        objects: Vec<NodeId>,
     },
-}
-
-/// Stage-carrying modifiers (recipes with vertex stages) expand per-stage
-/// vertex buffers in the owner, so the owner caps their count; stage-less
-/// Math View instances are bounded separately by
-/// [`crate::scene_modifier_math_view::MAX_MATH_VIEW_MODIFIERS`].
-pub const MAX_STAGE_CARRYING_MODIFIERS: usize = 16;
-
-/// The one wording for a refusal on force slots: what needs them, how many,
-/// and how many are free.
-pub fn force_slots_message(subject: &str, needed: usize, free: usize, limit: usize) -> String {
-    let slots = if needed == 1 { "slot" } else { "slots" };
-    format!("{subject} needs {needed} force {slots} and this scene has {free} free: a scene holds at most {limit} forces")
-}
-
-/// How many of an owner's force slots `modifiers` take: every modifier but a
-/// Math View.
-pub fn force_slots_used(modifiers: &[SceneModifierInstanceDef]) -> usize {
-    modifiers.iter().filter(|m| !crate::scene_modifier_math_view::is_math_view_recipe(&m.graph)).count()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneModifierInstanceDef {
     pub id: NodeId,
-    pub scene: SceneNodeRef,
+    pub scene: NodeId,
     pub targets: SceneTargetSelection,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_frames: Vec<SceneMeshReferenceFrame>,
@@ -164,11 +52,16 @@ pub struct SceneModifierInstanceDef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneMeshReferenceFrame {
-    pub target: SceneNodeRef,
-    pub source: SceneNodeRef,
+    pub target: NodeId,
+    pub source: NodeId,
     pub source_definition_hash: String,
     pub source_offset: [f64; 3],
     pub scene_radius: f64,
+    /// A node whose `pos_x`, `pos_y` and `pos_z` outputs give the target's
+    /// offset live, read in place of `source_offset` (which keeps the rest
+    /// value): a part that moves inside a frame it shares with others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_offset: Option<NodeId>,
 }
 
 /// Return the admission diagnostic for an authored parameter that is part of
@@ -185,7 +78,7 @@ pub fn scene_modifier_parameter_lock_reason(
         && owner
             .scene_modifiers
             .iter()
-            .any(|modifier| modifier.mesh_frames.iter().any(|frame| &frame.source.node == node))
+            .any(|modifier| modifier.mesh_frames.iter().any(|frame| frame.source == *node))
     {
         return Some("Source settings are locked by a calibrated modifier; remove it before changing the source.");
     }
@@ -230,7 +123,7 @@ pub struct SceneModifierRecipe {
 #[serde(rename_all = "camelCase")]
 pub struct SceneImpulseRecipe {
     pub param_id: String,
-    pub field: SceneNodeRef,
+    pub field: NodeId,
     pub port: String,
 }
 
@@ -283,7 +176,7 @@ pub enum SceneScalarExpr {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneNodeInitializer {
-    pub target: SceneNodeRef,
+    pub target: NodeId,
     pub param: String,
     pub value: SceneScalarExpr,
 }
@@ -311,6 +204,9 @@ pub enum SceneEndpoint {
     Atmosphere,
     Transform,
     Instances,
+    /// How many leading instances an object draws (its `instance_count`). A
+    /// stage that changes how many copies are live carries it on.
+    InstanceCount,
     Vertices,
     Acceleration,
 }
@@ -437,17 +333,11 @@ impl fmt::Display for SceneModifierSchemaError {
 
 impl std::error::Error for SceneModifierSchemaError {}
 
-fn check_ref(path: &str, reference: &SceneNodeRef) -> Result<(), SceneModifierSchemaError> {
-    if reference.node.is_empty() {
+fn check_ref(path: &str, reference: &NodeId) -> Result<(), SceneModifierSchemaError> {
+    if reference.is_empty() {
         return Err(SceneModifierSchemaError::MissingTarget {
             path: path.into(),
             detail: "node reference is empty".into(),
-        });
-    }
-    if reference.scope.iter().any(NodeId::is_empty) {
-        return Err(SceneModifierSchemaError::MissingTarget {
-            path: path.into(),
-            detail: "scope contains an empty node id".into(),
         });
     }
     Ok(())
@@ -653,10 +543,11 @@ pub fn initialize_scene_modifier_snapshot(
 
 fn resolve_leaf_node_mut<'a>(
     graph: &'a mut EffectGraphDef,
-    target: &SceneNodeRef,
+    target: &NodeId,
     path: &str,
 ) -> Result<&'a mut EffectGraphNode, SceneModifierSchemaError> {
-    resolve_leaf_in_nodes(&mut graph.nodes, &target.scope, &target.node, path)
+    let scope = leaf_scope(&graph.nodes, target).unwrap_or_default();
+    resolve_leaf_in_nodes(&mut graph.nodes, &scope, target, path)
 }
 
 fn resolve_leaf_in_nodes<'a>(
@@ -1181,7 +1072,7 @@ mod tests {
         ]);
         raw["presetMetadata"]["sceneModifier"]["initializers"] = json!([
             {
-                "target": {"scope": ["group-id"], "node": "leaf-id"},
+                "target": "leaf-id",
                 "param": "amount",
                 "value": {"constant": {"value": 0.0}}
             }
@@ -1235,7 +1126,7 @@ mod tests {
         let mut recipe = recipe_json();
         recipe["impulses"] = json!([{
             "paramId": "fire",
-            "field": {"scope": ["group-id"], "node": "event-field"},
+            "field": "event-field",
             "port": "events"
         }]);
         let mut raw = graph_json(Some(recipe), json!([]));
@@ -1253,8 +1144,8 @@ mod tests {
             "fire"
         );
         assert_eq!(
-            wire["presetMetadata"]["sceneModifier"]["impulses"][0]["field"]["scope"][0],
-            "group-id"
+            wire["presetMetadata"]["sceneModifier"]["impulses"][0]["field"],
+            "event-field"
         );
         let back: EffectGraphDef = serde_json::from_value(wire).expect("impulse reparses");
         assert_eq!(def, back);
@@ -1271,8 +1162,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .impulses[0]
-            .field
-            .node = NodeId::new("");
+            .field = NodeId::new("");
         assert!(matches!(
             validate_scene_modifier_schema(&invalid),
             Err(SceneModifierSchemaError::MissingTarget { .. })
@@ -1304,10 +1194,7 @@ mod tests {
             .impulses
             .push(SceneImpulseRecipe {
                 param_id: "fire".into(),
-                field: SceneNodeRef {
-                    scope: Vec::new(),
-                    node: NodeId::new("other-field"),
-                },
+                field: NodeId::new("other-field"),
                 port: "events".into(),
             });
         assert!(matches!(
@@ -1391,7 +1278,7 @@ mod tests {
         let mut recipe = recipe_json();
         recipe["impulses"] = json!([{
             "paramId": "fire",
-            "field": {"node": "event-field"},
+            "field": "event-field",
             "port": "events"
         }]);
         let mut raw = graph_json(Some(recipe), json!([]));
@@ -1597,10 +1484,7 @@ mod tests {
             .expect("recipe")
             .initializers
             .push(SceneNodeInitializer {
-                target: SceneNodeRef {
-                    scope: vec![NodeId::new("group-id")],
-                    node: NodeId::new("leaf-id"),
-                },
+                target: NodeId::new("leaf-id"),
                 param: "missing".into(),
                 value: SceneScalarExpr::Constant { value: 1.0 },
             });
@@ -1635,8 +1519,7 @@ mod tests {
             .as_mut()
             .expect("recipe")
             .initializers[0]
-            .target
-            .node = NodeId::new("missing-leaf");
+            .target = NodeId::new("missing-leaf");
         assert!(matches!(
             initialize_scene_modifier_snapshot(&missing, ([-1.0; 3], [1.0; 3])),
             Err(SceneModifierSchemaError::MissingTarget { .. })
@@ -1724,8 +1607,8 @@ mod tests {
             json!([
                 {
                     "id": "modifier-a",
-                    "scene": {"node": "scene"},
-                    "targets": {"explicit": {"objects": [{"node": "object-a"}]}},
+                    "scene": "scene",
+                    "targets": {"explicit": {"objects": ["object-a"]}},
                     "graph": instance
                 }
             ]),
@@ -1751,11 +1634,11 @@ mod tests {
             None,
             json!([{
                 "id": "modifier-a",
-                "scene": {"node": "scene"},
+                "scene": "scene",
                 "targets": "allObjects",
                 "meshFrames": [{
-                    "target": {"node": "object-a"},
-                    "source": {"node": "source-a"},
+                    "target": "object-a",
+                    "source": "source-a",
                     "sourceDefinitionHash": "hash-a",
                     "sourceOffset": [0.0, 0.0, 0.0],
                     "sceneRadius": 1.0
@@ -1803,25 +1686,19 @@ mod tests {
     }
 
     #[test]
-    fn scene_modifier_v3_checks_duplicate_ids_and_scoped_target_identity() {
-        let mut raw = graph_json(
+    fn scene_modifier_v3_checks_duplicate_ids_and_targets() {
+        let raw = graph_json(
             None,
             json!([{
                 "id": "modifier-a",
-                "scene": {"node": "scene"},
+                "scene": "scene",
                 "targets": {"explicit": {"objects": [
-                    {"scope": ["group-a"], "node": "object"},
-                    {"scope": ["group-b"], "node": "object"}
+                    "object",
+                    "object"
                 ]}},
                 "graph": graph_json(Some(recipe_json()), json!([]))
             }]),
         );
-        let def: EffectGraphDef =
-            serde_json::from_value(raw.clone()).expect("scoped fixture parses");
-        validate_scene_modifier_schema(&def).expect("scope is part of target identity");
-
-        raw["sceneModifiers"][0]["targets"]["explicit"]["objects"] = json!([{"scope": ["group-a"], "node": "object"},
-                   {"scope": ["group-a"], "node": "object"}]);
         let def: EffectGraphDef = serde_json::from_value(raw).expect("duplicate target parses");
         let err = validate_scene_modifier_schema(&def).expect_err("duplicate target rejected");
         assert!(matches!(
@@ -1832,9 +1709,9 @@ mod tests {
         let raw = graph_json(
             None,
             json!([
-                {"id": "modifier-a", "scene": {"node": "scene"},
+                {"id": "modifier-a", "scene": "scene",
                  "targets": "allObjects", "graph": graph_json(Some(recipe_json()), json!([]))},
-                {"id": "modifier-a", "scene": {"node": "scene-2"},
+                {"id": "modifier-a", "scene": "scene-2",
                  "targets": "allObjects", "graph": graph_json(Some(recipe_json()), json!([]))}
             ]),
         );
@@ -1870,10 +1747,7 @@ mod tests {
             .as_mut()
             .expect("recipe");
         recipe.initializers.push(SceneNodeInitializer {
-            target: SceneNodeRef {
-                scope: Vec::new(),
-                node: NodeId::new("local-node"),
-            },
+            target: NodeId::new("local-node"),
             param: "phase".into(),
             value: deep_add(16),
         });
@@ -1957,11 +1831,11 @@ mod tests {
             "wires": [],
             "sceneModifiers": [{
                 "id": "modifier",
-                "scene": {"scope": [], "node": "scene"},
+                "scene": "scene",
                 "targets": "allObjects",
                 "meshFrames": [{
-                    "target": {"scope": ["nested-group"], "node": "object"},
-                    "source": {"scope": ["nested-group"], "node": source},
+                    "target": "object",
+                    "source": source,
                     "sourceDefinitionHash": "hash",
                     "sourceOffset": [0.0, 0.0, 0.0],
                     "sceneRadius": 1.0
@@ -2011,7 +1885,7 @@ mod tests {
             "wires": [],
             "sceneModifiers": [{
                 "id": "modifier",
-                "scene": {"scope": [], "node": "scene"},
+                "scene": "scene",
                 "targets": "allObjects",
                 "graph": {
                     "version": 3,

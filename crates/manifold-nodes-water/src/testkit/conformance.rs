@@ -536,7 +536,7 @@ impl BoxScene {
             def.wires.extend([
                 wire(start, "transform".into(), body, "transform".into()),
                 wire(body, "body".into(), world, format!("body_{level}")),
-                wire(body, "shape".into(), mesh, "shape".into()),
+                wire(mesh, "source".into(), body, "source".into()),
                 wire(mesh, "vertices".into(), object, "vertices".into()),
                 wire(material, "out".into(), object, "material".into()),
                 wire(body, "pose".into(), object, "transform".into()),

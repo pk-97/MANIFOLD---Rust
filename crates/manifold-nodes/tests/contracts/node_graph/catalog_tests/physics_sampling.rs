@@ -9,7 +9,7 @@ use manifold_core::{Beats, Seconds};
     #[test]
     fn matter_liquid_samples_its_field_and_its_world_per_tick() {
         let runtime = PresetRuntime::from_json_str(
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterFloatingBoxMatter.json")),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/WaterFloatingBoxMatter.json")),
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("WaterFloatingBoxMatter loads");
@@ -24,7 +24,7 @@ use manifold_core::{Beats, Seconds};
 
     #[test]
     fn physics_history_mask_includes_nonlinear_lfo_and_excludes_rendering() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/PhysicsSolids.json")))
+        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")))
         .unwrap();
         def["nodes"]
             .as_array_mut()
@@ -77,7 +77,7 @@ use manifold_core::{Beats, Seconds};
 
     #[test]
     fn rigid_body_source_is_setup_and_excludes_gpu_mesh_ancestors_from_history() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/PhysicsSolids.json")))
+        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")))
         .unwrap();
         // Source-driven bodies take shape from the visible mesh. Remove the
         // legacy body's opposite shape route before wiring that source back.
@@ -130,7 +130,7 @@ use manifold_core::{Beats, Seconds};
     #[test]
     fn explicit_reset_clears_physics_history_clock() {
         let mut runtime = PresetRuntime::from_json_str(
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/PhysicsSolids.json")),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")),
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("PhysicsSolids loads");
@@ -146,7 +146,7 @@ use manifold_core::{Beats, Seconds};
 
     #[test]
     fn physics_history_holds_release_events_without_replaying_trigger_state() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/PhysicsSolids.json")))
+        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")))
         .unwrap();
         def["nodes"]
             .as_array_mut()
@@ -187,39 +187,5 @@ use manifold_core::{Beats, Seconds};
             PresetRuntime::from_json_str(&def.to_string(), &registry).is_err(),
             "stateful pose ancestry must still be rejected"
         );
-    }
-
-    /// Ocean Cliff's surges come from its paddle: the LFO, the paddle's
-    /// transform and its collider role are replayed at every tick's start, so
-    /// the waves are the same at any frame rate and never need a Reset. The
-    /// sea, the rock and the renderer stay out of the per-tick passes.
-    #[test]
-    fn ocean_cliff_paddle_is_replayed_per_tick() {
-        let runtime = PresetRuntime::from_json_str(
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/OceanCliff.json")),
-            &PrimitiveRegistry::with_builtin(),
-        )
-        .expect("OceanCliff loads");
-        let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).expect("the paddle is physics ancestry");
-        let sampled = |node_id: &str| {
-            let node = runtime
-                .graph
-                .instance_by_node_id(&manifold_core::NodeId::new(node_id))
-                .unwrap_or_else(|| panic!("{node_id} exists"));
-            let (_, on) = runtime
-                .plan
-                .steps()
-                .iter()
-                .zip(mask)
-                .find(|(step, _)| step.node == node)
-                .unwrap_or_else(|| panic!("{node_id} has a step"));
-            *on
-        };
-        for node_id in ["paddle_drive", "paddle_transform", "paddle", "domain"] {
-            assert!(sampled(node_id), "{node_id} is replayed per tick");
-        }
-        for node_id in ["scene", "cliff_object", "ocean_object", "swell_spectrum", "sky"] {
-            assert!(!sampled(node_id), "{node_id} stays out of the per-tick passes");
-        }
     }
 

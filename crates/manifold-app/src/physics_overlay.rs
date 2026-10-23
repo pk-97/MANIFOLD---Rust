@@ -16,11 +16,12 @@ use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId, NodeId};
 use manifold_node_engine::scene::camera::Camera;
 use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
-use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoMode, GizmoSelection, GizmoTargetId};
+use manifold_nodes_scene::node_graph::viewport_gizmo::{GizmoMode, GizmoSelection};
 use manifold_ui::panels::scene_setup_panel::SceneSelection;
 use manifold_ui::{Rect, Vec2};
 
 use crate::scene_gizmo::{GizmoGesture, GizmoPress, GizmoView};
+use crate::scene_pick::{PickSurface, ScenePick};
 use crate::ui_bridge::DispatchCtx;
 
 type Domains = [(NodeId, FluidDomainSnapshot)];
@@ -86,17 +87,14 @@ impl PhysicsOverlayFrame {
 #[derive(Default)]
 pub(crate) struct PreviewGizmo {
     mode: GizmoMode,
-    /// The shapes picked on the preview, in pick order. A picked shape is
-    /// selected while its item is selected in the Scene panel; an item
-    /// selected with none of its shapes picked shows its first shape.
-    picked: Vec<GizmoTargetId>,
     drag: Option<PreviewDrag>,
-    /// A press on empty space inside the picture, where it landed: its
-    /// release there is a click, which clears the selection.
-    missed_at: Option<Vec2>,
+    /// A press no handle took inside the picture, where it landed and
+    /// whether Shift was held: its release there is a click, which picks what
+    /// is drawn there.
+    missed_at: Option<(Vec2, bool)>,
     /// The preview took the last left press, so W, E and R pick the mode.
     focused: bool,
-    /// Moves with the mode and the picked shapes: a frame-planner input.
+    /// Moves with the mode: a frame-planner input.
     version: u64,
     /// The overlay frame the last present showed, and the output size it
     /// was rendered at.
@@ -133,18 +131,18 @@ impl PreviewGizmo {
         &self.outline
     }
 
-    /// The handles to show over the shown scene: the panel's selection, the
-    /// shapes picked here and the handle mode. The content thread builds the
+    /// The handles to show over the shown scene: the panel's selection and
+    /// the handle mode. The content thread builds the
     /// lines from this against the scene it renders.
     pub fn request(
         &self,
         panel: &manifold_ui::panels::scene_setup_panel::ScenePanel,
         kept: Option<&crate::gizmo_overlay::GizmoRequest>,
     ) -> crate::gizmo_overlay::GizmoRequest {
-        crate::gizmo_overlay::GizmoRequest::panel(self.mode, panel.live_selected(), &self.picked, kept)
+        crate::gizmo_overlay::GizmoRequest::panel(self.mode, panel.live_selected(), kept)
     }
 
-    /// Moves when the mode or the picked shape changes.
+    /// Moves when the mode changes.
     pub fn version(&self) -> u64 {
         self.version
     }
@@ -207,13 +205,13 @@ impl PreviewGizmo {
         if !fresh {
             self.target = key.map(|key| {
                 let items = panel.live_selected();
-                let selection = GizmoSelection::new(&key.0, crate::scene_gizmo::selected_targets(&key.0, items, &self.picked));
+                let selection = GizmoSelection::new(&key.0, crate::scene_gizmo::selected_targets(&key.0, items));
                 let fade = effect_follows(project, &layer);
                 let objects = items.iter().filter(|_| !fade).filter_map(|item| match item {
-                    SceneSelection::Object(object) => Some(object),
+                    SceneSelection::Item(object) => Some(object),
                     _ => None,
                 });
-                crate::selection_outline::outline_slots(&key.0, objects, &mut self.outline);
+                key.0.outline_slots(objects, &mut self.outline);
                 (key, selection, fade)
             });
             if self.target.is_none() {
@@ -223,59 +221,56 @@ impl PreviewGizmo {
         true
     }
 
-    /// A left press at `pos` in the window; `extend` (Shift) adds the
-    /// picked shape to the selection or takes it out. `fit` is where the
-    /// show picture sits (`ui_frame::video_fit_rect`). True when the preview
-    /// took it: a handle grabbed or refused, or a shape picked. Every press
-    /// inside the picture focuses the preview; one outside unfocuses it.
+    /// A left press at `pos` in the window; `extend` is Shift. `fit` is
+    /// where the show picture sits (`ui_frame::video_fit_rect`). With Show
+    /// gizmos on, the selection's handle takes the press first, then a
+    /// helper that draws no pixels; true when one did. Any other press on
+    /// the Scene panel's picture is remembered: released where it landed, it
+    /// is a click that picks what is drawn there. Every press inside the
+    /// picture focuses the preview; one outside unfocuses it.
     pub fn press(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2, extend: bool) -> bool {
         self.missed_at = None;
-        let layer = ctx.ui.scene_setup_panel.gizmo_layer().cloned();
+        let panel = &ctx.ui.scene_setup_panel;
+        let (layer, gizmos) = (panel.live_layer_id().cloned(), panel.gizmo_layer().is_some());
         // An open overlay over the picture takes its own presses.
         let inside = fit.is_some_and(|fit| fit.contains(pos)) && !ctx.ui.overlay_contains_point(pos);
-        self.focused = inside && layer.is_some();
+        self.focused = inside && gizmos;
         let (Some(layer), Some(fit), Some(view)) = (layer, fit.filter(|_| inside), self.view()) else { return false };
-        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)) else { return false };
-        let graph = GraphTarget::Generator(layer.clone());
-        let Some(scene) = crate::scene_gizmo::authored_def(&ctx.project, &graph).as_ref().and_then(SceneVm::from_def) else {
+        if self.shown().is_none_or(|frame| frame.layer != layer) {
             return false;
-        };
-        let items = ctx.ui.scene_setup_panel.live_selected();
-        let selection = GizmoSelection::new(&scene, crate::scene_gizmo::selected_targets(&scene, items, &self.picked));
-        let at = crate::scene_gizmo::PressAt { view: &view, point, extend };
-        match crate::scene_gizmo::press(ctx, &layer, &scene, &selection, self.mode, at) {
-            GizmoPress::Handle(gesture) => {
-                self.drag = gesture.map(|gesture| PreviewDrag { gesture: *gesture, view });
-                true
-            }
-            GizmoPress::Picked(Some(ids)) => {
-                if self.picked != ids {
-                    self.picked = ids;
-                    self.version += 1;
+        }
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)) else { return false };
+        // The handles were built over the cached scene at the last present;
+        // a press never rebuilds the scene.
+        if gizmos && let Some(((scene, ..), selection, _)) = self.target.as_ref() {
+            let at = crate::scene_gizmo::PressAt { view: &view, point, extend };
+            match crate::scene_gizmo::press(ctx, &layer, scene, selection, self.mode, at) {
+                GizmoPress::Handle(gesture) => {
+                    self.drag = gesture.map(|gesture| PreviewDrag { gesture: *gesture, view });
+                    return true;
                 }
-                true
-            }
-            GizmoPress::Picked(None) => {
-                self.missed_at = Some(pos);
-                false
+                GizmoPress::Picked(true) => return true,
+                GizmoPress::Picked(false) => {}
             }
         }
+        self.missed_at = Some((pos, extend));
+        false
     }
 
-    /// A left release at `pos`. A press on empty space released where it
-    /// landed is a click there, which clears the selection, as in Blender;
-    /// a press that orbited the preview away is not.
-    pub fn release_click(&mut self, ctx: &mut DispatchCtx, pos: Vec2) {
-        let Some(at) = self.missed_at.take() else { return };
+    /// A left release at `pos`. A remembered press released where it landed
+    /// is a click there: the content thread picks the item drawn under it,
+    /// and empty space clears the selection, as in Blender. A press that
+    /// orbited the preview away is not a click.
+    pub fn release_click(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2) {
+        let Some((at, extend)) = self.missed_at.take() else { return };
         if (pos.x - at.x).hypot(pos.y - at.y) > manifold_ui::color::DRAG_THRESHOLD_PX {
             return;
         }
-        let Some(layer) = ctx.ui.scene_setup_panel.gizmo_layer().cloned() else { return };
-        ctx.ui.scene_setup_panel.clear_selected(layer);
-        if !self.picked.is_empty() {
-            self.picked.clear();
-            self.version += 1;
-        }
+        let (Some(layer), Some(fit), Some(view)) = (ctx.ui.scene_setup_panel.live_layer_id().cloned(), fit, self.view()) else { return };
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)) else { return };
+        let surface = if self.navigated.is_some() { PickSurface::Viewport } else { PickSurface::Output };
+        let pick = ScenePick { layer, surface, uv: crate::scene_pick::uv_of(&view, point), extend };
+        crate::content_command::ContentCommand::send(ctx.content_tx, crate::content_command::ContentCommand::PickSceneItem(pick));
     }
 
     /// Pointer motion during a drag: the knob scrub moves live. True when a

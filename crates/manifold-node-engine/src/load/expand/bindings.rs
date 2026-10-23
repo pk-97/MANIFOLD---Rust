@@ -556,7 +556,7 @@ mod tests {
             },
             "sceneModifiers": [{
                 "id": "mod",
-                "scene": {"node": "scene"},
+                "scene": "scene",
                 "targets": "allObjects",
                 "graph": local_json()
             }],

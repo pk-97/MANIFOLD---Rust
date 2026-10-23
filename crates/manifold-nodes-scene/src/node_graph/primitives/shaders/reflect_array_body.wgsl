@@ -1,18 +1,19 @@
 // node.reflect_array — fusable BUFFER body (SCENE_MIRROR design D3/D4/D5).
-// Whole-array planar reflection of Array<InstanceTransform>: output slot j
-// in [0, cap) is original instance j; slot cap + j is its reflection across
+// Whole-array planar reflection of Array<InstanceTransform>. With n live
+// input slots (live_count, clamped to the input capacity), output slot j in
+// [0, n) is original instance j and slot n + j its reflection across
 // the plane perpendicular to `axis` through d = plane_offset along it. The
 // output capacity is FIXED at 2x the input capacity at plan pre-allocation —
 // axis / plane_offset / enabled are live card writes and never trigger a
 // rebuild (the BUG-757c capacity rule).
 //
 // ABI (buffer standalone codegen): the `in` port is a BufferGather input —
-// this body indexes buf_in itself (slot idx % cap; a coincident pre-read
+// this body indexes buf_in itself (slot idx or idx - n; a coincident pre-read
 // would run off the end of the smaller input array). GATHER form: the atom
 // fuses into buffer regions, declaring FusedOutputCapacity::MultipleOf
 // { input: "in", factor: 2 } (BUG-orm4) — the region's count composes to
 // 2 x the input length and the fused dispatch writes both halves; the body
-// is bounds-safe at ANY idx (the modulo + the idx < in_cap branch), which is
+// is bounds-safe at ANY idx (every read is below n <= the input length), which is
 // what makes the widened count sound.
 //
 // Marker (D5): rot.w = mirror plane component + 1 on mirrored slots
@@ -29,19 +30,30 @@
 // M Rx M = Rx(m_y m_z x). With the plane at component c (m_c = -1, the
 // other two +1) the angle about the mirror normal keeps its sign and the
 // two about in-plane axes negate.
-fn body(idx: u32, count: u32, axis: u32, plane_offset: f32, enabled: f32) -> Element {
+fn body(idx: u32, count: u32, axis: u32, plane_offset: f32, enabled: f32, live_count: f32) -> Element {
     let in_cap = arrayLength(&buf_in);
     if (in_cap == 0u) {
         return Element(vec4<f32>(0.0), vec4<f32>(0.0));
     }
-    let src = buf_in[idx % in_cap];
+    // The first n input slots are live (a Copies count): originals fill
+    // [0, n), their mirrors [n, 2n), so a draw of 2n instances shows both.
+    let n = u32(clamp(live_count, 0.0, f32(in_cap)));
+    let mirrored = idx >= n;
+    var src_idx = idx;
+    if (mirrored) {
+        src_idx = idx - n;
+    }
+    if (src_idx >= n) {
+        return Element(vec4<f32>(0.0), vec4<f32>(0.0));
+    }
+    let src = buf_in[src_idx];
     let live = src.pos_scale.w != 0.0;
 
     // Originals half. `enabled` does NOT gate this half — off is free
     // (INV-MR1/D9): originals pass through while the source slot is live;
     // a dead (zero-scale) source stays zero-scale so the whole-buffer
     // instance draw rasterizes nothing for it.
-    if (idx < in_cap) {
+    if (!mirrored) {
         if (!live) {
             return Element(vec4<f32>(0.0), vec4<f32>(0.0));
         }

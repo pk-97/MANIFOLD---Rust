@@ -56,7 +56,7 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{LIQUID_PARTIC
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_core::fluid_domain::{MAX_FLUID_ROLES, MAX_LIQUID_BODIES};
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES};
@@ -2229,7 +2229,7 @@ manifold_node_engine::primitive! {
         int_param!("tick_index", "Tick", 0.0, 0.0, 16_777_216.0),
         int_param!("body_count", "Bodies", 0.0, 0.0, MAX_LIQUID_BODIES as f32),
         int_param!("rows", "Rows", 0.0, 0.0, 16_777_216.0),
-        int_param!("region_count", "Regions", 0.0, 0.0, MAX_FLUID_ROLES as f32),
+        int_param!("region_count", "Regions", 0.0, 0.0, i32::MAX as f32),
         float_param!("inflow_jitter", "Inflow Jitter", 0.0, 0.0, 1.0),
         int_param!("steps", "Steps", 1.0, 1.0, 64.0),
         float_param!("flip", "Flip Share", 0.95, 0.0, 1.0),
@@ -2426,7 +2426,7 @@ impl Primitive for GpuFlipStep {
         let box_min = solver.min();
         let regions_in = ctx.inputs.array("regions");
         let region_count = match regions_in {
-            Some(_) => ctx.scalar_or_param("region_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32,
+            Some(_) => ctx.scalar_or_param("region_count", 0.0).round().clamp(0.0, i32::MAX as f32) as i32,
             None => 0,
         };
         let band = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
