@@ -443,8 +443,6 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         pos_scale: [0.0; 4],
         rot_pad: [0.0; 4],
     };
-    // The marks draw at the face's own size, so its corners stay where they were.
-    let face_radius = native_mark_radius(vertices.map(|v| v.position));
     let instance_buffer = |copies: &[InstanceTransform]| {
         let buffer =
             device.create_buffer_shared(std::mem::size_of_val(copies) as u64);
@@ -479,7 +477,7 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
             view_proj,
             model: RenderMeshDiagram::model_matrix(Transform::default(), &camera),
             viewport: [W as f32, H as f32, 0.0, 0.0],
-            radius: face_radius,
+            radius: 0.2,
             line_width: 4.0,
             grid: 0,
             fragments: 1,

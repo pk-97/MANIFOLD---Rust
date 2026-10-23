@@ -93,20 +93,23 @@ fn sample_position(which: u32, idx: u32) -> vec3<f32> {
     return incoming[idx].position;
 }
 
-// A sampled face's mark reaches this fraction of the frame radius from its
-// centre to its farthest corner, whatever the face's own size, so a dense
-// scan's millimetre faces read as clearly as a coarse shape's.
+// The smallest mark: its farthest corner sits at least this fraction of the
+// frame radius from its centre, so a dense scan's millimetre faces read as
+// clearly as a coarse shape's.
 const MARK_SIZE: f32 = 0.08;
 
-// Corner `corner` of the sampled face at `base`, redrawn about the face's
-// centre at the mark size; the face keeps its shape and turn.
+// Corner `corner` of the sampled face at `base`. A face already that big
+// draws at its own size; a smaller one grows about its centre to the
+// minimum, keeping its shape and turn. Marks never shrink a face.
 fn mark(which: u32, base: u32, corner: u32) -> vec3<f32> {
     let a = sample_position(which, base);
     let b = sample_position(which, base + 1u);
     let c = sample_position(which, base + 2u);
     let centre = (a + b + c) / 3.0;
     let extent = max(max(length(a - centre), length(b - centre)), length(c - centre));
-    return centre + (sample_position(which, base + corner) - centre) * (u.radius * MARK_SIZE / max(extent, 1e-12));
+    let grow = max(u.radius * MARK_SIZE / max(extent, 1e-12), 1.0);
+    let p = sample_position(which, base + corner);
+    return select(centre + (p - centre) * grow, p, grow == 1.0);
 }
 
 // Instance copy transform, object space: rotate (XYZ Euler, bit-for-bit the

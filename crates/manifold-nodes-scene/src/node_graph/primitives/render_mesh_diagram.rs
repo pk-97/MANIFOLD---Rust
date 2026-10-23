@@ -693,21 +693,10 @@ mod tests {
     }
 }
 
-/// `MARK_SIZE` in the shader: a face's mark reaches this fraction of the
-/// frame radius from its centre to its farthest corner.
+/// `MARK_SIZE` in the shader: a smaller face's mark grows until its farthest
+/// corner is this fraction of the frame radius from its centre.
 #[cfg(test)]
 const MARK_SIZE: f32 = 0.08;
-
-/// The frame radius at which a face's mark is the face at its own size.
-#[cfg(all(test, feature = "gpu-proofs"))]
-fn native_mark_radius(face: [[f32; 3]; 3]) -> f32 {
-    let centre: [f32; 3] = std::array::from_fn(|axis| face.iter().map(|p| p[axis]).sum::<f32>() / 3.0);
-    let extent = face
-        .iter()
-        .map(|p| (0..3).map(|axis| (p[axis] - centre[axis]).powi(2)).sum::<f32>().sqrt())
-        .fold(0.0, f32::max);
-    extent / MARK_SIZE
-}
 
 #[cfg(test)]
 #[test]
