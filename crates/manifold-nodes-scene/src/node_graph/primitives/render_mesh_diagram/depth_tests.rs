@@ -185,16 +185,10 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         0.1,
         10.0,
     );
-    let current = vertices_buffer(
-        &device,
-        &[
-            // The edge spans reversed-Z raw device depth from about 0.66 to 0.04 while
-            // remaining inside the view, so a constant 0.5 occluder splits it.
-            vertex([-0.06, -0.05, -0.85]),
-            vertex([0.8, 0.55, 1.2]),
-            vertex([-0.06, 0.05, -0.85]),
-        ],
-    );
+    // The edge spans reversed-Z raw device depth from about 0.66 to 0.04 while
+    // remaining inside the view, so a constant 0.5 occluder splits it.
+    let face = [[-0.06, -0.05, -0.85], [0.8, 0.55, 1.2], [-0.06, 0.05, -0.85]];
+    let current = vertices_buffer(&device, &face.map(vertex));
     let scene = texture_f32(&device, 0.5, "mesh-diagram-constant-scene-depth");
     let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
         min_filter: manifold_gpu::GpuFilterMode::Nearest,
@@ -247,8 +241,10 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         MSAA_SAMPLE_COUNT,
         "mesh-diagram-xray",
     );
-    let u_depth = uniforms(&camera, 1, 3, 1, 1.0);
-    let u_xray = uniforms(&camera, 1, 3, 0, 1.0);
+    // The mark is the face at its own size, so the edge keeps its depth span.
+    let radius = native_mark_radius(face);
+    let u_depth = DiagramUniforms { radius, ..uniforms(&camera, 1, 3, 1, 1.0) };
+    let u_xray = DiagramUniforms { radius, ..uniforms(&camera, 1, 3, 0, 1.0) };
     let b_depth = bindings(&u_depth, &current, &scene, &sampler);
     let b_xray = bindings(&u_xray, &current, &scene, &sampler);
     let mut encoder = device.create_encoder("mesh-diagram-depth-line-proof");
@@ -421,5 +417,52 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
     }
     if let Ok(path) = std::env::var("MANIFOLD_MATH_AXES_PREVIEW") {
         std::fs::write(path, encode_rgba8_png(&preview, W * 2, H * 2)).unwrap();
+    }
+}
+
+/// A sampled face's mark takes its size from the frame radius, never from the
+/// face: a millimetre face and the same face a hundred times larger both draw
+/// a mark whose corners sit `MARK_SIZE` × radius from the face's centre.
+#[test]
+fn math_view_marks_take_their_size_from_the_radius() {
+    let guard = manifold_gpu::testkit::test_device();
+    let device = guard.arc();
+    let camera = Camera::look_at([0.0, 0.0, 5.0], [0.0; 3], [0.0, 1.0, 0.0], 1.0, 0.05, 100.0);
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
+        &device, W, H, GpuTextureFormat::Rgba16Float, "math-mark-size",
+    );
+    let msaa = device.create_texture_msaa_memoryless(
+        W, H, GpuTextureFormat::Rgba16Float, MSAA_SAMPLE_COUNT, "math-mark-size",
+    );
+    let pipeline = device.create_render_pipeline_msaa(
+        SHADER, "vs_main", "fs_main", GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND),
+        MSAA_SAMPLE_COUNT, "math-mark-size",
+    );
+    let far = texture_f32(&device, 0.0, "math-mark-size-depth");
+    let sampler = device.create_sampler(&GpuSamplerDesc::default());
+    // Centred on the origin; its top corner is the farthest, 1.2 out.
+    let face = [[-1.0, -0.6, 0.0], [1.0, -0.6, 0.0], [0.0, 1.2, 0.0]];
+    let radius = 10.0;
+    let reach = radius * MARK_SIZE / 1.2;
+    let lit = |pixels: &[u8], point: [f32; 3]| {
+        let p = camera.project_to_pixel(point, W, H).unwrap();
+        let (x, y) = (p.px.round() as i32, p.py.round() as i32);
+        ((y - 1)..=(y + 1)).any(|py| ((x - 1)..=(x + 1)).any(|px| {
+            let i = ((py as u32 * W + px as u32) * 4) as usize;
+            pixels[i + 1] > 100 && pixels[i + 2] > 100
+        }))
+    };
+    for scale in [0.001, 0.1] {
+        let buffer = vertices_buffer(&device, &face.map(|p| vertex(p.map(|c| c * scale))));
+        let u = DiagramUniforms { radius, geometry_hue: 0.5, ..uniforms(&camera, 1, 3, 0, 1.0) };
+        let b = bindings(&u, &buffer, &far, &sampler);
+        let mut encoder = device.create_encoder("math-mark-size");
+        encoder.draw_instanced_msaa(&pipeline, &msaa, &target.texture, &b[..6], 18, 2, GpuLoadAction::Clear, "math-mark-size");
+        encoder.commit_and_wait_completed();
+        let pixels = readback_srgb_rgba8(&device, &target.texture, W, H);
+        // The bottom edge's middle and the left edge's middle of the mark.
+        assert!(lit(&pixels, [0.0, -0.6 * reach, 0.0]), "mark bottom edge missing at face scale {scale}");
+        assert!(lit(&pixels, [-0.5 * reach, 0.3 * reach, 0.0]), "mark left edge missing at face scale {scale}");
+        assert!(!lit(&pixels, [0.0, 0.0, 0.0]), "the mark is an outline, not a dot, at face scale {scale}");
     }
 }

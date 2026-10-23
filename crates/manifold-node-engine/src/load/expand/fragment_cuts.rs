@@ -628,6 +628,9 @@ pub(super) fn apply(
             wire_to(def, object, "weights", aligned);
         }
         wire_to(def, object, "topology", (map_id, "map".into()));
+        // The mesh is padded to the map's capacity; the draw stops at the
+        // map's live records.
+        wire_to(def, object, "live_count", (map_id, "live_count".into()));
     }
     align_mesh_diagrams(def, &mut next_id, &lineages, &mut remap_cache)
 }
@@ -820,6 +823,9 @@ mod tests {
         let morph_input = input(&def, 3, "in").expect("morph input wire");
         assert_eq!(current.from_node, reference.from_node);
         assert_eq!(current.from_node, morph_input.from_node);
+        let map = input(&def, 4, "topology").expect("object topology wire").from_node;
+        let live = input(&def, 4, "live_count").expect("object live count wire");
+        assert_eq!((live.from_node, live.from_port.as_str()), (map, "live_count"), "the draw stops at the cut's live records");
 
         let prepared = def.clone();
         apply(&mut def, &mut binding_sources).expect("prepared graph is an idempotent no-op");

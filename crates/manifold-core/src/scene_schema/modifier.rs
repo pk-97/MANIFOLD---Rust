@@ -196,8 +196,12 @@ pub struct ModifierTypeEntry {
     pub label: &'static str,
     /// The stock scene modifier recipe it compiles.
     pub recipe: &'static str,
-    /// It moves vertices, so a built-in shape it targets gets mesh detail.
+    /// It moves vertices, so Shatter leaves a shape it reaches whole
+    /// ([`shatter_parts`]).
     pub deforms: bool,
+    /// It bends surfaces smoothly, so a built-in shape it reaches is split
+    /// fine enough to curve. Cuts, snaps and breaks keep the shape as it is.
+    pub smooth_detail: bool,
     pub rows: &'static [PropertyRow],
 }
 
@@ -209,14 +213,21 @@ pub(super) const fn entry(
     deforms: bool,
     rows: &'static [PropertyRow],
 ) -> ModifierTypeEntry {
-    ModifierTypeEntry { modifier, key, label, recipe, deforms, rows }
+    ModifierTypeEntry { modifier, key, label, recipe, deforms, smooth_detail: false, rows }
+}
+
+impl ModifierTypeEntry {
+    /// Marks a type whose bends need a smooth surface.
+    pub(super) const fn smooth(self) -> Self {
+        Self { smooth_detail: true, ..self }
+    }
 }
 
 /// The mesh and scene modifiers.
 const CORE_TYPES: [ModifierTypeEntry; 7] = [
     entry(ModifierType::SurfacePeel, "surface_peel", "Surface Peel", "SurfacePeel", true, &SURFACE_PEEL_ROWS),
     entry(ModifierType::OrderedRecon, "ordered_recon", "Ordered Recon", "OrderedRecon", true, &ORDERED_RECON_ROWS),
-    entry(ModifierType::SurfaceWaves, "surface_waves", "Surface Waves", "SurfaceWaves", true, &SURFACE_WAVES_ROWS),
+    entry(ModifierType::SurfaceWaves, "surface_waves", "Surface Waves", "SurfaceWaves", true, &SURFACE_WAVES_ROWS).smooth(),
     entry(ModifierType::SpatialEchoes, "spatial_echoes", "Spatial Echoes", "SpatialEchoes", false, &SPATIAL_ECHOES_ROWS),
     entry(
         ModifierType::ElasticSculpture,
@@ -225,7 +236,8 @@ const CORE_TYPES: [ModifierTypeEntry; 7] = [
         "ElasticSculpture",
         true,
         &ELASTIC_SCULPTURE_ROWS,
-    ),
+    )
+    .smooth(),
     entry(
         ModifierType::VortexFragments,
         "vortex_fragments",

@@ -2557,6 +2557,7 @@ impl RenderScene {
             material: inputs.material("material"),
             mesh: inputs.slot_of("vertices"),
             indices: None,
+            live_count: None,
             weights: None,
             topology: None,
             base_color_map: inputs.slot_of("base_color_map"),

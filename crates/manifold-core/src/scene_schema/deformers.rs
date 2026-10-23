@@ -122,10 +122,10 @@ pub static SHAKE_ROWS: [PropertyRow; 5] = [
 
 /// The deformer types, in menu order.
 pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
-    entry(ModifierType::Bend, "bend", "Bend", "Bend", true, &BEND_ROWS),
-    entry(ModifierType::Twist, "twist", "Twist", "Twist", true, &TWIST_ROWS),
-    entry(ModifierType::Taper, "taper", "Taper", "Taper", true, &TAPER_ROWS),
-    entry(ModifierType::Inflate, "inflate", "Inflate", "Inflate", true, &INFLATE_ROWS),
+    entry(ModifierType::Bend, "bend", "Bend", "Bend", true, &BEND_ROWS).smooth(),
+    entry(ModifierType::Twist, "twist", "Twist", "Twist", true, &TWIST_ROWS).smooth(),
+    entry(ModifierType::Taper, "taper", "Taper", "Taper", true, &TAPER_ROWS).smooth(),
+    entry(ModifierType::Inflate, "inflate", "Inflate", "Inflate", true, &INFLATE_ROWS).smooth(),
     entry(ModifierType::Rotate, "rotate", "Rotate", "Rotate", false, &ROTATE_ROWS),
     entry(
         ModifierType::DisplaceByTexture,
@@ -134,18 +134,21 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         "DisplaceByTexture",
         true,
         &DISPLACE_TEXTURE_ROWS,
-    ),
+    )
+    .smooth(),
     entry(ModifierType::Morph, "morph", "Morph", "Morph", false, &MORPH_ROWS),
-    entry(ModifierType::Boil, "boil", "Boil", "Boil", true, &BOIL_ROWS),
-    entry(ModifierType::Ripple, "ripple", "Ripple", "Ripple", true, &RIPPLE_ROWS),
-    entry(ModifierType::Melt, "melt", "Melt", "Melt", true, &MELT_ROWS),
+    entry(ModifierType::Boil, "boil", "Boil", "Boil", true, &BOIL_ROWS).smooth(),
+    entry(ModifierType::Ripple, "ripple", "Ripple", "Ripple", true, &RIPPLE_ROWS).smooth(),
+    entry(ModifierType::Melt, "melt", "Melt", "Melt", true, &MELT_ROWS).smooth(),
+    // Each vertex jumps by its own stepped hash, so the glitch reads on the
+    // shape's own vertices; split finer it only turns to fuzz.
     entry(ModifierType::GlitchJitter, "glitch_jitter", "Glitch Jitter", "GlitchJitter", true, &GLITCH_JITTER_ROWS),
     entry(ModifierType::ShatterMesh, "shatter_mesh", "Shatter Mesh", "ShatterMesh", true, &SHATTER_MESH_ROWS),
     entry(ModifierType::Slice, "slice", "Slice", "Slice", true, &SLICE_ROWS),
     entry(ModifierType::Voxelize, "voxelize", "Voxelize", "Voxelize", true, &VOXELIZE_ROWS),
-    entry(ModifierType::Fold, "fold", "Fold", "Fold", true, &FOLD_ROWS),
+    entry(ModifierType::Fold, "fold", "Fold", "Fold", true, &FOLD_ROWS).smooth(),
     entry(ModifierType::FacetNormals, "facet_normals", "Facet Normals", "FacetNormals", false, &FACET_NORMALS_ROWS),
-    entry(ModifierType::WaveShear, "wave_shear", "Wave Shear", "WaveShear", true, &WAVE_SHEAR_ROWS),
+    entry(ModifierType::WaveShear, "wave_shear", "Wave Shear", "WaveShear", true, &WAVE_SHEAR_ROWS).smooth(),
     entry(ModifierType::CutOutBox, "cut_out_box", "Cut Out Box", "CutOutBox", true, &CUT_OUT_BOX_ROWS),
     entry(ModifierType::Shake, "shake", "Shake", "Shake", false, &SHAKE_ROWS),
 ];

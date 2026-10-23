@@ -79,9 +79,9 @@ pub(crate) struct Builder<'d> {
     frames: BTreeMap<NodeId, FramePlan>,
     /// Every drawn object a modifier can measure, in draw order.
     pub(crate) drawn: Vec<Drawn>,
-    /// The Objects a deforming Modifier that is on reaches: their built-in
+    /// The Objects a smoothly bending Modifier that is on reaches: their built-in
     /// shapes get mesh detail.
-    pub(crate) deformed: BTreeSet<ItemId>,
+    pub(crate) smoothed: BTreeSet<ItemId>,
 }
 
 /// A mesh's rest pose (SCENE_DOCUMENT_DESIGN.md ruling 20): every shape
@@ -145,7 +145,7 @@ impl<'d> Builder<'d> {
             modifiers: Vec::new(),
             frames: BTreeMap::new(),
             drawn: Vec::new(),
-            deformed: super::modifiers::deformed_items(doc),
+            smoothed: super::modifiers::smoothed_items(doc),
         };
         b.add(SCENE, "input", "system.generator_input");
         b.add(SCENE, "render", "node.render_scene");

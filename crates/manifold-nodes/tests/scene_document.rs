@@ -1059,3 +1059,33 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
     }
     prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
 }
+
+/// Only smooth bends split a built-in shape; a fragment cut keeps the cube
+/// as it is and the cube draws only the cut's live records.
+#[test]
+fn bends_add_detail_and_a_fragment_cut_draws_its_live_records() {
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    let prepared = |modifier| {
+        let mut doc = SceneDoc::base();
+        let mut card = ItemFields::default_for(ItemKind::Modifier);
+        if let ItemFields::Modifier(fields) = &mut card {
+            *fields = ModifierFields { modifier, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+        }
+        let end = doc.items.len();
+        doc.insert(None, end, Item::new(ItemId::new("card"), "Card", card)).unwrap();
+        let def = scene_layer(doc).gen_params().unwrap().graph.clone().unwrap();
+        prepare_scene_modifiers(&def, &PrimitiveRegistry::with_builtin()).unwrap().def
+    };
+    let split = |def: &EffectGraphDef| def.nodes.iter().any(|n| n.type_id == "node.subdivide_mesh");
+    assert!(split(&prepared(ModifierType::Bend)), "a bend splits the cube so it curves");
+    let cut = prepared(ModifierType::VortexFragments);
+    assert!(!split(&cut), "fragments cut the cube as it is");
+    let feed = |object: u32, port: &str| cut.wires.iter().find(|w| w.to_node == object && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()));
+    let objects: Vec<u32> = cut.nodes.iter().filter(|n| n.type_id == "node.scene_object").map(|n| n.id).filter(|&id| feed(id, "topology").is_some()).collect();
+    assert!(!objects.is_empty(), "the cut reaches an object");
+    for object in objects {
+        let (map, _) = feed(object, "topology").unwrap();
+        assert_eq!(feed(object, "live_count"), Some((map, "live_count".to_owned())), "the object draws the cut's live records");
+    }
+}

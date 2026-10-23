@@ -76,7 +76,7 @@ fn builtin_rest(b: &mut Builder<'_>, mesh_type: &str, solid: Option<u32>) -> Opt
     })
 }
 
-/// The vertex count a deformed built-in shape is split up to: enough for a
+/// The vertex count a smoothly bent built-in shape is split up to: enough for a
 /// cube face to curve smoothly under a bend or a wave. A quality target, not
 /// a cap: the split stops at the first level past it.
 const DETAIL_VERTICES: u32 = 6000;
@@ -86,13 +86,13 @@ const DETAIL_VERTICES: u32 = 6000;
 const MAX_DETAIL_LEVEL: u32 = 5;
 
 /// How many times to split a built-in shape's triangles: none unless a
-/// deforming Modifier that is on reaches it, then the fewest splits that give
+/// smoothly bending Modifier that is on reaches it, then the fewest splits that give
 /// it [`DETAIL_VERTICES`]. Each split multiplies the count by four.
 fn detail_level(b: &Builder<'_>, item: &Item, rest: Option<&Rest>) -> u32 {
     let Some(rest) = rest else {
         return 0;
     };
-    if !b.deformed.contains(&item.id) {
+    if !b.smoothed.contains(&item.id) {
         return 0;
     }
     let mut level = 0;
