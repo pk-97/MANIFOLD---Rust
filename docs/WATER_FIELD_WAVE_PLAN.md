@@ -90,6 +90,16 @@ Opus lanes run at high effort unless marked medium. S0 is mechanical, so it goes
 
 The whole set must finish before the landing. Nothing is stretch, because the wave runs until it is done.
 
+**Phases.**
+1. **Clear of the refinement wave:** S0, SA diagnosis, R1a, S1.
+2. **After refinement lands:** main merged into the wave, then R0 and SB.
+3. **Drawing and storage:** R2, then R1b; S2 alongside. Peter gets a launch command once R1b merges.
+4. **Cutover:** RD and S3; R3, R4, R5 and R7 fill free slots.
+5. **Open water:** S4 and SP; the render, look and storage reviews.
+6. **Last pieces:** S4b and S5; the domain and app reviews; fix lanes.
+7. **Audits:** the final audits in section 5.
+8. **Simplify and clean up** (section 5), then the quiet timing batch, the full gate and the one landing.
+
 ## 4. Lane briefs and done checklists
 
 Every lane's brief is its entry here plus sections 1 and 2. Anchors come from the 2026-10-23 inventories against main 5b3a6d255; the lead re-verifies them on the cut.
@@ -289,6 +299,17 @@ Ferstl et al. 2016, rebuilt on the storage helpers, working with sheeting, the f
   - contradictions between the plan, the design doc, the code and the lanes' named calls;
   - the clean-cut sweep: every deleted name returns zero, with no dead code and no unused params or rows;
   - a literal and cap sweep: every numeric literal and `MAX_*` added in the wave diff is physics, derived or named and sourced.
+- **Simplify and clean up (phase 8).** After the audits' fixes merge, three read-only Opus reviews (render, simulation, app and tests) read the whole wave diff for one thing: is this as simple and clean as it can be? Each finding names the simpler version and what it loses, if anything. They look for:
+  - more machinery than the job needs: helpers used once, interfaces wider than their callers, duplicated logic, abstractions with one user;
+  - anything left over from replaced systems: dead code, unused params and rows, stale comments and doc lines, leftover probes, prints and debug flags;
+  - tests that protect nothing, and tests that duplicate each other;
+  - files grown past 3000 lines, which get one split here;
+  - names and comments that no longer match what the code does.
+
+  Cleanup lanes (Opus, one commit each) apply the findings. Then a last sweep confirms that the clean-cut and literal audits still return zero. Branch and file cleanup comes after the landing:
+  - delete the merged lane branches and the prototype branches (`proto/level-set-*`);
+  - release and scrub every slot;
+  - delete the scratchpad captures.
 - **One quiet timing batch** after the last merge, with no lanes running. `fluid_capture` at 64 and 128 on the Dam Break: main against the wave, alternating, three runs each, reporting `gpu_ms`, `frame_ms` and memory.
 - **Landing.** `scripts/land_branch.py wave/water-field` once, followed with `scripts/watch_land.py --kind land`. Green lands on main. A red gets a typed bead and a fix lane. A red proven on main is named with `--named-red` and `--reason`.
 - **Blockers that need Peter:** decide, log in `decisions.md` and the report, keep going.
