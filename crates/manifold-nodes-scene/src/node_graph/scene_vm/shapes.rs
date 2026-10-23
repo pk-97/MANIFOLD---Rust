@@ -10,7 +10,7 @@ use manifold_foundation::ItemId;
 use manifold_foundation::scene_surface::SceneShapeDecl;
 use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Mat4, Transform};
 
-use crate::node_graph::scene_surface::{CENTRED_FORCE_SHAPES, DIRECTED_FORCE_SHAPES, ITEM_SHAPES, LAMP_SHAPES};
+use crate::node_graph::scene_surface::{RADIAL_FORCE_SHAPES, VORTEX_FORCE_SHAPES, DIRECTED_FORCE_SHAPES, ITEM_SHAPES, LAMP_SHAPES};
 
 /// The roles a placed fluid source plays (`node.fluid_role_source`'s
 /// `role` values 0 to 2).
@@ -129,7 +129,8 @@ pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) 
             }
             ItemFields::Force(force) => {
                 let decl = match force.force {
-                    ForceType::Radial | ForceType::Vortex | ForceType::Attractor | ForceType::Explosion => &CENTRED_FORCE_SHAPES[0],
+                    ForceType::Radial => &RADIAL_FORCE_SHAPES[0],
+                    ForceType::Vortex => &VORTEX_FORCE_SHAPES[0],
                     ForceType::Uniform | ForceType::Wind => &DIRECTED_FORCE_SHAPES[0],
                     // Still air has nowhere to be and no direction.
                     ForceType::Drag => return,

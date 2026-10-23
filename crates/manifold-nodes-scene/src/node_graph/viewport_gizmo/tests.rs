@@ -5,7 +5,9 @@ use manifold_core::fluid_domain::DOMAIN_EXTENT_METRES;
 use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
 
 use super::*;
-use crate::node_graph::scene_surface::{INITIAL_FILL_SHAPES, ITEM_SHAPES, LIQUID_DOMAIN_SHAPES, SWARM_SHAPES, WATER_SOURCE_SHAPES};
+use crate::node_graph::scene_surface::{
+    INITIAL_FILL_SHAPES, ITEM_SHAPES, LIQUID_DOMAIN_SHAPES, RADIAL_FORCE_SHAPES, SWARM_SHAPES, VORTEX_FORCE_SHAPES, WATER_SOURCE_SHAPES,
+};
 use crate::node_graph::scene_vm::{ParamAddr, ShapeWrite, TransformVm};
 
 fn cam_looking_down_neg_z(pos: [f32; 3]) -> Camera {
@@ -336,6 +338,60 @@ fn radial_force_target_derives_from_its_point_radius_declaration() {
     assert_eq!(pick_axis(GizmoMode::Scale, &target, &GizmoView::new(cam, 640, 480), px(offset(target.origin, GizmoAxis::Uniform.unit(), len_at(target.origin)))), Some(GizmoAxis::Uniform));
 }
 
+/// A Radial force draws its radius and the balls where its strength falls to
+/// half and a tenth, fainter; a Vortex draws a cylinder round its axis, with
+/// the axis. A click picks the radius, never a shell.
+#[test]
+fn radial_and_vortex_forces_draw_their_reach() {
+    let radial = |values: &[(&str, f32)]| GizmoTarget::from_shape(&force_shape(RADIAL_FORCE_SHAPES[0].clone(), values, [0.0; 3]));
+    let shells = |target: &GizmoTarget| match target.outline {
+        ShapeOutline::Field { center, shells, .. } => {
+            assert_eq!(center, [0.0, 0.0, -5.0]);
+            shells
+        }
+        other => panic!("a radial force draws its field, got {other:?}"),
+    };
+    let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-5);
+    // Inverse at power 2: (1/d)² is a half at √2 m and a tenth at √10 m.
+    let inverse = radial(&[("center_z", -5.0), ("radius", 1.0), ("falloff", 2.0), ("curve", 1.0)]);
+    let [half, tenth] = shells(&inverse);
+    assert!(near(half, 2f32.sqrt()) && near(tenth, 10f32.sqrt()), "{half:?} {tenth:?}");
+    // Edge at power 1: 1 − d/2 is a half at 1 m and a tenth at 1.8 m.
+    let [half, tenth] = shells(&radial(&[("center_z", -5.0), ("radius", 2.0), ("falloff", 1.0), ("curve", 0.0)]));
+    assert!(near(half, 1.0) && near(tenth, 1.8), "{half:?} {tenth:?}");
+    // Power 0 holds full strength to the edge: no shells.
+    assert_eq!(shells(&radial(&[("center_z", -5.0), ("radius", 2.0), ("falloff", 0.0)])), [None, None]);
+
+    let mut lines = Vec::new();
+    inverse.outline_lines([255, 0, 0, 200], &mut lines);
+    assert_eq!(lines.len(), 9 * OUTLINE_SEGMENTS, "three balls of three circles");
+    let alphas: Vec<u8> = [0, 1, 2].map(|ball| lines[ball * 3 * OUTLINE_SEGMENTS].color[3]).to_vec();
+    assert_eq!(alphas, [200, 120, 70], "the shells draw fainter, the tenth faintest");
+    let mut picked = 0;
+    inverse.outline.for_each_edge(|_, _| picked += 1);
+    assert_eq!(picked, 3 * OUTLINE_SEGMENTS, "a click picks the radius only");
+
+    let vortex = GizmoTarget::from_shape(&force_shape(
+        VORTEX_FORCE_SHAPES[0].clone(),
+        &[("center_z", -5.0), ("axis_y", 3.0), ("radius", 2.0), ("falloff", 1.0)],
+        [0.0; 3],
+    ));
+    assert_eq!(vortex.outline, ShapeOutline::Vortex { center: [0.0, 0.0, -5.0], axis: [0.0, 1.0, 0.0], radius: 2.0 });
+    let (mut rim, mut on_axis) = (0, 0);
+    vortex.outline.for_each_edge(|a, b| {
+        let from_axis = [a, b].map(|p| (p[0] * p[0] + (p[2] + 5.0) * (p[2] + 5.0)).sqrt());
+        assert!([a, b].iter().all(|p| p[1].abs() <= 3.0 + 1e-5), "within the cylinder's height and the axis's reach");
+        if from_axis.iter().all(|d| (d - 2.0).abs() < 1e-4) {
+            rim += 1;
+        } else if from_axis.iter().all(|d| d.abs() < 1e-4) {
+            on_axis += 1;
+        } else {
+            panic!("an edge off the cylinder and the axis: {a:?} {b:?}");
+        }
+    });
+    assert_eq!((rim, on_axis), (2 * OUTLINE_SEGMENTS + 4, 1), "two rings and four sides round the axis, and the axis");
+}
+
 #[test]
 fn vortex_force_rotate_turns_its_axis_and_keeps_its_length() {
     let decl = manifest_decl(
@@ -414,11 +470,11 @@ fn rotate_drag_delta_quarter_turn_is_roughly_half_pi() {
 }
 
 #[test]
-fn ring_lines_are_closed_loop_of_24_segments() {
+fn ring_lines_are_a_closed_loop() {
     let lines: Vec<_> = ring_lines([0.0, 0.0, 0.0], GizmoAxis::Y, 1.0, Y_COLOR).collect();
-    assert_eq!(lines.len(), 24);
+    assert_eq!(lines.len(), HANDLE_RING_SEGMENTS);
     for i in 0..3 {
-        assert!((lines[0].a[i] - lines[23].b[i]).abs() < 1e-4);
+        assert!((lines[0].a[i] - lines[HANDLE_RING_SEGMENTS - 1].b[i]).abs() < 1e-4);
     }
 }
 
@@ -1029,7 +1085,9 @@ fn every_declared_shape_is_picked_by_its_own_edges() {
         &[("center_z", -8.0), ("axis_y", 1.0), ("radius", 2.0)],
         [0.0; 3],
     );
-    for shape in [source, swarm, radial, vortex] {
+    let field = force_shape(RADIAL_FORCE_SHAPES[0].clone(), &[("center_z", -8.0), ("radius", 2.0), ("falloff", 2.0), ("curve", 1.0)], [0.0; 3]);
+    let swirl = force_shape(VORTEX_FORCE_SHAPES[0].clone(), &[("center_z", -8.0), ("axis_y", 1.0), ("radius", 2.0)], [0.0; 3]);
+    for shape in [source, swarm, radial, vortex, field, swirl] {
         let scene = scene_of(vec![shape]);
         let target = gizmo_targets(&scene).next().unwrap();
         let edge = edge_px(&target);

@@ -88,13 +88,14 @@ pub static ADD_ENTRIES: [AddEntry; 60] = [
     entry("water_source.fill", "Water Source", "Fill", ItemKind::WaterSource, "Fill", || source(SourceRole::Fill)),
     entry("water_source.inflow", "Water Source", "Inflow", ItemKind::WaterSource, "Inflow", || source(SourceRole::Inflow)),
     entry("water_source.drain", "Water Source", "Drain", ItemKind::WaterSource, "Drain", || source(SourceRole::Drain)),
-    entry("force.radial", "Force", "Radial", ItemKind::Force, "Radial Force", || force(ForceType::Radial)),
+    // Push, Pull and Burst are one Radial card at three starting points (`FORCE_STARTS`).
+    entry("force.push", "Force", "Push", ItemKind::Force, "Push", || force(ForceType::Radial)),
+    entry("force.pull", "Force", "Pull", ItemKind::Force, "Pull", || force(ForceType::Radial)),
+    entry("force.burst", "Force", "Burst", ItemKind::Force, "Burst", || force(ForceType::Radial)),
     entry("force.uniform", "Force", "Uniform", ItemKind::Force, "Uniform Force", || force(ForceType::Uniform)),
     entry("force.vortex", "Force", "Vortex", ItemKind::Force, "Vortex", || force(ForceType::Vortex)),
     entry("force.wind", "Force", "Wind", ItemKind::Force, "Wind", || force(ForceType::Wind)),
     entry("force.drag", "Force", "Drag", ItemKind::Force, "Drag", || force(ForceType::Drag)),
-    entry("force.attractor", "Force", "Attractor", ItemKind::Force, "Attractor", || force(ForceType::Attractor)),
-    entry("force.explosion", "Force", "Explosion", ItemKind::Force, "Explosion", || force(ForceType::Explosion)),
     // A new card aims at the selection, or the whole scene when nothing is
     // selected, at the end of the chain (section 7.2).
     entry("modifier.surface_peel", "Modifier", "Surface Peel", ItemKind::Modifier, "Surface Peel", || modifier(ModifierType::SurfacePeel)),
@@ -149,6 +150,21 @@ pub static ADD_ENTRIES: [AddEntry; 60] = [
 /// The entry a click on `key` means.
 pub fn add_entry(key: &str) -> Option<&'static AddEntry> {
     ADD_ENTRIES.iter().find(|entry| entry.key == key)
+}
+
+/// The Radial card's three starting points: the card values each entry
+/// writes after the recipe's own defaults. Push is the recipe as it stands.
+/// Pull draws in with an inverse-square reach; Burst holds no steady push
+/// and kicks outward when its Impulse fires.
+pub const FORCE_STARTS: [(&str, &[(&str, f32)]); 3] = [
+    ("force.push", &[]),
+    ("force.pull", &[("strength", -5.0), ("impulse_strength", -2.0), ("radius", 1.0), ("falloff", 2.0), ("curve", 1.0)]),
+    ("force.burst", &[("strength", 0.0), ("impulse_strength", 8.0), ("radius", 3.0)]),
+];
+
+/// The card values the entry `key` starts at, beyond its recipe's defaults.
+pub fn entry_starts(key: &str) -> &'static [(&'static str, f32)] {
+    FORCE_STARTS.iter().find(|(entry, _)| *entry == key).map_or(&[], |(_, starts)| starts)
 }
 
 /// A name for a new item: `base`, or `base N` for the lowest N from 2 that no

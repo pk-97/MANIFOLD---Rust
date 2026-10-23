@@ -426,6 +426,17 @@ pub enum SceneShape {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radius: Option<Cow<'static, str>>,
     },
+    /// A force about a centre: `center` moves and `radius` scales as
+    /// [`Self::PointRadius`]; `falloff` and `curve` place its strength
+    /// shells. With an `axis` it swirls round that axis (a vortex).
+    Field {
+        center: ParamTriple,
+        radius: Cow<'static, str>,
+        falloff: Cow<'static, str>,
+        curve: Cow<'static, str>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis: Option<ParamTriple>,
+    },
 }
 
 impl SceneShape {
@@ -439,6 +450,9 @@ impl SceneShape {
             Self::Plane { center, normal } => (vec![center, normal], Vec::new()),
             Self::Axis { origin, direction, radius } => {
                 (origin.iter().chain(std::iter::once(direction)).collect(), radius.iter().collect())
+            }
+            Self::Field { center, radius, falloff, curve, axis } => {
+                (std::iter::once(center).chain(axis).collect(), vec![radius, falloff, curve])
             }
         };
         triples.into_iter().flatten().chain(singles).map(|id| id.as_ref())

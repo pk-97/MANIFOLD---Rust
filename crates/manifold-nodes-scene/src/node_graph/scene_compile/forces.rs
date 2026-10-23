@@ -25,8 +25,6 @@ fn recipe_of(force: ForceType) -> &'static str {
         ForceType::Uniform => "UniformForce",
         ForceType::Vortex => "VortexForce",
         ForceType::Wind | ForceType::Drag => "Wind",
-        ForceType::Attractor => "Attractor",
-        ForceType::Explosion => "Explosion",
     }
 }
 

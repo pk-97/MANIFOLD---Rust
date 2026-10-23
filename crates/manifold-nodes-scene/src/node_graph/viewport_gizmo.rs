@@ -63,8 +63,13 @@ pub const PICK_RADIUS_PT: f32 = 22.0;
 pub const EDGE_PICK_TOLERANCE_PT: f32 = 8.0;
 /// Alpha of a shape that is not selected: faint, but there to click.
 pub const UNSELECTED_ALPHA: u8 = 90;
-/// Segments per circle of a shape outline.
-const OUTLINE_SEGMENTS: usize = 24;
+/// Segments per circle of a shape outline: round at any size on screen.
+const OUTLINE_SEGMENTS: usize = 96;
+/// Segments per rotate ring of a handle.
+const HANDLE_RING_SEGMENTS: usize = 64;
+/// A force's falloff shells: the strengths they mark, and how much of the
+/// outline's alpha each keeps.
+const SHELLS: [(f32, f32); 2] = [(0.5, 0.6), (0.1, 0.35)];
 /// A swarm's forces box.
 const SWARM_COLOR: [u8; 4] = [160, 150, 255, 255];
 /// Handle hit-test tolerance, screen points.
@@ -259,20 +264,50 @@ pub enum ShapeOutline {
     Ball { center: [f32; 3], radius: f32 },
     /// A direction from a point, with the ring of its reach around it.
     Ray { from: [f32; 3], dir: [f32; 3], length: f32, reach: Option<f32> },
+    /// A radial force: the ball of its radius, and the balls where its
+    /// strength falls to each of [`SHELLS`] (none where it never does).
+    Field { center: [f32; 3], radius: f32, shells: [Option<f32>; 2] },
+    /// A vortex: a cylinder of its radius round its unit axis, as tall as
+    /// it is wide, and the axis through it.
+    Vortex { center: [f32; 3], axis: [f32; 3], radius: f32 },
+}
+
+/// A circle of [`OUTLINE_SEGMENTS`] round `center` in the plane of unit `u`
+/// and `v`.
+fn circle(center: [f32; 3], u: [f32; 3], v: [f32; 3], r: f32, edge: &mut impl FnMut([f32; 3], [f32; 3])) {
+    let point = |k: usize| -> [f32; 3] {
+        let (s, c) = (k as f32 / OUTLINE_SEGMENTS as f32 * std::f32::consts::TAU).sin_cos();
+        std::array::from_fn(|i| center[i] + r * (c * u[i] + s * v[i]))
+    };
+    for k in 0..OUTLINE_SEGMENTS {
+        edge(point(k), point(k + 1));
+    }
+}
+
+/// A ball as three great circles.
+fn ball(center: [f32; 3], r: f32, edge: &mut impl FnMut([f32; 3], [f32; 3])) {
+    for (u, v) in [(0, 1), (1, 2), (0, 2)] {
+        circle(center, IDENTITY_AXES[u], IDENTITY_AXES[v], r, edge);
+    }
+}
+
+/// Where a radial force's strength falls to `strength` (0 to 1) of full,
+/// for radius `r`, power `p` and curve `curve` (0 Edge, 1 Inverse), solving
+/// `FalloffCurve::magnitude` (manifold-physics): Edge (1 − d/r)^p, Inverse
+/// (r/d)^p past r. `None` where the strength never falls: power 0 holds it
+/// at full.
+fn shell_distance(strength: f32, r: f32, p: f32, curve: f32) -> Option<f32> {
+    if p <= 0.0 || r <= 0.0 {
+        return None;
+    }
+    let d = if curve.round() >= 1.0 { r * strength.powf(-1.0 / p) } else { r * (1.0 - strength.powf(1.0 / p)) };
+    d.is_finite().then_some(d)
 }
 
 impl ShapeOutline {
-    /// Each edge as a world segment.
+    /// Each edge as a world segment: what draws at full strength and what
+    /// a click picks.
     pub fn for_each_edge(&self, mut edge: impl FnMut([f32; 3], [f32; 3])) {
-        fn circle(center: [f32; 3], u: [f32; 3], v: [f32; 3], r: f32, edge: &mut impl FnMut([f32; 3], [f32; 3])) {
-            let point = |k: usize| -> [f32; 3] {
-                let (s, c) = (k as f32 / OUTLINE_SEGMENTS as f32 * std::f32::consts::TAU).sin_cos();
-                std::array::from_fn(|i| center[i] + r * (c * u[i] + s * v[i]))
-            };
-            for k in 0..OUTLINE_SEGMENTS {
-                edge(point(k), point(k + 1));
-            }
-        }
         match *self {
             ShapeOutline::None => {}
             ShapeOutline::Box(corners) => {
@@ -284,17 +319,36 @@ impl ShapeOutline {
                     }
                 }
             }
-            ShapeOutline::Ball { center, radius } => {
-                for (u, v) in [(0, 1), (1, 2), (0, 2)] {
-                    circle(center, IDENTITY_AXES[u], IDENTITY_AXES[v], radius, &mut edge);
-                }
-            }
+            ShapeOutline::Ball { center, radius } | ShapeOutline::Field { center, radius, .. } => ball(center, radius, &mut edge),
             ShapeOutline::Ray { from, dir, length, reach } => {
                 edge(from, offset(from, dir, length));
                 if let Some(r) = reach {
                     let u = normalized(perpendicular(dir)).unwrap_or(IDENTITY_AXES[0]);
                     let v = cross3(dir, u);
                     circle(from, u, v, r, &mut edge);
+                }
+            }
+            ShapeOutline::Vortex { center, axis, radius } => {
+                let u = normalized(perpendicular(axis)).unwrap_or(IDENTITY_AXES[0]);
+                let v = cross3(axis, u);
+                let [top, bottom] = [radius, -radius].map(|h| offset(center, axis, h));
+                circle(top, u, v, radius, &mut edge);
+                circle(bottom, u, v, radius, &mut edge);
+                for side in [u, v, u.map(|c| -c), v.map(|c| -c)] {
+                    edge(offset(bottom, side, radius), offset(top, side, radius));
+                }
+                edge(offset(center, axis, -1.5 * radius), offset(center, axis, 1.5 * radius));
+            }
+        }
+    }
+
+    /// Each falloff shell's edges, with the share of the outline's alpha it
+    /// draws at. Shells draw only; a click picks the outline.
+    pub fn for_each_shell(&self, mut edge: impl FnMut([f32; 3], [f32; 3], f32)) {
+        if let ShapeOutline::Field { center, shells, .. } = *self {
+            for (shell, (_, alpha)) in shells.into_iter().zip(SHELLS) {
+                if let Some(r) = shell {
+                    ball(center, r, &mut |a, b| edge(a, b, alpha));
                 }
             }
         }
@@ -367,7 +421,7 @@ impl GizmoTarget {
                     }
                 }
             }
-            SceneShape::Sphere { center, radius } | SceneShape::PointRadius { center, radius } => {
+            SceneShape::Sphere { center, radius } | SceneShape::PointRadius { center, radius } | SceneShape::Field { center, radius, .. } => {
                 place(center, &mut handles);
                 extent(radius, &mut handles);
             }
@@ -387,7 +441,12 @@ impl GizmoTarget {
         }
         let local = local.unwrap_or(match &shape.decl.shape {
             SceneShape::Axis { origin: None, .. } => shape.anchor,
-            SceneShape::Box { .. } | SceneShape::Sphere { .. } | SceneShape::Plane { .. } | SceneShape::PointRadius { .. } | SceneShape::Axis { .. } => [0.0; 3],
+            SceneShape::Box { .. }
+            | SceneShape::Sphere { .. }
+            | SceneShape::Plane { .. }
+            | SceneShape::PointRadius { .. }
+            | SceneShape::Axis { .. }
+            | SceneShape::Field { .. } => [0.0; 3],
         });
         let to_world = |p: [f32; 3]| -> [f32; 3] {
             match shape.frame {
@@ -415,6 +474,10 @@ impl GizmoTarget {
     /// The lines of this shape's outline in `color`, appended to `out`.
     fn outline_lines(&self, color: [u8; 4], out: &mut Vec<WorldLine>) {
         self.outline.for_each_edge(|a, b| out.push(WorldLine { a, b, color }));
+        self.outline.for_each_shell(|a, b, alpha| {
+            let [r, g, b8, a8] = color;
+            out.push(WorldLine { a, b, color: [r, g, b8, (f32::from(a8) * alpha).round() as u8] });
+        });
     }
 
     /// The color this shape's outline draws in, by what it is: the families
@@ -502,7 +565,7 @@ impl GizmoTarget {
         let len = handle_length(self.origin, &view.camera, view.height);
         match mode {
             GizmoMode::Move | GizmoMode::Scale => Some(offset(self.origin, self.handle_direction(axis), len)),
-            GizmoMode::Rotate => ring_lines(self.origin, axis, len, [0; 4]).nth(3).map(|line| self.world_point(line.a)),
+            GizmoMode::Rotate => ring_lines(self.origin, axis, len, [0; 4]).nth(HANDLE_RING_SEGMENTS / 8).map(|line| self.world_point(line.a)),
         }
     }
 }
@@ -525,6 +588,19 @@ fn outline(shape: &SceneShapeVm, kind: GizmoTargetKind, origin: [f32; 3], to_wor
         (_, SceneShape::Sphere { radius, .. } | SceneShape::PointRadius { radius, .. }) => {
             value(radius).map(|radius| ShapeOutline::Ball { center: origin, radius: radius.abs() })
         }
+        (_, SceneShape::Field { radius, falloff, curve, axis, .. }) => value(radius).map(|radius| {
+            let radius = radius.abs();
+            match axis.as_ref().map(|axis| values(axis).and_then(normalized)) {
+                Some(Some(axis)) => ShapeOutline::Vortex { center: origin, axis, radius },
+                // A vortex with no axis swirls nowhere: its reach only.
+                Some(None) => ShapeOutline::Ball { center: origin, radius },
+                None => {
+                    let (power, curve) = (value(falloff).unwrap_or(1.0), value(curve).unwrap_or(0.0));
+                    let shells = SHELLS.map(|(strength, _)| shell_distance(strength, radius, power, curve));
+                    ShapeOutline::Field { center: origin, radius, shells }
+                }
+            }
+        }),
         (_, SceneShape::Axis { direction, radius, .. }) => values(direction).and_then(normalized).map(|dir| {
             let reach = radius.as_deref().and_then(value).map(f32::abs);
             ShapeOutline::Ray { from: origin, dir, length: reach.filter(|r| *r > MIN_EXTENT).unwrap_or(1.0), reach }
@@ -828,7 +904,7 @@ fn perpendicular(u: [f32; 3]) -> [f32; 3] {
 /// A ring of segments in the plane perpendicular to `axis` around `origin`.
 /// `Uniform` has no ring.
 fn ring_lines(origin: [f32; 3], axis: GizmoAxis, r: f32, color: [u8; 4]) -> impl Iterator<Item = WorldLine> {
-    const SEGMENTS: usize = 24;
+    const SEGMENTS: usize = HANDLE_RING_SEGMENTS;
     let ((a, b), segments) = match axis {
         GizmoAxis::X => (([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), SEGMENTS),
         GizmoAxis::Y => (([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]), SEGMENTS),

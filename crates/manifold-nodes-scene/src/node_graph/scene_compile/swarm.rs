@@ -6,9 +6,10 @@
 //! The swarm simulates in its emitter's frame, the item's Transform, and is
 //! drawn through that frame, so moving, turning or scaling the swarm carries
 //! the particles, the forces' lattice and the drawn copies together. The
-//! bounds box is fixed in that frame, wider than the seed box (the lattice
-//! holds its edge value outside it, so the Attractor and the gusts keep their
-//! shape over the whole stirred cloud). Forces are ordinary scene forces: the
+//! bounds box is fixed in that frame, wider than the seed box; past it a
+//! particle reads radial and vortex forces from their formulas and uniform
+//! pushes and air at their constant value, so a particle that leaves still
+//! feels the Pull. Forces are ordinary scene forces: the
 //! load passes lay every force that targets everything onto the swarm's
 //! lattice (`forces.rs` compiles them). They act in the world: the lattice
 //! samples them where each node sits in the world and turns them into the
@@ -52,9 +53,9 @@ pub(crate) const SPREAD: Rest = Rest { lo: [-0.5 * BOUNDS_SIZE; 3], hi: [0.5 * B
 
 /// The forces node's clock and field scalars go to the mover port for port;
 /// `epoch` also restarts the seed and the particle loop.
-const CLOCK_PORTS: [&str; 14] = [
+const CLOCK_PORTS: [&str; 16] = [
     "forces", "ticks", "first_tick", "force_lattices", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing",
-    "field_min_x", "field_min_y", "field_min_z", "tick_seconds", "impulses", "impulse_tick",
+    "field_min_x", "field_min_y", "field_min_z", "tick_seconds", "impulses", "impulse_tick", "far_forces", "far_terms",
 ];
 
 /// The value node that follows each World control a swarm takes, in

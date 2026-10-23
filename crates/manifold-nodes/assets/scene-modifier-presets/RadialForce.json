@@ -71,7 +71,7 @@
         "id": "strength",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 1, "cardLabel": "param"},
         "name": "Strength",
-        "tooltip": "Gravity is 9.8 m/s²",
+        "tooltip": "Gravity is 9.8 m/s²; negative pulls in",
         "unit": "metresPerSecondSquared",
         "min": -20.0,
         "max": 20.0,
@@ -81,9 +81,10 @@
         "id": "impulse_strength",
         "scene": {"role": "performance", "group": "force", "band": "forces", "cardOrder": 3, "cardLabel": "param"},
         "name": "Impulse Size",
+        "tooltip": "The kick at the centre; negative pulls in",
         "unit": "metresPerSecond",
-        "min": -20.0,
-        "max": 20.0,
+        "min": -50.0,
+        "max": 50.0,
         "defaultValue": 2.0
       },
       {

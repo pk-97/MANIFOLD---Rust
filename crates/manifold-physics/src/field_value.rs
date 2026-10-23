@@ -12,7 +12,10 @@ use crate::{
     VortexField,
 };
 
+mod far;
 mod serialization;
+
+pub use far::{FarShape, FarTerm, sample_far};
 
 /// Operations held inline: a field this size or smaller composes, clones and
 /// samples without allocating. A bigger one (a scene with many forces) spills

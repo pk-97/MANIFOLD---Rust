@@ -17,7 +17,9 @@ pub const FORCE_LATTICE_STRIDE: u32 = 4;
 /// or quality cap.
 pub const FORCE_LATTICE_RESERVE: u32 = 3;
 
+mod far;
 mod fill_workers;
+pub use far::{FAR_HEADER, FAR_TERM, FarForces};
 pub use fill_workers::FillWorkers;
 
 /// Lattices below this many nodes fill on the calling thread: handing out
@@ -275,6 +277,9 @@ pub struct TickForces {
     dirty: bool,
     /// Started on the first big fill, then reused every tick.
     workers: Option<FillWorkers>,
+    /// The far terms beside each lattice, for a consumer that reads past
+    /// its lattice ([`Self::with_far`]).
+    far: Option<FarForces>,
 }
 
 /// Lay `field` onto `values`, on `workers` when the lattice is big enough to
@@ -290,6 +295,12 @@ fn fill_lattice(workers: &mut Option<FillWorkers>, lattice: ForceLattice, values
 }
 
 impl TickForces {
+    /// Forces that also lay the far terms beside each lattice: what a
+    /// swarm reads past its lattice ([`FarForces`]).
+    pub fn with_far() -> Self {
+        Self { far: Some(FarForces::default()), ..Self::default() }
+    }
+
     /// Lay each of the frame's ticks' fields onto `lattice`. Call right after
     /// `clock` advanced to `frame`; `field` is this frame's, which belongs to
     /// any tick starting exactly now. `None` turns forces off.
@@ -313,6 +324,9 @@ impl TickForces {
         if field.is_none() {
             self.lattices = 0;
             self.source = None;
+            if let Some(far) = self.far.as_mut() {
+                far.clear();
+            }
             return Ok(());
         }
         let ticks = frame.ticks as usize;
@@ -324,12 +338,18 @@ impl TickForces {
             if self.lattices != 1 || self.source.as_ref() != Some(head) {
                 self.forces.resize(count, [0.0; 4]);
                 fill_lattice(&mut self.workers, lattice, &mut self.forces, head)?;
+                if let Some(far) = self.far.as_mut() {
+                    far.lay(&lattice, std::iter::once(head));
+                }
                 self.lattices = 1;
                 self.source = Some(head.clone());
                 self.dirty = true;
             }
         } else if ticks > 0 {
             self.forces.resize(ticks * count, [0.0; 4]);
+            if let Some(far) = self.far.as_mut() {
+                far.lay(&lattice, sampled.clone().map(|(_, at)| at));
+            }
             for (values, at) in self.forces.chunks_exact_mut(count).zip(sampled.map(|(_, at)| at)) {
                 fill_lattice(&mut self.workers, lattice, values, at)?;
             }
@@ -372,6 +392,23 @@ impl TickForces {
 
     pub fn mark_uploaded(&mut self) {
         self.dirty = false;
+    }
+
+    /// The far terms beside the lattices, packed; empty without
+    /// [`Self::with_far`] or a far form.
+    pub fn far(&self) -> &[[f32; 4]] {
+        if self.lattices == 0 { &[] } else { self.far.as_ref().map_or(&[], FarForces::packed) }
+    }
+
+    /// Far terms per lattice in [`Self::far`]; 0 for none.
+    pub fn far_terms(&self) -> usize {
+        if self.lattices == 0 { 0 } else { self.far.as_ref().map_or(0, FarForces::terms_per_lattice) }
+    }
+
+    /// The far force lattice `slot` gives at `local`, the CPU twin of a
+    /// swarm's read past its lattice.
+    pub fn sample_far(&self, slot: usize, local: [f32; 3]) -> ForceSample {
+        self.far.as_ref().map_or_else(ForceSample::default, |far| far.sample(slot, local))
     }
 }
 
