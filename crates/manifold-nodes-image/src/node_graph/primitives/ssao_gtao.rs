@@ -1,96 +1,57 @@
-//! `node.ssao_gtao` — Ground Truth Ambient Occlusion from scene depth + a
-//! Camera (`docs/CINEMATIC_POST_DESIGN.md` D9). REPLACES `node.ssao_from_depth`
-//! outright (D9(b): deleted, not paralleled — see `type_id_migration.rs`'s
-//! `node.ssao_from_depth` -> `node.ssao_gtao` entry for the load-migration).
-//! Same output contract as the retired atom: a grayscale AO map (R=G=B=
-//! occlusion, A=1); the atom does NOT modify the color image itself — the
-//! preset wires the output into a `node.mix` (Multiply mode) against the
-//! scene color, unchanged by the swap.
+//! `node.ssao_gtao` — Ground Truth Ambient Occlusion (Jimenez et al. 2016)
+//! from scene depth and a Camera, sampled as Intel's XeGTAO does
+//! (`docs/CINEMATIC_POST_DESIGN.md` D9, amended by
+//! `docs/SCENE_REFINEMENT_DESIGN.md` ruling 8). Output is a grayscale AO map
+//! (R=G=B=occlusion, A=1) that the graph multiplies onto the colour with a
+//! `node.mix`; the atom never touches the colour itself.
 //!
-//! Committed algorithm (D9(a), Jimenez et al.'s GTAO closed form — see
-//! `shaders/ssao_gtao_body.wgsl`'s header comment for the full derivation),
-//! plus two grazing-angle corrections (BUG-y5w7, below): reconstruct
-//! view-space center position + normal exactly as D3
-//! (`node.ssao_from_depth`'s method); 2 slices per pixel at hash-derived
-//! angles; per slice, per side, 4 screen-space steps at radii derived from
-//! the world `radius` projected at the center pixel's depth (transcribed
-//! from `ssao_from_depth`'s existing ndc<->view projection, not re-derived);
-//! horizon-angle integral with a deterministic per-side "-1.0 floor" for the
-//! no-occluder case; visibility normalized by the per-slice fully-open
-//! baseline (`cpu_reference::full_ref`, BUG-y5w7) instead of by slice count;
-//! `out.r = clamp(1 - intensity*(1-visibility), 0, 1)`. 16 depth taps total
-//! (2 slices * 2 sides * 4 steps) + the same +/-1-texel normal
-//! reconstruction as D3 — same sample class as the retired atom's 16-tap
-//! budget (Peter's "not hitting the performance harder than the current
-//! SSAO" bar).
+//! Per pixel: reconstruct the view-space position and the normal (±1-texel
+//! central differences); for each of `slices` screen directions, march
+//! `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius
+//! multiplier; world units, projected at the pixel's depth), keep each
+//! side's highest horizon, and integrate the
+//! visible arc against the normal. Visibility divides by the fully-open arc
+//! of each slice (`full_ref`), not by the slice count, so flat ground stays
+//! white at grazing angles (BUG-y5w7).
 //!
-//! BUG-y5w7 (GTAO flat-plane grazing-angle darkening) — two independent,
-//! compounding bugs, both required to fully fix it (verified: fixing either
-//! alone leaves substantial residual loss; fixing both drives worst-pixel
-//! loss to exactly 0 on a flat plane at any tested FOV up to 90 degrees):
+//! What keeps it free of lines: a tap's horizon fades to the open horizon
+//! over the outer 61.5% of that reach instead of being cut at it, so
+//! occlusion is about half faded at `radius`;
+//! each pixel offsets its taps by its own fraction of a step; and slice angle
+//! and step offset come from XeGTAO's spatio-temporal noise (Hilbert index
+//! walked by the R2 sequence). With `noise_per_frame` on the pattern moves
+//! every frame, for `node.temporal_accumulate` to average; off, it holds still.
+//! The pattern index follows the frame time, so an export renders the same
+//! noise every time.
 //!
-//! 1. **Sign bug (dominant; `dir3`, below).** `view_pos`/`height_pos` both
-//!    flip Y when reconstructing a sample's position from its pixel offset
-//!    (`ndc_y = 1.0 - v*2.0` / `1.0 - v` — screen-space Y grows downward,
-//!    view/world-space Y grows upward). `dir3` (the screen direction
-//!    embedded as a view-space vector, used to build the slice's `axis`
-//!    and hence `n_signed`) used unflipped `dir2.y`, so for any slice
-//!    direction with a nonzero Y component, `n_signed` was measured in a
-//!    frame that didn't match the frame the actual samples live in. This
-//!    made the "no real occluder" clamp target (`n_signed +/- pi/2`)
-//!    diverge from the TRUE geometric horizon of a flat, unoccluded
-//!    continuation by up to ~0.9 rad at grazing pixels (measured on the
-//!    real import fov_y=0.9 regime) — real occlusion was being reported
-//!    where there wasn't any. Fix: `dir3 = (dir2.x, -dir2.y, 0)`.
-//! 2. **Normalization bug (secondary; `full_ref`, below).** Even with
-//!    `dir3` correctly signed, the raw closed-form visibility (`proj_len *
-//!    (a(h1)+a(h2))`, averaged over slice count) is only exactly 1 for a
-//!    genuinely unoccluded surface when the per-pixel view vector
-//!    `V = normalize(-P)` is fronto-parallel to the normal. Once `V` tilts
-//!    away from the normal (any pixel off the principal point under
-//!    perspective, worse at wide FOV), the closed-form arc integral
-//!    `a(n-pi/2,n) + a(n+pi/2,n) = cos(n) + n*sin(n)` is provably NOT
-//!    constant in the slice's normal angle `n` — confirmed even in the
-//!    continuous (infinite-slice) limit, so this is not 2-slice
-//!    discretization noise, and matches production references (XeGTAO):
-//!    their own known fix for out-of-radius samples doesn't touch this
-//!    case, since a flat plane's samples ARE found within radius (they're
-//!    the same surface, not real occluders). Fix: normalize the
-//!    accumulated visibility by the sum of `proj_len * full_ref(n)` per
-//!    slice (the analytically-known fully-open baseline for that exact
-//!    slice geometry) instead of by slice count. This is exact by
-//!    construction whenever every slice is genuinely unoccluded — actual
-//!    and baseline are the same expression — at any view angle, and scales
-//!    real occlusion proportionally otherwise (`full_ref` needs no
-//!    occlusion state, only `n`).
+//! The Hilbert index, the R2 noise and the falloff are ported from XeGTAO
+//! (Intel, MIT license; see THIRD_PARTY_NOTICES.md).
 //!
-//! `bias` has NO successor param — the range check (`len <= radius`) already
-//! guards self-occlusion acne; D9(b) explicitly forbids re-adding it.
-//!
-//! `camera` reads `fov_y`/`near`/`far` entirely via the three
-//! `derived_uniforms` below — never a GPU binding, letting this Pointwise
-//! atom fuse with a neighbour instead of being a permanent boundary (P0/D7).
+//! `camera` reaches the kernel only through derived uniforms, so this
+//! Pointwise atom can fuse with a neighbour.
 
 use std::borrow::Cow;
 
-
-use manifold_node_engine::scene::camera::{Camera, CameraMode};
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
 /// Display labels for the `projection` enum, indexed by enum value.
 pub const GTAO_PROJECTIONS: &[&str] = &["Scene Depth", "Height Field"];
 
-/// Generated-codegen uniform layout: the four PARAMS (`radius`, `intensity`,
-/// `slices`, `steps`) in declaration order, then the three DERIVED fields
-/// (`fov_y`, `near`, `far`) in declaration order — one f32 word each, padded
-/// to a 16-byte (4-word) multiple. 7 words + 1 pad = 32 bytes. Mirrors
-/// `ssao_from_depth.rs`'s `SsaoFromDepthUniforms` layout note (minus the
-/// retired `bias` field).
+/// The noise pattern steps this many times per second of frame time.
+const NOISE_STEPS_PER_SECOND: f64 = 60.0;
+/// XeGTAO's temporal cycle: the pattern repeats after this many steps.
+const NOISE_CYCLE: i64 = 64;
+/// XeGTAO's Hilbert-index offset between consecutive frames.
+const NOISE_FRAME_STRIDE: u32 = 288;
+
+/// The generated uniform layout: the params in declaration order, then the
+/// derived fields in declaration order, padded to 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SsaoGtaoUniforms {
@@ -100,18 +61,18 @@ struct SsaoGtaoUniforms {
     steps: f32,
     projection: u32,
     relief: f32,
+    noise_per_frame: u32,
     fov_y: f32,
     near: f32,
     far: f32,
+    noise_frame: u32,
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 manifold_node_engine::primitive! {
     name: SsaoGtao,
     type_id: "node.ssao_gtao",
-    purpose: "Ground Truth Ambient Occlusion (GTAO) from scene depth + a Camera (docs/CINEMATIC_POST_DESIGN.md D9), replacing node.ssao_from_depth. Reconstructs view-space center position + normal exactly as the retired atom (linearize_depth + inverse-projection xy; normal via explicit +/-1-texel finite differences). 2 slices per pixel at hash-derived angles (phi_i = hash_angle(px)*0.5 + i*(pi/2)); per slice, per side (+/- the slice's screen direction), 4 steps at screen radii derived from `radius` projected at the center pixel's depth; each step's sample is range-checked against `radius` in view space and folded into a per-side horizon cosine (max, floored at -1.0 for 'no occluder'); the slice's normal-angle basis uses dir3=(dir2.x,-dir2.y,0) (Y negated to match the Y-flip in the view-space position reconstruction — BUG-y5w7 sign fix, see the module doc comment); horizon angles converted via acos, clamped against the normal's signed in-plane angle, and integrated with the closed-form arc a(h) = 0.25*(-cos(2h-n)+cos(n)+2h*sin(n)); slice contribution = ||N_p||*(a(h1)+a(h2)); pixel visibility = sum of slice contributions / sum of ||N_p||*full_ref(n) (full_ref(n) = cos(n)+n*sin(n), the analytically-known fully-open value of a(h1)+a(h2) for that slice's normal angle — normalizing by this instead of by slice count fixes BUG-y5w7's grazing-angle darkening on flat surfaces: the raw closed-form is exact only when the per-pixel view vector is fronto-parallel to the normal); out.r = clamp(1 - intensity*(1-visibility), 0, 1) (broadcast to RGB, alpha 1). Depth taps = slices*2*steps — the default (slices=2, steps=4, 16 taps) is the committed D9(a) budget, bit-identical for existing graphs; the `slices`/`steps` params buy fidelity at linear cost (e.g. 4x8 = 64 taps). No temporal accumulation, no thickness heuristic — deterministic single-frame budget (D9(a)). Output is an AO map — wire it into a node.mix (Multiply mode) against the scene color; this atom does NOT modify the color image itself. Reads fov_y/near/far entirely via derived uniforms — the Camera wire is never a GPU binding.",
+    purpose: "Ground Truth Ambient Occlusion from scene depth and a Camera, sampled as XeGTAO does. Per pixel: view-space position from depth, normal from ±1-texel central differences; `slices` screen directions, `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius multiplier; world units projected at the pixel's depth); each tap's horizon fades to the open horizon over the outer 61.5% of that reach (no hard cut), so occlusion is about half faded at `radius`; per-pixel step offsets and slice angles from XeGTAO's Hilbert/R2 spatio-temporal noise; the visible arc integrated against the normal and divided by the slice's fully-open arc. out.r = clamp(1 - intensity*(1-visibility), 0, 1), broadcast to RGB, alpha 1. `noise_per_frame` moves the noise every frame (for a temporal filter); off, the pattern holds still. The camera is read only through derived uniforms.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -136,11 +97,7 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 4.0)),
             enum_values: &[],
         },
-        // Quality knobs: the original D9(a) budget (2 slices x
-        // 4 steps = 16 taps) stays the DEFAULT — existing graphs render
-        // bit-identically. Raising them buys real variance reduction (the
-        // 16-tap hash noise is the whole grain complaint), still fusable,
-        // still deterministic single-frame — no temporal accumulation.
+        // Quality: taps = slices * 2 * steps (16 by default).
         ParamDef {
             name: Cow::Borrowed("slices"),
             label: "Slices",
@@ -157,13 +114,8 @@ manifold_node_engine::primitive! {
             range: Some((1.0, 16.0)),
             enum_values: &[],
         },
-        // Heightfield mode: `Scene Depth`
-        // (default) is the committed D9(a) perspective path, bit-identical.
-        // `Height Field` treats `depth` as a raw height map in an
-        // orthographic frame — position = (uv.x*aspect, uv.y, raw*relief),
-        // view = (0,0,-1), radius in uv units — no camera linearization, no
-        // depth-window shim. All math stays in fp32 registers in-kernel, so
-        // the fp16 quantization contours the shim chain produced can't occur.
+        // `Height Field` reads `depth` as a raw height map in an orthographic
+        // frame: position = (uv.x*aspect, uv.y, raw*relief), radius in uv units.
         ParamDef {
             name: Cow::Borrowed("projection"),
             label: "Projection",
@@ -180,33 +132,36 @@ manifold_node_engine::primitive! {
             range: Some((0.01, 2.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("noise_per_frame"),
+            label: "Noise Per Frame",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
-    // depth_rule: wide-radius multi-tap gather over `depth`, but output stays coincident with the input pixel grid — classified like blur/convolution, not a UV remap
+    // A wide gather over `depth`, but the output stays on the input's pixel grid.
     depth_rule: Inherit,
-    composition_notes: "Output is a grayscale AO map (R=G=B=occlusion, A=1) — wire straight into a node.mix (mode=Multiply, amount=1.0) with the scene color as `a` and this atom's `out` as `b`; this atom never touches the color image itself (D9's explicit no-fused-color contract, unchanged from D3). `depth` expects render_scene's raw [0,1] `depth` output (not pre-linearized), same contract as node.coc_from_depth / the retired node.ssao_from_depth. `radius` is a WORLD-units horizon-search radius (not pixels) — scale it to the scene's scale, not the canvas resolution. There is no `bias` param — the per-sample range check (reject a sample whose reconstructed view-space distance from the center exceeds `radius`) already guards self-occlusion acne; D9(b) forbids re-adding one. Replaces node.ssao_from_depth 1:1 on the output contract — a saved graph carrying the old type id load-migrates automatically (radius/intensity carry over, bias is dropped).",
+    composition_notes: "Output is a grayscale AO map (R=G=B=occlusion, A=1): wire it into a node.mix (mode=Multiply, amount=1.0) with the scene colour as `a`. `depth` is render_scene's raw [0,1] `depth` output. `radius` is in world units, where occlusion has faded to about half (it ends by 1.46x `radius`): scale it to the scene, not the canvas. The noise is per pixel; follow it with node.bilateral_blur (H then V). For a still image leave `noise_per_frame` off. With node.temporal_accumulate between this atom and the blur, turn `noise_per_frame` on: the pattern then moves every frame and the history averages it away.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "SSAO (GTAO)", category: Atom },
-    summary: "Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way ambient light naturally would, more accurately than the retired hemisphere-sample SSAO.",
+    summary: "Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO): darkens crevices and touching surfaces the way ambient light naturally would.",
     category: Mask,
     role: Map,
     aliases: ["gtao", "ssao", "ground truth ambient occlusion", "ambient occlusion", "contact shadow", "screen space ambient occlusion", "ao"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/ssao_gtao_body.wgsl"),
     input_access: [GatherTexel],
-    // D6(a): `depth` feeds both the finite-difference normal reconstruction
-    // (explicit +/-1-texel central differences) and the per-step horizon
-    // raymarch's view-space range test — fp16's ~10-bit mantissa quantizes
-    // both into visible stair-stepping at grazing angles.
+    // `depth` feeds the normal's finite differences and every tap's range
+    // test; fp16 would stair-step both at grazing angles.
     precision_critical: ["depth"],
-    derived_uniforms: ["fov_y", "near", "far"],
+    derived_uniforms: ["fov_y", "near", "far", "noise_frame:u32"],
     wgsl_includes: [DEPTH_COMMON],
 }
 
-/// Single source of truth for the three Camera-derived scalar fields, in
-/// `DERIVED_UNIFORMS` declaration order — shared by `run()` (unfused CPU
-/// path) and the `inventory::submit!` recompute below (fused path).
-/// Identical to `ssao_from_depth.rs`'s (now-deleted) `derive_view_scalars`.
-fn derive_view_scalars(cam: &Camera) -> [f32; 3] {
+/// The Camera-derived fields, shared by `run()` and the fused recompute.
+pub(super) fn derive_view_scalars(cam: &Camera) -> [f32; 3] {
     let fov_y = match cam.mode {
         CameraMode::Perspective { fov_y } => fov_y,
         CameraMode::Orthographic { .. } => std::f32::consts::FRAC_PI_3,
@@ -214,15 +169,21 @@ fn derive_view_scalars(cam: &Camera) -> [f32; 3] {
     [fov_y, cam.near, cam.far]
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
-// region's fov_y/near/far fields, IN DECLARATION ORDER — reads the region's
-// routed Camera external, matching `run()`'s own `derive_view_scalars` call
-// below exactly.
+/// The frame's offset into the noise sequence. It follows the frame time,
+/// not a counter, so rendering the same moment twice draws the same noise.
+fn noise_frame(frame: &FrameTime) -> u32 {
+    let step = (frame.seconds.0 * NOISE_STEPS_PER_SECOND).round() as i64;
+    step.rem_euclid(NOISE_CYCLE) as u32 * NOISE_FRAME_STRIDE
+}
+
 inventory::submit! {
     manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.ssao_gtao",
         array_ports: &[],
-        recompute: |ctx| ctx.camera.map(derive_view_scalars).map(|v| v.to_vec()),
+        recompute: |ctx| ctx.camera.map(|cam| {
+            let [fov_y, near, far] = derive_view_scalars(cam);
+            vec![fov_y, near, far, noise_frame(ctx.frame) as f32]
+        }),
     }
 }
 
@@ -243,9 +204,11 @@ impl Primitive for SsaoGtao {
             _ => 0,
         };
         let relief = read_f32(ctx, "relief", 0.2);
+        let noise_per_frame = u32::from(matches!(ctx.params.get("noise_per_frame"), Some(ParamValue::Bool(true))));
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far] = derive_view_scalars(&cam);
+        let noise_frame = noise_frame(&ctx.time);
 
         let Some(depth_tex) = ctx.inputs.texture_2d("depth") else {
             return;
@@ -268,12 +231,12 @@ impl Primitive for SsaoGtao {
             steps,
             projection,
             relief,
+            noise_per_frame,
             fov_y,
             near,
             far,
+            noise_frame,
             _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
         };
 
         dispatch_standalone_2d(
@@ -291,6 +254,7 @@ impl Primitive for SsaoGtao {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::{Beats, Seconds};
 
     #[test]
     fn derive_view_scalars_reads_perspective_fov_near_far() {
@@ -313,21 +277,31 @@ mod tests {
         let [fov_y, ..] = derive_view_scalars(&cam);
         assert_eq!(fov_y, std::f32::consts::FRAC_PI_3);
     }
+
+    /// The noise follows the frame time: the same moment gives the same
+    /// pattern (export repeats), consecutive frames move it, and it cycles.
+    #[test]
+    fn noise_frame_follows_frame_time() {
+        let at = |seconds: f64| FrameTime { beats: Beats(0.0), seconds: Seconds(seconds), delta: Seconds(1.0 / 60.0), frame_count: 0 };
+        assert_eq!(noise_frame(&at(2.5)), noise_frame(&at(2.5)));
+        assert_ne!(noise_frame(&at(2.5)), noise_frame(&at(2.5 + 1.0 / 60.0)));
+        assert_eq!(noise_frame(&at(1.0 / 60.0)), NOISE_FRAME_STRIDE);
+        assert_eq!(noise_frame(&at(NOISE_CYCLE as f64 / 60.0)), 0);
+        assert!(noise_frame(&at(-1.0 / 60.0)) < NOISE_CYCLE as u32 * NOISE_FRAME_STRIDE);
+    }
 }
 
-/// **CPU reference** (`docs/CINEMATIC_POST_DESIGN.md` P5 deliverable /
-/// I8: "atom per D9(a), CPU reference, synthetic depth ramp") — a plain-Rust
-/// implementation of the D9(a) algorithm, independent of the WGSL body (not
-/// sharing source), used two ways: (1) the analytic sanity unit test below
-/// (`gtao_flat_plane_full_visibility`, I8), pure CPU, no GPU device; (2) the
-/// `gtao_matches_cpu_reference` GPU-vs-CPU synthetic-ramp parity gpu_test
-/// further down, which uploads the same input this module reads and asserts
-/// pixel agreement.
+/// Plain-Rust twin of `shaders/ssao_gtao_body.wgsl`, written separately so
+/// the GPU parity test below is a real cross-check.
 #[cfg(test)]
 pub(crate) mod cpu_reference {
     use manifold_node_engine::scene::camera::linearize_depth;
 
     const GTAO_HALF_PI: f32 = std::f32::consts::FRAC_PI_2;
+    const FALLOFF_RANGE: f32 = 0.615;
+    const MIN_TAP_PX: f32 = 1.3;
+    const RADIUS_MULTIPLIER: f32 = 1.457;
+    const HILBERT_WIDTH: u32 = 64;
 
     /// A synthetic depth buffer: raw [0,1] depth values, row-major, `w*h` long.
     pub struct DepthBuffer<'a> {
@@ -344,13 +318,32 @@ pub(crate) mod cpu_reference {
         }
     }
 
-    fn hash_angle(px_x: f32, px_y: f32) -> f32 {
-        (((px_x * 12.9898 + px_y * 78.233).sin()) * 43_758.547).fract() * std::f32::consts::TAU
+    fn hilbert_index(mut x: u32, mut y: u32) -> u32 {
+        let mut index = 0;
+        let mut level = HILBERT_WIDTH / 2;
+        while level > 0 {
+            let rx = u32::from(x & level > 0);
+            let ry = u32::from(y & level > 0);
+            index += level * level * ((3 * rx) ^ ry);
+            if ry == 0 {
+                if rx == 1 {
+                    x = HILBERT_WIDTH - 1 - x;
+                    y = HILBERT_WIDTH - 1 - y;
+                }
+                std::mem::swap(&mut x, &mut y);
+            }
+            level /= 2;
+        }
+        index
     }
 
-    /// Round half away from zero, matching `ssao_gtao_body.wgsl`'s
-    /// `gtao_round` bit-for-bit (see that file's header comment for why the
-    /// language builtins are avoided).
+    /// (slice, step) noise in [0,1) for a pixel and frame offset.
+    fn noise(cx: i32, cy: i32, frame_offset: u32) -> (f32, f32) {
+        let index = (hilbert_index(cx as u32 % HILBERT_WIDTH, cy as u32 % HILBERT_WIDTH) + frame_offset) as f32;
+        let fract = |v: f32| v - v.floor();
+        (fract(0.5 + index * 0.754_877_7), fract(0.5 + index * 0.569_840_3))
+    }
+
     fn gtao_round(x: f32) -> f32 {
         if x >= 0.0 { (x + 0.5).floor() } else { -(-x + 0.5).floor() }
     }
@@ -381,9 +374,7 @@ pub(crate) mod cpu_reference {
         let v = (ccy as f32 + 0.5) / depth.h as f32;
         let ndc_x = u * 2.0 - 1.0;
         let ndc_y = 1.0 - v * 2.0;
-        let view_x = ndc_x * tan_half_fov * aspect * view_z;
-        let view_y = ndc_y * tan_half_fov * view_z;
-        [view_x, view_y, view_z]
+        [ndc_x * tan_half_fov * aspect * view_z, ndc_y * tan_half_fov * view_z, view_z]
     }
 
     fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -405,34 +396,31 @@ pub(crate) mod cpu_reference {
         let l = length(a);
         if l > 1e-8 { scale(a, 1.0 / l) } else { [0.0, 0.0, -1.0] }
     }
-    fn neg(a: [f32; 3]) -> [f32; 3] {
-        [-a[0], -a[1], -a[2]]
-    }
 
     fn integrate_arc(h: f32, n: f32) -> f32 {
         0.25 * (-(2.0 * h - n).cos() + n.cos() + 2.0 * h * n.sin())
     }
 
-    /// `integrate_arc` evaluated at the fully-open horizon (h1=n-pi/2,
-    /// h2=n+pi/2) for a given slice's normal angle `n` — the closed-form
-    /// arc value a genuinely unoccluded slice must produce. Grazing-angle
-    /// fix (BUG-y5w7): this is NOT constant across `n` (it's `cos(n) +
-    /// n*sin(n)`, algebraically), so multiplying it by `proj_len` and
-    /// averaging naively over just 2 slices does not reproduce full
-    /// visibility once the per-pixel view vector `V = normalize(-P)` tilts
-    /// away from a fronto-parallel normal under perspective — confirmed
-    /// even in the continuous (infinite-slice) limit, not just 2-slice
-    /// discretization noise. `gtao_texel` below normalizes the accumulated
-    /// visibility by the sum of this per-slice baseline instead of by
-    /// slice count, which is exact by construction (dividing a quantity by
-    /// itself) whenever every slice is genuinely unoccluded, at any view
-    /// angle, and scales real occlusion proportionally otherwise.
+    /// `integrate_arc(n-pi/2) + integrate_arc(n+pi/2)`: an unoccluded
+    /// slice's arc. Not constant in `n` (BUG-y5w7), hence the division by it.
     fn full_ref(n: f32) -> f32 {
         n.cos() + n * n.sin()
     }
 
-    /// The D9(a) algorithm, transcribed exactly (independent of the WGSL
-    /// body) — one texel's visibility output, `[0,1]`.
+    /// One side's horizon after a tap: faded toward the open horizon by the
+    /// falloff weight, then the running maximum.
+    fn horizon(hcos: f32, d: [f32; 3], view_vec: [f32; 3], radius: f32, low_cos: f32) -> f32 {
+        let len = length(d);
+        if len <= 1e-5 {
+            return hcos;
+        }
+        let weight = ((radius - len) / (FALLOFF_RANGE * radius)).clamp(0.0, 1.0);
+        let tap = dot(scale(d, 1.0 / len), view_vec);
+        hcos.max(low_cos + (tap - low_cos) * weight)
+    }
+
+    /// One texel's AO output, `[0,1]`. `noise_frame` is the frame's offset
+    /// into the noise sequence; 0 is the still pattern.
     #[allow(clippy::too_many_arguments)]
     pub fn gtao_texel(
         depth: &DepthBuffer<'_>,
@@ -447,61 +435,42 @@ pub(crate) mod cpu_reference {
         fov_y: f32,
         near: f32,
         far: f32,
+        noise_frame: u32,
     ) -> f32 {
+        let radius = radius * RADIUS_MULTIPLIER;
         let slices = slices.max(1);
         let steps = steps.max(1);
-        let pos = |cx: i32, cy: i32, tan_half_fov: f32, aspect: f32| -> [f32; 3] {
+        let tan_half_fov = (fov_y * 0.5).tan();
+        let aspect = depth.w as f32 / depth.h as f32;
+        let pos = |cx: i32, cy: i32| -> [f32; 3] {
             if heightfield {
                 height_pos(depth, cx, cy, aspect, relief)
             } else {
                 view_pos(depth, cx, cy, tan_half_fov, aspect, near, far)
             }
         };
-        let tan_half_fov = (fov_y * 0.5).tan();
-        let aspect = depth.w as f32 / depth.h as f32;
 
-        let p_c = pos(cx, cy, tan_half_fov, aspect);
-
-        let p_xp = pos(cx + 1, cy, tan_half_fov, aspect);
-        let p_xm = pos(cx - 1, cy, tan_half_fov, aspect);
-        let p_yp = pos(cx, cy + 1, tan_half_fov, aspect);
-        let p_ym = pos(cx, cy - 1, tan_half_fov, aspect);
-        let ddx = sub(p_xp, p_xm);
-        let ddy = sub(p_yp, p_ym);
+        let p_c = pos(cx, cy);
+        let ddx = sub(pos(cx + 1, cy), pos(cx - 1, cy));
+        let ddy = sub(pos(cx, cy + 1), pos(cx, cy - 1));
         let normal = normalize(cross(ddx, ddy));
 
         let (view_vec, radius_px) = if heightfield {
             ([0.0, 0.0, -1.0], radius * depth.h as f32)
         } else {
             let center_vz = p_c[2].max(1e-4);
-            (
-                normalize(neg(p_c)),
-                (radius / (tan_half_fov * center_vz)) * (depth.h as f32 * 0.5),
-            )
+            (scale(normalize(p_c), -1.0), (radius / (tan_half_fov * center_vz)) * (depth.h as f32 * 0.5))
         };
 
-        let rot = hash_angle(cx as f32, cy as f32);
+        let (slice_noise, step_offset) = noise(cx, cy, noise_frame);
+        let rot = slice_noise * std::f32::consts::TAU;
 
         let mut visibility_sum = 0.0f32;
         let mut baseline_sum = 0.0f32;
         for s in 0..slices {
             let phi = rot * 0.5 + (s as f32) * (2.0 * GTAO_HALF_PI / slices as f32);
             let dir2 = [phi.cos(), phi.sin()];
-            // `dir3`: the VIEW-SPACE direction a +dir2 PIXEL-space step
-            // reconstructs to, not the raw pixel-space vector embedded with
-            // z=0. Root cause (BUG-y5w7): `view_pos`/`height_pos` both flip
-            // Y (`ndc_y = 1.0 - v*2.0` / `1.0 - v`, screen-down to view/
-            // world-up) when reconstructing a sample's position, but
-            // `dir3` (which defines the slice's local basis for `axis`/
-            // `n_signed`) previously used unflipped `dir2.y` — a
-            // coordinate-convention mismatch between the frame `n_signed`
-            // was measured in and the frame samples actually live in. For
-            // slice directions with a nonzero Y component this made the
-            // "no occluder" clamp target (`n_signed +/- pi/2`) diverge from
-            // the ACTUAL geometric horizon of a flat, unoccluded
-            // continuation by up to ~0.9 rad at grazing pixels — far
-            // larger than the `full_ref` normalization gap above, and the
-            // dominant cause of the reported flat-surface darkening.
+            // The view-space direction of a +dir2 pixel step (Y flips, BUG-y5w7).
             let dir3 = [dir2[0], -dir2[1], 0.0];
 
             let axis = cross(dir3, view_vec);
@@ -520,28 +489,16 @@ pub(crate) mod cpu_reference {
                 }
             }
 
+            let low_plus = (n_signed + GTAO_HALF_PI).cos();
+            let low_minus = (n_signed - GTAO_HALF_PI).cos();
             let mut hcos_minus = -1.0f32;
             let mut hcos_plus = -1.0f32;
             for j in 0..steps {
-                let r_j = radius_px * ((j as f32) + 1.0) / (steps as f32);
-
-                let off_plus_x = gtao_round(dir2[0] * r_j) as i32;
-                let off_plus_y = gtao_round(dir2[1] * r_j) as i32;
-                let s_plus = pos(cx + off_plus_x, cy + off_plus_y, tan_half_fov, aspect);
-                let d_plus = sub(s_plus, p_c);
-                let len_plus = length(d_plus);
-                if len_plus > 1e-5 && len_plus <= radius {
-                    hcos_plus = hcos_plus.max(dot(scale(d_plus, 1.0 / len_plus), view_vec));
-                }
-
-                let off_minus_x = gtao_round(-dir2[0] * r_j) as i32;
-                let off_minus_y = gtao_round(-dir2[1] * r_j) as i32;
-                let s_minus = pos(cx + off_minus_x, cy + off_minus_y, tan_half_fov, aspect);
-                let d_minus = sub(s_minus, p_c);
-                let len_minus = length(d_minus);
-                if len_minus > 1e-5 && len_minus <= radius {
-                    hcos_minus = hcos_minus.max(dot(scale(d_minus, 1.0 / len_minus), view_vec));
-                }
+                let r_j = radius_px * (j as f32 + step_offset) / steps as f32 + MIN_TAP_PX;
+                let plus = pos(cx + gtao_round(dir2[0] * r_j) as i32, cy + gtao_round(dir2[1] * r_j) as i32);
+                hcos_plus = horizon(hcos_plus, sub(plus, p_c), view_vec, radius, low_plus);
+                let minus = pos(cx + gtao_round(-dir2[0] * r_j) as i32, cy + gtao_round(-dir2[1] * r_j) as i32);
+                hcos_minus = horizon(hcos_minus, sub(minus, p_c), view_vec, radius, low_minus);
             }
 
             let mut h1 = -hcos_minus.clamp(-1.0, 1.0).acos();
@@ -549,8 +506,7 @@ pub(crate) mod cpu_reference {
             h1 = n_signed + (h1 - n_signed).max(-GTAO_HALF_PI);
             h2 = n_signed + (h2 - n_signed).min(GTAO_HALF_PI);
 
-            let arc = integrate_arc(h1, n_signed) + integrate_arc(h2, n_signed);
-            visibility_sum += proj_len * arc;
+            visibility_sum += proj_len * (integrate_arc(h1, n_signed) + integrate_arc(h2, n_signed));
             baseline_sum += proj_len * full_ref(n_signed);
         }
 
@@ -559,107 +515,57 @@ pub(crate) mod cpu_reference {
     }
 }
 
-/// **Analytic sanity test** (`docs/CINEMATIC_POST_DESIGN.md` I8:
-/// `gtao_flat_plane_full_visibility`) — a flat plane (constant raw depth,
-/// no local depth discontinuity anywhere) must give `out.r ~= 1` (full
-/// visibility). BUG-y5w7: before the `full_ref` normalization fix, this
-/// only held near-exactly in a near-orthographic fixture (fov_y=0.02) —
-/// the per-pixel view vector `V=normalize(-P)` rotates under perspective,
-/// and the pre-fix formula (normalizing by slice count) darkened flat
-/// surfaces as that rotation grew, worst-pixel ~0.6 loss at a 90-degree FOV
-/// and radius 0.5. The fix makes visibility exactly 1 (by construction) for
-/// any genuinely unoccluded slice regardless of view angle, so this test
-/// now also covers the REAL import regime (fov_y=0.9) and a 90-degree FOV,
-/// not just the original near-orthographic fixture. Pure CPU, no GPU
-/// device.
+/// A flat plane must read fully visible (out.r ~ 1) at any field of view.
+/// `margin` skips the edge ring, where the finite-difference normal has no
+/// real neighbour.
 #[cfg(test)]
 mod analytic_sanity {
     use super::cpu_reference::{gtao_texel, DepthBuffer};
 
-    /// `margin`: pixels excluded from every edge before checking. The
-    /// +/-1-texel finite-difference normal (D3's method, shared by this
-    /// atom) has no real neighbor beyond the depth buffer's edge —
-    /// `DepthBuffer::load`'s `ClampToEdge` duplicates the edge texel there,
-    /// giving a degenerate normal at the outermost ring REGARDLESS of this
-    /// bug's fix (measured: worst loss drops from ~0.11 at margin=0 to
-    /// ~0.01-0.03 by margin=2 on this 16x16 fixture — a boundary artifact
-    /// of ANY screen-space normal-from-depth reconstruction, orthogonal to
-    /// BUG-y5w7's view-angle mechanism, and negligible on a real render's
-    /// actual resolution where it's confined to the literal outermost
-    /// pixel ring).
+    #[allow(clippy::too_many_arguments)]
     fn assert_flat_plane_visible(fov_y: f32, near: f32, far: f32, radius: f32, raw: f32, margin: i32, bound: f32) {
         let (w, h) = (16i32, 16i32);
         let raw_buf = vec![raw; (w * h) as usize];
         let depth = DepthBuffer { w, h, raw: &raw_buf };
-        let intensity = 1.0;
-
-        for cy in margin..(h - margin) {
-            for cx in margin..(w - margin) {
-                let vis = gtao_texel(&depth, cx, cy, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
-                assert!(
-                    (vis - 1.0).abs() < bound,
-                    "fov_y={fov_y} texel ({cx},{cy}): flat plane must give ~full visibility (out.r~1), got {vis}"
-                );
+        for noise_frame in [0, super::NOISE_FRAME_STRIDE * 7] {
+            for cy in margin..(h - margin) {
+                for cx in margin..(w - margin) {
+                    let vis = gtao_texel(&depth, cx, cy, radius, 1.0, 2, 4, false, 0.2, fov_y, near, far, noise_frame);
+                    assert!(
+                        (vis - 1.0).abs() < bound,
+                        "fov_y={fov_y} texel ({cx},{cy}): flat plane must give ~full visibility (out.r~1), got {vis}"
+                    );
+                }
             }
         }
     }
 
-    /// The original I8 fixture (near-orthographic, tiny radius) — kept as a
-    /// tight-tolerance regression check now that the fix makes it exact.
     #[test]
     fn gtao_flat_plane_full_visibility() {
         assert_flat_plane_visible(0.02, 0.1, 1000.0, 0.05, 0.5, 0, 1e-3);
     }
 
-    /// BUG-y5w7: the real import graph's camera FOV (`preset.generator.
-    /// cinematic_scene`'s default) and a realistic radius — this is the
-    /// regime that showed the dark-square-on-flat-rug bug. `raw` is chosen
-    /// so the reconstructed depth is ~2.5 view units (radius is a 20%
-    /// fraction of depth, a generous but plausible AO radius) rather than
-    /// the ~0.1 view units `raw=0.5` gives at this near/far pair — at that
-    /// near-field depth, `radius=0.5` is 5x the surface's own distance from
-    /// the camera, so `radius_px` (the world radius projected to screen
-    /// pixels) vastly exceeds this 16x16 fixture and EVERY sample clamps to
-    /// the depth buffer's edge (`DepthBuffer::load`'s `ClampToEdge`) — a
-    /// real but separate, orthogonal limitation of any finite screen-space
-    /// search radius, not the view-angle bug this test targets (confirmed:
-    /// an unclamped/infinite-extrapolation stand-in gives exactly 0 loss at
-    /// this same fov/radius/near/far at ANY canvas size once `raw` is
-    /// physically reasonable).
+    /// The import camera's field of view; `raw` puts the plane ~2.5 units out.
     #[test]
     fn gtao_flat_plane_full_visibility_at_import_fov() {
         assert_flat_plane_visible(0.9, 0.05, 200.0, 0.5, 0.0198, 2, 0.05);
     }
 
-    /// BUG-y5w7: a 90-degree FOV (the worst case measured pre-fix, ~0.6
-    /// worst-pixel loss) — the fix must hold well beyond the import
-    /// regime's fov_y=0.9, not just barely cover it. Same `raw` rationale
-    /// as `gtao_flat_plane_full_visibility_at_import_fov` above (~2.5 view
-    /// units of depth for this near/far pair).
     #[test]
     fn gtao_flat_plane_full_visibility_at_90_degree_fov() {
         assert_flat_plane_visible(std::f32::consts::FRAC_PI_2, 0.1, 1000.0, 0.5, 0.0399, 2, 0.05);
     }
 
-    /// BUG-y5w7 regression guard: the ORIGINAL reported regime (radius 5x
-    /// the surface depth, `raw=0.5` at near=0.05/far=200) is dominated by
-    /// depth-buffer edge-clamping, not the view-angle bug — but the fix
-    /// must not make it WORSE, and should still land well under the
-    /// pre-fix ~0.3 worst-pixel loss measured on this exact fixture.
+    /// A radius five times the plane's distance: every tap clamps to the
+    /// buffer edge. It must stay under the old ~0.3 worst-pixel loss.
     #[test]
     fn gtao_flat_plane_boundary_clamped_regime_does_not_regress() {
         assert_flat_plane_visible(0.9, 0.05, 200.0, 0.5, 0.5, 0, 0.2);
     }
 }
 
-/// **Corner/crease occlusion** (requirement 3: the flat-plane fix must not
-/// wash out real AO) — a near "block" surface (`raw_near`) standing in
-/// front of a farther "back wall" (`raw_far`), meeting at a depth step
-/// (`step_x`). A pixel on the far surface immediately adjacent to the step
-/// has part of its hemisphere genuinely blocked by the near surface —
-/// unlike the flat-plane cases above, this is real geometry, not a
-/// view-angle artifact, so it must show substantially more occlusion than
-/// a flat, unoccluded region of the same buffer.
+/// A near block in front of a far wall: the wall beside the step is occluded,
+/// flat regions away from it are not.
 #[cfg(test)]
 mod corner_sanity {
     use super::cpu_reference::{gtao_texel, DepthBuffer};
@@ -668,13 +574,6 @@ mod corner_sanity {
     fn corner_shows_real_occlusion_flat_region_does_not() {
         let (w, h) = (64i32, 64i32);
         let step_x = 32i32;
-        // Chosen so the far surface's view_z (~2.5) keeps radius_px well
-        // under the 28px gap from the flat sample points to the step
-        // (~13px at radius=0.5, fov_y=0.9), while the near surface sits
-        // just close enough (~2.3 view_z, a 0.2-unit step — comfortably
-        // inside the `radius=0.5` world-space range check together with
-        // the small lateral offset near the crease) to register as a real
-        // occluder rather than get rejected by the range check.
         let (raw_near, raw_far) = (0.022f32, 0.0198f32);
         let mut raw = vec![raw_far; (w * h) as usize];
         for y in 0..h {
@@ -683,29 +582,20 @@ mod corner_sanity {
             }
         }
         let depth = DepthBuffer { w, h, raw: &raw };
-        let (fov_y, near, far, radius, intensity) = (0.9f32, 0.05f32, 200.0f32, 0.5, 1.0);
+        let (fov_y, near, far, radius) = (0.9f32, 0.05f32, 200.0f32, 0.5);
+        // Averaged down the column, as the blur after this atom does: one
+        // pixel's two slices may run parallel to the step.
+        let ao = |x: i32| {
+            (8..h - 8).map(|y| gtao_texel(&depth, x, y, radius, 1.0, 2, 4, false, 0.2, fov_y, near, far, 0)).sum::<f32>()
+                / (h - 16) as f32
+        };
 
-        // Just past the step, on the far (back-wall) side — genuinely
-        // occluded by the near block in front of it.
-        let vis_at_crease = gtao_texel(&depth, step_x - 2, h / 2, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
-        // Far from the step on the SAME (far) surface — flat, unoccluded.
-        let vis_flat_far = gtao_texel(&depth, 4, h / 2, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
-        // Far from the step on the near block — also flat, unoccluded.
-        let vis_flat_near = gtao_texel(&depth, w - 4, h / 2, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
-
+        let (at_crease, flat_far, flat_near) = (ao(step_x - 2), ao(4), ao(w - 4));
+        assert!(flat_far > 0.9, "flat region on the far surface must read near-unoccluded, got {flat_far}");
+        assert!(flat_near > 0.9, "flat region on the near block must read near-unoccluded, got {flat_near}");
         assert!(
-            vis_flat_far > 0.9,
-            "flat region on the far surface, away from the crease, must read as near-unoccluded, got {vis_flat_far}"
-        );
-        assert!(
-            vis_flat_near > 0.9,
-            "flat region on the near surface, away from the crease, must read as near-unoccluded, got {vis_flat_near}"
-        );
-        assert!(
-            vis_at_crease < vis_flat_far - 0.15,
-            "texel just past the crease on the far surface must show real occlusion from the near \
-             block, not get washed out by the flat-plane fix: vis_at_crease={vis_at_crease} \
-             vis_flat_far={vis_flat_far}"
+            at_crease < flat_far - 0.15,
+            "the wall beside the step must show occlusion: crease {at_crease}, flat {flat_far}"
         );
     }
 }
@@ -714,10 +604,8 @@ mod corner_sanity {
 mod heightfield_sanity {
     use super::cpu_reference::{DepthBuffer, gtao_texel};
 
-    /// Heightfield mode on a flat height map: the ortho frame has no
-    /// perspective view/normal misalignment at all, so visibility must be
-    /// ~1 with NO narrow-FOV fixture trickery (contrast with the perspective
-    /// analytic test above, which needs fov=0.02 to get within 1e-3).
+    /// The orthographic frame has no perspective tilt: a flat height map is
+    /// exactly visible.
     #[test]
     fn heightfield_flat_plane_full_visibility_exact() {
         let (w, h) = (16i32, 16i32);
@@ -725,60 +613,179 @@ mod heightfield_sanity {
         let depth = DepthBuffer { w, h, raw: &raw };
         for cy in 0..h {
             for cx in 0..w {
-                let vis = gtao_texel(&depth, cx, cy, 0.02, 1.0, 4, 8, true, 0.25, 0.9, 1.0, 3.0);
-                assert!(
-                    (vis - 1.0).abs() < 1e-4,
-                    "texel ({cx},{cy}): flat heightfield must be fully visible, got {vis}"
-                );
+                let vis = gtao_texel(&depth, cx, cy, 0.02, 1.0, 4, 8, true, 0.25, 0.9, 1.0, 3.0, 0);
+                assert!((vis - 1.0).abs() < 1e-4, "texel ({cx},{cy}): flat heightfield must be fully visible, got {vis}");
             }
+        }
+    }
+}
+
+/// Peter's case: a 1 m cube on the ground (resting, and falling 10 cm
+/// above it), seen from 10 m. The ground in front of the cube is averaged
+/// across the cube's width into one AO profile against distance from the
+/// contact. A hard cut at the radius, or tap distances shared by every
+/// pixel, bend that profile sharply: the lines parallel to the edge.
+#[cfg(test)]
+mod contact_lines {
+    use super::cpu_reference::{gtao_texel, DepthBuffer};
+
+    const W: i32 = 1280;
+    const H: i32 = 720;
+    const FOV_Y: f32 = 0.9;
+    const NEAR: f32 = 0.05;
+    const FAR: f32 = 200.0;
+    const RADIUS: f32 = 0.5;
+    /// Where the fade-out starts.
+    const FADE_START: f32 = 0.85;
+    /// The largest upward bend (second difference between neighbouring
+    /// rows) a smooth fade-out shows. The hard cut at the radius measured
+    /// 0.025 here; the falloff measures 0.004 on one still frame.
+    const LINE_BEND: f32 = 0.01;
+
+    fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    }
+    fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+    fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    }
+    fn normalize(a: [f32; 3]) -> [f32; 3] {
+        let l = dot(a, a).sqrt();
+        [a[0] / l, a[1] / l, a[2] / l]
+    }
+
+    /// Nearest hit along a ray: the ground (y = 0) or the cube `hover` above it.
+    fn hit(o: [f32; 3], d: [f32; 3], hover: f32) -> Option<(f32, bool)> {
+        let mut best = (d[1] < 0.0).then(|| (-o[1] / d[1], false));
+        let (lo, hi) = ([-0.5f32, hover, -0.5], [0.5f32, 1.0 + hover, 0.5]);
+        let (mut t0, mut t1) = (0.0f32, f32::INFINITY);
+        for a in 0..3 {
+            let inv = 1.0 / d[a];
+            let (ta, tb) = ((lo[a] - o[a]) * inv, (hi[a] - o[a]) * inv);
+            t0 = t0.max(ta.min(tb));
+            t1 = t1.min(ta.max(tb));
+        }
+        if t0 <= t1 && best.is_none_or(|(t, _)| t0 < t) {
+            best = Some((t0, true));
+        }
+        best
+    }
+
+    /// Raw reversed-Z depth of the scene, and per pixel whether it is cube.
+    fn render(hover: f32) -> (Vec<f32>, Vec<bool>) {
+        let eye = [0.0f32, 3.5, 10.0];
+        let fwd = normalize(sub([0.0, 0.3, 0.5], eye));
+        let right = normalize(cross(fwd, [0.0, 1.0, 0.0]));
+        let up = cross(right, fwd);
+        let (tan_half, aspect) = ((FOV_Y * 0.5).tan(), W as f32 / H as f32);
+        let mut raw = vec![0.0f32; (W * H) as usize];
+        let mut cube = vec![false; (W * H) as usize];
+        for y in 0..H {
+            for x in 0..W {
+                let nx = ((x as f32 + 0.5) / W as f32 * 2.0 - 1.0) * tan_half * aspect;
+                let ny = (1.0 - (y as f32 + 0.5) / H as f32 * 2.0) * tan_half;
+                let d = normalize([
+                    fwd[0] + right[0] * nx + up[0] * ny,
+                    fwd[1] + right[1] * nx + up[1] * ny,
+                    fwd[2] + right[2] * nx + up[2] * ny,
+                ]);
+                if let Some((t, on_cube)) = hit(eye, d, hover) {
+                    let z = t * dot(d, fwd);
+                    let i = (y * W + x) as usize;
+                    raw[i] = NEAR * (FAR - z) / (z * (FAR - NEAR));
+                    cube[i] = on_cube;
+                }
+            }
+        }
+        (raw, cube)
+    }
+
+    /// Mean AO of the ground rows below the cube, across the middle of its
+    /// width, over the given noise frames.
+    fn profile(hover: f32, noise_frames: &[u32]) -> Vec<f32> {
+        let (raw, cube) = render(hover);
+        let depth = DepthBuffer { w: W, h: H, raw: &raw };
+        let centre = W / 2;
+        let bottom = (0..H).rev().find(|&y| cube[(y * W + centre) as usize]).expect("cube in view");
+        let cols: Vec<i32> = (0..W).filter(|&x| cube[(bottom * W + x) as usize]).collect();
+        let fifth = cols.len() / 5;
+        let cols = &cols[fifth..cols.len() - fifth];
+        (bottom + 1..(bottom + 120).min(H - 2))
+            .map(|y| {
+                let mut sum = 0.0;
+                for &x in cols {
+                    for &frame in noise_frames {
+                        sum += gtao_texel(&depth, x, y, RADIUS, 1.0, 2, 4, false, 0.2, FOV_Y, NEAR, FAR, frame);
+                    }
+                }
+                sum / (cols.len() * noise_frames.len()) as f32
+            })
+            .collect()
+    }
+
+    /// The largest upward bend of the fade-out: from the first row past
+    /// `FADE_START` on, the profile may only ease into white. A line is the
+    /// profile suddenly speeding up there. The rows nearer the cube are the
+    /// contact's own shape (and the gap under a falling cube), not lines.
+    fn largest_bend(p: &[f32]) -> f32 {
+        let start = p.iter().position(|&v| v > FADE_START).unwrap_or(p.len());
+        p[start..].windows(3).map(|w| w[2] - 2.0 * w[1] + w[0]).fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn no_lines_at_a_cube_contact_seen_from_ten_metres() {
+        let moving: Vec<u32> = (0..16).map(|k| k * super::NOISE_FRAME_STRIDE).collect();
+        for hover in [0.0, 0.1] {
+            let still = profile(hover, &[0]);
+            let averaged = profile(hover, &moving);
+            assert!(averaged[0] < 0.8, "hover {hover}: the ground by the cube must stay occluded, got {}", averaged[0]);
+            assert!(largest_bend(&still) < LINE_BEND, "hover {hover}: one still frame shows a line, bend {}", largest_bend(&still));
+            assert!(largest_bend(&averaged) < LINE_BEND, "hover {hover}: averaged frames show a line, bend {}", largest_bend(&averaged));
         }
     }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! **I8** (`docs/CINEMATIC_POST_DESIGN.md` P5 deliverable:
-    //! `gtao_matches_cpu_reference`): the generated standalone kernel (built
-    //! via `standalone_for_spec::<SsaoGtao>()`, the one that ships) must
-    //! reproduce `cpu_reference::gtao_texel` (the plain-Rust reference)
-    //! within tolerance on a synthetic non-uniform depth ramp. ALSO proves
-    //! the `docs/ADDING_PRIMITIVES.md` codegen-path mandate
-    //! (generated-vs-hand WGSL parity) against `ssao_gtao.wgsl`, mirroring
-    //! `ssao_from_depth.rs`'s (now-deleted) `generated_ssao_matches_hand_
-    //! kernel` — two independent oracles (CPU-Rust and hand-WGSL), same
-    //! generated kernel.
+    //! The generated standalone kernel (the one that ships) against
+    //! `cpu_reference::gtao_texel`. Integer tap offsets mean a last-digit
+    //! difference between GPU and CPU trig can land a tap on a neighbouring
+    //! texel, so a minority of texels differ by a discrete jump; the bounds
+    //! below carry that.
     use half::f16;
 
     use manifold_gpu::{GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
     use super::cpu_reference::{gtao_texel, DepthBuffer};
-    use super::SsaoGtao;
+    use super::{SsaoGtao, SsaoGtaoUniforms};
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
-    fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
-        assert_eq!(px.len(), (w * h * 4) as usize);
+    fn upload_depth(device: &GpuDevice, w: u32, h: u32, raw: &[f32]) -> GpuTexture {
+        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for (i, &r) in raw.iter().enumerate() {
+            px[i * 4] = f16::from_f32(r);
+            px[i * 4 + 1] = f16::from_f32(r);
+            px[i * 4 + 2] = f16::from_f32(r);
+            px[i * 4 + 3] = f16::from_f32(1.0);
+        }
         let tex = device.create_texture(&GpuTextureDesc {
             width: w,
             height: h,
             depth: 1,
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::CPU_UPLOAD
-                | GpuTextureUsage::SHADER_READ
-                | GpuTextureUsage::COPY_SRC,
-            label,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+            label: "gtao-depth",
             mip_levels: 1,
         });
-        let bytes = unsafe {
-            std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px))
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice())) };
         device.upload_texture(&tex, bytes);
         tex
     }
 
-    /// Non-uniform synthetic depth ramp (raw varies smoothly in x AND y so
-    /// the reconstructed normal is non-degenerate everywhere) — same
-    /// rationale as `ssao_from_depth.rs`'s (now-deleted) `depth_ramp_2d`.
+    /// Depth that varies in x and y, so the normal is never degenerate.
     fn depth_ramp_2d(w: u32, h: u32) -> Vec<f32> {
         let mut raw = vec![0.0f32; (w * h) as usize];
         for y in 0..h {
@@ -791,71 +798,32 @@ mod gpu_tests {
         raw
     }
 
-    fn upload_depth(device: &GpuDevice, w: u32, h: u32, raw: &[f32]) -> GpuTexture {
-        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
-        for (i, &r) in raw.iter().enumerate() {
-            px[i * 4] = f16::from_f32(r);
-            px[i * 4 + 1] = f16::from_f32(r);
-            px[i * 4 + 2] = f16::from_f32(r);
-            px[i * 4 + 3] = f16::from_f32(1.0);
+    fn uniforms(radius: f32, fov_y: f32, near: f32, far: f32, noise_frame: u32) -> SsaoGtaoUniforms {
+        SsaoGtaoUniforms {
+            radius,
+            intensity: 1.0,
+            slices: 2.0,
+            steps: 4.0,
+            projection: 0,
+            relief: 0.2,
+            noise_per_frame: u32::from(noise_frame != 0),
+            fov_y,
+            near,
+            far,
+            noise_frame,
+            _pad0: 0.0,
         }
-        upload_rgba16f(device, w, h, "gtao-depth-ramp", &px)
     }
 
-    fn readback_rgba(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
-        let bytes_per_row = w * 8;
-        let total = u64::from(h * bytes_per_row);
-        let readback = device.create_buffer_shared(total);
-        let mut enc = device.create_encoder("gtao-readback");
-        enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
-        let ptr = readback.mapped_ptr().expect("shared readback buffer");
-        let halves: &[u16] =
-            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-        (0..(w * h) as usize)
-            .map(|i| {
-                let o = i * 4;
-                [
-                    f16::from_bits(halves[o]).to_f32(),
-                    f16::from_bits(halves[o + 1]).to_f32(),
-                    f16::from_bits(halves[o + 2]).to_f32(),
-                    f16::from_bits(halves[o + 3]).to_f32(),
-                ]
-            })
-            .collect()
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-    struct GtaoUniforms {
-        radius: f32,
-        intensity: f32,
-        slices: f32,
-        steps: f32,
-        projection: u32,
-        relief: f32,
-        fov_y: f32,
-        near: f32,
-        far: f32,
-        _pad0: f32,
-        _pad1: f32,
-        _pad2: f32,
-    }
-
-    fn dispatch(
-        device: &GpuDevice,
-        pipeline: &manifold_gpu::GpuComputePipeline,
-        depth: &GpuTexture,
-        w: u32,
-        h: u32,
-        uniform_bytes: &[u8],
-    ) -> Vec<[f32; 4]> {
+    fn run_generated(device: &GpuDevice, depth: &GpuTexture, w: u32, h: u32, uniforms: &SsaoGtaoUniforms) -> Vec<f32> {
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SsaoGtao>().expect("node.ssao_gtao standalone codegen");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "gtao-generated");
         let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "gtao-out");
         let mut enc = device.create_encoder("gtao-dispatch");
         enc.dispatch_compute(
-            pipeline,
+            &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: uniform_bytes },
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(uniforms) },
                 GpuBinding::Texture { binding: 1, texture: depth },
                 GpuBinding::Texture { binding: 2, texture: &out.texture },
             ],
@@ -863,156 +831,50 @@ mod gpu_tests {
             "gtao-dispatch",
         );
         enc.commit_and_wait_completed();
-        readback_rgba(device, &out.texture, w, h)
+        let bytes_per_row = w * 8;
+        let readback = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let mut enc = device.create_encoder("gtao-readback");
+        enc.copy_texture_to_buffer(&out.texture, &readback, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared readback buffer");
+        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        (0..(w * h) as usize).map(|i| f16::from_bits(halves[i * 4]).to_f32()).collect()
     }
 
-    /// **I8a**: generated kernel vs CPU-Rust reference — same house pattern
-    /// as `ssao_from_depth.rs`'s (now-deleted) parity test: implement the
-    /// committed algorithm twice, once in WGSL, once in plain Rust.
-    ///
-    /// Tolerance policy (measured, not assumed, on this exact fixture —
-    /// investigated live rather than guessed at, per two dead ends first:
-    /// (1) a genuine bug, `43_758.547` vs the committed `43758.5453` typo'd
-    /// into this module's `hash_angle` — fixed, but the mismatch rate barely
-    /// moved, so it was NOT the dominant cause; (2) a hypothesis that a huge
-    /// `radius_px` (D9(a)'s world-radius-at-depth screen projection) was
-    /// clamping every step against this tiny 24x16 fixture's border —
-    /// shrinking `radius` 25x (0.5 -> 0.02) barely moved the rate either,
-    /// ruling that out too. The actual cause, confirmed by inspecting
-    /// individual texels: D9(a)'s `gtao_round` snaps each step's continuous
-    /// screen offset to an INTEGER texel. With only 4 steps this is a
-    /// staircase with wide treads — a sub-ulp difference between GPU
-    /// hardware transcendentals and CPU libm in `ssao_hash_angle`'s
-    /// `sin(dot(px, ...))*43758.5453` term (chaotic by construction; large
-    /// `px` arguments make hardware-vs-software `sin` disagreement more
-    /// likely, not less) can tip `dir2 = (cos(phi), sin(phi))` across a
-    /// `gtao_round` tread boundary, landing the step on a DIFFERENT
-    /// neighbour texel with a different depth entirely — a discrete jump,
-    /// not a smooth perturbation. This is structurally worse than D3's
-    /// (retired `ssao_from_depth`) hemisphere sampling, which reuses the
-    /// SAME hash for all 16 independent samples and averages a continuous
-    /// occlusion accumulator, diluting a bad rotation to a rare single-
-    /// sample flip; D9(a)'s 2-slice horizon integral has far less
-    /// redundancy, so one flipped tap can swing a slice's visibility
-    /// substantially. Measured on this exact fixture (radius=0.02,
-    /// intensity=1, fov_y=pi/2, near=0.1, far=100, 24x16 ramp): of 384
-    /// texels, 83 (21.6%) disagree by more than 1e-3 (ordinary FP noise, not
-    /// counted as a "mismatch" below), 30 (7.8%) by more than 0.02, 6 (1.6%)
-    /// by more than 0.1, and the observed maximum is 0.194 — comfortably
-    /// under the algebraic ceiling of 1.0 (visibility is clamped to [0,1]).
-    /// The bound below is set with headroom above these measurements, not
-    /// tightened to them. This test's job is the
-    /// algorithm-level cross-check, and the hash-driven jump class above is
-    /// accepted as inherent to D9(a)'s committed integer-stepping — NOT
-    /// something this phase may fix by substituting a different algorithm
-    /// (the design doc's own named plausible-wrong move).
     #[test]
     fn gtao_matches_cpu_reference() {
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (24u32, 16u32);
         let raw = depth_ramp_2d(w, h);
         let depth_tex = upload_depth(&device, w, h, &raw);
-
-        let (radius, intensity) = (0.02f32, 1.0f32);
-        let (fov_y, near, far) = (std::f32::consts::FRAC_PI_2, 0.1, 100.0);
-        let uniforms = GtaoUniforms { radius, intensity, slices: 2.0, steps: 4.0, projection: 0, relief: 0.2, fov_y, near, far, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
-        let bytes = bytemuck::bytes_of(&uniforms);
-
-        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SsaoGtao>()
-            .expect("node.ssao_gtao standalone codegen");
-        let pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            manifold_node_engine::freeze::codegen::ENTRY,
-            "gtao-generated",
-        );
-        let gen_out = dispatch(&device, &pipeline, &depth_tex, w, h, bytes);
-
+        let (radius, fov_y, near, far) = (0.02f32, std::f32::consts::FRAC_PI_2, 0.1, 100.0);
         let depth_buf = DepthBuffer { w: w as i32, h: h as i32, raw: &raw };
-        let total = (w * h) as usize;
-        let mut mismatches = 0usize;
-        for y in 0..h as i32 {
-            for x in 0..w as i32 {
-                let cpu = gtao_texel(&depth_buf, x, y, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
-                let gpu = gen_out[(y as u32 * w + x as u32) as usize][0];
-                let diff = (cpu - gpu).abs();
-                // Every disagreement, however large, must stay under the
-                // measured-max-plus-headroom ceiling — this is the catch-a-
-                // real-bug line, checked on every texel regardless of the
-                // rate bound below.
-                assert!(
-                    diff < 0.25,
-                    "texel ({x},{y}): cpu={cpu} gpu={gpu} diff={diff} exceeds the hash-driven-jump \
-                     ceiling (measured max on this fixture: 0.194) — looks like a real algorithm \
-                     mismatch, not a discrete tread-boundary flip"
-                );
-                // Ordinary FP noise (<=1e-3) isn't counted; the 1e-3..0.25
-                // band is the accepted hash-driven-jump class, rate-bounded
-                // below (measured 30/384 = 7.8% exceed 0.02 specifically;
-                // this coarser 1e-3 count is a superset, so the bound has
-                // more headroom than the raw number suggests).
-                if diff >= 1e-3 {
-                    mismatches += 1;
+        for noise_frame in [0, 5 * super::NOISE_FRAME_STRIDE] {
+            let gpu_out = run_generated(&device, &depth_tex, w, h, &uniforms(radius, fov_y, near, far, noise_frame));
+            let mut mismatches = 0usize;
+            for y in 0..h as i32 {
+                for x in 0..w as i32 {
+                    let cpu = gtao_texel(&depth_buf, x, y, radius, 1.0, 2, 4, false, 0.2, fov_y, near, far, noise_frame);
+                    let gpu = gpu_out[(y as u32 * w + x as u32) as usize];
+                    let diff = (cpu - gpu).abs();
+                    assert!(diff < 0.25, "frame {noise_frame} texel ({x},{y}): cpu={cpu} gpu={gpu} diff={diff}");
+                    if diff >= 1e-3 {
+                        mismatches += 1;
+                    }
                 }
             }
+            assert!(mismatches * 3 <= (w * h) as usize, "frame {noise_frame}: {mismatches} texels differ by more than 1e-3");
         }
-        assert!(
-            mismatches * 3 <= total,
-            "{mismatches}/{total} texels exceed 1e-3 — exceeds the expected rate (>33%), which \
-             would suggest a systematic issue rather than isolated hash-driven tread-boundary \
-             flips (measured baseline on this fixture: 83/384 = 21.6%)"
-        );
     }
 
-
-
-    /// **Analytic sanity, GPU path** (I8: `gtao_flat_plane_full_visibility`,
-    /// GPU leg): the same flat-plane claim as
-    /// `analytic_sanity::gtao_flat_plane_full_visibility`, dispatched on the
-    /// real generated kernel (not just the CPU reference) — belt-and-
-    /// suspenders that the shipping kernel, not only its Rust twin,
-    /// satisfies the invariant.
     #[test]
     fn generated_gtao_flat_plane_gives_full_visibility() {
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
-        let raw = vec![0.5f32; (w * h) as usize];
-        let depth_tex = upload_depth(&device, w, h, &raw);
-
-        // Same narrow-FOV / small-radius fixture as
-        // `analytic_sanity::gtao_flat_plane_full_visibility` — see that
-        // test's doc comment for why GTAO's flat-plane bound needs a
-        // near-orthographic fixture, unlike D3's hemisphere SSAO.
-        let uniforms = GtaoUniforms {
-            radius: 0.05,
-            intensity: 1.0,
-            slices: 2.0,
-            steps: 4.0,
-            projection: 0,
-            relief: 0.2,
-            fov_y: 0.02,
-            near: 0.1,
-            far: 1000.0,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-        };
-        let bytes = bytemuck::bytes_of(&uniforms);
-
-        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SsaoGtao>()
-            .expect("node.ssao_gtao standalone codegen");
-        let pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            manifold_node_engine::freeze::codegen::ENTRY,
-            "gtao-flat",
-        );
-        let out = dispatch(&device, &pipeline, &depth_tex, w, h, bytes);
-
-        for (i, px) in out.iter().enumerate() {
-            assert!(
-                (px[0] - 1.0).abs() < 1e-3,
-                "texel {i}: flat plane must give ~full visibility (out.r~1), got {}",
-                px[0]
-            );
+        let depth_tex = upload_depth(&device, w, h, &vec![0.5f32; (w * h) as usize]);
+        let out = run_generated(&device, &depth_tex, w, h, &uniforms(0.05, 0.02, 0.1, 1000.0, 0));
+        for (i, v) in out.iter().enumerate() {
+            assert!((v - 1.0).abs() < 1e-3, "texel {i}: flat plane must give ~full visibility, got {v}");
         }
     }
 }

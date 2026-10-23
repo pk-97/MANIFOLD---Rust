@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 404 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 405 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -61,7 +61,7 @@ _Generated from the node registry. Do not hand-edit. 404 nodes registered, group
 | Saturation | `node.saturation` | Filter | Pulls colours toward grey or pushes them more vivid. |
 | Tone Map | `node.tone_map` | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 
-### Blur & Sharpen (9)
+### Blur & Sharpen (10)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -73,6 +73,7 @@ _Generated from the node registry. Do not hand-edit. 404 nodes registered, group
 | Gaussian Blur | `node.gaussian_blur` | Filter | A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions. |
 | Motion Blur | `node.motion_blur` | Filter | Smears each pixel along its own screen-space motion, scaled by the camera's shutter angle — the classic filmic motion-blur look, driven by real per-object move… |
 | Sharpen | `node.sharpen` | Filter | Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper. |
+| Temporal Accumulate | `node.temporal_accumulate` | Filter | Smooths a noisy 3D effect by averaging it with the last few frames, following the scene's motion so nothing smears. |
 | Variable Blur | `node.variable_blur` | Filter | A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for s… |
 
 ### Distort & Warp (8)
@@ -149,7 +150,7 @@ _Generated from the node registry. Do not hand-edit. 404 nodes registered, group
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | Region Mask | `node.region_mask` | Filter | Turns observed tracked region labels into a pixel-accurate mask with optional box filling. |
 | RGB Distance | `node.rgb_distance` | Filter | Measures each pixel's Euclidean RGB distance from a scalar-bindable target colour. |
-| SSAO (GTAO) | `node.ssao_gtao` | Map | Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way amb… |
+| SSAO (GTAO) | `node.ssao_gtao` | Map | Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO): darkens crevices and touching surfaces the way ambi… |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 
 ### Composite (9)
