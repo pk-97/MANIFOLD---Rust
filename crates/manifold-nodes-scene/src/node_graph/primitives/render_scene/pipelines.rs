@@ -2,10 +2,33 @@
 
 use super::*;
 
+/// The shading every lit scene pass shares: `scene_shading.wgsl` (uniform,
+/// lights, shadows, image-based lighting, fog, the PBR light loop) and the
+/// look hooks, one file per look item. A pass prepends it to its own WGSL
+/// with `concat!`, so the mesh renderer and a full-screen pass run the same
+/// code.
+macro_rules! scene_shading_wgsl {
+    () => {
+        concat!(
+            include_str!("../shaders/scene_shading.wgsl"),
+            include_str!("../shaders/look_ripple_detail.wgsl"),
+            include_str!("../shaders/look_foam.wgsl"),
+            include_str!("../shaders/look_mist.wgsl"),
+            include_str!("../shaders/look_thin_water_light.wgsl"),
+            include_str!("../shaders/look_wet_surface.wgsl"),
+        )
+    };
+}
+
 impl RenderScene {
+    /// The mesh renderer's composed shader: the shared scene shading, then
+    /// `render_scene.wgsl`.
+    pub(super) const SHADER_WGSL: &'static str =
+        concat!(scene_shading_wgsl!(), include_str!("../shaders/render_scene.wgsl"));
+
     /// GBUFFER_DESIGN.md section 2 D5 (P2) text-substitution patterns that turn
-    /// the base `render_scene.wgsl` (unmodified — the velocity-off
-    /// pipeline compiles the file exactly as it ships) into the
+    /// the composed shader (unmodified — the velocity-off pipeline compiles
+    /// it exactly as it ships) into the
     /// EMIT_VELOCITY variant: inject the `FsOut` struct and `VsOut`'s two
     /// extra clip-space fields, compute `clip_now`/`clip_prev` in
     /// `vs_main`, and rewrap every fragment entry's `-> @location(0)
@@ -267,7 +290,7 @@ impl RenderScene {
                 .entry((MaterialKind::Unlit, false, false, false, false, true, MSAA_SAMPLES))
                 .or_insert_with(|| {
                     device.create_render_pipeline_depth_msaa_point_size(
-                        include_str!("../shaders/render_scene.wgsl"),
+                        Self::SHADER_WGSL,
                         "vs_points",
                         "fs_unlit",
                         7,
@@ -293,7 +316,7 @@ impl RenderScene {
                     Self::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed)
                 {
                     device.create_specialized_render_pipeline_depth_msaa(
-                        include_str!("../shaders/render_scene.wgsl"),
+                        Self::SHADER_WGSL,
                         "vs_main",
                         fs_entry,
                         specs,
@@ -307,7 +330,7 @@ impl RenderScene {
                     )
                 } else {
                     device.create_render_pipeline_depth_msaa(
-                        include_str!("../shaders/render_scene.wgsl"),
+                        Self::SHADER_WGSL,
                         "vs_main",
                         fs_entry,
                         manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -345,7 +368,7 @@ impl RenderScene {
             MaterialKind::Cel => "fs_cel",
         };
         device.create_render_pipeline_depth_msaa(
-            include_str!("../shaders/render_scene.wgsl"),
+            Self::SHADER_WGSL,
             "vs_main",
             fs_entry,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -407,7 +430,7 @@ impl RenderScene {
                         Self::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed)
                     {
                         device.create_specialized_render_pipeline_depth_msaa(
-                            include_str!("../shaders/render_scene.wgsl"),
+                            Self::SHADER_WGSL,
                             "vs_main",
                             fs_entry,
                             specs,
@@ -421,7 +444,7 @@ impl RenderScene {
                         );
                     } else {
                         device.create_render_pipeline_depth_msaa(
-                            include_str!("../shaders/render_scene.wgsl"),
+                            Self::SHADER_WGSL,
                             "vs_main",
                             fs_entry,
                             manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -490,7 +513,7 @@ impl RenderScene {
         // lazily compiled on the first Points frame without this. Warm it so
         // flipping a scene to Points mid-show is a cache hit, not a stall.
         device.create_render_pipeline_depth_msaa_point_size(
-            include_str!("../shaders/render_scene.wgsl"),
+            Self::SHADER_WGSL,
             "vs_points",
             "fs_unlit",
             7,

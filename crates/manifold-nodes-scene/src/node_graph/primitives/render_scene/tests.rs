@@ -77,7 +77,7 @@
     fn wgsl_caster_struct_matches_the_rust_record() {
         let generated = manifold_gpu::ShadowCaster::WGSL;
         for (name, src) in [
-            ("render_scene.wgsl", include_str!("../shaders/render_scene.wgsl")),
+            ("scene_shading.wgsl", include_str!("../shaders/scene_shading.wgsl")),
             ("shaft_march.wgsl", include_str!("../shaders/shaft_march.wgsl")),
         ] {
             assert!(src.contains(generated), "{name} must carry the generated ShadowCaster struct:\n{generated}");
@@ -278,7 +278,7 @@
     //  exports it, and no stray 48-byte assumption survives in the source.
     #[test]
     fn render_scene_wgsl_parses_and_carries_tangent() {
-        let src = include_str!("../shaders/render_scene.wgsl");
+        let src = RenderScene::SHADER_WGSL;
         let module = naga::front::wgsl::parse_str(src).expect("render_scene.wgsl must naga-parse");
         let mut validator = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
@@ -291,6 +291,30 @@
             src.contains("tangent: vec4<f32>") && src.contains("fn tbn_for"),
             "the authored-tangent path (BUG-wfxe) must be present in the kernel"
         );
+    }
+
+    /// The shared scene shading stands alone: a full-screen pass prepends it
+    /// with no mesh vertex stage, so it must validate with nothing from
+    /// `render_scene.wgsl`, and carry the light loop and IBL it exists for.
+    #[test]
+    fn scene_shading_validates_without_the_mesh_shader() {
+        let shading = RenderScene::SHADER_WGSL
+            .strip_suffix(include_str!("../shaders/render_scene.wgsl"))
+            .expect("the composed shader ends with render_scene.wgsl");
+        let module = naga::front::wgsl::parse_str(shading).expect("scene shading must naga-parse alone");
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!("scene shading validation failed alone:\n{}", e.emit_to_string(shading));
+        }
+        for function in ["pbr_direct_lighting", "pbr_ibl", "light_visibility", "apply_fog", "look_wet_surface"] {
+            assert!(
+                module.functions.iter().any(|(_, f)| f.name.as_deref() == Some(function)),
+                "scene shading must define `{function}`"
+            );
+        }
     }
 
     /// IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate: `texture_flags2`
@@ -307,7 +331,7 @@
     /// don't count as "reads".
     #[test]
     fn texture_flags2_is_read_only_inside_its_dedicated_resolve_functions() {
-        let src = include_str!("../shaders/render_scene.wgsl");
+        let src = RenderScene::SHADER_WGSL;
 
         fn function_body<'a>(src: &'a str, sig: &str) -> &'a str {
             let start = src.find(sig).unwrap_or_else(|| panic!("missing `{sig}`"));

@@ -866,7 +866,7 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
     return resolve_albedo(input.uv, input.vertex_color);
 }
 "#;
-        let shader = format!("{}\n{}", include_str!("../shaders/render_scene.wgsl"), PROBE);
+        let shader = format!("{}\n{}", RenderScene::SHADER_WGSL,PROBE);
         let pipeline = device.create_render_pipeline(
             &shader,
             "vs_main",
@@ -1045,7 +1045,7 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
     return sample_extension_map(sheen_color_map, probe_uv, index);
 }
 "#;
-        let shader = format!("{}\n{}", include_str!("../shaders/render_scene.wgsl"), PROBE);
+        let shader = format!("{}\n{}", RenderScene::SHADER_WGSL,PROBE);
         let pipeline = device.create_render_pipeline(
             &shader,
             "vs_main",
@@ -1221,7 +1221,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Each 2x2 block averages to 0.5 in mip 1. The first mip is black
         // at (1/8,1/8). A 2^0.6 texel footprint independently predicts
         // no mip = 0, nearest mip = 0.5, linear mip = 0.3.
-        let shader = format!("{}\n{}", include_str!("../shaders/render_scene.wgsl"), r#"
+        let shader = format!("{}\n{}", RenderScene::SHADER_WGSL,r#"
 @vertex fn vs_mip_probe(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let x = f32((i << 1u) & 2u);
     let y = f32(i & 2u);

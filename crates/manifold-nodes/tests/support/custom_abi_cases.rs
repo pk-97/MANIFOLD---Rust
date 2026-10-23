@@ -428,7 +428,7 @@ pub const CASES: &[CustomAbiCase] = &[
     CustomAbiCase {
         source: "render_scene.rs",
         rust_struct: "RenderSceneUniforms",
-        shader: "shaders/render_scene.wgsl",
+        shader: "shaders/scene_shading.wgsl",
         shader_struct: "Uniforms",
         aliases: &[],
     },
