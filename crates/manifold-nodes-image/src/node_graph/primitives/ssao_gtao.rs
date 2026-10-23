@@ -5,8 +5,9 @@
 //! (R=G=B=occlusion, A=1) that the graph multiplies onto the colour with a
 //! `node.mix`; the atom never touches the colour itself.
 //!
-//! Per pixel: reconstruct the view-space position and the normal (±1-texel
-//! central differences); for each of `slices` screen directions, march
+//! Per pixel: reconstruct the view-space position and the normal (XeGTAO's
+//! edge-aware reconstruction, `view_normal_common.wgsl`, so a pixel beside a
+//! silhouette keeps its own surface's normal); for each of `slices` screen directions, march
 //! `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius
 //! multiplier; world units, projected at the pixel's depth), keep each
 //! side's highest horizon, and integrate the
@@ -20,33 +21,36 @@
 //! each pixel offsets its taps by its own fraction of a step; and slice angle
 //! and step offset come from XeGTAO's spatio-temporal noise (Hilbert index
 //! walked by the R2 sequence). With `noise_per_frame` on the pattern moves
-//! every frame, for `node.temporal_accumulate` to average; off, it holds still.
-//! The pattern index follows the frame time, so an export renders the same
-//! noise every time.
+//! on every run of the node, for `node.temporal_accumulate` to average; off,
+//! it holds still. The step is the node's own count of runs, not the frame
+//! time, so the pattern keeps moving while the transport is stopped (the
+//! history would otherwise settle on one pattern's grain). `clear_state`
+//! restarts the count, and export clears state before its first frame, so
+//! two exports draw the same noise.
 //!
-//! The Hilbert index, the R2 noise and the falloff are ported from XeGTAO
-//! (Intel, MIT license; see THIRD_PARTY_NOTICES.md).
+//! The Hilbert index, the R2 noise, the falloff and the normal are ported
+//! from XeGTAO (Intel, MIT license; see THIRD_PARTY_NOTICES.md).
 //!
-//! `camera` reaches the kernel only through derived uniforms, so this
-//! Pointwise atom can fuse with a neighbour.
+//! The run count is state that crosses frames, so this atom is a fusion
+//! boundary: a fused kernel could not advance it. Its kernel is still
+//! generated from `wgsl_body`.
 
 use std::borrow::Cow;
 
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
 use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
+const VIEW_NORMAL_COMMON: &str = include_str!("shaders/view_normal_common.wgsl");
 
 /// Display labels for the `projection` enum, indexed by enum value.
 pub const GTAO_PROJECTIONS: &[&str] = &["Scene Depth", "Height Field"];
 
-/// The noise pattern steps this many times per second of frame time.
-const NOISE_STEPS_PER_SECOND: f64 = 60.0;
 /// XeGTAO's temporal cycle: the pattern repeats after this many steps.
-const NOISE_CYCLE: i64 = 64;
+const NOISE_CYCLE: u32 = 64;
 /// XeGTAO's Hilbert-index offset between consecutive frames.
 const NOISE_FRAME_STRIDE: u32 = 288;
 
@@ -72,7 +76,7 @@ struct SsaoGtaoUniforms {
 manifold_node_engine::primitive! {
     name: SsaoGtao,
     type_id: "node.ssao_gtao",
-    purpose: "Ground Truth Ambient Occlusion from scene depth and a Camera, sampled as XeGTAO does. Per pixel: view-space position from depth, normal from ±1-texel central differences; `slices` screen directions, `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius multiplier; world units projected at the pixel's depth); each tap's horizon fades to the open horizon over the outer 61.5% of that reach (no hard cut), so occlusion is about half faded at `radius`; per-pixel step offsets and slice angles from XeGTAO's Hilbert/R2 spatio-temporal noise; the visible arc integrated against the normal and divided by the slice's fully-open arc. out.r = clamp(1 - intensity*(1-visibility), 0, 1), broadcast to RGB, alpha 1. `noise_per_frame` moves the noise every frame (for a temporal filter); off, the pattern holds still. The camera is read only through derived uniforms.",
+    purpose: "Ground Truth Ambient Occlusion from scene depth and a Camera, sampled as XeGTAO does. Per pixel: view-space position from depth, normal from XeGTAO's edge-aware reconstruction (each corner of the four neighbours weighted by how well they follow the local depth slope, so silhouette pixels keep their own surface's normal); `slices` screen directions, `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius multiplier; world units projected at the pixel's depth); each tap's horizon fades to the open horizon over the outer 61.5% of that reach (no hard cut), so occlusion is about half faded at `radius`; per-pixel step offsets and slice angles from XeGTAO's Hilbert/R2 spatio-temporal noise; the visible arc integrated against the normal and divided by the slice's fully-open arc. out.r = clamp(1 - intensity*(1-visibility), 0, 1), broadcast to RGB, alpha 1. `noise_per_frame` moves the noise on every run of the node, whether or not frame time moves (for a temporal filter); clear_state restarts the sequence; off, the pattern holds still. The camera is read only through derived uniforms.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -150,17 +154,21 @@ manifold_node_engine::primitive! {
     category: Mask,
     role: Map,
     aliases: ["gtao", "ssao", "ground truth ambient occlusion", "ambient occlusion", "contact shadow", "screen space ambient occlusion", "ao"],
-    fusion_kind: Pointwise,
+    boundary_reason: CrossFrameState,
     wgsl_body: include_str!("shaders/ssao_gtao_body.wgsl"),
     input_access: [GatherTexel],
-    // `depth` feeds the normal's finite differences and every tap's range
-    // test; fp16 would stair-step both at grazing angles.
+    // `depth` feeds the normal and every tap's range test; fp16 would
+    // stair-step both at grazing angles.
     precision_critical: ["depth"],
     derived_uniforms: ["fov_y", "near", "far", "noise_frame:u32"],
-    wgsl_includes: [DEPTH_COMMON],
+    wgsl_includes: [DEPTH_COMMON, VIEW_NORMAL_COMMON],
+    extra_fields: {
+        // Runs since the last `clear_state`, modulo `NOISE_CYCLE`.
+        noise_step: u32 = 0,
+    },
 }
 
-/// The Camera-derived fields, shared by `run()` and the fused recompute.
+/// The Camera-derived fields `run()` passes as derived uniforms.
 pub(super) fn derive_view_scalars(cam: &Camera) -> [f32; 3] {
     let fov_y = match cam.mode {
         CameraMode::Perspective { fov_y } => fov_y,
@@ -169,25 +177,20 @@ pub(super) fn derive_view_scalars(cam: &Camera) -> [f32; 3] {
     [fov_y, cam.near, cam.far]
 }
 
-/// The frame's offset into the noise sequence. It follows the frame time,
-/// not a counter, so rendering the same moment twice draws the same noise.
-fn noise_frame(frame: &FrameTime) -> u32 {
-    let step = (frame.seconds.0 * NOISE_STEPS_PER_SECOND).round() as i64;
-    step.rem_euclid(NOISE_CYCLE) as u32 * NOISE_FRAME_STRIDE
-}
-
-inventory::submit! {
-    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
-        type_id: "node.ssao_gtao",
-        array_ports: &[],
-        recompute: |ctx| ctx.camera.map(|cam| {
-            let [fov_y, near, far] = derive_view_scalars(cam);
-            vec![fov_y, near, far, noise_frame(ctx.frame) as f32]
-        }),
+impl SsaoGtao {
+    /// This run's offset into the noise sequence; each call moves one step.
+    fn next_noise_frame(&mut self) -> u32 {
+        let step = self.noise_step;
+        self.noise_step = (step + 1) % NOISE_CYCLE;
+        step * NOISE_FRAME_STRIDE
     }
 }
 
 impl Primitive for SsaoGtao {
+    fn clear_state(&mut self) {
+        self.noise_step = 0;
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let read_f32 = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| -> f32 {
             match ctx.params.get(name) {
@@ -208,7 +211,7 @@ impl Primitive for SsaoGtao {
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far] = derive_view_scalars(&cam);
-        let noise_frame = noise_frame(&ctx.time);
+        let noise_frame = self.next_noise_frame();
 
         let Some(depth_tex) = ctx.inputs.texture_2d("depth") else {
             return;
@@ -222,7 +225,11 @@ impl Primitive for SsaoGtao {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<Self>()
+                .expect("node.ssao_gtao standalone codegen");
+            gpu.device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "node.ssao_gtao")
+        });
 
         let uniforms = SsaoGtaoUniforms {
             radius,
@@ -254,7 +261,6 @@ impl Primitive for SsaoGtao {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::{Beats, Seconds};
 
     #[test]
     fn derive_view_scalars_reads_perspective_fov_near_far() {
@@ -278,16 +284,22 @@ mod tests {
         assert_eq!(fov_y, std::f32::consts::FRAC_PI_3);
     }
 
-    /// The noise follows the frame time: the same moment gives the same
-    /// pattern (export repeats), consecutive frames move it, and it cycles.
+    /// The noise moves on every run whatever the frame time does (a stopped
+    /// transport still averages), cycles, and `clear_state` restarts it, so
+    /// two exports from a cleared state draw the same sequence.
     #[test]
-    fn noise_frame_follows_frame_time() {
-        let at = |seconds: f64| FrameTime { beats: Beats(0.0), seconds: Seconds(seconds), delta: Seconds(1.0 / 60.0), frame_count: 0 };
-        assert_eq!(noise_frame(&at(2.5)), noise_frame(&at(2.5)));
-        assert_ne!(noise_frame(&at(2.5)), noise_frame(&at(2.5 + 1.0 / 60.0)));
-        assert_eq!(noise_frame(&at(1.0 / 60.0)), NOISE_FRAME_STRIDE);
-        assert_eq!(noise_frame(&at(NOISE_CYCLE as f64 / 60.0)), 0);
-        assert!(noise_frame(&at(-1.0 / 60.0)) < NOISE_CYCLE as u32 * NOISE_FRAME_STRIDE);
+    fn noise_moves_every_run_and_restarts_on_clear() {
+        let mut node = SsaoGtao::new();
+        let first: Vec<u32> = (0..NOISE_CYCLE + 1).map(|_| node.next_noise_frame()).collect();
+        assert_eq!(first[0], 0);
+        assert_eq!(first[1], NOISE_FRAME_STRIDE);
+        assert!(first.windows(2).all(|w| w[0] != w[1]), "consecutive runs must move the pattern");
+        assert_eq!(first[NOISE_CYCLE as usize], 0, "the pattern cycles");
+
+        node.next_noise_frame();
+        Primitive::clear_state(&mut node);
+        let again: Vec<u32> = (0..NOISE_CYCLE + 1).map(|_| node.next_noise_frame()).collect();
+        assert_eq!(first, again, "a cleared node repeats the sequence");
     }
 }
 
@@ -397,6 +409,33 @@ pub(crate) mod cpu_reference {
         if l > 1e-8 { scale(a, 1.0 / l) } else { [0.0, 0.0, -1.0] }
     }
 
+    /// `view_normal_common.wgsl`'s edge weights (left, right, top, bottom).
+    fn view_normal_edges(center: f32, left: f32, right: f32, top: f32, bottom: f32) -> [f32; 4] {
+        let e = [left - center, right - center, top - center, bottom - center];
+        let slope_lr = (e[1] - e[0]) * 0.5;
+        let slope_tb = (e[3] - e[2]) * 0.5;
+        let adjusted = [e[0] + slope_lr, e[1] - slope_lr, e[2] + slope_tb, e[3] - slope_tb];
+        let scale = (center * 0.011).max(1e-6);
+        std::array::from_fn(|i| (1.25 - e[i].abs().min(adjusted[i].abs()) / scale).clamp(0.0, 1.0))
+    }
+
+    /// `view_normal_common.wgsl`'s `view_normal`.
+    fn view_normal(edges: [f32; 4], c: [f32; 3], l: [f32; 3], r: [f32; 3], t: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        let dir = |p: [f32; 3]| {
+            let d = sub(p, c);
+            let len = length(d);
+            if len > 1e-8 { scale(d, 1.0 / len) } else { [0.0; 3] }
+        };
+        let (l, r, t, b) = (dir(l), dir(r), dir(t), dir(b));
+        let accepted = [edges[0] * edges[2], edges[2] * edges[1], edges[1] * edges[3], edges[3] * edges[0]].map(|a| (a + 0.01).clamp(0.0, 1.0));
+        let corners = [cross(l, t), cross(t, r), cross(r, b), cross(b, l)];
+        let mut n = [0.0f32; 3];
+        for (a, corner) in accepted.iter().zip(corners) {
+            n = [n[0] + a * corner[0], n[1] + a * corner[1], n[2] + a * corner[2]];
+        }
+        normalize(n)
+    }
+
     fn integrate_arc(h: f32, n: f32) -> f32 {
         0.25 * (-(2.0 * h - n).cos() + n.cos() + 2.0 * h * n.sin())
     }
@@ -451,9 +490,9 @@ pub(crate) mod cpu_reference {
         };
 
         let p_c = pos(cx, cy);
-        let ddx = sub(pos(cx + 1, cy), pos(cx - 1, cy));
-        let ddy = sub(pos(cx, cy + 1), pos(cx, cy - 1));
-        let normal = normalize(cross(ddx, ddy));
+        let (l, r, t, b) = (pos(cx - 1, cy), pos(cx + 1, cy), pos(cx, cy - 1), pos(cx, cy + 1));
+        let edges = if heightfield { [1.0; 4] } else { view_normal_edges(p_c[2], l[2], r[2], t[2], b[2]) };
+        let normal = view_normal(edges, p_c, l, r, t, b);
 
         let (view_vec, radius_px) = if heightfield {
             ([0.0, 0.0, -1.0], radius * depth.h as f32)
@@ -675,13 +714,18 @@ mod contact_lines {
 
     /// Raw reversed-Z depth of the scene, and per pixel whether it is cube.
     fn render(hover: f32) -> (Vec<f32>, Vec<bool>) {
-        let eye = [0.0f32, 3.5, 10.0];
+        let (raw, hits) = render_from([0.0, 3.5, 10.0], hover);
+        (raw, hits.iter().map(|h| h.is_some()).collect())
+    }
+
+    /// Raw reversed-Z depth seen from `eye`, and per pixel the cube point hit.
+    fn render_from(eye: [f32; 3], hover: f32) -> (Vec<f32>, Vec<Option<[f32; 3]>>) {
         let fwd = normalize(sub([0.0, 0.3, 0.5], eye));
         let right = normalize(cross(fwd, [0.0, 1.0, 0.0]));
         let up = cross(right, fwd);
         let (tan_half, aspect) = ((FOV_Y * 0.5).tan(), W as f32 / H as f32);
         let mut raw = vec![0.0f32; (W * H) as usize];
-        let mut cube = vec![false; (W * H) as usize];
+        let mut cube = vec![None; (W * H) as usize];
         for y in 0..H {
             for x in 0..W {
                 let nx = ((x as f32 + 0.5) / W as f32 * 2.0 - 1.0) * tan_half * aspect;
@@ -695,7 +739,7 @@ mod contact_lines {
                     let z = t * dot(d, fwd);
                     let i = (y * W + x) as usize;
                     raw[i] = NEAR * (FAR - z) / (z * (FAR - NEAR));
-                    cube[i] = on_cube;
+                    cube[i] = on_cube.then(|| [eye[0] + d[0] * t, eye[1] + d[1] * t, eye[2] + d[2] * t]);
                 }
             }
         }
@@ -744,6 +788,31 @@ mod contact_lines {
             assert!(largest_bend(&still) < LINE_BEND, "hover {hover}: one still frame shows a line, bend {}", largest_bend(&still));
             assert!(largest_bend(&averaged) < LINE_BEND, "hover {hover}: averaged frames show a line, bend {}", largest_bend(&averaged));
         }
+    }
+
+    /// The cube's right side seen nearly edge-on, with the ground far behind
+    /// it. The background pixel just outside the silhouette must read like
+    /// the background beyond it: a central-difference normal there straddles
+    /// the silhouette, leans toward the cube and draws a dark line down it.
+    #[test]
+    fn no_dark_line_beside_an_edge_on_face() {
+        let (raw, hits) = render_from([3.0, 3.5, 10.0], 0.0);
+        let depth = DepthBuffer { w: W, h: H, raw: &raw };
+        let ao = |x: i32, y: i32| gtao_texel(&depth, x, y, RADIUS, 1.0, 2, 4, false, 0.2, FOV_Y, NEAR, FAR, 0);
+        let mid_side = |x: i32, y: i32| hits[(y * W + x) as usize].is_some_and(|p| (p[0] - 0.5).abs() < 1e-3 && (0.3..0.7).contains(&p[1]));
+        let (mut outside, mut beyond) = (0.0, 0.0);
+        let mut rows = 0;
+        for y in 1..H - 1 {
+            let Some(x) = (1..W - 4).find(|&x| mid_side(x, y) && hits[(y * W + x + 1) as usize].is_none()) else {
+                continue;
+            };
+            outside += ao(x + 1, y);
+            beyond += ao(x + 3, y);
+            rows += 1;
+        }
+        assert!(rows > 10, "the side must be in view on more than {rows} rows");
+        let (outside, beyond) = (outside / rows as f32, beyond / rows as f32);
+        assert!(outside > beyond - 0.05, "a dark line beside the silhouette: {outside} against {beyond} beyond it");
     }
 }
 
@@ -816,7 +885,7 @@ mod gpu_tests {
     }
 
     fn run_generated(device: &GpuDevice, depth: &GpuTexture, w: u32, h: u32, uniforms: &SsaoGtaoUniforms) -> Vec<f32> {
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SsaoGtao>().expect("node.ssao_gtao standalone codegen");
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<SsaoGtao>().expect("node.ssao_gtao standalone codegen");
         let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "gtao-generated");
         let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "gtao-out");
         let mut enc = device.create_encoder("gtao-dispatch");

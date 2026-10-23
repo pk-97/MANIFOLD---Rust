@@ -2749,7 +2749,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Depth-guided (bilateral) single-axis blur: fixed 9 taps at 1-texel spacing along `axis`, weight_j = K9_j * exp(-(dz_j/depth_sigma)^2) where K9_j are the same sigma~=2 gaussian constants used by every other 9-tap kernel in this codebase and dz_j is the linearized-depth difference from the center texel, renormalized by the weight sum actually used. Pair a Horizontal pass with a Vertical pass for a full 2D edge-aware blur that smooths noise (e.g. raw SSAO/GTAO occlusion) without bleeding across depth discontinuities (silhouette edges stay sharp). Alpha is a pure center pass-through. `camera` is read entirely via near/far derived uniforms for `linearize_depth` — never a GPU binding.",
+      "purpose": "Depth-guided (bilateral) single-axis blur: fixed 9 taps at 1-texel spacing along `axis`, weight_j = K9_j * exp(-(dz_j/depth_sigma)^2) where K9_j are the same sigma~=2 gaussian constants used by every other 9-tap kernel in this codebase and dz_j is tap j's linearized depth minus the depth the center's surface has at tap j (the center's raw depth stepped j texels along its gentler one-texel raw slope, exact on any plane however steeply it recedes), renormalized by the weight sum actually used. Pair a Horizontal pass with a Vertical pass for a full 2D edge-aware blur that smooths noise (e.g. raw SSAO/GTAO occlusion) without bleeding across depth discontinuities (silhouette edges stay sharp). Alpha is a pure center pass-through. `camera` is read entirely via near/far derived uniforms for `linearize_depth` — never a GPU binding.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "A depth-guided blur that smooths noise without bleeding across depth edges — the standard denoise pass after any per-pixel noisy sampler (ambient occlusion, dithered effects) that needs to stay sharp at silhouettes.",
@@ -42982,7 +42982,7 @@
         "ao"
       ],
       "category": "Mask",
-      "derived_recompute": true,
+      "derived_recompute": false,
       "derived_uniforms": [
         "fov_y",
         "near",
@@ -42990,7 +42990,7 @@
         "noise_frame:u32"
       ],
       "examples": [],
-      "fusion": "pointwise",
+      "fusion": "boundary:cross_frame_state",
       "inputs": [
         {
           "name": "depth",
@@ -43082,7 +43082,7 @@
           "type": "bool"
         }
       ],
-      "purpose": "Ground Truth Ambient Occlusion from scene depth and a Camera, sampled as XeGTAO does. Per pixel: view-space position from depth, normal from ±1-texel central differences; `slices` screen directions, `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius multiplier; world units projected at the pixel's depth); each tap's horizon fades to the open horizon over the outer 61.5% of that reach (no hard cut), so occlusion is about half faded at `radius`; per-pixel step offsets and slice angles from XeGTAO's Hilbert/R2 spatio-temporal noise; the visible arc integrated against the normal and divided by the slice's fully-open arc. out.r = clamp(1 - intensity*(1-visibility), 0, 1), broadcast to RGB, alpha 1. `noise_per_frame` moves the noise every frame (for a temporal filter); off, the pattern holds still. The camera is read only through derived uniforms.",
+      "purpose": "Ground Truth Ambient Occlusion from scene depth and a Camera, sampled as XeGTAO does. Per pixel: view-space position from depth, normal from XeGTAO's edge-aware reconstruction (each corner of the four neighbours weighted by how well they follow the local depth slope, so silhouette pixels keep their own surface's normal); `slices` screen directions, `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius multiplier; world units projected at the pixel's depth); each tap's horizon fades to the open horizon over the outer 61.5% of that reach (no hard cut), so occlusion is about half faded at `radius`; per-pixel step offsets and slice angles from XeGTAO's Hilbert/R2 spatio-temporal noise; the visible arc integrated against the normal and divided by the slice's fully-open arc. out.r = clamp(1 - intensity*(1-visibility), 0, 1), broadcast to RGB, alpha 1. `noise_per_frame` moves the noise on every run of the node, whether or not frame time moves (for a temporal filter); clear_state restarts the sequence; off, the pattern holds still. The camera is read only through derived uniforms.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO): darkens crevices and touching surfaces the way ambient light naturally would.",
@@ -44579,7 +44579,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Reprojected temporal accumulation (Jimenez et al. 2016, GTAO section 5). Fetches last frame's result at uv + (-velocity.x, velocity.y)/2 (`velocity` is the render's NDC motion, now minus previous) with four bilinear taps; a tap is kept only when its stored view depth is within 2% plus the local depth slope of the depth this pixel's surface had from last frame's camera. Kept history is clipped to the current 3x3 neighbourhood's mean ± 1.25 standard deviations, then out = mix(history, in, 1/n) with n = min(history n + 1, `frames`). No usable history gives out = in. Resets on the first frame, a camera cut (Camera.shot), a seek or owner change, a size change and clear_state; never on a geometry change. `depth` is the render's raw reversed-Z depth.",
+      "purpose": "Reprojected temporal accumulation (Jimenez et al. 2016, GTAO section 5). Fetches last frame's result at uv + (-velocity.x, velocity.y)/2 (`velocity` is the render's NDC motion, now minus previous) with four bilinear taps; a tap is kept only when its stored view depth is within 2% plus the local depth slope of the depth this pixel's surface had from last frame's camera, and its stored world normal (reconstructed from depth, XeGTAO's edge-aware normal) is within cos 0.9 of this pixel's. Kept history is clipped to the current 3x3 neighbourhood's mean ± 1.25 standard deviations, then out = mix(history, in, 1/n) with n = min(history n + 1, `frames`). No usable history gives out = in. Resets on the first frame, a camera cut (Camera.shot), a seek or owner change, a size change and clear_state; never on a geometry change. `depth` is the render's raw reversed-Z depth.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Smooths a noisy 3D effect by averaging it with the last few frames, following the scene's motion so nothing smears.",
