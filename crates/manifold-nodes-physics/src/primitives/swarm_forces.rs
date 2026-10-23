@@ -23,10 +23,10 @@ use crate::tick_sampled::{TickSampled, TickSampledRegistration};
 /// Force Detail's top: 64³ lattice nodes laid on the CPU per tick at most.
 const MAX_FORCE_DETAIL: f32 = 64.0;
 
-const OUTPUTS: [&str; 13] = [
+const OUTPUTS: [&str; 14] = [
     "ticks", "first_tick", "epoch", "force_lattices",
     "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing",
-    "field_min_x", "field_min_y", "field_min_z", "simulation_time", "impulse_tick",
+    "field_min_x", "field_min_y", "field_min_z", "simulation_time", "impulse_tick", "far_terms",
 ];
 const IMPULSE_TICK: usize = 12;
 
@@ -60,9 +60,11 @@ manifold_node_engine::primitive! {
         field_min_x: ScalarF32, field_min_y: ScalarF32, field_min_z: ScalarF32,
         simulation_time: ScalarF32,
         impulse_tick: ScalarF32,
+        far_terms: ScalarF32,
         forces: Array(f32),
         tick_seconds: Array(f32),
         impulses: Array(f32),
+        far_forces: Array(f32),
     },
     params: [
         param("force_detail", "Force Detail", ParamType::Int, 17.0, (2.0, MAX_FORCE_DETAIL)),
@@ -70,7 +72,7 @@ manifold_node_engine::primitive! {
         param("air_drag", "Air Drag", ParamType::Float, 1.0, (0.0, 4.0)),
     ],
     depth_rule: Terminal,
-    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds and impulses are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Inserted from the Add menu, and in the Swarm preset, the Physics World drives gravity_x, gravity, gravity_z, air_resistance, speed and reset: the swarm falls under World gravity (metres per second squared, added to the scene forces it feels) and its Air Drag acts against the World's still air (air_resistance, 1/s), follows World Speed and restarts on World Reset, which clip triggers fire. Unwired, gravity is zero; elsewhere, wire a trigger counter into reset. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over, in the swarm's own frame; a particle outside it reads the nearest edge of the lattice. Wire the swarm's frame (its emitter transform, the frame its particles move in) into frame: forces are sampled where each lattice node sits in the world and turned back into the frame, so a wind blows the same way however the emitter turns. Unwired, the frame is the world. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
+    composition_notes: "The swarm's source of truth. Every output but epoch and simulation_time wires into node.move_swarm's port of the same name (forces, tick_seconds, impulses and far_forces are buffers). Wire epoch into the particle loop's node.array_feedback reset_trigger (and the seeder's), so every clock restart reseeds the particles: live after a loop matches an export. Inserted from the Add menu, and in the Swarm preset, the Physics World drives gravity_x, gravity, gravity_z, air_resistance, speed and reset: the swarm falls under World gravity (metres per second squared, added to the scene forces it feels) and its Air Drag acts against the World's still air (air_resistance, 1/s), follows World Speed and restarts on World Reset, which clip triggers fire. Unwired, gravity is zero; elsewhere, wire a trigger counter into reset. Scene forces arrive on acceleration_field (the scene force list expands into it, as for a liquid domain). The bounds transform (position and scale) is the box forces are laid out over, in the swarm's own frame; past it a particle reads the far terms on far_forces (far_terms per lattice, 0 for none): radial and vortex forces from their formulas, uniform pushes and air at their constant value, gusts as still air. Wire the swarm's frame (its emitter transform, the frame its particles move in) into frame: forces are sampled where each lattice node sits in the world and turned back into the frame, so a wind blows the same way however the emitter turns. Unwired, the frame is the world. Force Detail is the lattice nodes along the box's longest side; every value in its range fits any box. Air Drag scales how strongly the swarm feels the air a wind force carries: 0 ignores the air, 1 takes the wind's own drag rate.",
     examples: ["Swarm"],
     picker: { label: "Swarm Forces", category: Atom },
     summary: "Runs a swarm's simulation clock and lays the scene's forces over its box.",
@@ -80,7 +82,7 @@ manifold_node_engine::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         clock: SimulationClock = SimulationClock::default(),
-        forces: TickForces = TickForces::default(),
+        forces: TickForces = TickForces::with_far(),
         buffers: LatticeBuffers = LatticeBuffers::default(),
         published: [f32; OUTPUTS.len()] = [0.0; OUTPUTS.len()],
         tick_seconds: Vec<f32> = Vec::with_capacity(FORCE_LATTICE_RESERVE as usize),
@@ -213,6 +215,7 @@ impl SwarmForces {
             min[0], min[1], min[2],
             frame.simulation_time as f32,
             impulse_tick.map_or(-1.0, |tick| tick as f32),
+            self.forces.far_terms() as f32,
         ])
     }
 
@@ -266,6 +269,7 @@ impl SwarmForces {
             impulses_dirty: self.impulses_dirty,
             hits: &[],
             tick_seconds: &self.tick_seconds,
+            far: self.forces.far(),
         };
         self.buffers.upload(gpu, offline, data)?;
         self.forces.mark_uploaded();
@@ -278,7 +282,7 @@ impl SwarmForces {
 
 impl Primitive for SwarmForces {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "forces" | "tick_seconds" | "impulses")
+        matches!(port, "forces" | "tick_seconds" | "impulses" | "far_forces")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -286,6 +290,7 @@ impl Primitive for SwarmForces {
             "forces" => self.buffers.forces(),
             "tick_seconds" => self.buffers.tick_seconds(),
             "impulses" => self.buffers.impulses(),
+            "far_forces" => self.buffers.far(),
             _ => None,
         }
     }

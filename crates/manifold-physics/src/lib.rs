@@ -22,7 +22,7 @@ pub mod tick_samples;
 pub mod tick_hits;
 pub mod turbulence;
 use coupled_motion::{SupportCount, SupportPoint, MAX_SUPPORT_POINTS};
-pub use field_value::{FieldLeaf, FieldValue};
+pub use field_value::{FarShape, FarTerm, FieldLeaf, FieldValue, sample_far};
 pub use interaction::{
     FalloffCurve, FieldInput, ForceSample, RadialField, SampledField, ScaledField, SumField,
     TickStamp, UniformField, VectorField, VortexField,

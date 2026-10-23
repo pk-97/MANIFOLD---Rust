@@ -1,4 +1,4 @@
-//! Force: the rows of each of the seven types, from the force recipes
+//! Force: the rows of each of the five types, from the force recipes
 //! (`scene-modifier-presets`). A force compiles to one scene modifier
 //! instance, so a row reaches a param of that instance's recipe: the row's
 //! property is the recipe's own param id. Drag is the Wind recipe with its
@@ -32,12 +32,6 @@ fn wind(fields: &ItemFields) -> bool {
 }
 fn drag(fields: &ItemFields) -> bool {
     is(fields, ForceType::Drag)
-}
-fn attractor(fields: &ItemFields) -> bool {
-    is(fields, ForceType::Attractor)
-}
-fn explosion(fields: &ItemFields) -> bool {
-    is(fields, ForceType::Explosion)
 }
 
 const fn r(property: &'static str, exposure: Exposure, when: fn(&ItemFields) -> bool) -> PropertyRow {
@@ -74,8 +68,8 @@ const fn drag_held(property: &'static str, why: &'static str, value: f32) -> Pro
 
 const NO_WIND: &str = "Drag is still air: it has no wind to aim";
 
-pub static FORCE_ROWS: [PropertyRow; 65] = [
-    // Radial: pushes out from a centre.
+pub static FORCE_ROWS: [PropertyRow; 46] = [
+    // Radial: pushes out from a centre, or pulls in at a negative Strength.
     on_off(radial),
     centre("center_x", radial),
     centre("center_y", radial),
@@ -126,27 +120,6 @@ pub static FORCE_ROWS: [PropertyRow; 65] = [
     drag_held("turbulence", "Drag is still air: it has no gusts", 0.0),
     drag_held("turbulence_size", "Drag is still air: it has no gusts", 2.0),
     r("air_resistance", perform(FORCES, 1), drag).unit(Unit::PerSecond).name("Drag"),
-    // Attractor: pulls toward a centre.
-    on_off(attractor),
-    centre("center_x", attractor),
-    centre("center_y", attractor),
-    centre("center_z", attractor),
-    radius(attractor),
-    r("falloff", setup(), attractor),
-    r("curve", setup(), attractor),
-    strength(attractor),
-    impulse_size(3, attractor),
-    impulse(attractor),
-    // Explosion: one outward kick from a centre; the impulse is its point.
-    on_off(explosion),
-    centre("center_x", explosion),
-    centre("center_y", explosion),
-    centre("center_z", explosion),
-    radius(explosion),
-    r("falloff", setup(), explosion),
-    r("curve", setup(), explosion),
-    impulse_size(1, explosion),
-    impulse(explosion),
 ];
 
 /// What a Force can be aimed at: Objects and Groups (the bodies at or under
@@ -199,8 +172,6 @@ const TYPES: &[Choice] = &[
     Choice { key: "vortex", label: "Vortex" },
     Choice { key: "wind", label: "Wind" },
     Choice { key: "drag", label: "Drag" },
-    Choice { key: "attractor", label: "Attractor" },
-    Choice { key: "explosion", label: "Explosion" },
 ];
 
 pub static FORCE_FIELDS: [FieldRow; 2] = [
@@ -219,8 +190,6 @@ pub static FORCE_FIELDS: [FieldRow; 2] = [
                     ForceType::Vortex => "vortex",
                     ForceType::Wind => "wind",
                     ForceType::Drag => "drag",
-                    ForceType::Attractor => "attractor",
-                    ForceType::Explosion => "explosion",
                 }
                 .to_owned(),
             ),
@@ -236,8 +205,6 @@ pub static FORCE_FIELDS: [FieldRow; 2] = [
                 "vortex" => ForceType::Vortex,
                 "wind" => ForceType::Wind,
                 "drag" => ForceType::Drag,
-                "attractor" => ForceType::Attractor,
-                "explosion" => ForceType::Explosion,
                 _ => return Err(wrong_value("force_type", value)),
             };
             Ok(())

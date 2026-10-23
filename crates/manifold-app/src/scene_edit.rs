@@ -95,7 +95,7 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
             });
         }
         let material_id = material.id.clone();
-        let mut commands = add_object_commands(layer, parent.clone(), index, Item::new(id.clone(), name, fields()), material);
+        let mut commands = add_object_commands(layer, parent.clone(), index, Item::new(id.clone(), name.clone(), fields()), material);
         if key == LAYER_PLANE {
             // Alpha cutout, so a layer's transparent pixels leave the plane clear.
             commands.push(write(layer, &material_id, "alpha_mode", 0.0, ALPHA_MASK));
@@ -105,18 +105,20 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
         vec![
             Box::new(AddSceneItemCommand::new(layer.clone(), entry.kind, parent.clone(), index, None, id.clone())),
             Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id.clone(), fields())),
-            Box::new(RenameSceneItemCommand::new(layer.clone(), id.clone(), name)),
+            Box::new(RenameSceneItemCommand::new(layer.clone(), id.clone(), name.clone())),
         ]
     };
+    // The params exist once the item is added; a starting point writes over the recipe's defaults.
+    commands.extend(scene_schema::entry_starts(key).iter().map(|(property, value)| write(layer, &id, property, 0.0, *value)));
     if entry.kind == ItemKind::Swarm {
         let mut taken = names.iter().map(|taken| (*taken).to_owned()).collect::<Vec<_>>();
         // Forces sit at the top of the scene: after the swarm when it is
         // there too, else at the end.
         let force_index = if parent.is_none() { index + 1 } else { doc.items.len() };
-        for (offset, (base, force, values)) in SWARM_FORCES.iter().enumerate() {
+        for (offset, (role, force, values)) in SWARM_FORCES.iter().enumerate() {
             let force_id = new_id();
-            let name = unique_name(base, &taken.iter().map(String::as_str).collect::<Vec<_>>());
-            taken.push(name.clone());
+            let force_name = unique_name(&format!("{name} {role}"), &taken.iter().map(String::as_str).collect::<Vec<_>>());
+            taken.push(force_name.clone());
             commands.push(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Force, None, force_index + offset, None, force_id.clone())));
             commands.push(Box::new(SetSceneItemFieldsCommand::new(
                 layer.clone(),
@@ -124,7 +126,7 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
                 // Aimed at this swarm only, not every body, water or other swarm.
                 ItemFields::Force(ForceFields { force: *force, targets: ForceTargets::Items(vec![id.clone()]) }),
             )));
-            commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), force_id.clone(), name)));
+            commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), force_id.clone(), force_name)));
             // The force's params exist once it is added; they start at the stock recipe's values.
             commands.extend(values.iter().map(|(property, value)| write(layer, &force_id, property, 0.0, *value)));
         }
@@ -197,16 +199,16 @@ fn names(doc: &SceneDoc) -> Vec<&str> {
 /// A force a new Swarm brings: its name, type and starting values.
 type SwarmForce = (&'static str, ForceType, &'static [(&'static str, f32)]);
 
-/// What a new Swarm brings (Houdini's POP Attract in spring mode): an
-/// Attractor and a Radial Force at the swarm's centre, and drifting gusts.
-/// Beyond the core's radius the Attractor pulls at full strength; inside it
-/// the push cancels the pull in proportion, so the pull grows with distance
-/// from the centre. The gusts' Air Resistance relaxes every particle toward
-/// the gusts, so the cloud breathes and swirls but never leaves, at stock
-/// World gravity with no still air, tuned for
-/// a 60 s clip. Forces that target everything act in the swarm's own frame.
+/// What a new Swarm brings (Houdini's POP Attract in spring mode), each named
+/// after the swarm and aimed at it: two Radial forces at its centre, a Pull
+/// and a Core, and drifting Gusts. Beyond the Core's radius the Pull draws in
+/// at full strength; inside it the Core's push cancels the pull in
+/// proportion, so the pull grows with distance from the centre. The Gusts'
+/// Air Resistance relaxes every particle toward the gusts, so the cloud
+/// breathes and swirls but never leaves, at stock World gravity with no
+/// still air, tuned for a 60 s clip.
 const SWARM_FORCES: [SwarmForce; 3] = [
-    ("Attractor", ForceType::Attractor, &[("strength", 20.0), ("radius", 2.5), ("falloff", 1.0), ("curve", 1.0)]),
+    ("Pull", ForceType::Radial, &[("strength", -20.0), ("impulse_strength", -2.0), ("radius", 2.5), ("falloff", 1.0), ("curve", 1.0)]),
     ("Core", ForceType::Radial, &[("strength", 20.0), ("radius", 1.5), ("falloff", 1.0), ("curve", 0.0)]),
     ("Gusts", ForceType::Wind, &[("speed", 0.5), ("turbulence", 5.0), ("turbulence_size", 0.8), ("air_resistance", 3.0)]),
 ];
@@ -815,6 +817,35 @@ mod tests {
                 assert_eq!(base(instance(&project, &layer).unwrap(), &material, property), Some(old), "{property} after undo");
             }
         }
+    }
+
+    /// Pull is the one Radial card at its pulling start; a new Swarm's
+    /// forces are Radial and Wind cards named after it and aimed at it.
+    #[test]
+    fn pull_starts_inward_and_a_swarms_forces_carry_its_name() {
+        let (mut project, layer, _) = cube_scene();
+        let mut pull = add(&project, &layer, "force.pull", None, &[]).unwrap();
+        pull.command.execute(&mut project);
+        let pull = pull.select.unwrap();
+        let found = doc(&project, &layer).unwrap().find(&pull).unwrap();
+        assert!(matches!(&found.fields, ItemFields::Force(force) if force.force == ForceType::Radial));
+        assert_eq!(found.name, "Pull");
+        let inst = instance(&project, &layer).unwrap();
+        assert_eq!((base(inst, &pull, "strength"), base(inst, &pull, "curve")), (Some(-5.0), Some(1.0)));
+
+        let mut swarm = add(&project, &layer, "swarm", None, &[]).unwrap();
+        swarm.command.execute(&mut project);
+        let swarm = swarm.select.unwrap();
+        let doc = doc(&project, &layer).unwrap();
+        let forces: Vec<(&str, ForceType)> = doc
+            .items
+            .iter()
+            .filter_map(|item| match &item.fields {
+                ItemFields::Force(force) if force.targets == ForceTargets::Items(vec![swarm.clone()]) => Some((item.name.as_str(), force.force)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(forces, [("Swarm Pull", ForceType::Radial), ("Swarm Core", ForceType::Radial), ("Swarm Gusts", ForceType::Wind)]);
     }
 
     /// A scene layer holding a new cube: the project, the layer, the cube.

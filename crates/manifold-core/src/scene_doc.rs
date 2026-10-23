@@ -585,8 +585,6 @@ pub enum ForceType {
     Vortex,
     Wind,
     Drag,
-    Attractor,
-    Explosion,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

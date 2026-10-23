@@ -30,8 +30,6 @@ fn recipe(name: &str) -> EffectGraphDef {
         "RadialForce" => include_str!("../assets/scene-modifier-presets/RadialForce.json"),
         "VortexForce" => include_str!("../assets/scene-modifier-presets/VortexForce.json"),
         "Wind" => include_str!("../assets/scene-modifier-presets/Wind.json"),
-        "Attractor" => include_str!("../assets/scene-modifier-presets/Attractor.json"),
-        "Explosion" => include_str!("../assets/scene-modifier-presets/Explosion.json"),
         _ => panic!("unknown force recipe {name}"),
     };
     serde_json::from_str(source).expect("force recipe parses")
@@ -115,9 +113,11 @@ fn force_recipes_validate_and_expose_finite_controls() {
             .iter()
             .find(|param| param.id == "impulse_strength")
             .expect("signed impulse strength control");
+        // The Radial card is also Burst, whose kick reaches 50 m/s.
+        let reach = if name == "RadialForce" { 50.0 } else { 20.0 };
         assert_eq!(
             (impulse_strength.min, impulse_strength.max, impulse_strength.default_value),
-            (-20.0, 20.0, 2.0)
+            (-reach, reach, 2.0)
         );
         let fire = metadata
             .params
@@ -658,9 +658,10 @@ fn force_recipes_prepare_with_zero_selected_bodies() {
     }
 }
 
-/// The industry set (SCENE_SETUP_PROGRAMME.md section D2): Wind, Attractor
-/// and Explosion validate, declare a shape, bind every control but Impulse,
-/// attach with and without bodies, and expand to the field they promise.
+/// The industry set (SCENE_SETUP_PROGRAMME.md D2 (Industry set)):
+/// Wind and the Radial force validate, declare a shape, bind every control
+/// but Impulse, attach with and without bodies, and expand to the field
+/// they promise, the Radial force at its Pull and Burst starting values.
 #[test]
 fn industry_force_recipes_attach_and_evaluate() {
     let host: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).expect("host parses");
@@ -670,7 +671,7 @@ fn industry_force_recipes_attach_and_evaluate() {
         .find(|node| node.type_id == "node.render_scene")
         .map(|node| node.node_id.clone())
         .expect("physics host has render_scene");
-    for name in ["Wind", "Attractor", "Explosion"] {
+    for name in ["Wind", "RadialForce"] {
         let def = recipe(name);
         validate_scene_modifier_schema(&def).unwrap_or_else(|error| panic!("{name} schema is valid: {error}"));
         let metadata = def.preset_metadata.as_ref().expect("preset metadata");
@@ -705,18 +706,20 @@ fn industry_force_recipes_attach_and_evaluate() {
     let still = evaluate_force_output(&["Wind"], &[[&wind[..], &[("air_resistance", 0.0)]].concat()], false);
     assert!(close(still, previous), "{still:?}");
 
-    // The sample point sits 0.935 m from the origin, inside the attractor's
-    // 1 m radius, so the Inverse curve pulls at full strength toward it.
+    // Pull: the sample point sits 0.935 m from the origin, inside its 1 m
+    // radius, so the Inverse curve pulls at full strength toward it.
     let at = [0.25f32, -0.5, 0.75];
     let d = at.iter().map(|c| c * c).sum::<f32>().sqrt();
-    let pulled = evaluate_force_output(&["Attractor"], &[vec![("strength", 5.0)]], false);
+    let pull = vec![("strength", -5.0), ("radius", 1.0), ("falloff", 2.0), ("curve", 1.0)];
+    let pulled = evaluate_force_output(&["RadialForce"], &[pull], false);
     assert!(close(pulled, std::array::from_fn(|i| previous[i] - 5.0 * at[i] / d)), "{pulled:?}");
 
-    // An explosion has no steady push; its impulse kicks outward, fading to
-    // nothing at its 3 m radius.
-    let calm = evaluate_force_output(&["Explosion"], &[vec![("impulse_strength", 8.0)]], false);
+    // Burst has no steady push; its impulse kicks outward, fading to nothing
+    // at its 3 m radius.
+    let burst = vec![("strength", 0.0), ("impulse_strength", 8.0), ("radius", 3.0)];
+    let calm = evaluate_force_output(&["RadialForce"], std::slice::from_ref(&burst), false);
     assert!(close(calm, previous), "{calm:?}");
-    let blast = evaluate_force_output(&["Explosion"], &[vec![("impulse_strength", 8.0)]], true);
+    let blast = evaluate_force_output(&["RadialForce"], &[burst], true);
     let size = 8.0 * (1.0 - d / 3.0);
     assert!(close(blast, std::array::from_fn(|i| size * at[i] / d)), "{blast:?}");
 }
