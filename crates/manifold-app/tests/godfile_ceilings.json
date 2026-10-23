@@ -42,8 +42,6 @@
     "crates/manifold-ui/src/panels/param_slider_shared/builders.rs": 2516,
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": 2036,
     "crates/manifold-ui/src/panels/viewport.rs": 2818,
-    "crates/manifold-water-gpu-flip/src/primitives/gpu_flip_step.rs": 3142,
-    "crates/manifold-water-gpu-flip/src/primitives/gpu_flip_step_tests.rs": 3136,
     "crates/manifold-water-rigid/src/physics.rs": 4699
   },
   "limit": 2500
