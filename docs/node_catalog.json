@@ -35998,6 +35998,11 @@
           "type": "Array"
         },
         {
+          "name": "copy_scale",
+          "required": false,
+          "type": "Transform"
+        },
+        {
           "name": "camera",
           "required": true,
           "type": "Camera"

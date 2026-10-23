@@ -102,6 +102,7 @@ fn uniforms(
         instances_wired: 0,
         instance_history_stride: 0,
         _instances_pad: 0,
+        copy_inner: [1.0, 1.0, 1.0, 0.0],
     }
 }
 

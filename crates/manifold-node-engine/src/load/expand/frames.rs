@@ -175,6 +175,7 @@ pub fn resolve_modifier_mesh_frames(
                 source_offset,
                 scene_radius: radius,
                 live_offset: None,
+                item_radius: None,
             });
         }
     }
@@ -191,6 +192,8 @@ pub struct TargetPlacement {
     /// ([`SceneMeshReferenceFrame::live_offset`]), for a part that moves
     /// inside a frame it shares.
     pub live: Option<NodeId>,
+    /// Its own rest radius ([`SceneMeshReferenceFrame::item_radius`]).
+    pub radius: f64,
 }
 
 /// The frames of `instance` where its owner already knows each target's
@@ -225,6 +228,7 @@ pub fn capture_mesh_frames(
             source_offset: placement.offset,
             scene_radius: radius,
             live_offset: placement.live.clone(),
+            item_radius: Some(placement.radius),
             target,
         };
         validate_numbers(&frame)?;
@@ -298,6 +302,7 @@ fn validate_numbers(frame: &SceneMeshReferenceFrame) -> Result<(), SceneModifier
             .source_offset
             .iter()
             .any(|value| !value.is_finite() || !(*value as f32).is_finite())
+        || frame.item_radius.is_some_and(|radius| !(radius as f32).is_finite() || radius as f32 <= 0.0)
         || frame.source_definition_hash.is_empty()
     {
         return Err(frame_error(

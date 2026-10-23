@@ -62,6 +62,12 @@ pub struct SceneMeshReferenceFrame {
     /// value): a part that moves inside a frame it shares with others.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_offset: Option<NodeId>,
+    /// The target's own rest radius, mesh units: Math View sizes its marks
+    /// from it, so a small item in a big scene keeps marks that outline it.
+    /// `None` (a frame captured outside the scene compiler) reads as
+    /// `scene_radius`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_radius: Option<f64>,
 }
 
 /// Return the admission diagnostic for an authored parameter that is part of

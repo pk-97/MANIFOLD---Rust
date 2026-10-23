@@ -311,6 +311,7 @@ fn math_view_trails_render_recorded_copy_motion() {
             inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
             trails_brightness: 1.0,
+            copy_inner: [1.0, 1.0, 1.0, 0.0],
             ..bytemuck::Zeroable::zeroed()
         };
         let copies = if wired != 0 { copy_count } else { 1 };
@@ -471,7 +472,7 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         0.05,
         200.0,
     );
-    let render = |instances: &manifold_gpu::GpuBuffer, copy_count: u32, wired: u32| {
+    let render_scaled = |instances: &manifold_gpu::GpuBuffer, copy_count: u32, wired: u32, inner: [f32; 3]| {
         let view_proj = camera.view_proj(W as f32 / H as f32);
         let u = DiagramUniforms {
             view_proj,
@@ -479,6 +480,7 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
             viewport: [W as f32, H as f32, 0.0, 0.0],
             radius: 0.2,
             line_width: 4.0,
+            copy_inner: [inner[0], inner[1], inner[2], 0.0],
             grid: 0,
             fragments: 1,
             ghosts: 1,
@@ -520,6 +522,7 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         encoder.commit_and_wait_completed();
         readback_raw_halves(&device, &target.texture, W, H)
     };
+    let render = |instances: &manifold_gpu::GpuBuffer, copy_count: u32, wired: u32| render_scaled(instances, copy_count, wired, [1.0; 3]);
     let alpha_at = |image: &[u8], point: [f32; 3]| {
         let pixel = camera.project_to_pixel(point, W, H).unwrap();
         let x = pixel.px as usize;
@@ -541,6 +544,12 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
     let echo_point = [1.6, 0.1 + 0.3, 0.0];
     assert!(alpha_at(&copies, echo_point) > 0.05, "translated copy ghost invisible");
     assert!(alpha_at(&unwired, echo_point) < 0.01, "unwired diagram shows no copy");
+    // A copy group's per-axis scale stretches each copy inside its instance:
+    // twice as tall, the translated copy's top vertex rises from 0.3 to 0.6.
+    let stretched = render_scaled(&three, 3, 1, [1.0, 2.0, 1.0]);
+    let tall_point = [1.6, 0.1 + 0.6, 0.0];
+    assert!(alpha_at(&stretched, tall_point) > 0.05, "a stretched copy reaches its scaled top");
+    assert!(alpha_at(&copies, tall_point) < 0.01, "an unstretched copy stops at its own top");
     // Inactive holes (the all-zero sentinel) are skipped, so a hole-padded
     // buffer draws exactly the same marks as its compact form.
     let hole_padded = render(&with_hole, 4, 1);
@@ -610,6 +619,7 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
             brightness: [1.0;4],
             trails_brightness: 1.0,
+            copy_inner: [1.0, 1.0, 1.0, 0.0],
             ..bytemuck::Zeroable::zeroed()
         };
         let mut encoder = device.create_encoder("world-grid-proof");

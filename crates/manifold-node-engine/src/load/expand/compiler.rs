@@ -439,6 +439,8 @@ struct MathViewCapture {
     /// or a host-wired instances port. `None` when nothing upstream produces
     /// copies — the diagram then behaves exactly as a vertices-only capture.
     instances: Option<PortAddress>,
+    /// The sampled item's own radius (the frame's when the frame has none):
+    /// the diagram sizes its marks, arrow heads and axes from it.
     radius: f64,
 }
 
@@ -600,7 +602,12 @@ impl Builder<'_> {
                 .and_then(|key| self.current.get(&key).and_then(Clone::clone));
             captures.push((
                 target.clone(),
-                MathViewCapture { reference, current, instances, radius: frame.scene_radius },
+                MathViewCapture {
+                    reference,
+                    current,
+                    instances,
+                    radius: frame.item_radius.unwrap_or(frame.scene_radius),
+                },
             ));
         }
         captures
@@ -708,12 +715,21 @@ impl Builder<'_> {
                 .attachment_key(modifier, Some(&target), SceneEndpoint::Transform)
                 .ok()
                 .and_then(|key| self.current.get(&key).and_then(Clone::clone));
-            resolved.push((target, capture, transform));
+            // A copies body's per-axis scale feeds the object; the diagram
+            // reads the same wire so copies draw at their real scale.
+            let copy_scale = self.index.by_ref.get(&target).and_then(|object| {
+                self.derived
+                    .wires
+                    .iter()
+                    .find(|wire| wire.to_node == *object && wire.to_port == "copy_scale")
+                    .map(|wire| (wire.from_node, wire.from_port.clone()))
+            });
+            resolved.push((target, capture, transform, copy_scale));
         }
 
         let view = modifier.id.as_str();
         let mut diagrams = Vec::with_capacity(resolved.len());
-        for (index, (target, capture, transform)) in resolved.into_iter().enumerate() {
+        for (index, (target, capture, transform, copy_scale)) in resolved.into_iter().enumerate() {
             let parts = |role: &'static str| vec!["math_view", view, role, target.as_str()];
             let current_samples = self.add_math_node(
                 &parts("current_samples"),
@@ -760,6 +776,7 @@ impl Builder<'_> {
                 (Some(camera.clone()), "camera"),
                 (transform, "transform"),
                 (capture.instances, "instances"),
+                (copy_scale, "copy_scale"),
                 (Some((scene_id, "depth".to_string())), "scene_depth"),
             ] {
                 if let Some(from) = from {
