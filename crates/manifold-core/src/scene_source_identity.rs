@@ -695,6 +695,7 @@ mod tests {
             source_offset: [1.0, 2.0, 3.0],
             scene_radius: 4.0,
             live_offset: None,
+            item_radius: None,
         }
     }
 

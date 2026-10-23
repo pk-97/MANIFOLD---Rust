@@ -50,7 +50,7 @@ Each lane: its own slot and `lane/refine-<name>` branch, one commit, then stop a
 - The uniform-scale and "positive scale up to 100" rules in `physics/copy_group.rs` are deleted. A copied Object's B matrix carries the prototype's per-axis scale only; position and rotation stay in the pose.
 - Spacing: ruling 10, one constant in `copies_body.rs` used by `scene_schema/copies.rs` and `copy_group.rs`.
 - Refusals name the item and the real reason, on the control they concern; no "Out of the physics world", no "can't move" on a Collider. A refused copy group draws at rest; a refused single Body stays where it was.
-- Physics on all cores: `bridge.c` sets `workerCount` to the cores minus two, at least one, using Box3D's built-in scheduler.
+- Physics on the performance cores: `bridge.c` sets `workerCount` to the performance cores minus one (the UI thread's; the content thread counts as a worker), at least one, using Box3D's built-in scheduler.
 - Copies share one collision shape instead of one cooked per copy.
 
 **P1d Materials** (Opus, medium).

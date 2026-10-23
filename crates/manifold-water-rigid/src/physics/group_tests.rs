@@ -202,6 +202,10 @@ fn per_axis_copies_join_and_a_refused_group_draws_at_rest() {
     let refusals = simulation.refusals();
     assert_eq!(refusals.len(), 1);
     assert_eq!((refusals[0].member, refusals[0].reason.param()), (Member::Copies(1), Some("copy_size_spacing")));
+    assert!(
+        matches!(refusals[0].reason, RefusalReason::Gate { reason: "Spacing must be at least 0.01", .. }),
+        "the reason names the row's own minimum"
+    );
     let rest = simulation.group_poses(1);
     assert_eq!(rest.len(), 6, "the refused group draws at rest");
     assert!(rest.iter().all(|copy| copy.pos == [0.0, 3.0, 0.0]), "at Spacing 0 every copy sits on the group's origin");

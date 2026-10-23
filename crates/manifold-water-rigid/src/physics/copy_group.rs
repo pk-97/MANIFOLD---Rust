@@ -2,7 +2,7 @@
 //! body and the arrangement they rest in. Every group shares the world's
 //! copy pool of `MAX_COPIES`.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use manifold_core::copies_body::SPACING_MIN;
 
@@ -173,7 +173,7 @@ pub(crate) fn validate_spawn(spawn: CopySpawn) -> Result<(), (&'static str, &'st
         return Err(("Count must be a number", "copy_count"));
     }
     if !spawn.spacing.is_finite() || spawn.spacing < SPACING_MIN {
-        return Err((SPACING_REASON, "copy_size_spacing"));
+        return Err((SPACING_REASON.as_str(), "copy_size_spacing"));
     }
     if !spawn.columns.is_finite() {
         return Err(("Columns must be a number", "copy_columns"));
@@ -188,4 +188,4 @@ pub(crate) fn validate_spawn(spawn: CopySpawn) -> Result<(), (&'static str, &'st
 }
 
 /// What the gate says of a Spacing below [`SPACING_MIN`].
-pub(crate) const SPACING_REASON: &str = "Spacing must be at least 0.01";
+static SPACING_REASON: LazyLock<String> = LazyLock::new(|| format!("Spacing must be at least {SPACING_MIN}"));

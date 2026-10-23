@@ -472,9 +472,11 @@ anywhere · new modulation machinery (D6).
 ## 6. Performance (stated honestly)
 
 Step cost is CPU, on the content thread, inline (D2). The current stress-test
-capacity is 4,000 copies, with 60 Hz outer ticks and four substeps. Box3D steps
-on every core but two (`manifold_physics::default_worker_count`) with its own
-scheduler, and solves in the same order at any worker count.
+capacity is 4,000 copies, with 60 Hz outer ticks and four substeps. A scene world
+steps on the performance cores less one for the UI thread, the content thread
+counting as one (`manifold_physics::default_worker_count`), with Box3D's own
+scheduler; `PhysicsWorld::new` (tests, tools) steps on one. Box3D solves in the
+same order at any worker count.
 Capacity is not a measured real-time guarantee; use the HUD to measure the scene.
 Pose upload at 4,000 copies is 128 KB/frame through the existing compute-upload
 path. Preview gives physics one project-frame CPU interval per work batch, with

@@ -450,20 +450,44 @@ pub fn cook_hull(points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, PhysicsError> {
     Ok(cooked)
 }
 
-/// The threads a world steps on: every core but two, which stay free for
-/// the content and UI threads, and never fewer than one.
+/// The threads the app's scene worlds step on: the performance cores, less
+/// one kept for the UI thread. Box3D counts the thread that calls step (the
+/// content thread) as its first worker, so it is inside this count. Box3D
+/// gains little from efficiency cores, so they are left out. Never below one.
 pub fn default_worker_count() -> u32 {
     static WORKERS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *WORKERS.get_or_init(|| {
-        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-        u32::try_from(cores.saturating_sub(2).max(1)).unwrap_or(1)
-    })
+    *WORKERS.get_or_init(|| performance_cores().saturating_sub(1).max(1))
+}
+
+/// Performance cores: on macOS `hw.perflevel0.physicalcpu`, which counts
+/// only the fast cluster; elsewhere, or if that read fails, every core.
+fn performance_cores() -> u32 {
+    #[cfg(target_os = "macos")]
+    {
+        let mut cores: i32 = 0;
+        let mut size = std::mem::size_of::<i32>();
+        let status = unsafe {
+            libc::sysctlbyname(
+                c"hw.perflevel0.physicalcpu".as_ptr(),
+                (&raw mut cores).cast(),
+                &raw mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if status == 0 && cores > 0 {
+            return cores.unsigned_abs();
+        }
+    }
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    u32::try_from(cores).unwrap_or(1)
 }
 
 impl PhysicsWorld {
-    /// A world stepping on [`default_worker_count`] threads.
+    /// A world stepping on one thread. The app's scene path picks its own
+    /// count with [`Self::with_workers`]; tests and tools stay on one.
     pub fn new(gravity: [f32; 3]) -> Result<Self, PhysicsError> {
-        Self::with_workers(gravity, default_worker_count())
+        Self::with_workers(gravity, 1)
     }
 
     /// A world stepping on `workers` threads, at least one. Box3D solves in

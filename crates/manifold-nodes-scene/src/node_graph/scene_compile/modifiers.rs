@@ -48,6 +48,17 @@ const TARGETS_PER_INSTANCE: usize = 256;
 /// A frame's smallest radius, so a flat or empty box still measures.
 const MIN_RADIUS: f64 = 1e-3;
 
+/// A drawn mesh's own rest radius: half its rest box's diagonal, or the
+/// smallest radius when the box does not measure.
+fn own_radius(drawn: &Drawn) -> f64 {
+    let radius = (0..3)
+        .map(|axis| f64::from(drawn.rest.hi[axis]) - f64::from(drawn.rest.lo[axis]))
+        .map(|size| size * size * 0.25)
+        .sum::<f64>()
+        .sqrt();
+    if radius.is_finite() { radius.max(MIN_RADIUS) } else { MIN_RADIUS }
+}
+
 use manifold_foundation::mesh_partition::MAX_PIECES;
 
 /// Emit every Modifier card, in chain order.
@@ -351,7 +362,7 @@ fn plan(
         } else {
             std::array::from_fn(|axis| at[axis] - centre[axis])
         };
-        placements.push(TargetPlacement { target, offset, live });
+        placements.push(TargetPlacement { target, offset, live, radius: own_radius(drawn) });
     }
     FramePlan { placements, radius }
 }
@@ -368,7 +379,7 @@ fn copies_plan(b: &mut Builder<'_>, card: &Item, frame: &CardFrame) -> FramePlan
             continue;
         };
         let (offset, live) = copies_origin(b, card, &frame.role, drawn).map_or(([0.0; 3], None), |(rest, live)| (rest, Some(live)));
-        placements.push(TargetPlacement { target, offset, live });
+        placements.push(TargetPlacement { target, offset, live, radius: own_radius(drawn) });
     }
     FramePlan { placements, radius: MIN_RADIUS }
 }

@@ -1376,7 +1376,8 @@ impl RigidSimulation {
         let SceneRef { bodies, groups, gravity, acceleration_field, .. } = scene;
         let mut made = std::mem::take(&mut self.pool_made);
         let not_made = copy_pool(groups.iter().map(Option::as_ref), &mut made);
-        let mut world = PhysicsWorld::new(gravity).map_err(|e| e.to_string())?;
+        let mut world = PhysicsWorld::with_workers(gravity, manifold_physics::default_worker_count())
+            .map_err(|e| e.to_string())?;
         self.admission.clear_lost();
         self.resize_for(bodies.len(), groups.len());
         self.handles.fill(None);

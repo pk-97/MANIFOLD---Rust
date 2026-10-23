@@ -71,6 +71,9 @@ struct DiagramUniforms {
     instances_wired: u32,
     instance_history_stride: u32,
     _instances_pad: u32,
+    /// A copy group's per-axis scale inside each copy (`copy_scale`); one
+    /// with no copies or no such scale.
+    copy_inner: [f32; 4],
 }
 
 #[repr(C)]
@@ -94,6 +97,7 @@ manifold_node_engine::primitive! {
         reference: Array(MeshVertex) required,
         incoming: Array(MeshVertex) required,
         instances: Array(InstanceTransform) optional,
+        copy_scale: Transform optional,
         camera: Camera required,
         transform: Transform optional,
         grid: ScalarF32 optional,
@@ -140,7 +144,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.001, 100.0)), enum_values: &[] },
     ],
     depth_rule: SourceHeight,
-    composition_notes: "Current, reference, and incoming arrays are sampled faces of real meshes. The transparent diagram uses the Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories. Occlusion=1 with Mode=2 tests scene_depth at its own resolution; Mode 1 never occludes. When current_mesh and reference_mesh are both wired and differ in size, reference and incoming read as current (ghosts coincide, arrows hide). Ghosts/trails remain translucent.",
+    composition_notes: "Current, reference, and incoming arrays are sampled faces of real meshes. The transparent diagram uses the Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories. Occlusion=1 with Mode=2 tests scene_depth at its own resolution; Mode 1 never occludes. When current_mesh and reference_mesh are both wired and differ in size, reference and incoming read as current (ghosts coincide, arrows hide). Ghosts/trails remain translucent. Optional copy_scale (a copies body's copy_scale) scales each copy per axis inside its instance, as the scene draws it; it applies only with instances wired.",
     examples: [], picker: { label: "Mesh Diagram", category: Atom },
     summary: "Draws sparse evaluated mesh samples as a transparent native diagram.",
     category: Geometry3D, role: Filter, aliases: ["mesh diagram", "math view"], boundary_reason: DrawCall,
@@ -406,6 +410,15 @@ impl Primitive for RenderMeshDiagram {
         let mode = ctx.scalar_or_param("mode", 0.0).round().clamp(0.0, 2.0) as u32;
         // Depth occlusion applies to Overlay only; Math draws on black.
         let occlusion = ctx.scalar_or_param("occlusion", 0.0).round().clamp(0.0, 1.0) as u32;
+        // Copies draw at the group's per-axis scale inside each copy, as the
+        // scene draws them; without copies the scale is exactly one, so the
+        // marks stay byte-identical.
+        let copy_inner = match ctx.inputs.transform("copy_scale") {
+            Some(copy) if input_instances.is_some() && copy.scale.iter().all(|s| s.is_finite()) => {
+                [copy.scale[0], copy.scale[1], copy.scale[2], 0.0]
+            }
+            _ => [1.0, 1.0, 1.0, 0.0],
+        };
         let uniforms = DiagramUniforms {
             view_proj,
             model: Self::model_matrix(
@@ -444,6 +457,7 @@ impl Primitive for RenderMeshDiagram {
             instances_wired: u32::from(input_instances.is_some()),
             instance_history_stride: MAX_COPY_INSTANCES,
             _instances_pad: 0,
+            copy_inner,
         };
         let input_scene_depth = ctx.inputs.texture_2d("scene_depth");
         let gpu = ctx.gpu_encoder();
@@ -694,7 +708,7 @@ mod tests {
 }
 
 /// `MARK_SIZE` in the shader: a smaller face's mark grows until its farthest
-/// corner is this fraction of the frame radius from its centre.
+/// corner is this fraction of the item's own radius from its centre.
 #[cfg(test)]
 const MARK_SIZE: f32 = 0.08;
 

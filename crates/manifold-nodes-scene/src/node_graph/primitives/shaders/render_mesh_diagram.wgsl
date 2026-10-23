@@ -8,6 +8,7 @@ struct U {
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
     brightness: vec4<f32>, trails_brightness: f32, _brightness_pad0: f32, _brightness_pad1: f32, _brightness_pad2: f32,
     copy_count: u32, instances_wired: u32, instance_history_stride: u32, _instances_pad: u32,
+    copy_inner: vec4<f32>,
 };
 struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32>, color: vec4<f32> };
 struct I { pos_scale: vec4<f32>, rot_pad: vec4<f32> };
@@ -94,7 +95,7 @@ fn sample_position(which: u32, idx: u32) -> vec3<f32> {
 }
 
 // The smallest mark: its farthest corner sits at least this fraction of the
-// frame radius from its centre, so a dense scan's millimetre faces read as
+// item's own radius from its centre, so a dense scan's millimetre faces read as
 // clearly as a coarse shape's.
 const MARK_SIZE: f32 = 0.08;
 
@@ -113,7 +114,8 @@ fn mark(which: u32, base: u32, corner: u32) -> vec3<f32> {
 }
 
 // Instance copy transform, object space: rotate (XYZ Euler, bit-for-bit the
-// render_scene.wgsl / render_instanced_3d_mesh.wgsl convention), uniform
+// render_scene.wgsl / render_instanced_3d_mesh.wgsl convention), the copy
+// group's per-axis scale (exactly one without one) and uniform
 // scale, then translate. The diagram's clip_point applies the object model
 // matrix afterwards, matching render_scene's model * T_instance order.
 fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
@@ -143,7 +145,7 @@ fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
 }
 
 fn apply_copy(p: vec3<f32>, inst: I) -> vec3<f32> {
-    return euler_xyz(inst.rot_pad.xyz) * (p * inst.pos_scale.w) + inst.pos_scale.xyz;
+    return euler_xyz(inst.rot_pad.xyz) * (p * u.copy_inner.xyz * inst.pos_scale.w) + inst.pos_scale.xyz;
 }
 
 // Producers collapse inactive slots to an all-zero transform (see

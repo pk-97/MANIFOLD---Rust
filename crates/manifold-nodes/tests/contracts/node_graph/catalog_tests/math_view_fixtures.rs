@@ -86,6 +86,7 @@ pub(crate) fn test_owner_with(
             }),
             scene_radius: 3.0,
             live_offset: None,
+            item_radius: None,
         });
     }
     let owner = attach_scene_modifier(&owner, SceneModifierInstanceDef {

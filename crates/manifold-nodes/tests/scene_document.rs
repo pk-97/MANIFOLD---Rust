@@ -814,6 +814,58 @@ fn a_copied_object_draws_its_per_axis_scale_inside_each_copy() {
     assert_eq!(object.params.get("instances_space"), Some(&SerializedParamValue::Enum { value: 1 }), "inside each copy");
 }
 
+/// Math View sizes each item's marks from that item's own rest size, never
+/// from the scene's: a plane beside a cube gets the plane's radius. A copied
+/// item's diagram reads its copies' per-axis scale, as the draw does.
+#[test]
+fn math_view_marks_follow_each_item_and_its_copies_scale() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType, Shape};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        object.copies = true;
+    }
+    let mut plane = ItemFields::default_for(ItemKind::Object);
+    if let ItemFields::Object(object) = &mut plane {
+        object.shape = Shape::Plane;
+    }
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields { modifier: ModifierType::MathView, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+    }
+    for (id, fields) in [("plane", plane), ("card", card)] {
+        let end = doc.items.len();
+        doc.insert(None, end, Item::new(ItemId::new(id), id, fields)).unwrap();
+    }
+    let def = scene_layer(doc).gen_params().unwrap().graph.clone().unwrap();
+    let prepared = prepare_scene_modifiers(&def, &PrimitiveRegistry::with_builtin()).unwrap().def;
+    let feed = |to: u32, port: &str| prepared.wires.iter().find(|w| w.to_node == to && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()));
+    let object = |item: &str| {
+        let id = format!("{item}:object");
+        prepared.nodes.iter().find(|n| n.type_id == "node.scene_object" && n.node_id.as_str() == id).unwrap_or_else(|| panic!("{item} draws")).id
+    };
+    // A diagram samples its item's own mesh.
+    let diagram = |item: &str| {
+        let mesh = feed(object(item), "vertices");
+        prepared
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_mesh_diagram" && feed(n.id, "current_mesh") == mesh)
+            .unwrap_or_else(|| panic!("{item} has a diagram"))
+    };
+    let radius = |item: &str| match diagram(item).params.get("radius") {
+        Some(SerializedParamValue::Float { value }) => *value,
+        other => panic!("{item}'s diagram radius: {other:?}"),
+    };
+    let (cube, plane) = (radius("cube"), radius("plane"));
+    assert!((cube - 0.75f32.sqrt()).abs() < 1e-4, "a unit cube's own radius, got {cube}");
+    assert!((plane - 0.5f32.sqrt()).abs() < 1e-4, "a unit plane's own radius, not the scene's, got {plane}");
+    assert!(feed(object("cube"), "copy_scale").is_some(), "the cube's copies carry a scale");
+    assert_eq!(feed(diagram("cube").id, "copy_scale"), feed(object("cube"), "copy_scale"), "the diagram reads the copies' scale");
+    assert_eq!(feed(diagram("plane").id, "copy_scale"), None, "an item without copies has none");
+}
+
 /// A swarm drawing a group with Copies on nests the layout at its live
 /// particles only: Count drives how many carry it, not the seed's capacity.
 #[test]
