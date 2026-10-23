@@ -82,8 +82,9 @@ Each lane: its own slot and `lane/refine-<name>` branch, one commit, then stop a
 - Gizmos: smooth anti-aliased lines at a readable width, round circles. A radial force shows its radius and two falloff shells (half strength and a tenth). A Vortex shows a cylinder round its axis, with the axis.
 
 **P2d Scan colliders** (Opus, high).
-- The `CollisionShape` service builds a Collider's contact mesh by vertex clustering at a cell size set from world scale, cached by scale.
-- Box3D's per-contact triangle buffer moves to per-worker scratch and grows; the patch is listed in `native/box3d/README.md`.
+- Correctness first: Box3D's per-contact triangle buffer moves to per-worker scratch and grows, so the exact mesh collides correctly at any density; the patch is listed in `native/box3d/README.md`.
+- Then speed without losing the shape: the `CollisionShape` service simplifies a Collider's contact mesh with an error-bounded method (quadric edge collapse with a maximum geometric error, as meshoptimizer's `simplify` does), never by vertex clustering. The maximum distance between the contact mesh and the drawn surface is a named world-space tolerance (start at 5 mm), reported per mesh, and cached by scale. A small body or a splash must rest on the surface it sees. Ported code gets file-header credit and a `THIRD_PARTY_NOTICES.md` entry.
+- Water keeps its own distance lattice from the exact mesh; it does not read the contact mesh.
 
 ### Phase 3: polish
 
