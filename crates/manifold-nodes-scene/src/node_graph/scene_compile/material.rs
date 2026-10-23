@@ -7,7 +7,7 @@
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::material_inspector::{MATERIAL_FEATURE_MODE_PARAMS, MATERIAL_FEATURES};
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, MaterialType, TextureFeeds, TextureSource};
+use manifold_core::scene_doc::{Item, ItemFields, ItemId, MaterialFields, MaterialType, SceneDoc, TextureFeeds, TextureSource};
 use manifold_core::scene_schema::{CardFacts, MATERIAL_FAMILY};
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardLabel, SurfaceRole, Unit};
@@ -50,12 +50,7 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     let owner = item.id.as_str();
     let node_type = manifold_core::scene_schema::material_node_type(fields);
     let surface = b.add(owner, MATERIAL_FAMILY.node, node_type);
-    // A layer feeds the surface the Material says; a file always feeds the
-    // base colour.
-    let feeds = match fields.texture_feeds {
-        TextureFeeds::BaseColour => "base_color_map",
-        TextureFeeds::Emission => "emissive_map",
-    };
+    let feeds = layer_port(fields);
     // A model material's surface starts at the file's values, so its card
     // rows do too.
     let maps = match &fields.texture {
@@ -89,12 +84,13 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         if MATERIAL_FAMILY.automatic.contains(&meta.name.as_str()) {
             continue;
         }
-        // A map's placement and sampling rows are rows only while it has a
-        // texture; the node keeps their values either way.
-        if crate::node_graph::material_inspector::map_port(&meta.name).is_some_and(|port| !fed.contains(&port)) {
-            continue;
-        }
         let mut facts = SURFACE_FACTS;
+        // A map's placement and sampling rows hide while it has no texture.
+        // They stay declared, so their values, modulators and mappings
+        // survive the texture leaving and coming back.
+        if crate::node_graph::material_inspector::map_port(&meta.name).is_some_and(|port| !fed.contains(&port)) {
+            facts.role = SurfaceRole::Hidden;
+        }
         if matches!(meta.name.as_str(), "iridescence_thickness_min" | "iridescence_thickness_max") {
             facts.unit = Some(Unit::Nanometres);
         }
@@ -111,6 +107,28 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         }
     }
     b.rows(item);
+}
+
+/// The port a layer texture feeds: the one the Material says. A file always
+/// feeds the base colour.
+fn layer_port(fields: &MaterialFields) -> &'static str {
+    match fields.texture_feeds {
+        TextureFeeds::BaseColour => "base_color_map",
+        TextureFeeds::Emission => "emissive_map",
+    }
+}
+
+/// The `node.scene_object` map ports a Material's texture source feeds, as
+/// [`emit`] wires them. A model's maps are known once its facts arrive.
+pub fn fed_map_ports(doc: &SceneDoc, fields: &MaterialFields) -> Vec<&'static str> {
+    match &fields.texture {
+        TextureSource::None => Vec::new(),
+        TextureSource::Layer { .. } => vec![layer_port(fields)],
+        TextureSource::File { .. } => vec!["base_color_map"],
+        TextureSource::Model { file, material } => {
+            model_file(doc, file).map(|model| super::model_material::map_ports(model, *material).collect()).unwrap_or_default()
+        }
+    }
 }
 
 /// The surface node an item draws with, and each texture source and the
@@ -151,11 +169,18 @@ mod tests {
             other => panic!("{name} is {other:?}"),
         };
         assert_eq!((size("width"), size("height")), (64, 32));
-        // Only the textured map's placement and sampling are rows.
+        // Every map's placement and sampling are declared; only the textured
+        // map's show.
         let rows = &def.preset_metadata.as_ref().unwrap().params;
-        let row = |property: &str| rows.iter().any(|p| p.id == manifold_core::scene_doc::param_id(&ItemId::new(BASE_CUBE_MATERIAL), property));
-        assert!(row("uv_m00") && row("wrap_u") && row("uv_set"), "the base colour map has a texture");
-        assert!(!row("nrm_uv_set") && !row("sheen_color_wrap_u") && !row("clearcoat_uv_tx"), "maps with no texture have no rows");
+        let hidden = |property: &str| {
+            let id = manifold_core::scene_doc::param_id(&ItemId::new(BASE_CUBE_MATERIAL), property);
+            let row = rows.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("{property} is declared"));
+            row.scene.is_some_and(|scene| scene.role == manifold_foundation::scene_surface::SurfaceRole::Hidden)
+        };
+        assert!(!hidden("uv_m00") && !hidden("wrap_u") && !hidden("uv_set"), "the base colour map has a texture");
+        assert!(hidden("nrm_uv_set") && hidden("sheen_color_wrap_u") && hidden("clearcoat_uv_tx"), "maps with no texture hide their rows");
+        let ItemFields::Material(fields) = &doc.find(&ItemId::new(BASE_CUBE_MATERIAL)).unwrap().fields else { unreachable!() };
+        assert_eq!(super::fed_map_ports(&doc, fields), vec!["base_color_map"]);
         std::fs::remove_file(path).unwrap();
     }
 }

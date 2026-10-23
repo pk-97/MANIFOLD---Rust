@@ -135,7 +135,8 @@ fn row_reasons(doc: &SceneDoc, inst: &PresetInstance, item: &Item, material: Opt
     let mut reasons = Vec::new();
     if let Some(material) = material.filter(|material| material.pbr)
         && let Some(metallic) = inst.params.get(&param_id(&material.item, "metallic"))
-        && crate::scene_edit::full_metal(metallic.base)
+        && let Some(ItemFields::Material(fields)) = doc.find(&material.item).map(|found| &found.fields)
+        && crate::scene_edit::full_metal(doc, fields, metallic.base)
     {
         use manifold_core::material_inspector::{MaterialGroup, MaterialParamRole};
         for id in &material.parameter_ids {

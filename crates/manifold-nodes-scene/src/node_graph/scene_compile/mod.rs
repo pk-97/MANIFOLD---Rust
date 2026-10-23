@@ -39,6 +39,7 @@ mod water;
 mod world;
 
 pub(crate) use builder::Builder;
+pub use material::fed_map_ports;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_doc::{Item, ItemKind, SceneDoc};
