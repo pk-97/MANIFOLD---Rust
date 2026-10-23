@@ -868,6 +868,57 @@ fn math_view_marks_follow_each_item_and_its_copies_scale() {
     assert_eq!(feed(diagram("plane").id, "copy_scale"), None, "an item without copies has none");
 }
 
+/// Copy Blend on copies placed On Surface lays its second arrangement out in
+/// the frame those copies draw in: the surface's frame, then the item's own
+/// transform. No copies body lays them out, so the arrangement reads no
+/// copies frame and centres on the item where it sits on the surface, never
+/// on the world origin.
+#[test]
+fn copy_blend_on_surface_copies_centres_on_the_item() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType, Shape};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    let mut doc = SceneDoc::base();
+    let mut plane = ItemFields::default_for(ItemKind::Object);
+    if let ItemFields::Object(object) = &mut plane {
+        object.shape = Shape::Plane;
+    }
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields {
+            modifier: ModifierType::CopyBlend,
+            on: true,
+            targets: ModifierTargets::Items(vec![ItemId::new("cube")]),
+            ..fields.clone()
+        };
+    }
+    for (id, fields) in [("plane", plane), ("blend", card)] {
+        let end = doc.items.len();
+        doc.insert(None, end, Item::new(ItemId::new(id), id, fields)).unwrap();
+    }
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        object.copies = true;
+        object.copies_surface = Some(ItemId::new("plane"));
+    }
+    let def = scene_layer(doc).gen_params().unwrap().graph.clone().unwrap();
+    let prepared = prepare_scene_modifiers(&def, &PrimitiveRegistry::with_builtin()).unwrap().def;
+    let feed = |to: u32, port: &str| {
+        prepared.wires.iter().find(|w| w.to_node == to && w.to_port == port).map(|w| {
+            let from = prepared.nodes.iter().find(|n| n.id == w.from_node).unwrap();
+            (from.node_id.as_str().to_owned(), w.from_port.clone())
+        })
+    };
+    let arrange: Vec<_> = prepared.nodes.iter().filter(|n| n.type_id == "node.arrange_copies").collect();
+    assert_eq!(arrange.len(), 1, "one Copy Blend arrangement");
+    for port in ["copy_frame", "copy_box", "copy_turn", "copy_grid", "active_count"] {
+        assert_eq!(feed(arrange[0].id, port), None, "no copies body lays surface copies out, so {port} is unwired");
+    }
+    let object = prepared.nodes.iter().find(|n| n.type_id == "node.scene_object" && n.node_id.as_str() == "cube:object").expect("the cube draws");
+    assert_eq!(object.params.get("instances_space"), Some(&SerializedParamValue::Enum { value: 1 }), "each copy draws inside its instance");
+    assert_eq!(feed(object.id, "parent_transform"), Some(("cube:emit_frame".into(), "transform".into())), "instances sit in the surface's frame");
+    assert_eq!(feed(object.id, "transform"), Some(("cube:transform".into(), "transform".into())), "then the item's own transform");
+}
+
 /// A swarm drawing a group with Copies on nests the layout at its live
 /// particles only: Count drives how many carry it, not the seed's capacity.
 #[test]
