@@ -435,7 +435,7 @@ struct MathViewCapture {
     reference: PortAddress,
     current: PortAddress,
     /// Chain producer of `SceneEndpoint::Instances` at the view's position:
-    /// preceding copy/echo modifiers (SpatialEchoes, WavesEchoes, SceneLoop)
+    /// preceding copy/echo modifiers (SpatialEchoes, SceneLoop)
     /// or a host-wired instances port. `None` when nothing upstream produces
     /// copies — the diagram then behaves exactly as a vertices-only capture.
     instances: Option<PortAddress>,

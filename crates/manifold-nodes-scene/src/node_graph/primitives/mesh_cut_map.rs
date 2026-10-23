@@ -15,7 +15,10 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
+/// The vertices a cut may add past its source, a memory reserve: each cut object lays this many map records and mesh vertices at build (96 bytes each, about 19 MB), so Bands and Cells move live.
 pub const CUT_MAP_EXTRA_RECORDS: u32 = 196_608;
+/// What a cut past [`CUT_MAP_EXTRA_RECORDS`] says.
+const OVER_RESERVE: &str = "the cut adds more than its memory reserve of 196,608 vertices; fewer Bands or bigger cells fit";
 const MESH_VERTEX_SIZE: u64 = std::mem::size_of::<MeshVertex>() as u64;
 const VEC4_VERTEX_SIZE: u64 = std::mem::size_of::<Vec4Vertex>() as u64;
 const SHADER: &str = include_str!("shaders/mesh_cut_map.wgsl");
@@ -229,7 +232,7 @@ fn report_completed_status(ctx: &mut EffectNodeContext<'_, '_>, status: &GpuBuff
     let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 4) };
     if words[3] != 0 {
         let reason = match words[3] {
-            1 => "output capacity exceeded",
+            1 => OVER_RESERVE,
             2 => "nonfinite geometry or intersection",
             3 => "source triangle index is not exactly representable as f32",
             _ => "unsupported numeric condition",
@@ -681,6 +684,12 @@ impl Primitive for CutMeshCells {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_over_reserve_message_names_the_reserve() {
+        let n = CUT_MAP_EXTRA_RECORDS;
+        assert!(OVER_RESERVE.contains(&format!("{},{:03}", n / 1000, n % 1000)));
+    }
 
     #[test]
     fn map_capacity_reserves_additive_fragment_space() {

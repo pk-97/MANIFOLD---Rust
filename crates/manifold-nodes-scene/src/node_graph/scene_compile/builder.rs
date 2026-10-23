@@ -620,6 +620,7 @@ pub(crate) fn card_spec(
         limit: facts.limit,
         unit: facts.unit,
         scene: Some(facts.desc(section)),
+        tooltip: facts.tip.map(str::to_owned),
         ..ParamSpecDef::default()
     }
 }

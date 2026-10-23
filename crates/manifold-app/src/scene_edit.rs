@@ -615,6 +615,35 @@ pub(crate) fn aim_sun_at_hdri(project: &Project, layer: &LayerId, file: &str) ->
     Ok(batch(writes, "Aim Sun at HDRI", None))
 }
 
+/// "Add Loop Camera" on the Scene Loop card: a camera on the Loop rig, after
+/// the scene's other cameras, made the World's camera in the same undo step.
+/// The World's Camera row cuts back to any other camera.
+pub(crate) fn add_loop_camera(project: &Project, layer: &LayerId) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    if scene_schema::scene_loop(doc).is_none() {
+        return Err(scene_schema::NO_SCENE_LOOP.to_owned());
+    }
+    let world = doc.world().map(|world| world.id.clone()).ok_or("This scene has no World to pick the camera")?;
+    let inst = instance(project, layer).ok_or("There is no scene to add a camera to")?;
+    let id = new_id();
+    let index = doc.items.iter().rposition(|item| item.kind() == ItemKind::Camera).map_or(doc.items.len(), |last| last + 1);
+    let cut = doc.upcoming_cut();
+    let pick = base(inst, &world, manifold_core::scene_doc::CAMERA_PICK).unwrap_or(0.0);
+    let commands: Vec<Box<dyn Command>> = vec![
+        Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Camera, None, index, None, id.clone())),
+        Box::new(SetSceneItemFieldsCommand::new(
+            layer.clone(),
+            id.clone(),
+            ItemFields::Camera(CameraFields { rig: CameraRig::Loop, ..CameraFields::default() }),
+        )),
+        Box::new(RenameSceneItemCommand::new(layer.clone(), id.clone(), unique_name(LOOP_CAMERA_NAME, &names(doc)))),
+        write(layer, &world, manifold_core::scene_doc::CAMERA_PICK, pick, cut as f32),
+    ];
+    Ok(batch(commands, "Add Loop Camera", Some(id)))
+}
+
+const LOOP_CAMERA_NAME: &str = "Loop Camera";
+
 /// The camera the World's Camera row shows.
 fn camera_of(doc: &SceneDoc, inst: &PresetInstance) -> Option<(ItemId, CameraFields)> {
     let pick = doc.camera_pick_param().filter(|id| inst.params.contains(id)).map_or(0.0, |id| inst.get_base_param(&id));

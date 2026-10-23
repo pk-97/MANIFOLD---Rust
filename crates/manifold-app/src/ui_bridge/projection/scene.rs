@@ -11,7 +11,7 @@ use manifold_core::scene_doc::{
     EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, SceneDoc, Shape, draws_with_material, param_id, split_param_id,
 };
 use manifold_core::scene_schema::{
-    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, break_unavailable, choice_disabled, impulse_unavailable, item_disabled,
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, break_unavailable, choice_disabled, impulse_unavailable, item_disabled, has_loop_camera, waits_for_loop_camera,
 };
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
@@ -84,7 +84,12 @@ fn item_vm(
     layers: &[(LayerId, String)],
     materials: &Materials,
 ) -> SceneItemVm {
-    let params_of = |id: &ItemId| owned.get(id.as_str()).cloned().unwrap_or_default();
+    // A row only a Loop camera reads stays hidden until a camera rides the loop.
+    let params_of = |id: &ItemId| {
+        let mut ids = owned.get(id.as_str()).cloned().unwrap_or_default();
+        ids.retain(|param| !split_param_id(param).is_some_and(|(_, property)| waits_for_loop_camera(doc, item, property)));
+        ids
+    };
     let fields = field_rows(doc, item, layers);
     let material_item = match item.kind() {
         ItemKind::Material => Some(item.id.clone()),
@@ -124,6 +129,7 @@ fn item_vm(
         environment,
         aim_sun_file,
         draw_again: false,
+        add_loop_camera: is_scene_loop(item) && !has_loop_camera(doc),
         row_reasons,
     }
 }
@@ -347,6 +353,11 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     }
 }
 
+/// Whether `item` is the scene's Scene Loop card.
+fn is_scene_loop(item: &Item) -> bool {
+    matches!(&item.fields, ItemFields::Modifier(card) if card.modifier == manifold_core::scene_doc::ModifierType::SceneLoop)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +390,48 @@ mod tests {
         let block = block.expect("the Swarm's card shows its Material");
         assert_eq!(block.item, material);
         assert_eq!(block.used_by, 2, "the cube and the Swarm both draw with it");
+    }
+
+    /// The Scene Loop card hides the rows only a Loop camera reads and offers
+    /// Add Loop Camera; the button adds a Loop camera, makes it the World's
+    /// camera, and the rows come back.
+    #[test]
+    fn add_loop_camera_puts_a_camera_on_the_loop_and_shows_its_rows() {
+        let mut project = Project::default();
+        let index = project.timeline.add_layer("A", LayerType::Generator, PresetTypeId::SCENE);
+        let layer = project.timeline.layers[index].layer_id.clone();
+        let mut add = crate::scene_edit::add(&project, &layer, "modifier.scene_loop", None, &[]).expect("Scene Loop adds");
+        add.command.execute(&mut project);
+        let card = add.select.expect("the add selects the card");
+        let loop_card = |project: &Project| {
+            let SceneSetupState::Live(vm) = scene_state(project, Some(&project.timeline.layers[index]), &Default::default()) else {
+                panic!("the scene tab is live");
+            };
+            vm.items.into_iter().find(|item| item.id == card).expect("the Scene Loop card")
+        };
+        let camera_only = |item: &SceneItemVm| {
+            manifold_core::scene_schema::LOOP_CAMERA_ONLY.into_iter().filter(|property| item.parameter_ids.contains(&param_id(&card, property))).count()
+        };
+
+        let before = loop_card(&project);
+        assert!(before.add_loop_camera, "a Scene Loop with no Loop camera offers one");
+        assert_eq!(camera_only(&before), 0, "rows only a Loop camera reads stay hidden");
+        assert!(before.parameter_ids.contains(&param_id(&card, "cell_size")), "the corridor's own rows show");
+
+        let mut edit = crate::scene_edit::add_loop_camera(&project, &layer).expect("the button adds a camera");
+        edit.command.execute(&mut project);
+        let camera = edit.select.expect("the new camera is selected");
+        let doc = project.scene_of(&layer).expect("the scene");
+        let Some(ItemFields::Camera(fields)) = doc.find(&camera).map(|item| item.fields.clone()) else {
+            panic!("the button adds a Camera");
+        };
+        assert_eq!(fields.rig, manifold_core::scene_doc::CameraRig::Loop);
+        let pick = doc.camera_pick_param().expect("the World's Camera row");
+        let inst = project.timeline.layers[index].gen_params().expect("scene params");
+        assert_eq!(doc.picked_camera(inst.get_base_param(&pick)), Some(&camera), "the new camera is the World's camera");
+
+        let after = loop_card(&project);
+        assert!(!after.add_loop_camera, "one Loop camera is enough");
+        assert_eq!(camera_only(&after), manifold_core::scene_schema::LOOP_CAMERA_ONLY.len(), "the Loop camera's rows show");
     }
 }

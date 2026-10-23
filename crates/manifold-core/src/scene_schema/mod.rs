@@ -55,9 +55,9 @@ pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
 use ocean::OCEAN_TABLES;
 pub use ocean::OCEAN_LOOK;
 pub use physics::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
-pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, SWARM_ROWS};
+pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, MAX_COUNT_REASON as SWARM_MAX_COUNT_REASON, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
-pub use scene_wide::{LOOP_CAMERA_ROWS, NO_SCENE_LOOP, add_refused, scene_loop};
+pub use scene_wide::{LOOP_CAMERA_ONLY, LOOP_CAMERA_ROWS, NO_SCENE_LOOP, add_refused, has_loop_camera, scene_loop, waits_for_loop_camera};
 pub use water::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET, WATER_FAMILY_REASON, WATER_MATERIAL_ROLE,
     WATER_OBJECT_ROLE, WATER_ROWS, WHITEWATER_PER_CELL, WORLD_FOLLOWS, water_look,
@@ -121,6 +121,8 @@ pub struct CardFacts {
     pub toggle: bool,
     /// The slider range where the node param's own is not the right one.
     pub range: Option<(f32, f32)>,
+    /// The hover text: why the row stops where it does.
+    pub tip: Option<&'static str>,
 }
 
 /// One (kind, property) row.
@@ -173,6 +175,7 @@ const fn facts(role: SurfaceRole) -> CardFacts {
         limit: HardLimit::Slider,
         toggle: false,
         range: None,
+        tip: None,
     }
 }
 
@@ -258,6 +261,13 @@ impl PropertyRow {
     const fn toggle(mut self) -> Self {
         if let Exposure::Card(f) = &mut self.exposure {
             f.toggle = true;
+        }
+        self
+    }
+
+    const fn tip(mut self, tip: &'static str) -> Self {
+        if let Exposure::Card(f) = &mut self.exposure {
+            f.tip = Some(tip);
         }
         self
     }
