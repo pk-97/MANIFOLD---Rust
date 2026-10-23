@@ -2,7 +2,8 @@
 //! (SCENE_DOCUMENT_DESIGN.md section 7.19 (Modifiers)): the Loop flyer sees
 //! the same picture at beat 0 and at beat 8, one loop later, and an orbit
 //! camera sees every tile carry the grid and the swarm, each mirrored
-//! across the floor.
+//! across the floor. A fragment cut under the whole scene draws only its
+//! live vertices, so copies times tiles never multiply its padding.
 //! `SCENE_LOOP_COPIES_PNG_DIR=dir` saves each still.
 
 use manifold_core::Seconds;
@@ -110,4 +111,72 @@ fn the_loop_wraps_a_copies_grid_and_a_swarm_cleanly() {
     save("orbit_beat0", &orbit);
     assert!(start == wrapped, "one loop later the Loop flyer sees the same picture");
     assert!(start != midway, "the flyer moves between the wraps");
+}
+
+/// Vortex Fragments on the cube draws the cut's live vertices, never the cut
+/// map's padded capacity (SCENE_REFINEMENT_DESIGN.md section 4 (Checks)). The
+/// cube is glass because the probe reads the transmissive draws.
+#[cfg(feature = "fluid-perf-proofs")]
+#[test]
+fn vortex_fragments_draw_only_the_cuts_live_vertices() {
+    use manifold_nodes_scene::node_graph::primitives::render_scene::water_perf;
+    let mut doc = SceneDoc::base();
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields { modifier: ModifierType::VortexFragments, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("vortex"), "vortex", card)).unwrap();
+    let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
+    layer.gen_params_mut().unwrap().install_scene_document(doc).unwrap();
+    let mut fx = layer.gen_params().unwrap().clone();
+    assert!(fx.set_base_param("cube-material.transmission", 1.0), "the cube's material has a transmission row");
+    let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_def_for_render(fx.graph.clone().unwrap(), &registry, Some(&fx.params), false)
+        .expect("the scene builds")
+        .with_generator_device(std::sync::Arc::clone(device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float)
+        .expect("the scene installs on the device");
+    runtime.apply_param_values(&fx.params);
+    runtime.set_dump_all(true);
+    let target = RenderTarget::new(device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "vortex-live-draw");
+    let frames = 4;
+    for frame in 0..frames {
+        if frame == frames - 1 {
+            water_perf::arm();
+        }
+        let context = PresetContext {
+            time: frame as f64 * TICK,
+            beat: frame as f64 * TICK * 2.0,
+            dt: TICK as f32,
+            width: WIDTH,
+            height: HEIGHT,
+            output_width: WIDTH,
+            output_height: HEIGHT,
+            aspect: WIDTH as f32 / HEIGHT as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        runtime.set_sim_step(SimStep::live(Seconds(TICK)));
+        let mut encoder = device.create_encoder("vortex-live-draw");
+        runtime.render(&mut GpuEncoder::new(&mut encoder, device), &target.texture, &context, &fx.params);
+        encoder.commit_and_wait_completed();
+    }
+    let dumps = runtime.dump_arrays_all();
+    let counts: Vec<u32> = dumps
+        .iter()
+        .filter(|d| d.type_id == "node.cut_mesh_cells" && d.port == "live_count")
+        .map(|d| manifold_node_engine::testkit::array_harness::read::<u32>(d.buffer, 1)[0])
+        .collect();
+    let [live] = counts[..] else { panic!("one fragment cut, found {counts:?}") };
+    let mut draws = Vec::new();
+    // SAFETY: the armed frame completed above and no frame was encoded since.
+    unsafe { water_perf::finish(|draw| draws.push(draw)) };
+    let [cube] = &draws[..] else { panic!("one glass cube draw, found {draws:?}") };
+    println!("vortex cube: live {live}, drawn {}, capacity {}", cube.drawn_vertices, cube.capacity_vertices);
+    assert!(live > 0 && live < cube.capacity_vertices, "the cut is padded: live {live}, capacity {}", cube.capacity_vertices);
+    assert_eq!(cube.drawn_vertices, live / 3 * 3, "the cube draws the cut's live vertices");
 }

@@ -39694,6 +39694,11 @@
           "type": "Array"
         },
         {
+          "name": "live_count",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "weights",
           "required": false,
           "type": "Array"

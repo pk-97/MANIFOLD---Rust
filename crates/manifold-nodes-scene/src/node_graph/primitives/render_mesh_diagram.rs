@@ -693,6 +693,17 @@ mod tests {
     }
 }
 
+/// `MARK_SIZE` in the shader: a smaller face's mark grows until its farthest
+/// corner is this fraction of the frame radius from its centre.
+#[cfg(test)]
+const MARK_SIZE: f32 = 0.08;
+
+#[cfg(test)]
+#[test]
+fn the_mark_size_oracle_matches_the_shader() {
+    assert!(SHADER.contains(&format!("const MARK_SIZE: f32 = {MARK_SIZE:?};")));
+}
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 

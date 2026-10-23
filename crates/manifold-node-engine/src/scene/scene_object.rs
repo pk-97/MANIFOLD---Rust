@@ -58,6 +58,11 @@ pub struct SceneObject {
     pub mesh: Option<Slot>,
     /// Optional u32 triangle indices into the vertex array.
     pub indices: Option<Slot>,
+    /// Optional `Array<u32>` whose first word, written on the GPU, is how
+    /// many leading `mesh` vertices are live (a fragment cut's live record
+    /// count). The renderer draws from it when the mesh slot carries no
+    /// live extent of its own, so a padded cut never draws its padding.
+    pub live_count: Option<Slot>,
     /// Optional per-vertex appearance weights consumed by `render_scene`.
     pub weights: Option<Slot>,
     /// Cut-map slot. The renderer resolves its typed content metadata from
@@ -234,6 +239,7 @@ mod tests {
             material: None,
             mesh: None,
             indices: None,
+            live_count: None,
             weights: None,
             topology: None,
             base_color_map: None,

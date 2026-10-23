@@ -105,8 +105,14 @@ impl RenderScene {
                 return None;
             }
             let indices_content = object.indices.and_then(|slot| ctx.inputs.content_version_of(slot));
-            let live_extent = object.indices.or(mesh_slot).and_then(|s| ctx.inputs.live_extent_slot(s));
             let capacity = indices.map_or_else(|| whole_triangle_vertices(vertices), |buffer| (buffer.size / 4 / 3 * 3).min(u64::from(u32::MAX)) as u32);
+            // A fragment cut pads its mesh far past the live records, and the
+            // primitives after the cut do not forward its extent; the object's
+            // live count stands in so the padding is never drawn.
+            let live_extent = object.indices.or(mesh_slot).and_then(|s| ctx.inputs.live_extent_slot(s)).or_else(|| {
+                let counts = object.live_count.filter(|_| object.indices.is_none()).and_then(|s| ctx.inputs.array_slot(s))?;
+                Some(manifold_node_engine::scene::live_extent::LiveExtent { counts: counts.clone(), offset: 0, per_item: 1, bound: capacity })
+            });
             let (object_vertex_count, point_count) = match &live_extent {
                 Some(extent) => {
                     let bound = extent.bound.min(capacity);

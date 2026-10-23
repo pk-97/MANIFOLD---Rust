@@ -72,14 +72,14 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
     Ok(())
 }
 
-/// The Objects a deforming card that is on reaches, directly, through a
+/// The Objects a smoothly bending card that is on reaches, directly, through a
 /// Group target, or as the whole scene.
-pub(crate) fn deformed_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
+pub(crate) fn smoothed_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
     let cards: Vec<&ModifierTargets> = doc
         .items
         .iter()
         .filter_map(|item| match &item.fields {
-            ItemFields::Modifier(card) if card.on && modifier_type(card.modifier).deforms => Some(&card.targets),
+            ItemFields::Modifier(card) if card.on && modifier_type(card.modifier).smooth_detail => Some(&card.targets),
             _ => None,
         })
         .collect();
