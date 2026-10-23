@@ -21,6 +21,9 @@ fn item(id: &str, kind: ItemKind, name: &str, depth: usize, parent: Option<&str>
         draw_again: false,
         add_loop_camera: false,
         row_reasons: Vec::new(),
+        holds_copies: false,
+        body: false,
+        look: None,
     }
 }
 
@@ -37,6 +40,7 @@ fn physics_field() -> FieldRowVm {
             ],
         },
         disabled: None,
+        header: false,
     }
 }
 
@@ -57,6 +61,7 @@ fn live_panel_with(cube: SceneItemVm) -> (ScenePanel, UITree) {
             top_level: true,
             holders: vec![ItemKind::Group],
             disabled: None,
+            needs_copies: None,
         }],
     };
     let surface = ParamSurface {
@@ -292,4 +297,181 @@ fn the_scale_link_belongs_to_one_layers_item() {
     assert!(panel.scale_link_click(row));
     assert!(!panel.scale_linked(&LayerId::new("layer-1"), &cube));
     assert!(panel.scale_linked(&LayerId::new("layer-2"), &cube), "another layer's cube keeps its own link");
+}
+
+fn switch_field(id: &str, label: &str, on: bool) -> FieldRowVm {
+    FieldRowVm {
+        id: id.into(),
+        label: label.into(),
+        section: ControlGroup::Copies,
+        control: FieldControlVm::Switch { on, toggle: FieldPick::Choice(if on { "off" } else { "on" }.into()) },
+        disabled: None,
+        header: false,
+    }
+}
+
+/// An on/off field is a switch: a click sends its flip at once, no menu.
+#[test]
+fn an_on_off_field_is_a_switch_that_flips() {
+    let (mut panel, mut tree) = live_panel(vec![switch_field("copies", "Copies", false)]);
+    let ids = panel.properties_card.row_host.toggle_ids[0].as_ref().expect("the switch is a button row");
+    assert_eq!(ids.kind, crate::param_surface::RowKind::Switch);
+    let button = ids.button_id;
+    let actions = click(&mut panel, &mut tree, button);
+    assert!(
+        matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneFieldSet { field, pick: FieldPick::Choice(key), .. })]
+            if field == "copies" && key == "on"),
+        "{actions:?}"
+    );
+}
+
+/// A Modifier's Type and On ride its header, not its rows.
+#[test]
+fn a_modifier_header_carries_its_type_and_switch() {
+    let mut card = item("cube", ItemKind::Modifier, "Bend", 0, None);
+    let mut kind = physics_field();
+    kind.id = "modifier_type".into();
+    kind.header = true;
+    let mut on = switch_field("on", "On", true);
+    on.header = true;
+    card.fields = vec![kind, on];
+    let (mut panel, mut tree) = live_panel_with(card);
+    assert!(panel.properties_card.rows.is_empty(), "no Type or On row on the card");
+    let switch = named(&tree, "scene_setup.properties.header_field.on").expect("the header switch");
+    let actions = click(&mut panel, &mut tree, switch);
+    assert!(
+        matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneFieldSet { field, pick: FieldPick::Choice(key), .. })]
+            if field == "on" && key == "off"),
+        "{actions:?}"
+    );
+    assert!(named(&tree, "scene_setup.properties.header_field.modifier_type").is_some());
+}
+
+fn add_entry(key: &str, group: &str, label: &str, needs_copies: bool) -> AddEntryVm {
+    AddEntryVm {
+        key: key.into(),
+        group: group.into(),
+        label: label.into(),
+        top_level: true,
+        holders: vec![ItemKind::Group],
+        disabled: None,
+        needs_copies: needs_copies.then(|| "Turn on Copies to move them".into()),
+    }
+}
+
+fn add_menu(panel: &mut ScenePanel, tree: &mut UITree, section: &str) -> Vec<crate::panels::dropdown::DropdownItem> {
+    let button = named(tree, &format!("scene_tree.add.{section}")).expect("the section has a +");
+    let actions = click(panel, tree, button);
+    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] = actions.as_slice() else {
+        panic!("expected one menu, got {actions:?}");
+    };
+    items.clone()
+}
+
+/// Each section's + offers only what belongs there, and a copy Modifier is
+/// offered only for a target with Copies on (SCENE_REFINEMENT_DESIGN rulings
+/// 2 and 4).
+#[test]
+fn each_section_adds_its_own_and_copy_modifiers_need_copies() {
+    let mut cube = item("cube", ItemKind::Object, "Cube", 0, None);
+    let vm = |cube: SceneItemVm| SceneSetupVm {
+        layer_id: LayerId::new("layer-1"),
+        items: vec![item("world", ItemKind::World, "World", 0, None), cube],
+        add_entries: vec![
+            add_entry("object.cube", "Object", "Cube", false),
+            add_entry("group", "Group", "Group", false),
+            add_entry("light.sun", "Light", "Sun", false),
+            add_entry("modifier.bend", "Modifier", "Bend", false),
+            add_entry("modifier.copy_wave", "Modifier", "Copy Wave", true),
+        ],
+    };
+    let (mut panel, mut tree) = live_panel_with(cube.clone());
+    panel.configure(SceneSetupState::Live(Box::new(vm(cube.clone()))));
+    tree.clear();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    assert!(named(&tree, "scene_tree.add").is_none(), "the top Add is gone");
+    let labels = |items: &[crate::panels::dropdown::DropdownItem]| items.iter().map(|item| item.label.clone()).collect::<Vec<_>>();
+    assert_eq!(labels(&add_menu(&mut panel, &mut tree, "Objects")), ["Cube", "Group"]);
+    assert_eq!(labels(&add_menu(&mut panel, &mut tree, "Lighting")), ["Sun"]);
+    let modifiers = add_menu(&mut panel, &mut tree, "Modifiers");
+    assert_eq!(labels(&modifiers), ["Bend", "Copy Wave (Turn on Copies to move them)"]);
+    assert!(!modifiers[1].enabled);
+    cube.holds_copies = true;
+    panel.configure(SceneSetupState::Live(Box::new(vm(cube))));
+    tree.clear();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    let modifiers = add_menu(&mut panel, &mut tree, "Modifiers");
+    assert!(modifiers[1].enabled && modifiers[1].label == "Copy Wave", "{:?}", modifiers[1].label);
+}
+
+/// Lighting lines up with every other top-level row, and a Material shows
+/// as its own row only when two or more items use it.
+#[test]
+fn lighting_lines_up_and_only_shared_materials_are_rows() {
+    let material = |id: &str, used_by: usize| {
+        let mut row = item(id, ItemKind::Material, id, 0, None);
+        row.material = Some(MaterialBlockVm {
+            item: ItemId::new(id),
+            name: id.into(),
+            used_by,
+            features: Vec::new(),
+            parameter_ids: Vec::new(),
+            fields: Vec::new(),
+            look: None,
+            pbr: true,
+        });
+        row
+    };
+    let vm = SceneSetupVm {
+        layer_id: LayerId::new("layer-1"),
+        items: vec![
+            item("world", ItemKind::World, "World", 0, None),
+            item("sun", ItemKind::Light, "Sun", 0, None),
+            item("cube", ItemKind::Object, "Cube", 0, None),
+            material("own", 1),
+            material("shared", 2),
+        ],
+        add_entries: Vec::new(),
+    };
+    let mut panel = ScenePanel::new();
+    panel.open();
+    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    let mut tree = UITree::new();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    let row_x = |sel: SceneSelection| tree.get_bounds(panel.outliner_row_ids.iter().find(|(_, row)| *row == sel).expect("a row").0).x;
+    assert_eq!(row_x(SceneSelection::Lighting), row_x(SceneSelection::Item(ItemId::new("world"))));
+    let has_row = |id: &str| panel.outliner_row_ids.iter().any(|(_, sel)| *sel == SceneSelection::Item(ItemId::new(id)));
+    assert!(!has_row("own"), "a Material one item uses shows only on that item's card");
+    assert!(has_row("shared"));
+}
+
+/// Dragging a Modifier card draws a line where it will land.
+#[test]
+fn a_card_drag_shows_where_it_lands() {
+    let (mut panel, mut tree) = chain_panel();
+    let (bend, twist) = (panel.chain_rows[0].0, panel.chain_rows[1].0);
+    let from = tree.get_bounds(bend);
+    let below = tree.get_bounds(twist);
+    let start = Vec2::new(from.x + 4.0, from.y + from.height * 0.5);
+    assert!(panel.handle_event(&drag_begin(Some(bend), start), &mut tree).0);
+    let past = Vec2::new(start.x, below.y + below.height);
+    let version = panel.view_version();
+    panel.handle_event(&UIEvent::Drag { node_id: None, pos: past, delta: Vec2::ZERO, modifiers: Modifiers::default() }, &mut tree);
+    assert!(panel.view_version() > version, "a new landing place redraws");
+    tree.clear();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    let line = named(&tree, "scene_tree.drop_line").expect("the landing line");
+    let twist_now = tree.get_bounds(panel.chain_rows[1].0);
+    assert_eq!(tree.get_bounds(line).y + 1.0, twist_now.y + twist_now.height, "the line sits under the last card");
+    panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: past }, &mut tree);
+    tree.clear();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    assert!(named(&tree, "scene_tree.drop_line").is_none(), "the line leaves with the drag");
+}
+
+/// The live node registered under `name`, in any region.
+fn named(tree: &UITree, name: &str) -> Option<NodeId> {
+    (0..=u8::MAX).find_map(|region| {
+        (0..).map(|slot| tree.id_in(region, slot)).take_while(|id| *id != NodeId::PLACEHOLDER).find(|id| tree.name_of(*id) == Some(name))
+    })
 }

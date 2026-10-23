@@ -3,9 +3,12 @@
 //! light's header heads its sub-section inside Lighting. The Camera header
 //! also carries "Use this view" (D14); the World of a layer that stopped
 //! drawing carries Draw Again, and a Scene Loop with no Loop camera carries
-//! Add Loop Camera.
+//! Add Loop Camera. A Modifier's header carries its Type and its on/off
+//! switch in place of the kind (SCENE_DOCUMENT_DESIGN.md section 8); a Swarm
+//! drawn as a scene item links to that item as its look.
 
 use super::*;
+use crate::panels::param_slider_shared::{TOGGLE_BTN_H, TOGGLE_BTN_W, dropdown_trigger_style, field_row_action, switch_text};
 
 const USE_VIEW: &str = "Use this view";
 
@@ -21,6 +24,10 @@ pub(super) struct HeaderButtons {
     aim_sun: Option<(NodeId, String)>,
     draw_again: Option<NodeId>,
     add_loop_camera: Option<NodeId>,
+    /// A Modifier's Type and On: each control and the field row it sets.
+    fields: Vec<(NodeId, ParamRow)>,
+    /// A Swarm's look link and the item it selects.
+    pub(super) look: Option<(NodeId, ItemId)>,
 }
 
 impl HeaderButtons {
@@ -33,6 +40,8 @@ impl HeaderButtons {
         self.aim_sun = None;
         self.draw_again = None;
         self.add_loop_camera = None;
+        self.fields.clear();
+        self.look = None;
     }
 }
 
@@ -61,12 +70,49 @@ impl ScenePanel {
         } else {
             0.0
         };
+        let header_fields: Vec<(&FieldRowVm, f32)> = item
+            .fields
+            .iter()
+            .filter(|field| field.header)
+            .map(|field| {
+                let width = match &field.control {
+                    FieldControlVm::Switch { .. } => TOGGLE_BTN_W,
+                    FieldControlVm::Pick { current, .. } => {
+                        tree.text_width(current, color::FONT_LABEL, crate::node::FontWeight::Regular) + 24.0
+                    }
+                    FieldControlVm::File { .. } => 0.0,
+                };
+                (field, width)
+            })
+            .collect();
+        let fields_w: f32 = header_fields.iter().map(|(_, width)| width + 4.0).sum();
         let buttons_w = STEP_W * (2.0 * f32::from(u8::from(item.removable)))
             + if framed { frame_w } else { 0.0 }
-            + view_w;
+            + view_w
+            + fields_w;
         let name_w = (inner_w - buttons_w - if buttons_w > 0.0 { 4.0 } else { 0.0 }).max(0.0);
-        self.build_name_and_kind(tree, Rect::new(inner_x, cy, name_w, ROW_H), item);
+        self.build_name_and_kind(tree, Rect::new(inner_x, cy, name_w, ROW_H), item, header_fields.is_empty());
         let mut x = inner_x + name_w + 4.0;
+        for (field, width) in header_fields {
+            let row = super::properties::field_param_row(&item.id, field);
+            let (text, mut style, y, h) = match &field.control {
+                FieldControlVm::Switch { on, .. } => {
+                    (switch_text(*on).to_owned(), toggle_btn_style(*on), cy + (ROW_H - TOGGLE_BTN_H) * 0.5, TOGGLE_BTN_H)
+                }
+                FieldControlVm::Pick { current, .. } => (current.clone(), dropdown_trigger_style(color::FONT_LABEL), cy, ROW_H),
+                FieldControlVm::File { .. } => continue,
+            };
+            if field.disabled.is_some() {
+                style.text_color = color::TEXT_DIMMED_C32;
+            }
+            let id = tree.add_button_keyed(Some(self.content_parent), x, y, width, h, style, &text, item_key(&item.id, &field.id));
+            tree.set_name(id, format!("scene_setup.properties.header_field.{}", field.id));
+            if let Some(node) = tree.get_node_mut(id) {
+                node.tooltip.clone_from(&field.disabled);
+            }
+            self.header_buttons.fields.push((id, row));
+            x += width + 4.0;
+        }
         if item.copy_view {
             let id = tree.add_button_keyed(
                 Some(self.content_parent),
@@ -98,6 +144,14 @@ impl ScenePanel {
             self.header_buttons.remove.push((remove, item.id.clone()));
         }
         let mut cy = cy + ROW_H + ROW_GAP;
+        if let Some((look, name)) = &item.look {
+            let id = self.action_button(tree, (inner_x, inner_w), cy, item, &format!("Look: {name}"), "scene_setup.properties.look");
+            if let Some(node) = tree.get_node_mut(id) {
+                node.tooltip = Some(format!("Select {name}, the item this swarm draws"));
+            }
+            self.header_buttons.look = Some((id, look.clone()));
+            cy += ROW_H + ROW_GAP;
+        }
         if item.draw_again {
             self.header_buttons.draw_again = Some(self.action_button(tree, (inner_x, inner_w), cy, item, "Draw Again", "scene_setup.properties.draw_again"));
             cy += ROW_H + ROW_GAP;
@@ -121,7 +175,7 @@ impl ScenePanel {
     pub(super) fn build_light_header(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), mut cy: f32, item: &SceneItemVm) -> f32 {
         // A scene has one Environment, so its header has no Duplicate.
         let buttons_w = if item.environment { STEP_W } else { STEP_W * 2.0 };
-        self.build_name_and_kind(tree, Rect::new(inner_x, cy, (inner_w - buttons_w - 4.0).max(0.0), ROW_H), item);
+        self.build_name_and_kind(tree, Rect::new(inner_x, cy, (inner_w - buttons_w - 4.0).max(0.0), ROW_H), item, true);
         let x = inner_x + inner_w - buttons_w;
         if !item.environment {
             let dup = tree.add_button_keyed(Some(self.content_parent), x, cy, STEP_W, ROW_H, btn_style(), "\u{29C9}", item_key(&item.id, "dup"));
@@ -160,10 +214,11 @@ impl ScenePanel {
     }
 
     /// The name button (a click renames) with the kind word right-aligned
-    /// after it, skipped when the kind would repeat the name.
-    fn build_name_and_kind(&mut self, tree: &mut UITree, rect: Rect, item: &SceneItemVm) {
+    /// after it, skipped when the kind would repeat the name or `show_kind`
+    /// is off.
+    fn build_name_and_kind(&mut self, tree: &mut UITree, rect: Rect, item: &SceneItemVm, show_kind: bool) {
         let kind = item.kind.default_name();
-        let kind_w = if kind == item.name {
+        let kind_w = if kind == item.name || !show_kind {
             0.0
         } else {
             tree.text_width(kind, color::FONT_LABEL, crate::node::FontWeight::Regular) + GAP * 2.0
@@ -190,6 +245,10 @@ impl ScenePanel {
     /// A click on a header button, as the action it sends.
     pub(super) fn item_header_click(&self, node_id: NodeId, vm: &SceneSetupVm) -> Option<PanelAction> {
         let layer = || vm.layer_id.clone();
+        if let Some((_, row)) = self.header_buttons.fields.iter().find(|(button, _)| *button == node_id) {
+            // A disabled control's click does nothing, as its row's would.
+            return field_row_action(&GraphParamTarget::GeneratorOf(layer()), row, node_id).into_iter().next();
+        }
         if let Some((item, _, name)) = self.header_buttons.names.iter().find(|(_, button, _)| *button == node_id) {
             return Some(PanelAction::Root(RootAction::SceneRenameClicked(layer(), item.clone(), name.clone())));
         }

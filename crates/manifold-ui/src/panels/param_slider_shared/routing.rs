@@ -62,7 +62,8 @@ pub(crate) fn pick_list_action(
 
 /// A click on a scene item's structural field row (the section 8 action
 /// rows): a pick list opens the shared menu under the row's button, every
-/// option carrying the `SceneFieldSet` it sends; a file field asks the app
+/// option carrying the `SceneFieldSet` it sends; a switch sends its flip; a
+/// file field asks the app
 /// for its file dialog. A row with a reason (`inactive_reason`) is disabled,
 /// so its click does nothing.
 pub(crate) fn field_row_action(
@@ -104,6 +105,12 @@ pub(crate) fn field_row_action(
                 .collect();
             vec![PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id: button, items })]
         }
+        FieldControlVm::Switch { toggle, .. } => vec![PanelAction::Project(crate::ProjectAction::SceneFieldSet {
+            layer_id: layer.clone(),
+            item: item.clone(),
+            field: field.clone(),
+            pick: toggle.clone(),
+        })],
         FieldControlVm::File { extensions, .. } => vec![PanelAction::Root(RootAction::SceneFieldFileClicked {
             layer_id: layer.clone(),
             item: item.clone(),

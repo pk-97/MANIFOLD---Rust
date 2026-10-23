@@ -265,6 +265,25 @@ impl Unit {
             Self::Radius => " × radius",
         }
     }
+
+    /// The unit as a narrow value box shows it, before it drops the unit.
+    pub fn short_suffix(self) -> &'static str {
+        match self {
+            Self::Metres => "m",
+            Self::MetresPerSecond => "m/s",
+            Self::MetresPerSecondSquared => "m/s²",
+            Self::Kilograms => "kg",
+            Self::Ev => "EV",
+            Self::Pixels => "px",
+            Self::MillionCells => "M",
+            Self::Seconds => "s",
+            Self::Nanometres => "nm",
+            Self::Beats => "b",
+            Self::PerSecond => "/s",
+            Self::SizeMultiple => "×",
+            Self::Radius => "×r",
+        }
+    }
 }
 
 /// The eleven kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer

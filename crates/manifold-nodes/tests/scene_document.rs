@@ -574,6 +574,7 @@ mod every_kind_and_choice_survives {
             found
         };
         match control {
+            FieldControl::OnOff => vec![manifold_core::scene_schema::is_on(false), manifold_core::scene_schema::is_on(true)],
             FieldControl::Closed(choices) | FieldControl::ClosedOrLayer(choices) => {
                 choices.iter().map(|c| FieldValue::Choice(c.key.to_owned())).collect()
             }

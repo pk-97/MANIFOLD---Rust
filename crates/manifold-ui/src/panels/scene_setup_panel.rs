@@ -60,7 +60,6 @@ const KEY_NEW_SCENE: u64 = 80_012;
 const KEY_SHOW_GIZMOS: u64 = 80_026;
 const KEY_GIZMO_MODE: u64 = 80_028;
 const KEY_RENDER_MODE: u64 = 80_029;
-const KEY_ADD: u64 = 80_030;
 
 const PANEL_W_MIN: f32 = 320.0;
 pub(crate) const ROW_H: f32 = 24.0;
@@ -259,8 +258,8 @@ pub struct ScenePanel {
     show_gizmos_id: Option<NodeId>,
     gizmo_mode_id: Option<NodeId>,
     render_mode_id: Option<NodeId>,
-    /// The tree's "+ Add" button.
-    add_id: Option<NodeId>,
+    /// The tree's + buttons this frame, each with the section it adds to.
+    add_buttons: Vec<(NodeId, outliner::TreeSection)>,
     /// How gizmos meet scene depth, for the preview, the viewport and an
     /// export. UI-only workspace state, like `show_gizmos`.
     gizmo_draw_mode: GizmoDrawMode,
@@ -323,6 +322,9 @@ pub struct ScenePanel {
     chain_rows: Vec<(NodeId, ItemId)>,
     /// The Modifier card being dragged to a new place in the chain.
     chain_drag: Option<ItemId>,
+    /// Where the dragged card lands if released now: its place among the
+    /// other cards. The tree draws a line there.
+    chain_drop_at: Option<usize>,
     /// The tree row being dragged to a new place in the tree.
     tree_drag: Option<ItemId>,
     /// The item a tree row double-click last renamed: its name field opens
@@ -347,7 +349,7 @@ impl Default for ScenePanel {
             show_gizmos_id: None,
             gizmo_mode_id: None,
             render_mode_id: None,
-            add_id: None,
+            add_buttons: Vec::new(),
             gizmo_draw_mode: GizmoDrawMode::default(),
             show_gizmos: false,
             properties_card: SceneCardState::new(),
@@ -372,6 +374,7 @@ impl Default for ScenePanel {
             material_block: Default::default(),
             chain_rows: Vec::new(),
             chain_drag: None,
+            chain_drop_at: None,
             tree_drag: None,
             tree_rename: None,
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -417,6 +420,7 @@ impl ScenePanel {
     pub fn close(&mut self) {
         self.open = false;
         self.chain_drag = None;
+        self.chain_drop_at = None;
         self.tree_drag = None;
         self.tree_rename = None;
     }
@@ -547,7 +551,7 @@ impl ScenePanel {
         self.show_gizmos_id = None;
         self.gizmo_mode_id = None;
         self.render_mode_id = None;
-        self.add_id = None;
+        self.add_buttons.clear();
         self.header_buttons.clear();
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
@@ -759,8 +763,9 @@ impl ScenePanel {
         self.open && self.panel_rect.contains(pos)
     }
 
-    /// The Add menu for the live scene, a separator between menu sections.
-    fn add_menu_items(&self) -> Vec<super::dropdown::DropdownItem> {
+    /// The menu of one tree section's +: the Add menu entries of its menu
+    /// sections, a separator between sections.
+    fn add_menu_items(&self, section: outliner::TreeSection) -> Vec<super::dropdown::DropdownItem> {
         let Some(vm) = self.state.as_live() else { return Vec::new() };
         // An entry goes inside the selected item when that item can hold it
         // (a Group holds anything, a Water its sources), else at the top;
@@ -769,23 +774,32 @@ impl ScenePanel {
             Some(SceneSelection::Item(id)) => vm.item(id),
             _ => None,
         };
-        let entries: Vec<_> = vm
+        let groups = section.groups();
+        let mut entries: Vec<_> = vm
             .add_entries
             .iter()
+            .filter(|entry| groups.contains(&entry.group.as_str()))
             .filter_map(|entry| match selected.filter(|item| entry.holders.contains(&item.kind)) {
                 Some(holder) => Some((entry, Some(holder.id.clone()))),
                 None => entry.top_level.then_some((entry, None)),
             })
             .collect();
+        entries.sort_by_key(|(entry, _)| groups.iter().position(|group| *group == entry.group));
         let selected_items = self.selected_scene_items();
+        let no_copies = self.copies_missing(vm, &selected_items);
         let mut items: Vec<super::dropdown::DropdownItem> = Vec::with_capacity(entries.len());
         for (index, &(entry, ref parent)) in entries.iter().enumerate() {
-            let mut item = super::dropdown::DropdownItem::new(&format!("{} \u{2014} {}", entry.group, entry.label));
-            if entry.group == entry.label {
-                item.label = entry.label.clone();
-            }
+            // The section names the first group; others say theirs when the
+            // label alone would not.
+            let plain = entry.group == groups[0] || entry.group == entry.label;
+            let mut item = super::dropdown::DropdownItem::new(&if plain {
+                entry.label.clone()
+            } else {
+                format!("{} \u{2014} {}", entry.group, entry.label)
+            });
             // The menu has no hover, so a refused entry says why in its label.
-            if let Some(reason) = &entry.disabled {
+            let reason = entry.disabled.as_ref().or(entry.needs_copies.as_ref().filter(|_| no_copies));
+            if let Some(reason) = reason {
                 item.label = format!("{} ({reason})", item.label);
                 item.enabled = false;
             }
@@ -799,6 +813,19 @@ impl ScenePanel {
             items.push(item);
         }
         items
+    }
+
+    /// Whether a new copy Modifier would have no copies to move: a selected
+    /// Object or Group without Copies, or nothing selected and nothing in the
+    /// scene with Copies. A new card aims at the selected Objects and Groups,
+    /// else the whole scene (`new_modifier`).
+    fn copies_missing(&self, vm: &SceneSetupVm, selected: &[ItemId]) -> bool {
+        let targets: Vec<&SceneItemVm> =
+            selected.iter().filter_map(|id| vm.item(id)).filter(|item| matches!(item.kind, ItemKind::Object | ItemKind::Group)).collect();
+        if targets.is_empty() {
+            return !vm.items.iter().any(|item| item.depth == 0 && item.holds_copies);
+        }
+        !targets.iter().all(|item| item.holds_copies)
     }
 
     /// Handle one input event. Returns `(consumed, actions)`.
@@ -858,6 +885,27 @@ impl ScenePanel {
                     }
                     return (true, Vec::new());
                 }
+                // A swarm's look link selects the item it draws, unfolding
+                // the groups above it so its row shows.
+                if let Some((_, look)) = self.header_buttons.look.clone().filter(|(id, _)| id == node_id)
+                    && let Some(vm) = self.state.as_live()
+                {
+                    let layer_id = vm.layer_id.clone();
+                    let mut above = Vec::new();
+                    let mut at = vm.item(&look).and_then(|item| item.parent.clone());
+                    while let Some(parent) = at {
+                        at = vm.item(&parent).and_then(|item| item.parent.clone());
+                        above.push(parent);
+                    }
+                    for parent in above {
+                        self.unfold(layer_id.clone(), parent);
+                    }
+                    self.clear_item_focus();
+                    self.selection.insert(layer_id.clone(), SceneSelection::Item(look));
+                    self.selected.remove(&layer_id);
+                    self.note_selection(&layer_id);
+                    return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer_id))]);
+                }
                 if let Some((row, _)) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id))
                     && self.scale_link_click(row)
                 {
@@ -870,10 +918,10 @@ impl ScenePanel {
                         // toggle every switch row sends.
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
                         actions.push(PanelAction::Params(ParamsAction::ParamToggle(target, manifold_foundation::ParamId::from(param))));
-                    } else if self.add_id == Some(*node_id) {
+                    } else if let Some(&(_, section)) = self.add_buttons.iter().find(|(id, _)| id == node_id) {
                         actions.push(PanelAction::Root(RootAction::SceneSetupActionMenuClicked {
                             button_node_id: *node_id,
-                            items: self.add_menu_items(),
+                            items: self.add_menu_items(section),
                         }));
                     } else if let Some(act) = self.item_header_click(*node_id, vm).or_else(|| self.material_click(*node_id, vm)) {
                         actions.push(act);
@@ -940,12 +988,25 @@ impl ScenePanel {
             UIEvent::DragBegin { .. } => {
                 // A drag that began elsewhere means no card or row drag is live.
                 self.chain_drag = None;
+                self.chain_drop_at = None;
                 self.tree_drag = None;
                 (self.properties_card.row_host.is_dragging(), Vec::new())
             }
-            UIEvent::Drag { .. } if self.chain_drag.is_some() || self.tree_drag.is_some() => (true, Vec::new()),
+            UIEvent::Drag { pos, .. } if self.chain_drag.is_some() => {
+                // The line moves only when the landing place does.
+                let to = self.chain_drag.as_ref().and_then(|card| self.chain_landing(tree, card, pos.y)).map(|(_, to)| to);
+                if to != self.chain_drop_at {
+                    self.chain_drop_at = to;
+                    self.view_version += 1;
+                }
+                (true, Vec::new())
+            }
+            UIEvent::Drag { .. } if self.tree_drag.is_some() => (true, Vec::new()),
             UIEvent::DragEnd { pos, .. } if self.chain_drag.is_some() => {
                 let card = self.chain_drag.take().expect("a chain drag");
+                if self.chain_drop_at.take().is_some() {
+                    self.view_version += 1;
+                }
                 (true, self.chain_drop(tree, &card, pos.y).into_iter().collect())
             }
             UIEvent::DragEnd { pos, .. } if self.tree_drag.is_some() => {
@@ -978,6 +1039,16 @@ impl ScenePanel {
     /// other cards, by the rows whose middle sits above the drop.
     fn chain_drop(&self, tree: &UITree, card: &ItemId, y: f32) -> Option<PanelAction> {
         let vm = self.state.as_live()?;
+        let (from, to) = self.chain_landing(tree, card, y)?;
+        (to != from).then(|| {
+            PanelAction::Project(ProjectAction::SceneChainMove { layer_id: vm.layer_id.clone(), item: card.clone(), to })
+        })
+    }
+
+    /// The dragged `card`'s place in the chain now, and where it lands if
+    /// released at height `y`: the count of other cards whose middle sits
+    /// above `y`.
+    fn chain_landing(&self, tree: &UITree, card: &ItemId, y: f32) -> Option<(usize, usize)> {
         let from = self.chain_rows.iter().position(|(_, row_card)| row_card == card)?;
         let to = self
             .chain_rows
@@ -988,9 +1059,7 @@ impl ScenePanel {
                 bounds.y + bounds.height * 0.5 < y
             })
             .count();
-        (to != from).then(|| {
-            PanelAction::Project(ProjectAction::SceneChainMove { layer_id: vm.layer_id.clone(), item: card.clone(), to })
-        })
+        Some((from, to))
     }
 
     /// A drag's actions after the colour swatch's RGB rewrite.

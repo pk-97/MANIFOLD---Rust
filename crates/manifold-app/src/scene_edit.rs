@@ -72,6 +72,12 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
     let id = new_id();
     if let ItemFields::Modifier(card) = fields() {
         let mut item = new_modifier(doc, id.clone(), card.modifier, selected);
+        if let ItemFields::Modifier(made) = &item.fields
+            && manifold_core::scene_schema::acts_on_copies(made.modifier)
+            && let Some(reason) = manifold_core::scene_schema::copies_refused(doc, &made.targets)
+        {
+            return Err(reason.to_owned());
+        }
         item.name = name;
         return Ok(batch(vec![Box::new(add_modifier(layer, doc, item))], &format!("Add {}", entry.label), Some(id)));
     }

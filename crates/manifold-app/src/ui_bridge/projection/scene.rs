@@ -8,10 +8,12 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
-    EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, SceneDoc, Shape, draws_with_material, param_id, split_param_id,
+    DrawAs, EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, PhysicsSetting, SceneDoc, Shape, draws_with_material,
+    param_id, split_param_id,
 };
 use manifold_core::scene_schema::{
-    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, break_unavailable, choice_disabled, impulse_unavailable, item_disabled, has_loop_camera, waits_for_loop_camera,
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, MODIFIER_HEADER_FIELDS, TURN_ON_COPIES, acts_on_copies, applicable_fields,
+    break_unavailable, choice_disabled, has_loop_camera, holds_copies, impulse_unavailable, is_on, item_disabled, on_off_key, waits_for_loop_camera,
 };
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
@@ -70,6 +72,10 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
             top_level: manifold_core::scene_doc::can_hold(None, entry.kind),
             holders: ItemKind::ALL.into_iter().filter(|holder| manifold_core::scene_doc::can_hold(Some(*holder), entry.kind)).collect(),
             disabled: entry.fields.and_then(|fields| manifold_core::scene_schema::add_refused(doc, &fields())).map(str::to_owned),
+            needs_copies: entry
+                .fields
+                .is_some_and(|fields| matches!(fields(), ItemFields::Modifier(card) if acts_on_copies(card.modifier)))
+                .then(|| TURN_ON_COPIES.to_owned()),
         })
         .collect();
     SceneSetupVm { layer_id, items, add_entries }
@@ -131,6 +137,15 @@ fn item_vm(
         draw_again: false,
         add_loop_camera: is_scene_loop(item) && !has_loop_camera(doc),
         row_reasons,
+        holds_copies: holds_copies(item),
+        body: item.fields.physics() == PhysicsSetting::Body,
+        look: match &item.fields {
+            ItemFields::Swarm(swarm) => match &swarm.draw_as {
+                DrawAs::Item(id) => doc.find(id).map(|drawn| (id.clone(), drawn.name.clone())),
+                _ => None,
+            },
+            _ => None,
+        },
     }
 }
 
@@ -209,12 +224,21 @@ fn material_block(
 
 fn field_rows(doc: &SceneDoc, item: &Item, layers: &[(LayerId, String)]) -> Vec<FieldRowVm> {
     applicable_fields(&item.fields)
-        .map(|row| FieldRowVm {
-            id: row.id.to_owned(),
-            label: row.label.to_owned(),
-            section: row.section,
-            control: control(doc, item, row, layers),
-            disabled: (row.disabled)(doc, item).map(str::to_owned),
+        .map(|row| {
+            let control = control(doc, item, row, layers);
+            // A switch whose flip is refused is a disabled row.
+            let refused_flip = match &control {
+                FieldControlVm::Switch { toggle: FieldPick::Choice(key), .. } => choice_disabled(doc, item, row.id, key),
+                _ => None,
+            };
+            FieldRowVm {
+                id: row.id.to_owned(),
+                label: row.label.to_owned(),
+                section: row.section,
+                control,
+                disabled: (row.disabled)(doc, item).or(refused_flip).map(str::to_owned),
+                header: item.kind() == ItemKind::Modifier && MODIFIER_HEADER_FIELDS.contains(&row.id),
+            }
         })
         .collect()
 }
@@ -257,6 +281,10 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
         FieldControlVm::Pick { current, options }
     };
     match row.control {
+        FieldControl::OnOff => {
+            let on = held == is_on(true);
+            FieldControlVm::Switch { on, toggle: FieldPick::Choice(on_off_key(!on).to_owned()) }
+        }
         FieldControl::Closed(choices) => {
             let mut options = closed(choices, &held);
             for (option, choice) in options.iter_mut().zip(choices) {

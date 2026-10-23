@@ -350,6 +350,9 @@ impl ParamRow {
     pub fn kind(&self, scene: bool) -> RowKind {
         let spec = &self.spec;
         match self.affordance {
+            Some(RowAffordance::Field { control: crate::panels::scene_setup_panel::FieldControlVm::Switch { .. }, .. }) => {
+                return RowKind::Switch;
+            }
             Some(RowAffordance::Field { .. }) => return RowKind::Choice,
             Some(RowAffordance::ScaleLink { .. }) => return RowKind::Switch,
             None => {}
