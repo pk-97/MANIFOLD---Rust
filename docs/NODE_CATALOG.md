@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 405 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 406 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
