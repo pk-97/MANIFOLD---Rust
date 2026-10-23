@@ -340,8 +340,8 @@ impl Primitive for RenderMeshDiagram {
         self.last_frame_count = Some(ctx.time.frame_count);
         let density = ctx.scalar_or_param("density", 4.0).round().clamp(2.0, 8.0) as u32;
         // Copy count comes from the wired InstanceTransform buffer. Producers
-        // collapse inactive slots to an all-zero transform (see
-        // generate_instance_transforms_body.wgsl), so a smaller active_count
+        // collapse inactive slots to an all-zero transform (node.arrange_copies
+        // and the physics world upload zero the tail), so a smaller active_count
         // never draws garbage; the shader skips those sentinels explicitly.
         let input_instances = ctx.inputs.array("instances");
         let copies = input_instances.map_or(1, |buffer| {

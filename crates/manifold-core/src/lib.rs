@@ -35,6 +35,7 @@ pub mod clip;
 pub mod color;
 pub mod control_history;
 pub mod copies_body;
+pub mod copy_layout;
 pub mod initial_fill;
 pub mod effect_graph_def;
 pub mod effect_registration;

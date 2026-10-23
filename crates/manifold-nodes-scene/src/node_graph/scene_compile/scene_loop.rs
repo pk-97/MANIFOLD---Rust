@@ -6,9 +6,17 @@
 //! on every drawn object: its `node.scene_array` builds the cells around the
 //! camera the render uses, so a cut to any camera keeps the tiling
 //! (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D1, D2). The Loop cameras are the
-//! camera emitter's (`camera.rs`); this card's Beats, Pattern, Stride,
-//! Spacing, Home, Near and Far drive all of them, so camera travel per loop
-//! is always a whole number of patterns and the wrap is pure (corridor D3).
+//! camera emitter's (`camera.rs`); this card's Beats, Pattern, Stride, Home,
+//! Near and Far drive all of them, so camera travel per loop is always a
+//! whole number of patterns and the wrap is pure (corridor D3).
+//!
+//! One cell length serves the corridor and every Loop camera: the scene's
+//! `node.loop_cell` measures the rest boxes of what the loop tiles (each
+//! object at its transform, each copy group's layout, each swarm's spread)
+//! along the corridor, live, and adds the card's Spacing as a gap. Dragging
+//! a Transform, scale or Copies row moves the tiles on the same frame; a body
+//! physics moves never does, since the boxes are where things start
+//! (SCENE_REFINEMENT_DESIGN.md P3b).
 //!
 //! For an object drawn once, the corridor is the first instance stage, before
 //! the chain's own: it replaces the single pose with the cells, and every
@@ -25,11 +33,12 @@ use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef};
 use manifold_core::param_lookup::NodeParamMetadata;
 use manifold_core::scene_doc::{CameraRig, ItemFields, ItemId, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
-use manifold_core::scene_schema::{self, Exposure, LOOP_CAMERA_ROWS, PropertyRow, modifier_type};
+use manifold_core::scene_schema::{self, COPIES_ROLE, Exposure, LOOP_CAMERA_ROWS, LOOP_GAP_ROW, PropertyRow, modifier_type};
 
 use super::builder::{Builder, SCENE, card_spec, number, rest_box};
 use super::camera::LOOP_BEATS;
 use super::forces::{CardParam, bindings, node, recipe_card};
+use crate::node_graph::primitives::loop_cell::LOOP_CELL_TYPE_ID;
 
 /// The most objects one instance targets (`frames::selected_objects`).
 const TARGETS_PER_INSTANCE: usize = 256;
@@ -37,32 +46,37 @@ const TARGETS_PER_INSTANCE: usize = 256;
 /// The stock recipe that tiles an object drawing many copies.
 const COPIES_RECIPE: &str = "SceneLoopCopies";
 
-/// A cell's size with nothing drawn to measure: the recipe's own.
+/// Spacing with nothing drawn to measure: the corridor's own cell.
 const UNMEASURED_CELL: f32 = 10.0;
 
-/// The corridor's scale, from the scene's rest-pose box: a cell is twice the
-/// scene's depth along the travel axis (Z), one depth of scene and one of
-/// open air (SCENE_LOOP_DESIGN.md D4, the gap rule). The box holds every
-/// drawn mesh and every swarm's spread ([`super::swarm::SPREAD`]), so a
-/// swarm's tiles start apart.
+/// The corridor's starting scale, from the scene's rest-pose box as the
+/// compiler sees it: Spacing starts at the scene's depth along the travel
+/// axis (Z), so a cell starts at twice it, one depth of scene and one of open
+/// air (SCENE_LOOP_DESIGN.md D4, the gap rule). The box holds every drawn
+/// mesh and every swarm's spread ([`super::swarm::SPREAD`]). The live cell is
+/// `node.loop_cell`'s; this seeds Spacing and the starts and ranges of Home,
+/// Near and Far.
 struct Corridor {
     cell: f32,
+    gap: f32,
 }
 
 impl Corridor {
     fn measure(b: &Builder<'_>) -> Self {
         let swarms = b.swarms.iter().map(|_| &super::swarm::SPREAD);
         let depth = rest_box(b.drawn.iter().map(|drawn| &drawn.rest).chain(swarms)).map(|(lo, hi)| hi[2] - lo[2]);
-        let cell = depth.filter(|depth| *depth > 0.0).map_or(UNMEASURED_CELL, |depth| 2.0 * depth);
-        Self { cell }
+        match depth.filter(|depth| *depth > 0.0) {
+            Some(depth) => Self { cell: 2.0 * depth, gap: depth },
+            None => Self { cell: UNMEASURED_CELL, gap: UNMEASURED_CELL },
+        }
     }
 
-    /// A Loop camera's start, default and slider range for `property`, where
-    /// the scene's scale decides them (SCENE_LOOP_DESIGN.md D11).
+    /// A Scene Loop row's start, default and slider range for `property`,
+    /// where the scene's scale decides them (SCENE_LOOP_DESIGN.md D11).
     fn scaled(&self, property: &str) -> Option<(f32, (f32, f32))> {
         let c = self.cell;
         Some(match property {
-            "cell_size" => (c, (0.25 * c, 4.0 * c)),
+            "spacing" => (self.gap, (0.0, 4.0 * c)),
             // The corridor entry: the camera starts half a cell back, in the gap.
             "home" => (-0.5 * c, (-2.0 * c, 2.0 * c)),
             "near" => ((0.002 * c).max(0.001), (0.001, 2.0 * c)),
@@ -72,7 +86,8 @@ impl Corridor {
     }
 }
 
-/// Emit the scene's Scene Loop, if it has one: the corridor and its card.
+/// Emit the scene's Scene Loop, if it has one: the cell measure, the
+/// corridor and its card.
 pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
     let doc = b.doc;
     let Some(item) = scene_schema::scene_loop(doc) else {
@@ -85,12 +100,14 @@ pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
     let entry = modifier_type(card.modifier);
     let lookup = |param: &str| entry.rows.iter().find(|row| row.property == param);
     let host_id = |param: &str| param_id(&item.id, param);
-    let (graph, mut specs) = recipe_card(entry.recipe, &lookup, &host_id, &[("cell_size", corridor.cell)])?;
-    for (spec, param) in &mut specs {
-        if let Some((_, range)) = corridor.scaled(param) {
-            (spec.min, spec.max) = range;
-        }
-    }
+    let (graph, specs) = recipe_card(entry.recipe, &lookup, &host_id, &[])?;
+
+    // Spacing is the gap the cell adds on top of what it measures.
+    let cell = emit_cell(b, item.id.as_str());
+    let (property, param) = LOOP_GAP_ROW;
+    let meta = b.param_meta(LOOP_CELL_TYPE_ID, param).ok_or_else(|| format!("{LOOP_CELL_TYPE_ID} has no {param}"))?;
+    let spec = outside_spec(&corridor, &host_id(property), lookup(property), &meta)?;
+    b.declare(spec, &meta, &[cell], param);
 
     // Every Loop camera rides this card: (rig, phase) per camera.
     let cameras: Vec<(u32, u32)> = doc
@@ -99,6 +116,9 @@ pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
         .filter(|id| matches!(doc.find(id).map(|camera| &camera.fields), Some(ItemFields::Camera(c)) if c.rig == CameraRig::Loop))
         .filter_map(|id| Some((b.id(id.as_str(), "rig")?, b.id(id.as_str(), "phase")?)))
         .collect();
+    for &(rig, _) in &cameras {
+        b.wire(cell, "cell_size", rig, "cell_size");
+    }
     for (property, role) in LOOP_CAMERA_ROWS {
         let targets: Vec<u32> = cameras.iter().map(|&(rig, phase)| if role == "phase" { phase } else { rig }).collect();
         let type_id = if role == "phase" { "node.beat_ramp" } else { "node.loop_camera" };
@@ -107,7 +127,7 @@ pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
         // manifest param drives the corridor and every camera.
         let spec = match specs.iter().find(|(_, param)| param == property) {
             Some((spec, _)) => spec.clone(),
-            None => camera_spec(&corridor, &host_id(property), lookup(property), &meta)?,
+            None => outside_spec(&corridor, &host_id(property), lookup(property), &meta)?,
         };
         b.declare(spec, &meta, &targets, property);
     }
@@ -125,6 +145,86 @@ pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
     Ok(())
 }
 
+/// The scene's `node.loop_cell`, fed one rest box per object drawn once, copy
+/// group and swarm. Returns the node.
+fn emit_cell(b: &mut Builder<'_>, owner: &str) -> u32 {
+    // (the box's node and port, the frame it sits in)
+    let mut boxes: Vec<((u32, &'static str), Option<u32>)> = Vec::new();
+    // An object drawn many times is measured by its group's box below.
+    for drawn in b.drawn.clone() {
+        if b.input(drawn.object, "instances").is_some() {
+            continue;
+        }
+        let Some((placed, within)) = rest_frame(b, drawn.object) else {
+            continue;
+        };
+        // The mesh's box under its transform: the unit cube at the box's
+        // centre, scaled to its size.
+        let shape = b.add_named(node(owner, &format!("box:{}", drawn.item)), "node.transform_3d");
+        let (lo, hi) = (drawn.rest.lo, drawn.rest.hi);
+        for (axis, (pos, scale)) in [("pos_x", "scale_x"), ("pos_y", "scale_y"), ("pos_z", "scale_z")].into_iter().enumerate() {
+            b.set_number(shape, pos, 0.5 * (lo[axis] + hi[axis]));
+            b.set_number(shape, scale, hi[axis] - lo[axis]);
+        }
+        b.wire(placed, "transform", shape, "parent");
+        boxes.push(((shape, "transform"), within));
+    }
+    // Each copy group's layout at rest. A group's own layout that a swarm
+    // carries rides the swarm's spread instead, and copies on a surface sit
+    // inside that surface's box.
+    let mut copied = Vec::new();
+    b.doc.walk(|item, _| {
+        if item.fields.copies_surface().is_none() {
+            copied.push(item.id.clone());
+        }
+    });
+    for item in copied {
+        // A swarm's copies are its particles, measured by its spread below.
+        if b.swarms.contains(&item) {
+            continue;
+        }
+        let Some(body) = b.id(item.as_str(), COPIES_ROLE) else {
+            continue;
+        };
+        if b.nests.values().any(|layout| *layout == Some(body)) {
+            continue;
+        }
+        boxes.push(((body, "rest_box"), None));
+    }
+    // Each swarm's lattice box, which its stirred cloud fills, in its
+    // emitter's frame.
+    for swarm in b.swarms.clone() {
+        if let (Some(spread), Some(emitter)) = (b.id(swarm.as_str(), "bounds"), b.id(swarm.as_str(), "transform")) {
+            boxes.push(((spread, "transform"), Some(emitter)));
+        }
+    }
+    let cell = b.add(SCENE, "loop_cell", LOOP_CELL_TYPE_ID);
+    b.set_number(cell, "boxes", boxes.len().max(1) as f32);
+    for (k, ((from, port), within)) in boxes.into_iter().enumerate() {
+        b.wire(from, port, cell, &format!("box_{k}"));
+        if let Some(within) = within {
+            b.wire(within, "transform", cell, &format!("within_{k}"));
+        }
+    }
+    cell
+}
+
+/// Where `object` rests: the transform its mesh is placed by and the frame
+/// that holds it, as the renderer composes them, but with a body's solved
+/// pose read as the start transform the body takes. A body that draws only
+/// at its pose rests at its start.
+fn rest_frame(b: &Builder<'_>, object: u32) -> Option<(u32, Option<u32>)> {
+    let at_rest = |frame: u32| match b.input(frame, "parent") {
+        Some((body, port)) if port == "pose" => b.input(body, "transform").map_or(frame, |(start, _)| start),
+        _ => frame,
+    };
+    let within = b.input(object, "parent_transform").map(|(frame, _)| at_rest(frame));
+    match b.input(object, "transform") {
+        Some((placed, _)) => Some((placed, within)),
+        None => within.map(|start| (start, None)),
+    }
+}
+
 /// Tile the objects that draw many copies, once every Modifier card has
 /// shaped them (the module doc says why last): every live copy in every cell.
 pub(crate) fn emit_copies(b: &mut Builder<'_>) -> Result<(), String> {
@@ -138,12 +238,11 @@ pub(crate) fn emit_copies(b: &mut Builder<'_>) -> Result<(), String> {
     if !card.on || objects.is_empty() {
         return Ok(());
     }
-    let corridor = Corridor::measure(b);
     let entry = modifier_type(card.modifier);
     let lookup = |param: &str| entry.rows.iter().find(|row| row.property == param);
     let host_id = |param: &str| param_id(&item.id, param);
     // The same card params as the corridor `emit` declared drive this one.
-    let (graph, specs) = recipe_card(COPIES_RECIPE, &lookup, &host_id, &[("cell_size", corridor.cell)])?;
+    let (graph, specs) = recipe_card(COPIES_RECIPE, &lookup, &host_id, &[])?;
     push_instances(b, item.id.as_str(), "loop_copies", &objects, &graph, &specs);
     Ok(())
 }
@@ -166,8 +265,9 @@ fn push_instances(b: &mut Builder<'_>, owner: &str, role: &str, objects: &[NodeI
     }
 }
 
-/// The card param of a Scene Loop row that reaches the Loop cameras only.
-fn camera_spec(
+/// The card param of a Scene Loop row that reaches a node outside the
+/// recipe: a Loop camera's, or the cell measure's gap.
+fn outside_spec(
     corridor: &Corridor,
     id: &str,
     row: Option<&'static PropertyRow>,

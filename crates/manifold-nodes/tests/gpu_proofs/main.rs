@@ -29,6 +29,7 @@ mod render_legacy_parity;
 mod render_scene_map_set;
 mod scene_swarm;
 mod scene_loop_copies;
+mod copy_blend_layout;
 mod render_scene_ao_mask;
 mod render_scene_shadow_cache;
 mod rt_object_motion_shadow;

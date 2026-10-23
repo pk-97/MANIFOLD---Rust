@@ -9,7 +9,7 @@ use manifold_core::copies_body::SPACING_MIN;
 use manifold_node_engine::scene::transform::{quat_to_render_scene_euler, Transform};
 use manifold_physics::{BodyConfig, BodyHandle, BodyPose, CookedSolid, PhysicsWorld};
 
-use super::copy_layout::{copy_width, requested_count, Arrangement};
+use super::copy_layout::{arrangement_of, copy_width, requested_count, rest_pose, Arrangement};
 use super::{CopySpawn, DeferredAnimatedEdit, RigidBody, Solid, installed_volume, mesh_volume, same_authored_body};
 
 /// One group's installed copies. `handles` holds every body installed since
@@ -63,7 +63,7 @@ impl CopyGroup {
     /// Copy `index`'s rest pose under the installed arrangement.
     pub fn rest(&self, index: usize) -> BodyPose {
         self.arrangement.map_or(BodyPose { position: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0] }, |arrangement| {
-            arrangement.rest(self.width, index)
+            rest_pose(&arrangement, self.width, index)
         })
     }
 
@@ -75,10 +75,16 @@ impl CopyGroup {
     /// Publish `arrangement`'s first `count` rest poses, growing storage
     /// only past its high-water mark.
     pub fn show_rest(&mut self, arrangement: &Arrangement, scale: [f32; 3]) {
+        self.show_rest_from(arrangement, scale, 0);
+    }
+
+    /// [`Self::show_rest`] for the copies from `from` on; those before keep
+    /// the poses already published.
+    pub fn show_rest_from(&mut self, arrangement: &Arrangement, scale: [f32; 3], from: usize) {
         if self.poses.len() < arrangement.count {
             self.poses.resize(arrangement.count, Transform::default());
         }
-        for (index, pose) in self.poses[..arrangement.count].iter_mut().enumerate() {
+        for (index, pose) in self.poses[..arrangement.count].iter_mut().enumerate().skip(from) {
             let rest = arrangement.rest(self.width, index);
             *pose = Transform {
                 pos: rest.position,
@@ -100,7 +106,7 @@ impl CopyGroup {
             return;
         }
         self.width = copy_width(prototype);
-        self.show_rest(&Arrangement::of(prototype, count), prototype.transform.scale);
+        self.show_rest(&arrangement_of(prototype, count), prototype.transform.scale);
         self.refused = Some(prototype.clone());
     }
 }

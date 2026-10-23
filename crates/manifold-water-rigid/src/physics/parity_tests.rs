@@ -1,8 +1,9 @@
 //! Digests of every pose at tick 120 of the bundled Physics Boxes scene and a
 //! 64-body world. Each mass is the one its density gave the same body. A
-//! digest moves only when the solver's input moves: installing a body with
-//! its mass directly rounds inertia differently, and the bullet test measures
-//! a body by its collision shape's true extent, not its scale.
+//! digest moves only when the solver's input moves, the copies' rest places
+//! among it: installing a body with its mass directly rounds inertia
+//! differently, and the bullet test measures a body by its collision shape's
+//! true extent, not its scale.
 
 use super::*;
 use manifold_core::copies_body::{platonic_width, size_multiple, spacing_unit};
@@ -105,7 +106,7 @@ fn physics_boxes_and_a_sixty_four_body_world_keep_their_trajectory_at_tick_120()
     }
     assert_eq!(boxes.active_copies(0), 256);
     let boxes_digest = digest(boxes.poses.iter().chain(boxes.group_poses(0)).copied());
-    assert_eq!(boxes_digest, 0x2966_a1fa_392f_4050, "Physics Boxes left its trajectory");
+    assert_eq!(boxes_digest, 0x0d07_3579_b3c0_4bd4, "Physics Boxes left its trajectory");
 
     let wired = sixty_four_bodies();
     let mut world = RigidSimulation::default();

@@ -198,16 +198,13 @@ pub static COPY_NOISE_ROWS: [PropertyRow; 8] = [
     held("enabled", ON_IS_THE_TOGGLE),
 ];
 
-/// Copy Blend: the copies move toward a second layout as Mix rises.
-pub static COPY_BLEND_ROWS: [PropertyRow; 9] = [
+/// Copy Blend: the copies move toward a second layout as Mix rises. The
+/// second layout is the copies' own with only Layout switched, so it takes
+/// their Count, Spacing, Columns and Turn.
+pub static COPY_BLEND_ROWS: [PropertyRow; 4] = [
     live("mix", 1),
     live("layout", 2),
-    live("count", 3),
-    live("width", 4),
-    live("height", 5),
-    live("depth", 6),
-    live("size", 7),
-    live("seed", 8),
+    live("size", 3),
     held("enabled", ON_IS_THE_TOGGLE),
 ];
 

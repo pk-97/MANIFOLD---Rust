@@ -13,12 +13,10 @@
 //! render byte-identical to the same scene with `instances_n` left
 //! unwired (the cached Rust-side stub).
 //!
-//! All four scenes reuse one procedural 1-entry `node.arrange_copies`
-//! (Ring layout, `active_count=1`, all extents 0, `base_scale=1`,
-//! rotation 0) as the "identity instance" building block — verified
-//! against `generate_instance_transforms_body.wgsl`'s Ring formula to
-//! collapse to `pos_scale=[0,0,0,1]`, `rot_pad=[0,0,0,0]` bit-for-bit,
-//! the same values as `render_scene.rs`'s Rust-side stub.
+//! All four scenes reuse one 1-entry `node.arrange_copies` (one Grid copy,
+//! unturned, `base_scale=1`) as the "identity instance" building block:
+//! `pos_scale=[0,0,0,1]`, `rot_pad=[0,0,0,0]`, the same values as
+//! `render_scene.rs`'s Rust-side stub.
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
@@ -28,24 +26,17 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
 
-/// A 1-entry `Array<InstanceTransform>` producer. `rot_x` lets callers
-/// additionally orient the instance (e.g. to face a camera) while keeping
-/// the position/scale identity — Ring's position formula ignores rotation
-/// entirely, so this stays a pure per-instance rotate.
+/// A 1-entry `Array<InstanceTransform>` producer: one Grid copy on the
+/// origin at scale 1. `rot_x` turns the copy (e.g. to face a camera) while
+/// its position stays on the origin.
 fn identity_instance_node(id: u32, node_id: &str, rot_x: f32) -> String {
     format!(
         r#"{{"id":{id},"typeId":"node.arrange_copies","nodeId":"{node_id}","params":{{
             "max_capacity":{{"type":"Int","value":1}},
             "active_count":{{"type":"Int","value":1}},
-            "layout":{{"type":"Enum","value":1}},
-            "seed":{{"type":"Int","value":0}},
-            "extent_x":{{"type":"Float","value":0.0}},
-            "extent_y":{{"type":"Float","value":0.0}},
-            "extent_z":{{"type":"Float","value":0.0}},
+            "layout":{{"type":"Enum","value":0}},
             "base_scale":{{"type":"Float","value":1.0}},
-            "rot_x":{{"type":"Float","value":{rot_x}}},
-            "rot_y":{{"type":"Float","value":0.0}},
-            "rot_z":{{"type":"Float","value":0.0}}}}}}"#
+            "turn_x":{{"type":"Float","value":{rot_x}}}}}}}"#
     )
 }
 

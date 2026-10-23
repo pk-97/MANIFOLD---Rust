@@ -1,60 +1,35 @@
-//! `node.arrange_copies` — emit an
-//! `Array<InstanceTransform>` filled with a procedural layout.
+//! `node.arrange_copies` — lay copies out exactly as a copies body does.
 //!
-//! Phase B of `BUFFER_PORT_PLAN`. The instance-side companion
-//! to `node.grid_mesh` — produces N transforms in one
-//! of grid / ring / spiral / random patterns, paired with
-//! `node.render_copies` to draw N copies of a base
-//! mesh. Unlocks NestedCubes, DigitalPlants, and any future
-//! "many small objects in a pattern" generator.
+//! The rest places come from `manifold_core::copy_layout`, the formula the
+//! physics world rests a copies body's copies by, so Copy Blend moves copy
+//! `i` to the slot copy `i` would take if the copies' own Layout were
+//! switched, and no two blend paths cross. Computed on the CPU only when an
+//! input changes, then uploaded as an immutable snapshot.
 
 use std::borrow::Cow;
 
-use manifold_gpu::GpuBinding;
-
-use manifold_node_engine::mesh::InstanceTransform;
+use manifold_core::copies_body::{COPY_LAYOUT_LABELS, SIZE_SPACING_DEFAULT, SIZE_SPACING_RANGE};
+use manifold_core::copy_layout::{Arrangement, CopyLayout};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::instance_upload::InstanceSnapshotUpload;
+use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::transform::quat_to_render_scene_euler;
 
-pub const INSTANCE_LAYOUTS: &[&str] = &["Grid", "Ring", "Spiral", "Random"];
-
-/// Generated-codegen uniform layout: scalar params in PARAMS order
-/// (`max_capacity` Int → i32 [allocation-only, the shader ignores it but it
-/// occupies a uniform word], `active_count` Int → i32 [the inactive threshold],
-/// `layout` Enum → u32, `seed` Int → i32, then the f32 extents / base_scale /
-/// rotations and the origin), then the codegen-injected `dispatch_count` (=
-/// output capacity, the guard). 15 words, padded to 64 bytes.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceUniforms {
-    max_capacity: i32,
-    active_count: i32,
-    layout: u32,
-    seed: i32,
-    extent_x: f32,
-    extent_y: f32,
-    extent_z: f32,
-    base_scale: f32,
-    rot_x: f32,
-    rot_y: f32,
-    rot_z: f32,
-    origin_x: f32,
-    origin_y: f32,
-    origin_z: f32,
-    dispatch_count: u32,
-    _pad: u32,
-}
+/// A copies body's Columns default, for a node no copies body feeds.
+const COLUMNS_DEFAULT: f32 = 16.0;
 
 manifold_node_engine::primitive! {
     name: GenerateInstanceTransforms,
     type_id: "node.arrange_copies",
-    purpose: "Emit an Array<InstanceTransform> filled with one of four procedural layouts (slots beyond active_count zero out): Grid — side = ceil(active_count^(1/3)), 3D index (cx,cy,cz) = (i mod side, (i/side) mod side, i/side^2), position = ((cx/(side-1) - 0.5)*extent_x, (cy/(side-1) - 0.5)*extent_y, (cz/(side-1) - 0.5)*extent_z). Ring — t = i/active_count, theta = t*2π, position = (cos(theta)*extent_x/2, 0, sin(theta)*extent_z/2). Spiral — t = i/active_count, theta = t*2π*4 (4 turns), r = t, position = (cos(theta)*r*extent_x/2, (t-0.5)*extent_y, sin(theta)*r*extent_z/2). Random — wang-hash of (index, seed) per axis, position = (hash-0.5)*extent per axis, uniform within the extent box. Every position is then offset by (origin_x, origin_y, origin_z), the centre the layout sits around. Scale is uniform `base_scale`; rotation is uniform (rot_x, rot_y, rot_z) applied identically to every instance. Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
+    purpose: "Emit an Array<InstanceTransform> of active_count copies laid out exactly as a copies body lays out its own (manifold_core::copy_layout): Grid, Scatter, Line, Ring, Spiral or Random, spaced in multiples of one copy's box width (copy_box) by copy_grid's Spacing, Columns a row or ring, each copy turned by copy_turn, the whole layout placed and turned by copy_frame. Line and Grid grow one way from the first copy on the origin; Ring spreads its copies evenly round the full circle, up to Columns a ring. Each copy's scale is copy_frame's X scale times base_scale (Copy Size). Slots past active_count are zero.",
     inputs: {
-        origin_x: ScalarF32 optional,
-        origin_y: ScalarF32 optional,
-        origin_z: ScalarF32 optional,
+        copy_frame: Transform optional,
+        copy_box: ScalarVec3 optional,
+        copy_turn: ScalarVec3 optional,
+        copy_grid: ScalarVec2 optional,
+        active_count: ScalarF32 optional,
     },
     outputs: {
         instances: Array(InstanceTransform),
@@ -82,265 +57,127 @@ manifold_node_engine::primitive! {
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
             range: None,
-            enum_values: INSTANCE_LAYOUTS,
+            enum_values: &COPY_LAYOUT_LABELS,
         },
-        ParamDef {
-            name: Cow::Borrowed("seed"),
-            label: "Seed",
-            ty: ParamType::Int,
-            default: ParamValue::Float(0.0),
-            range: Some((0.0, 1_000_000.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("extent_x"),
-            label: "Extent X",
-            ty: ParamType::Float,
-            default: ParamValue::Float(4.0),
-            range: Some((0.0, 100.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("extent_y"),
-            label: "Extent Y",
-            ty: ParamType::Float,
-            default: ParamValue::Float(4.0),
-            range: Some((0.0, 100.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("extent_z"),
-            label: "Extent Z",
-            ty: ParamType::Float,
-            default: ParamValue::Float(4.0),
-            range: Some((0.0, 100.0)),
-            enum_values: &[],
-        },
+        ParamDef { name: Cow::Borrowed("columns"), label: "Columns", ty: ParamType::Int, default: ParamValue::Float(COLUMNS_DEFAULT), range: Some((1.0, 64.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("spacing"), label: "Spacing", ty: ParamType::Float, default: ParamValue::Float(SIZE_SPACING_DEFAULT), range: Some(SIZE_SPACING_RANGE), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("box_x"), label: "Copy Width", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("box_y"), label: "Copy Height", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("box_z"), label: "Copy Depth", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("turn_x"), label: "Copy Turn X", ty: ParamType::Angle, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("turn_y"), label: "Copy Turn Y", ty: ParamType::Angle, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("turn_z"), label: "Copy Turn Z", ty: ParamType::Angle, default: ParamValue::Float(0.0), range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)), enum_values: &[] },
         ParamDef {
             name: Cow::Borrowed("base_scale"),
-            label: "Base Scale",
+            label: "Copy Size",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 10.0)),
             enum_values: &[],
         },
-        ParamDef {
-            name: Cow::Borrowed("rot_x"),
-            label: "Rotation X",
-            ty: ParamType::Angle,
-            default: ParamValue::Float(0.0),
-            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("rot_y"),
-            label: "Rotation Y",
-            ty: ParamType::Angle,
-            default: ParamValue::Float(0.0),
-            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("rot_z"),
-            label: "Rotation Z",
-            ty: ParamType::Angle,
-            default: ParamValue::Float(0.0),
-            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
-            enum_values: &[],
-        },
-        ParamDef { name: Cow::Borrowed("origin_x"), label: "Origin X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-100000.0, 100000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("origin_y"), label: "Origin Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-100000.0, 100000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("origin_z"), label: "Origin Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-100000.0, 100000.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "origin_x/y/z are port-shadows-param: wire a live centre (Copy Blend wires its target's copies origin) so the layout follows what it belongs to. max_capacity is chain-build allocation ceiling — pre-allocates max_capacity × 32 bytes. active_count is a free slider. Rotation params apply to every instance uniformly — for per-instance varying rotation, write a downstream transform primitive that perturbs `rot_pad`.",
+    composition_notes: "Wire a copies body's copy_frame, copy_box, copy_turn, copy_grid and active_count (node.rigid_body outputs; Copy Blend's stage takes them from the copies context) to lay a second arrangement of the same copies, then node.blend_copies between the two. Each wired input replaces its params: copy_box the box_x/y/z copy width, copy_turn turn_x/y/z, copy_grid (Columns, Spacing) columns and spacing, active_count its param. An unwired copy_frame is the identity, so one copy sits on the origin. max_capacity is the allocation ceiling (max_capacity × 32 bytes). The places are recomputed only when an input changes.",
     examples: [],
     picker: { label: "Arrange Copies", category: Atom },
-    summary: "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
+    summary: "Lays copies out the way a copies body does, in a grid, line, ring, spiral, pile or random spread, giving each one a position to render at.",
     category: Geometry3D,
     role: Source,
     aliases: ["arrange copies", "generate instance transforms", "instance layout", "scatter", "place"],
-    fusion_kind: Source,
-    wgsl_body: include_str!("shaders/generate_instance_transforms_body.wgsl"),
+    boundary_reason: IoBridge,
+    extra_fields: {
+        // The places last computed, and what they were computed from.
+        places: Vec<InstanceTransform> = Vec::new(),
+        laid: Option<(Arrangement, [u32; 3], u32)> = None,
+        version: u64 = 0,
+        upload: InstanceSnapshotUpload = InstanceSnapshotUpload::default(),
+    },
+}
+
+fn vector<const N: usize>(value: Option<ParamValue>, default: [f32; N]) -> [f32; N] {
+    match (value, N) {
+        (Some(ParamValue::Vec2(v)), 2) => std::array::from_fn(|i| v[i]),
+        (Some(ParamValue::Vec3(v)), 3) => std::array::from_fn(|i| v[i]),
+        _ => default,
+    }
 }
 
 impl Primitive for GenerateInstanceTransforms {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        // Allocation-only param — not used by the shader, but the generated
-        // uniform lays out every PARAM, so pack it (the body ignores it).
-        let max_capacity = match ctx.params.get("max_capacity") {
-            Some(ParamValue::Float(n)) => n.round() as i32,
-            _ => 65_536,
-        };
-        let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 64,
-        };
-        let layout = match ctx.params.get("layout") {
-            Some(ParamValue::Enum(n)) => *n,
-            _ => 0,
-        };
-        let seed = match ctx.params.get("seed") {
-            Some(ParamValue::Float(n)) => n.round() as u32,
-            _ => 0,
-        };
-        let extent_x = ctx.param_f32("extent_x", 4.0);
-
-        let extent_y = ctx.param_f32("extent_y", 4.0);
-
-        let extent_z = ctx.param_f32("extent_z", 4.0);
-
-        let base_scale = ctx.param_f32("base_scale", 1.0);
-
-        let rot_x = ctx.param_f32("rot_x", 0.0);
-
-        let rot_y = ctx.param_f32("rot_y", 0.0);
-
-        let rot_z = ctx.param_f32("rot_z", 0.0);
-        let origin_x = ctx.scalar_or_param("origin_x", 0.0);
-        let origin_y = ctx.scalar_or_param("origin_y", 0.0);
-        let origin_z = ctx.scalar_or_param("origin_z", 0.0);
-
-        let Some(out_buf) = ctx.outputs.array("instances") else {
+        let Some(out) = ctx.outputs.array("instances") else {
             return;
         };
-        let item_size = std::mem::size_of::<InstanceTransform>() as u64;
-        let capacity = (out_buf.size / item_size) as u32;
-        let active_count = active_count.min(capacity);
-
-        let gpu = ctx.gpu_encoder();
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-
-        let uniforms = InstanceUniforms {
-            max_capacity,
-            active_count: active_count as i32,
-            layout,
-            seed: seed as i32,
-            extent_x,
-            extent_y,
-            extent_z,
-            base_scale,
-            rot_x,
-            rot_y,
-            rot_z,
-            origin_x,
-            origin_y,
-            origin_z,
-            dispatch_count: capacity,
-            _pad: 0,
+        let capacity = (out.size / std::mem::size_of::<InstanceTransform>() as u64) as usize;
+        let count = (ctx.scalar_or_param("active_count", 64.0).round().max(0.0) as usize).min(capacity);
+        let layout = match ctx.params.get("layout") {
+            Some(ParamValue::Enum(value)) => *value as f32,
+            Some(ParamValue::Float(value)) => *value,
+            _ => 0.0,
         };
-
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: out_buf,
-                    offset: 0,
-                },
-            ],
-            [capacity.div_ceil(256), 1, 1],
-            "node.arrange_copies",
+        let frame = ctx.inputs.transform("copy_frame").unwrap_or_default();
+        let width = vector(ctx.inputs.scalar("copy_box"), ["box_x", "box_y", "box_z"].map(|name| ctx.param_f32(name, 1.0)));
+        let turn = vector(ctx.inputs.scalar("copy_turn"), ["turn_x", "turn_y", "turn_z"].map(|name| ctx.param_f32(name, 0.0)));
+        let [columns, spacing] = vector(
+            ctx.inputs.scalar("copy_grid"),
+            [ctx.param_f32("columns", COLUMNS_DEFAULT), ctx.param_f32("spacing", SIZE_SPACING_DEFAULT)],
         );
+        let arrangement = Arrangement {
+            layout: CopyLayout::from_value(layout),
+            count,
+            columns: columns.round().clamp(1.0, 64.0) as usize,
+            spacing,
+            turn,
+            origin: frame.pos,
+            rotation: frame.rot_euler,
+        };
+        let scale = frame.scale[0] * ctx.param_f32("base_scale", 1.0);
+        let key = (arrangement, width.map(f32::to_bits), scale.to_bits());
+        if self.laid != Some(key) {
+            self.places.clear();
+            self.places.extend((0..count).map(|index| place(&arrangement, width, scale, index)));
+            self.laid = Some(key);
+            self.version = self.version.wrapping_add(1);
+        }
+        let retained = ctx.outputs_retained();
+        let Some(gpu) = ctx.gpu.as_deref_mut() else {
+            return;
+        };
+        match self.upload.upload(gpu, out, &self.places, self.version, retained) {
+            Ok(true) => {}
+            Ok(false) => ctx.mark_output_content_unchanged(),
+            Err(error) => ctx.error(error),
+        }
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain SOURCE parity oracle (freeze section 12) — generate_instance_
-    //! transforms had no GPU test. The generated kernel (self-contained
-    //! wang_hash; active_count is a param; two-count inactive collapse) must
-    //! reproduce the hand kernel transform-for-transform across ALL four layouts,
-    //! including the inactive-slot zeroing. Deterministic math/hash on-GPU both
-    //! ways → bit-identical.
+/// Copy `index`'s instance: its rest place, as the physics world publishes
+/// a resting copy.
+fn place(arrangement: &Arrangement, width: [f32; 3], scale: f32, index: usize) -> InstanceTransform {
+    let rest = arrangement.rest(width, index);
+    let [x, y, z] = quat_to_render_scene_euler(rest.rotation);
+    InstanceTransform {
+        pos_scale: [rest.position[0], rest.position[1], rest.position[2], scale],
+        rot_pad: [x, y, z, 0.0],
+    }
+}
+
+#[cfg(test)]
+mod tests {
     use super::*;
 
-    fn dispatch_git(wgsl: &str, capacity: u32, uniform: &[u8]) -> Vec<InstanceTransform> {
-        let device = manifold_gpu::testkit::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "git-oracle");
-        let out_buf = device.create_buffer_shared(capacity as u64 * 32);
-        let mut enc = device.create_encoder("git-oracle");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 },
-            ],
-            [capacity.div_ceil(64), 1, 1],
-            "git-oracle",
-        );
-        enc.commit_and_wait_completed();
-        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
-        let slice =
-            unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, capacity as usize) };
-        slice.to_vec()
-    }
-
     #[test]
-    fn generated_instance_transforms_match_hand_kernel_all_layouts() {
-        const CAPACITY: u32 = 16;
-        let active = 10u32; // < capacity → exercises inactive collapse
-        let seed = 42u32;
-        let (ex, ey, ez) = (4.0f32, 3.0f32, 5.0f32);
-        let base_scale = 1.25f32;
-        let (rx, ry, rz) = (0.1f32, 0.2f32, 0.3f32);
-        // The generated kernel centres the layout on its origin; the hand
-        // kernel predates it, so a live slot sits `origin` further along.
-        let origin = [2.5f32, -1.0, 7.0];
-
-        for layout in 0u32..4u32 {
-            // Hand layout: active_count(u32), capacity(u32), layout(u32), seed(u32),
-            //   extent_x/y/z, base_scale, rot_x/y/z, pad.
-            let mut hand = Vec::new();
-            hand.extend_from_slice(&active.to_le_bytes());
-            hand.extend_from_slice(&CAPACITY.to_le_bytes());
-            hand.extend_from_slice(&layout.to_le_bytes());
-            hand.extend_from_slice(&seed.to_le_bytes());
-            for v in [ex, ey, ez, base_scale, rx, ry, rz] {
-                hand.extend_from_slice(&v.to_le_bytes());
-            }
-            hand.extend_from_slice(&[0u8; 4]);
-
-            // Generated layout: max_capacity(i32), active_count(i32), layout(u32),
-            //   seed(i32), extent_x/y/z, base_scale, rot_x/y/z, dispatch_count(u32).
-            let mut gen_bytes = Vec::new();
-            gen_bytes.extend_from_slice(&65_536i32.to_le_bytes());
-            gen_bytes.extend_from_slice(&(active as i32).to_le_bytes());
-            gen_bytes.extend_from_slice(&layout.to_le_bytes());
-            gen_bytes.extend_from_slice(&(seed as i32).to_le_bytes());
-            for v in [ex, ey, ez, base_scale, rx, ry, rz, origin[0], origin[1], origin[2]] {
-                gen_bytes.extend_from_slice(&v.to_le_bytes());
-            }
-            gen_bytes.extend_from_slice(&CAPACITY.to_le_bytes());
-            gen_bytes.extend_from_slice(&[0u8; 4]);
-
-            let hand_wgsl = include_str!("shaders/generate_instance_transforms.wgsl");
-            let gen_wgsl =
-                manifold_node_engine::freeze::codegen::standalone_for_spec::<GenerateInstanceTransforms>()
-                    .expect("generate_instance_transforms buffer codegen");
-
-            let from_hand = dispatch_git(hand_wgsl, CAPACITY, &hand);
-            let from_gen = dispatch_git(&gen_wgsl, CAPACITY, &gen_bytes);
-
-            for i in 0..CAPACITY as usize {
-                for c in 0..4 {
-                    let shift = if (i as u32) < active { origin.get(c).copied().unwrap_or(0.0) } else { 0.0 };
-                    assert!(
-                        (from_hand[i].pos_scale[c] + shift - from_gen[i].pos_scale[c]).abs() < 1e-5,
-                        "layout {layout} slot {i} pos_scale[{c}]: hand={} gen={}",
-                        from_hand[i].pos_scale[c],
-                        from_gen[i].pos_scale[c]
-                    );
-                    assert!(
-                        (from_hand[i].rot_pad[c] - from_gen[i].rot_pad[c]).abs() < 1e-6,
-                        "layout {layout} slot {i} rot_pad[{c}]"
-                    );
-                }
-            }
-        }
+    fn one_unwired_copy_is_the_identity_instance() {
+        let arrangement = Arrangement {
+            layout: CopyLayout::Grid,
+            count: 1,
+            columns: COLUMNS_DEFAULT as usize,
+            spacing: SIZE_SPACING_DEFAULT,
+            turn: [0.0; 3],
+            origin: [0.0; 3],
+            rotation: [0.0; 3],
+        };
+        let instance = place(&arrangement, [1.0; 3], 1.0, 0);
+        assert_eq!(instance.pos_scale, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(instance.rot_pad, [0.0; 4]);
     }
 }

@@ -12,8 +12,9 @@
 //! copied.
 //!
 //! A swarm emitting from a Group seeds from this mesh, so every part emits
-//! at its own place. Wired to the seed's `reset_trigger`, it merges only on
-//! that value's integer edges (and the first frame), as the seed reads it.
+//! at its own place. Wired to the seed's `reset_trigger`, it merges on that
+//! value's integer edges (and the first frame), and again only when its
+//! storage was not kept, so the mesh is whole on any frame the seed reads.
 //!
 //! Hand-written because the port list follows `parts` (`node.camera_switch`
 //! pattern); one dispatch per part of one copy kernel.
@@ -206,7 +207,10 @@ impl EffectNode for MergeMeshes {
             let current = v.round() as i32;
             let edge = self.last_reset_trigger != Some(current);
             self.last_reset_trigger = Some(current);
-            if !edge {
+            // Between edges the last merge stands while its storage does: a
+            // seed placing new particles for a Count rise reads it.
+            if !edge && ctx.outputs_retained() {
+                ctx.mark_outputs_unchanged();
                 return;
             }
         }

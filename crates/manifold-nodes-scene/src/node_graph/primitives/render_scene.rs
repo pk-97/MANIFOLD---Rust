@@ -1764,6 +1764,15 @@ fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderF
         RtAccelError::Encode(_) => FrameRenderFailure::RtEncode,
     }
 }
+
+/// What the card says while ray tracing sits out a frame.
+fn rt_paused_reason(failure: FrameRenderFailure) -> &'static str {
+    match failure {
+        FrameRenderFailure::RtAllocation | FrameRenderFailure::SurfaceAllocation => "Ray tracing paused: not enough GPU memory for this scene. Drawing without it.",
+        FrameRenderFailure::InvalidGeometry => "Ray tracing paused: an object's shape is invalid. Drawing without it.",
+        _ => "Ray tracing paused for this frame. Drawing without it.",
+    }
+}
 // ---- Pass-1 draw record (was local to evaluate(); hoisted for the BUG-trh7
 // stage-2 pass methods — Pass 1 produces, the RT block + Pass 2 consume).
 // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): one ObjectDraw per wired,
@@ -2710,10 +2719,13 @@ impl RenderScene {
                     pre.reset_decision |= changed;
                     Some((textures, topo, content))
                 }
+                // Maintenance prepares whatever needs it in this frame, so an
+                // error here is a real failure (memory admission refusing a
+                // huge Count mid-drag): the frame draws raster, the stage
+                // hears once (NodeErrors), and the next frame tries again.
                 Err(failure) => {
-                    ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(failure));
-                    Self::fail_frame(ctx, None, format!("RT current-frame update failed: {failure:?}"));
-                    return;
+                    ctx.error(rt_paused_reason(failure));
+                    None
                 }
             }
         } else { None };

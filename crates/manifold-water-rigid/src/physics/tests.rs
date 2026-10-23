@@ -1278,9 +1278,8 @@ fn paused_animated_copy_edit_and_undo_update_every_copy_without_ticks() {
     prototype.transform.pos[0] = 5.0;
     prototype.transform.rot_euler[1] = 0.25;
     let edited = advance(prototype.clone());
-    // The group moves and turns as one: its centre moves 5 m, every copy turns.
-    let centre = |poses: &[Transform]| (poses[0].pos[0] + poses[1].pos[0]) * 0.5;
-    assert!((centre(&edited) - centre(&before) - 5.0).abs() < 1.0e-5);
+    // The group moves and turns as one about its first copy, which sits on its origin: that copy moves 5 m, every copy turns.
+    assert!((edited[0].pos[0] - before[0].pos[0] - 5.0).abs() < 1.0e-5);
     for (old, new) in before.iter().zip(&edited) {
         assert!((new.rot_euler[1] - old.rot_euler[1] - 0.25).abs() < 1.0e-5);
     }

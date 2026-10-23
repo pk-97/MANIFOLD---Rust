@@ -128,7 +128,6 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     }
     let state = b.add(owner, "state", "node.array_feedback");
     let mover = b.add(owner, "move", "node.move_swarm");
-    b.set_number(mover, "active_count", SWARM_MAX_COUNT);
     let copies = b.add(owner, "copies", "node.swarm_to_copies");
     // How many particles are live (Count): the draw reads only those, so a
     // stage that nests the copies (the Scene Loop) sizes by Count, not by
@@ -136,6 +135,8 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     let live = b.add(owner, "live_count", "node.value");
     b.wire(forces, "epoch", seed, "reset_trigger");
     b.wire(forces, "epoch", state, "reset_trigger");
+    // A Count rise copies the seed's new particles into the loop.
+    b.wire(live, "out", state, "active_count");
     b.wire(seed, "particles", state, "seed");
     b.wire(state, "out", mover, "in");
     b.wire(mover, "out", state, "in");
@@ -196,6 +197,8 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     b.swarms.push(item.id.clone());
     b.rows(item);
     b.follow(seed, "active_count", live, "value");
+    // Only the live particles move.
+    b.follow(seed, "active_count", mover, "active_count");
     // Only the live particles carry the drawn layout, so the nest sizes by
     // Count, not by the seed's capacity.
     if let (Some(seed), Some(nest)) = (b.id(owner, "seed"), b.id(owner, "nest")) {

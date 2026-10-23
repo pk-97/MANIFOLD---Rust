@@ -466,8 +466,9 @@ mod every_param_has_a_row {
             _ => false,
         });
         let plain_material = owner == "scene" && role == "default_material";
-        // A modifier frame's rest centre is placed by the compiler, not a row.
-        let frame_centre = role.starts_with("centre:")
+        // A modifier frame's rest centre, and the Scene Loop's rest box of
+        // each object it measures, are placed by the compiler, not a row.
+        let frame_centre = (role.starts_with("centre:") || role.starts_with("box:"))
             && doc.find(&ItemId::new(owner)).is_some_and(|item| item.kind() == ItemKind::Modifier);
         let scene_level = SCENE_LEVEL_ROWS.iter().any(|row| matches!(row.reach, Reach::Scene(r) if r == role) && row.param == param);
         found || family || water || plain_material || frame_centre || (owner == "scene" && scene_level)
@@ -1147,14 +1148,14 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
         }
         doc.insert(None, end + 1 + k, Item::new(ItemId::new(id), id, card)).unwrap();
     }
-    // The default cell holds what is drawn: the swarm's 6 m spread, so its
-    // tiles start apart (twice its depth, one of swarm and one of air).
-    let spacing = |doc: SceneDoc| values(scene_layer(doc).gen_params().unwrap()).into_iter().find(|(id, ..)| id == "loop.cell_size").unwrap().2;
-    assert!((spacing(doc.clone()) - 12.0).abs() < 1e-4, "the swarm's spread sizes the cell");
+    // Spacing, the gap between tiles, starts at the depth of what is drawn:
+    // the swarm's 6 m spread, so its tiles start a spread apart.
+    let spacing = |doc: SceneDoc| values(scene_layer(doc).gen_params().unwrap()).into_iter().find(|(id, ..)| id == "loop.spacing").unwrap().2;
+    assert!((spacing(doc.clone()) - 6.0).abs() < 1e-4, "the swarm's spread sizes the gap");
     let mut no_swarm = doc.clone();
     no_swarm.remove(&ItemId::new("swarm")).unwrap();
     // A Copies row at its defaults lies across the travel axis: one cube deep.
-    assert!((spacing(no_swarm) - 2.0).abs() < 1e-4, "the copies' row sizes the cell");
+    assert!((spacing(no_swarm) - 1.0).abs() < 1e-4, "the copies' row sizes the gap");
     // A Water's particle draws (foam, spray, bubbles, Physics View dots)
     // have no live count and stay out of the corridor.
     let end = doc.items.len();
@@ -1182,7 +1183,9 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
         let (switch, _) = source(object.id, "instances");
         let (nest, port) = source(switch.id, "in_1");
         assert_eq!((nest.type_id.as_str(), port), ("node.nest_copies", "copies"), "{}: the tiles carry the copies", object.node_id);
-        assert_eq!(source(nest.id, "outer").0.type_id, "node.scene_array", "one copy set per corridor cell");
+        let (cells, _) = source(nest.id, "outer");
+        assert_eq!(cells.type_id, "node.scene_array", "one copy set per corridor cell");
+        assert_eq!(source(cells.id, "cell_size").0.type_id, "node.loop_cell", "the cells are as long as the live measure");
         assert_eq!(source(nest.id, "inner").0.type_id, "node.reflect_array", "the mirror shaped one tile before the tiling");
         let (count, _) = source(object.id, "instance_count");
         assert_eq!(source(count.id, "in_1"), (nest, "count"), "{}: the draw reads the live product", object.node_id);
@@ -1194,6 +1197,138 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
         assert_eq!((live.type_id.as_str(), port), want, "{}: the live count", object.node_id);
     }
     prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
+}
+
+thread_local! {
+    static CELL: Cell<Option<f32>> = const { Cell::new(None) };
+}
+
+/// Reads the Scene Loop's live cell length.
+struct CellProbe(EffectNodeType);
+
+impl EffectNode for CellProbe {
+    fn is_liveness_root(&self) -> bool {
+        true
+    }
+    fn type_id(&self) -> &EffectNodeType {
+        &self.0
+    }
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        static INPUTS: [NodeInput; 1] = [NodePort {
+            name: Cow::Borrowed("cell"),
+            ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
+            kind: PortKind::Input,
+            required: true,
+        }];
+        &INPUTS
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &[]
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &[]
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        CELL.set(match ctx.inputs.scalar("cell") {
+            Some(ParamValue::Float(value)) => Some(value),
+            _ => None,
+        });
+    }
+}
+
+/// The Scene Loop's cell follows the live rows on the frame they change, as
+/// Blender's Array follows its object: Copies Columns and Count, Copies
+/// Spacing and an Object's scale all move the tiles at once. Bodies physics
+/// moves never move them: the cell measures where things start
+/// (SCENE_REFINEMENT_DESIGN.md P3b).
+#[test]
+fn the_loop_cell_follows_live_rows_and_never_a_moving_body() {
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType, ObjectFields, Shape};
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(cube), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        cube.copies = true;
+        cube.physics = PhysicsSetting::Body;
+    }
+    let ball = ObjectFields { shape: Shape::Cube, physics: PhysicsSetting::Body, ..ObjectFields::default() };
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("ball"), "Ball", ItemFields::Object(ball))).unwrap();
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields { modifier: ModifierType::SceneLoop, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+    }
+    doc.insert(None, end + 1, Item::new(ItemId::new("loop"), "loop", card)).unwrap();
+    let mut layer = scene_layer(doc);
+    let fx = layer.gen_params_mut().unwrap();
+    // The ball starts 3 m back along the corridor and gravity pulls along it, so a
+    // measure that read moving bodies would change every frame.
+    for (id, value) in [("ball.pos_z", -3.0), ("world.gravity_y", 0.0), ("world.gravity_z", -9.81)] {
+        assert!(fx.set_base_param(id, value), "the scene has {id}");
+    }
+
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.loop_cell", || Box::new(CellProbe(EffectNodeType::new("test.loop_cell"))));
+    registry.register("test.scene_pose", || Box::new(PoseProbe(EffectNodeType::new("test.scene_pose"))));
+    // The load pass runs on the sealed layer graph, as the runtime loads it.
+    let prepared = manifold_node_engine::load::expand::prepare_scene_modifiers(fx.graph.as_ref().unwrap(), &registry).unwrap();
+    let mut def = manifold_core::flatten::flatten_groups(&prepared.def).unwrap();
+    let id = |def: &EffectGraphDef, node_id: &str| def.nodes.iter().find(|n| n.node_id.as_str().ends_with(node_id)).unwrap_or_else(|| panic!("no {node_id}")).id;
+    let (cell, pose) = (id(&def, "scene:loop_cell"), id(&def, "ball:pose_frame"));
+    let next = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
+    for (offset, node_id, type_id) in [(0, "cell_probe", "test.loop_cell"), (1, "pose_probe", "test.scene_pose")] {
+        def.nodes.push(serde_json::from_value(serde_json::json!({"id": next + offset, "nodeId": node_id, "typeId": type_id})).unwrap());
+    }
+    for (from_node, from_port, to_node, to_port) in [(cell, "cell_size", next, "cell"), (pose, "transform", next + 1, "pose")] {
+        def.wires.push(EffectGraphWire { from_node, from_port: from_port.into(), to_node, to_port: to_port.into() });
+    }
+    let mut runtime = PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).unwrap();
+    runtime.apply_param_values(&fx.params);
+
+    let mut frame_count = 0;
+    let mut step = |runtime: &mut PresetRuntime| {
+        CELL.set(None);
+        POSE.set(None);
+        let seconds = f64::from(frame_count) / 30.0;
+        runtime.execute_frame(FrameTime { seconds: Seconds(seconds), beats: Beats(seconds * 2.0), delta: Seconds(1.0 / 30.0), frame_count: i64::from(frame_count) });
+        frame_count += 1;
+        (CELL.get().expect("the cell measure ran"), POSE.get().expect("the ball draws at its pose"))
+    };
+    let write = |fx: &mut PresetInstance, runtime: &mut PresetRuntime, id: &str, value: f32| {
+        assert!(fx.set_base_param(id, value), "the scene has {id}");
+        runtime.apply_param_values(&fx.params);
+    };
+    let close = |cell: f32, want: f32, what: &str| assert!((cell - want).abs() < 1e-4, "{what}: cell {cell}, want {want}");
+
+    // Four copies in one row across the corridor, one cube deep (z from -0.5
+    // to 0.5), and the ball from -3.5 to -2.5: 4 m of scene. Spacing starts
+    // at the 1 m the compiler saw.
+    close(step(&mut runtime).0, 4.0 + 1.0, "at the start");
+    // Nine copies in three rows of three, growing along +Z from the first:
+    // rows at 0, 1.1 and 2.2 m, copies to 2.7.
+    write(fx, &mut runtime, "cube.columns", 3.0);
+    write(fx, &mut runtime, "cube.count", 9.0);
+    close(step(&mut runtime).0, 6.2 + 1.0, "Columns and Count");
+    // Spacing 2 sets the rows 2 m apart: copies to 4.5.
+    write(fx, &mut runtime, "cube.spacing", 2.0);
+    close(step(&mut runtime).0, 8.0 + 1.0, "Copies Spacing");
+    // The ball three times as deep: from -4.5 to -1.5.
+    write(fx, &mut runtime, "ball.scale_z", 3.0);
+    let (scaled, start) = step(&mut runtime);
+    close(scaled, 9.0 + 1.0, "the ball's scale");
+    // The Scene Loop's Spacing is the gap on top.
+    write(fx, &mut runtime, "loop.spacing", 0.5);
+    close(step(&mut runtime).0, 9.0 + 0.5, "the gap");
+
+    let mut moved = start;
+    for _ in 0..20 {
+        let (cell, pose) = step(&mut runtime);
+        close(cell, 9.5, "a moving body");
+        moved = pose;
+    }
+    let (from, to) = (start.world()[3][2], moved.world()[3][2]);
+    assert!(to < from - 0.5, "the ball falls down the corridor: {from} then {to}");
 }
 
 /// Only smooth bends split a built-in shape; a fragment cut keeps the cube

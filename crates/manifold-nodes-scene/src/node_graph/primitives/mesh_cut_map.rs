@@ -1024,6 +1024,139 @@ mod tests {
         }
     }
 
+    /// Walking only the bands a triangle reaches keeps every fragment: at 64
+    /// bands, each triangle's fragments still cover its whole area, and none
+    /// falls outside its band.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn gpu_bands_cover_each_triangle_whole() {
+        let hash = |index: u32| {
+            let mut value = index.wrapping_mul(0x9e37_79b9) ^ 0x85eb_ca6b;
+            value ^= value >> 16;
+            value = value.wrapping_mul(0x7feb_352d);
+            value ^= value >> 15;
+            value as f32 / u32::MAX as f32 * 2.0 - 1.0
+        };
+        let triangles = 2048u32;
+        let mut vertices = Vec::with_capacity(triangles as usize * 3);
+        for triangle in 0..triangles {
+            // From slivers inside one band to triangles across all of them.
+            let size = 0.002 + 2.0 * (triangle as f32 / triangles as f32).powi(3);
+            let centre = [hash(triangle * 7), hash(triangle * 7 + 1), hash(triangle * 7 + 2)];
+            for corner in 0..3 {
+                let offset = |axis: u32| hash(triangle * 7 + 3 + corner * 3 + axis) * size;
+                let position = [centre[0] + offset(0), centre[1] + offset(1), centre[2] + offset(2)];
+                vertices.push(MeshVertex { position, ..bytemuck::Zeroable::zeroed() });
+            }
+        }
+        let bands = 64;
+        let capacity = triangles * 3 + CUT_MAP_EXTRA_RECORDS;
+        let (output, status) = dispatch_shader(&vertices, 0, bands, capacity);
+        assert_eq!(status[1], 0, "no error");
+        let full = 3f32.sqrt() / 2.0;
+        let mut covered = vec![0.0f32; triangles as usize];
+        for record in output[..status[0] as usize].chunks_exact(3) {
+            let triangle = record[0].position[3] as usize;
+            let [a, b, c] = [0, 1, 2].map(|k| glam::Vec3::from_slice(&record[k].position[..3]));
+            covered[triangle] += (b - a).cross(c - a).length() / 2.0;
+            // Projected along y, the fragment stays inside one band.
+            let corners = [0, 1, 2].map(|k| glam::Vec3::from_slice(&vertices[triangle * 3 + k].position));
+            let ys = [a, b, c].map(|bary| (corners[0] * bary.x + corners[1] * bary.y + corners[2] * bary.z).y);
+            let (low, high) = (ys.iter().copied().fold(f32::INFINITY, f32::min), ys.iter().copied().fold(f32::NEG_INFINITY, f32::max));
+            let band_of = |y: f32| ((0.5 + 0.5 * y) * bands as f32).floor().clamp(0.0, bands as f32 - 1.0);
+            if high - low > 2e-4 {
+                assert_eq!(band_of(low + 1e-4), band_of(high - 1e-4), "triangle {triangle}: a fragment spans two bands");
+            }
+        }
+        for (triangle, area) in covered.iter().enumerate() {
+            assert!((area - full).abs() < 1e-3, "triangle {triangle}: fragments cover {area} of {full}");
+        }
+    }
+
+    /// A photoscan-sized cut: every triangle keeps its place in the map and
+    /// the scan's GPU time is printed (median of nine), so a drag of Bands
+    /// or Direction on a big scan can be timed against its frame.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn gpu_scan_orders_a_photoscan_and_reports_its_time() {
+        let device = manifold_gpu::testkit::test_device();
+        for triangles in [131_072u32, 1_048_576] {
+            let vertex = |position| MeshVertex { position, ..bytemuck::Zeroable::zeroed() };
+            let mut vertices = Vec::with_capacity(triangles as usize * 3);
+            for _ in 0..triangles {
+                vertices.extend([vertex([0.0, 0.0, 0.0]), vertex([1.0, 0.0, 0.0]), vertex([0.0, 1.0, 0.0])]);
+            }
+            let reference = device.create_buffer_shared(std::mem::size_of_val(vertices.as_slice()) as u64);
+            unsafe { reference.write(0, bytemuck::cast_slice(&vertices)) };
+            let blocks = triangles.div_ceil(256);
+            let words = u64::from(triangles + blocks);
+            let counts = device.create_buffer_shared(words * 4);
+            let prefix = device.create_buffer_shared(words * 4);
+            let status = device.create_buffer_shared(16);
+            status.zero_fill();
+            let live = device.create_buffer_shared(4);
+            let output_capacity = triangles * 3;
+            let map = device.create_buffer_shared(u64::from(output_capacity) * VEC4_VERTEX_SIZE);
+            let uniforms = CutMapUniforms {
+                mode: 0,
+                bands: 1,
+                triangle_count: triangles,
+                candidate_count: triangles,
+                output_capacity,
+                _pad0: 0,
+                cell_size: 1.0,
+                scale: 1.0,
+                source_offset: [0.0; 3],
+                _pad1: 0.0,
+                direction: [0.0, 1.0, 0.0],
+                _pad2: 0.0,
+            };
+            let pipeline = |entry| device.create_compute_pipeline(SHADER, entry, entry);
+            let (count, scan, emit) = (pipeline("count_main"), pipeline("scan_main"), pipeline("emit_main"));
+            let bindings = [
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &reference, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &counts, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: &prefix, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: &status, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: &map, offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: &live, offset: 0 },
+            ];
+            // The scan overwrites the block tails it reads, so each timed
+            // scan follows a fresh count.
+            let mut times = Vec::new();
+            let mut count_times = Vec::new();
+            for _ in 0..9 {
+                let mut encoder = device.create_encoder("cut-map-scan-count");
+                encoder.dispatch_compute(&count, &bindings, [blocks, 1, 1], "count");
+                count_times.push(encoder.commit_and_wait_profiled(&device).total_ms);
+                let mut encoder = device.create_encoder("cut-map-scan");
+                encoder.dispatch_compute(&scan, &bindings, [1, 1, 1], "scan");
+                times.push(encoder.commit_and_wait_profiled(&device).total_ms);
+            }
+            let mut encoder = device.create_encoder("cut-map-scan-emit");
+            encoder.dispatch_compute(&emit, &bindings, [blocks, 1, 1], "emit");
+            let emit_ms = encoder.commit_and_wait_profiled(&device).total_ms;
+            times.sort_by(f64::total_cmp);
+            count_times.sort_by(f64::total_cmp);
+            println!(
+                "CUT_MAP_SCAN triangles={triangles} blocks={blocks} scan_ms={:.4} count_ms={:.4} emit_ms={emit_ms:.4}",
+                times[4], count_times[4]
+            );
+            let status = unsafe { *(status.mapped_ptr().expect("shared status") as *const [u32; 4]) };
+            assert_eq!(status[1], 0, "no error");
+            assert_eq!(status[0], output_capacity, "every triangle is counted");
+            let live = unsafe { *(live.mapped_ptr().expect("shared live count") as *const u32) };
+            assert_eq!(live, output_capacity);
+            let records = unsafe {
+                std::slice::from_raw_parts(map.mapped_ptr().expect("shared map") as *const Vec4Vertex, output_capacity as usize)
+            };
+            for (triangle, record) in records.chunks_exact(3).enumerate() {
+                assert!(record.iter().all(|r| r.position[3] == triangle as f32), "triangle {triangle} sits at its own place");
+            }
+        }
+    }
+
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn gpu_prefix_rejects_single_block_aggregate_overflow() {

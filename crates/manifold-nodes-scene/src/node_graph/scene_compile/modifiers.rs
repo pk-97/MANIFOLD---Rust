@@ -16,9 +16,8 @@
 //! to the frame's rest centre, so the group bends as one piece wherever its
 //! parts sit and as they move (Blender's deform about an origin object). A
 //! skinned, animated or morphing part bends its posed result. A Copy card
-//! (Copy Wave, Jitter, Noise, Blend) takes the frame its target's copies
-//! live in instead: the world its copies body lays them out in, with the
-//! body's origin as the target's offset ([`copies_plan`]). One instance
+//! (Copy Wave, Jitter, Noise, Blend) takes the world its copies body lays
+//! the copies out in, with no offset ([`copies_plan`]). One instance
 //! per frame, all driven by the card's one set of manifest params,
 //! `<card id>.<param>`.
 //!
@@ -148,7 +147,7 @@ fn emit(
         }
         let role = &frame.role;
         let mut plan = if acts_on_copies(card.modifier) {
-            copies_plan(b, item, &frame)
+            copies_plan(b, &frame)
         } else {
             plan(b, item, &frame, lineage, card.modifier == ModifierType::Shatter)
         };
@@ -381,43 +380,15 @@ fn plan(
     FramePlan { placements, radius }
 }
 
-/// A Copy card's frame is where its target's copies live. A copies body lays
-/// them out in the world about its own transform, so a target's offset is
-/// that origin, read live as the target moves: Copy Blend's second layout
-/// sits around it. Copies that live in their surface's frame (On Surface),
-/// and a target with no copies, sit at their own origin.
-fn copies_plan(b: &mut Builder<'_>, card: &Item, frame: &CardFrame) -> FramePlan {
-    let mut placements = Vec::with_capacity(frame.members.len());
-    for drawn in &frame.members {
-        let Some(target) = b.node_id_of(drawn.object) else {
-            continue;
-        };
-        let (offset, live) = copies_origin(b, card, &frame.role, drawn).map_or(([0.0; 3], None), |(rest, live)| (rest, Some(live)));
-        placements.push(TargetPlacement { target, offset, live, radius: own_radius(drawn) });
-    }
+/// A Copy card's frame: copy modifiers move whole copies through their
+/// instances, which the copies body already lays out in the world, so a
+/// target needs no offset. Copy Blend reads the body's own layout rows
+/// through the copies context instead.
+fn copies_plan(b: &mut Builder<'_>, frame: &CardFrame) -> FramePlan {
+    let placements = frame.members.iter()
+        .filter_map(|drawn| Some(TargetPlacement { target: b.node_id_of(drawn.object)?, offset: [0.0; 3], live: None, radius: own_radius(drawn) }))
+        .collect();
     FramePlan { placements, radius: MIN_RADIUS }
-}
-
-/// The origin `drawn`'s copies body lays its copies out about: the body's
-/// transform at rest (translation only, as the compiler starts it), and the
-/// node that reads it live.
-fn copies_origin(b: &mut Builder<'_>, card: &Item, role: &str, drawn: &Drawn) -> Option<([f64; 3], NodeId)> {
-    let (body, port) = b.input(drawn.object, "instances")?;
-    if port != "instances" || b.node_type(body) != Some(BODY_TYPE_ID) {
-        return None;
-    }
-    let (transform, from_port) = b.input(body, "transform")?;
-    let mut rest = [0.0; 3];
-    let mut at = Some(transform);
-    while let Some(node) = at {
-        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
-            rest[axis] += b.started(node, param).map_or(0.0, f64::from);
-        }
-        at = b.input(node, "parent").map(|(above, _)| above);
-    }
-    let origin = b.add_named(node(card.id.as_str(), &format!("origin:{role}:{}", drawn.item)), "node.transform_components");
-    b.wire(transform, &from_port, origin, "transform");
-    Some((rest, b.node_id_of(origin)?))
 }
 
 /// The transform a Group's parts are placed in: its frame, or `None` at a

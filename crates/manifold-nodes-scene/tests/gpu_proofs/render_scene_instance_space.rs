@@ -18,10 +18,11 @@ use manifold_node_engine::scene::camera::Camera;
 
 const CAMERA_POS: [f32; 3] = [0.0, 11.0, 7.5];
 const FOV_Y: f32 = 1.0;
-/// The copies: a Ring of three, radius 3, every copy turned by `COPY_YAW`.
+/// The copies: a Ring of three, radius 3, each copy facing along the ring and
+/// turned a further `COPY_YAW`.
 const COPIES: usize = 3;
 const RING_RADIUS: f32 = 3.0;
-const COPY_YAW: f32 = 1.2;
+const COPY_YAW: f32 = 2.6;
 /// The group's parent transform and the two parts' places inside it.
 const PARENT: [f32; 3] = [0.0, 0.0, 0.5];
 const PART_RED: [f32; 3] = [1.5, 0.0, 0.0];
@@ -30,20 +31,20 @@ const PART_GREEN: [f32; 3] = [-1.5, 0.0, 0.0];
 const ECHO_RADIUS: f32 = 1.0;
 const ECHO_YAW: f32 = 0.8;
 
-fn copies_node(id: u32, node_id: &str, extent: f32, rot_y: f32) -> String {
+/// A Ring of [`COPIES`] at `radius`, each copy turned by `turn_y` beyond the
+/// ring's own facing. With Columns = COPIES and a 1 m copy, neighbours sit
+/// Spacing apart on the chord, so Spacing = radius · 2 sin(π / COPIES).
+fn copies_node(id: u32, node_id: &str, radius: f32, turn_y: f32) -> String {
+    let spacing = radius * 2.0 * (std::f32::consts::PI / COPIES as f32).sin();
     format!(
         r#"{{"id":{id},"typeId":"node.arrange_copies","nodeId":"{node_id}","params":{{
             "max_capacity":{{"type":"Int","value":{COPIES}}},
             "active_count":{{"type":"Int","value":{COPIES}}},
-            "layout":{{"type":"Enum","value":1}},
-            "seed":{{"type":"Int","value":0}},
-            "extent_x":{{"type":"Float","value":{extent}}},
-            "extent_y":{{"type":"Float","value":0.0}},
-            "extent_z":{{"type":"Float","value":{extent}}},
-            "base_scale":{{"type":"Float","value":1.0}},
-            "rot_x":{{"type":"Float","value":0.0}},
-            "rot_y":{{"type":"Float","value":{rot_y}}},
-            "rot_z":{{"type":"Float","value":0.0}}}}}}"#
+            "layout":{{"type":"Enum","value":3}},
+            "columns":{{"type":"Int","value":{COPIES}}},
+            "spacing":{{"type":"Float","value":{spacing}}},
+            "box_z":{{"type":"Float","value":0.5}},
+            "turn_y":{{"type":"Float","value":{turn_y}}}}}}}"#
     )
 }
 
@@ -101,7 +102,7 @@ fn scene_json() -> String {
             "fov_y":{{"type":"Float","value":{FOV_Y}}}}}}}"#,
             CAMERA_POS[0], CAMERA_POS[1], CAMERA_POS[2]
         ),
-        copies_node(2, "copies", RING_RADIUS * 2.0, COPY_YAW),
+        copies_node(2, "copies", RING_RADIUS, COPY_YAW),
         transform_node(3, "group", PARENT, 0.0),
         quad_nodes(4, "red", 0.8),
         material_node(6, "red_mat", [1.0, 0.0, 0.0]),
@@ -111,7 +112,7 @@ fn scene_json() -> String {
         material_node(12, "green_mat", [0.0, 1.0, 0.0]),
         transform_node(13, "green_part", PART_GREEN, 0.0),
         object_node(14, "green_obj", 1),
-        copies_node(16, "echoes", ECHO_RADIUS * 2.0, 0.0),
+        copies_node(16, "echoes", ECHO_RADIUS, 0.0),
         quad_nodes(17, "blue", 0.5),
         material_node(19, "blue_mat", [0.0, 0.0, 1.0]),
         transform_node(20, "echo_turn", [0.0; 3], ECHO_YAW),
@@ -232,6 +233,12 @@ fn ring(i: usize, radius: f32) -> [f32; 3] {
     [theta.cos() * radius, 0.0, theta.sin() * radius]
 }
 
+/// Ring copy `i`'s turn about Y: its X runs along the ring, then `turn_y`.
+fn facing(i: usize, turn_y: f32) -> f32 {
+    let theta = i as f32 / COPIES as f32 * std::f32::consts::TAU;
+    turn_y - (theta + std::f32::consts::FRAC_PI_2)
+}
+
 #[test]
 fn group_space_copies_draw_every_part_and_object_space_echoes_stay_put() {
     let (bytes, w, h) = render();
@@ -240,7 +247,7 @@ fn group_space_copies_draw_every_part_and_object_space_echoes_stay_put() {
     for i in 0..COPIES {
         for (part, colour, name) in [(PART_RED, 0, "red"), (PART_GREEN, 1, "green")] {
             // Group space: parent · instance · part.
-            let right = add(PARENT, add(ring(i, RING_RADIUS), yaw(COPY_YAW, part)));
+            let right = add(PARENT, add(ring(i, RING_RADIUS), yaw(facing(i, COPY_YAW), part)));
             assert_eq!(colour_at(&bytes, w, h, &camera, right), Some(colour), "copy {i} draws its {name} part at {right:?}");
             // Object space would have put it at parent · part · instance.
             let wrong = add(PARENT, add(part, ring(i, RING_RADIUS)));

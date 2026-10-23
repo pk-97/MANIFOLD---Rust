@@ -17,13 +17,6 @@
         "wholeNumbers": true
       },
       {
-        "id": "cell_size",
-        "name": "Spacing",
-        "min": 0.01,
-        "max": 1000.0,
-        "defaultValue": 10.0
-      },
-      {
         "id": "jitter_amount",
         "name": "Jitter",
         "min": 0.0,
@@ -48,16 +41,6 @@
           "kind": "node",
           "nodeId": "scene_array",
           "param": "pattern_length"
-        }
-      },
-      {
-        "id": "cell_size",
-        "label": "Spacing",
-        "defaultValue": 10.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "scene_array",
-          "param": "cell_size"
         }
       },
       {
@@ -96,6 +79,14 @@
               "source": {
                 "previous": {
                   "endpoint": "camera"
+                }
+              }
+            },
+            {
+              "port": "cell_size",
+              "source": {
+                "context": {
+                  "value": "loopCell"
                 }
               }
             }
@@ -146,6 +137,10 @@
             {
               "name": "camera",
               "portType": "Camera"
+            },
+            {
+              "name": "cell_size",
+              "portType": "Scalar(F32)"
             }
           ],
           "outputs": [
@@ -195,6 +190,12 @@
             "nodeId": "loop_corridor_output",
             "typeId": "system.group_output",
             "handle": "output"
+          },
+          {
+            "id": 4,
+            "nodeId": "group_cell_size",
+            "typeId": "system.group_input",
+            "handle": "cell_size"
           }
         ],
         "wires": [
@@ -203,6 +204,12 @@
             "fromPort": "camera",
             "toNode": 2,
             "toPort": "camera"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "cell_size",
+            "toNode": 2,
+            "toPort": "cell_size"
           },
           {
             "fromNode": 2,

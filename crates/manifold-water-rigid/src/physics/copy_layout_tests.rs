@@ -20,7 +20,7 @@ fn group(layout: CopyLayout, count: usize, spacing: f32, columns: usize) -> Arra
     Arrangement { layout, count, columns, spacing, turn: [0.0; 3], origin: [1.0, 2.0, 3.0], rotation: [0.0; 3] }
 }
 
-fn rests(arrangement: &Arrangement, width: [f32; 3]) -> Vec<manifold_physics::BodyPose> {
+fn rests(arrangement: &Arrangement, width: [f32; 3]) -> Vec<manifold_core::copy_layout::CopyPose> {
     (0..arrangement.count).map(|index| arrangement.rest(width, index)).collect()
 }
 
@@ -28,7 +28,7 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
     (0..3).map(|axis| (a[axis] - b[axis]).powi(2)).sum::<f32>().sqrt()
 }
 
-fn centroid(poses: &[manifold_physics::BodyPose]) -> [f32; 3] {
+fn centroid(poses: &[manifold_core::copy_layout::CopyPose]) -> [f32; 3] {
     let mut sum = [0.0f64; 3];
     for pose in poses {
         for (total, value) in sum.iter_mut().zip(pose.position) {
@@ -75,26 +75,68 @@ fn the_platonic_widths_are_the_installed_hulls_bit_for_bit() {
     }
 }
 
+/// Line and Grid grow one way from the first copy, which sits on the group's
+/// origin, as Blender's Array does: no fill from the centre, and a Count
+/// change never moves the copies already there.
 #[test]
-fn line_and_grid_are_centred_and_spaced_by_the_copy_size() {
+fn line_and_grid_grow_one_way_from_the_first_copy_spaced_by_the_copy_size() {
     let width = platonic_width(1, 0.5);
+    let origin = [1.0, 2.0, 3.0];
+    let step = 1.5 * width[0];
     let line = rests(&group(CopyLayout::Line, 5, 1.5, 16), width);
-    let c = centroid(&line);
-    assert!(distance(c, [1.0, 2.0, 3.0]) < 1.0e-5, "line centre {c:?}");
-    for pair in line.windows(2) {
-        assert!((distance(pair[0].position, pair[1].position) - 1.5 * width[0]).abs() < 1.0e-5);
+    for (index, pose) in line.iter().enumerate() {
+        let want = [origin[0] + index as f32 * step, origin[1], origin[2]];
+        assert!(distance(pose.position, want) < 1.0e-5, "line copy {index} at {:?}, want {want:?}", pose.position);
     }
-    // Four copies in a 16-column grid make one centred row, not a corner.
-    // Extra layers stack up from the group's plane.
-    for count in [4, 12, 16, 48] {
-        let grid = rests(&group(CopyLayout::Grid, count, 1.1, 4), width);
-        let c = centroid(&grid);
-        assert!((c[0] - 1.0).abs() < 1.0e-5 && (c[2] - 3.0).abs() < 1.0e-5, "grid of {count} centred: {c:?}");
-        assert_eq!(grid[0].position[1], 2.0);
-        assert!((grid[1].position[0] - grid[0].position[0] - 1.1 * width[0]).abs() < 1.0e-5);
+    // Columns copies along X, then the next row along Z, then the next layer up.
+    let step = [1.1 * width[0], 1.1 * width[1], 1.1 * width[2]];
+    let grid = rests(&group(CopyLayout::Grid, 48, 1.1, 4), width);
+    for (index, pose) in grid.iter().enumerate() {
+        let cell = [index % 4, index / 16, (index / 4) % 4];
+        let want: [f32; 3] = std::array::from_fn(|axis| origin[axis] + cell[axis] as f32 * step[axis]);
+        assert!(distance(pose.position, want) < 1.0e-5, "grid copy {index} at {:?}, want {want:?}", pose.position);
     }
-    let wide = rests(&group(CopyLayout::Grid, 4, 1.1, 16), width);
-    assert!((centroid(&wide)[0] - 1.0).abs() < 1.0e-5, "fewer copies than columns stay centred");
+}
+
+#[test]
+fn a_copy_rests_in_the_same_place_whatever_the_count() {
+    let width = platonic_width(1, 0.6);
+    for layout in [CopyLayout::Grid, CopyLayout::Scatter, CopyLayout::Line, CopyLayout::Spiral, CopyLayout::Random] {
+        let few = rests(&group(layout, 10, 1.2, 4), width);
+        let many = rests(&group(layout, 1_000, 1.2, 4), width);
+        assert_eq!(few[..], many[..10], "{layout:?}");
+        // The places are all different.
+        for (index, left) in many.iter().enumerate() {
+            for right in &many[index + 1..] {
+                assert!(distance(left.position, right.position) > 1.0e-3, "{layout:?} doubles a place");
+            }
+        }
+    }
+}
+
+/// A Ring spreads its copies evenly round the whole circle, up to Columns a
+/// ring, as Cinema 4D's radial Cloner does: Count changes slide them round a
+/// ring of the same size, and full rings stay put.
+#[test]
+fn a_ring_spreads_its_copies_evenly_round_the_whole_circle() {
+    let width = platonic_width(1, 0.6);
+    let around = |pose: &manifold_core::copy_layout::CopyPose| (pose.position[2] - 3.0).atan2(pose.position[0] - 1.0);
+    let full = rests(&group(CopyLayout::Ring, 8, 1.2, 8), width);
+    let radius = distance(full[0].position, [1.0, 2.0, 3.0]);
+    for count in [1usize, 2, 3, 5, 8] {
+        let ring = rests(&group(CopyLayout::Ring, count, 1.2, 8), width);
+        for (index, pose) in ring.iter().enumerate() {
+            assert!((distance(pose.position, [1.0, 2.0, 3.0]) - radius).abs() < 1.0e-4, "{count}: the ring keeps its size");
+            let want = std::f32::consts::TAU * index as f32 / count as f32;
+            let off = (around(pose) - want).rem_euclid(std::f32::consts::TAU);
+            assert!(off.min(std::f32::consts::TAU - off) < 1.0e-4, "{count}: copy {index} a 1/{count} turn on");
+        }
+    }
+    // Twelve at eight a ring: the first ring full, four spread round the next.
+    let tower = rests(&group(CopyLayout::Ring, 12, 1.2, 8), width);
+    assert_eq!(tower[..8], full[..], "a full ring stays put");
+    let quarter = (around(&tower[9]) - around(&tower[8])).rem_euclid(std::f32::consts::TAU);
+    assert!((quarter - std::f32::consts::FRAC_PI_2).abs() < 1.0e-4, "four round the second ring: {quarter}");
 }
 
 #[test]
@@ -110,7 +152,8 @@ fn every_layout_holds_its_copies_apart_at_spacing_one() {
             let poses = rests(&group(layout, count, 1.0, 5), width);
             for (index, left) in poses.iter().enumerate() {
                 for right in &poses[index + 1..] {
-                    if (left.position[1] - right.position[1]).abs() >= width[1] {
+                    // Stacked a whole width apart, they touch.
+                    if (left.position[1] - right.position[1]).abs() >= width[1] - 1.0e-5 {
                         continue;
                     }
                     assert!(
@@ -137,13 +180,17 @@ fn every_layout_holds_its_copies_apart_at_spacing_one() {
 fn ring_neighbours_sit_one_spacing_apart_once_their_corners_clear() {
     let width = platonic_width(1, 1.0);
     let step = 1.5 * width[0];
-    let poses = rests(&group(CopyLayout::Ring, 2, 1.5, 16), width);
+    let poses = rests(&group(CopyLayout::Ring, 2, 1.5, 2), width);
     assert!((distance(poses[0].position, poses[1].position) - step).abs() < 1.0e-5);
-    let poses = rests(&group(CopyLayout::Ring, 64, 4.0, 16), width);
+    let poses = rests(&group(CopyLayout::Ring, 64, 4.0, 64), width);
     let step = 4.0 * width[0];
     let gap = distance(poses[0].position, poses[1].position);
     assert!(gap >= step - 1.0e-4 && gap < step * 1.05, "{gap} vs {step}");
     assert!(distance(centroid(&poses), [1.0, 2.0, 3.0]) < 1.0e-4);
+    // Columns copies make a ring; more stack the next ring a step up.
+    let tower = rests(&group(CopyLayout::Ring, 8, 1.5, 4), width);
+    assert!((tower[4].position[1] - tower[0].position[1] - 1.5 * width[1]).abs() < 1.0e-5);
+    assert!(distance([tower[4].position[0], 0.0, tower[4].position[2]], [tower[0].position[0], 0.0, tower[0].position[2]]) < 1.0e-5);
 }
 
 #[test]
@@ -216,33 +263,127 @@ fn a_layout_edit_lands_on_the_same_tick_at_any_frame_rate_live_and_in_export() {
     assert!(reference[5][0].pos[1] < 1.0, "the grid had fallen before the edit");
 }
 
-#[test]
-fn laid_out_copies_rest_and_other_bodies_keep_their_motion() {
-    let run = |edit: bool| {
-        let mut bodies = vec![None; 2];
-        bodies[0] = Some(cube([8.0, 4.0, 0.0], 0.5));
-        let mut simulation = RigidSimulation::default().with_step(SimStep::export(FIXED_TICK));
-        let mut velocities = Vec::new();
-        for frame in 0..=60 {
-            let time = f64::from(frame) / 60.0;
-            let count = if edit && frame >= 30 { 10.0 } else { 20.0 };
-            let scene = copies_scene(&bodies, Some(cube([0.0, 3.0, 0.0], 0.5)), count, 1.1, 4.0, 0.0, GRAVITY, None, &[]);
-            simulation.advance_scene(&scene, PlayedTime::from_played(time), 1.0, 0.0).unwrap();
-            if edit && frame == 30 {
-                let world = simulation.native_world().unwrap();
-                for handle in simulation.native_copy_handles(0).iter().flatten() {
-                    velocities.push((world.linear_velocity(*handle).unwrap(), world.angular_velocity(*handle).unwrap()));
-                }
-            }
+/// What [`count_edit_run`] saw: every copy's pose and the first ten
+/// copies' velocities at one second, every copy's pose on the edit's frame,
+/// the loose cube's pose and the world's epoch.
+struct CountEditRun {
+    poses: Vec<Transform>,
+    velocities: Vec<[f32; 3]>,
+    at_edit: Vec<Transform>,
+    cube: Transform,
+    epoch: Option<u64>,
+}
+
+/// A copy group falling free beside a loose cube: Count 10 for half a
+/// second, then 1,000 when `grow`.
+fn count_edit_run(grow: bool) -> CountEditRun {
+    let mut bodies = vec![None; 2];
+    bodies[0] = Some(cube([30.0, 4.0, 0.0], 0.5));
+    let mut simulation = RigidSimulation::default().with_step(SimStep::export(FIXED_TICK));
+    let mut at_edit = Vec::new();
+    for frame in 0..=60 {
+        let time = f64::from(frame) / 60.0;
+        let count = if grow && frame >= 30 { 1_000.0 } else { 10.0 };
+        let scene = copies_scene(&bodies, Some(cube([0.0, 3.0, 0.0], 0.5)), count, 1.1, 16.0, 0.0, GRAVITY, None, &[]);
+        simulation.advance_scene(&scene, PlayedTime::from_played(time), 1.0, 0.0).unwrap();
+        if frame == 30 {
+            at_edit = simulation.group_poses(0).to_vec();
         }
-        (simulation.poses[0], velocities, simulation.impulse_epoch)
-    };
-    let (still, _, epoch) = run(false);
-    let (edited, velocities, edited_epoch) = run(true);
-    assert_eq!(edited, still, "a Count edit leaves another body's motion untouched");
-    assert_eq!(edited_epoch, epoch, "and builds no new world");
-    assert_eq!(velocities.len(), 10);
-    assert!(velocities.iter().all(|(linear, angular)| *linear == [0.0; 3] && *angular == [0.0; 3]), "{velocities:?}");
+    }
+    let world = simulation.native_world().unwrap();
+    let velocities = simulation.native_copy_handles(0)[..10]
+        .iter()
+        .map(|handle| world.linear_velocity(handle.unwrap()).unwrap())
+        .collect();
+    CountEditRun {
+        poses: simulation.group_poses(0).to_vec(),
+        velocities,
+        at_edit,
+        cube: simulation.poses[0],
+        epoch: simulation.impulse_epoch,
+    }
+}
+
+#[test]
+fn a_count_edit_keeps_the_copies_moving_and_adds_new_ones_at_rest() {
+    let still = count_edit_run(false);
+    let grown = count_edit_run(true);
+    assert_eq!(grown.epoch, still.epoch, "no new world");
+    assert_eq!(grown.poses.len(), 1_000);
+    assert!(still.velocities.iter().all(|velocity| velocity[1] < -5.0), "the ten are falling: {:?}", still.velocities);
+    assert_eq!(&grown.poses[..10], &still.poses[..10], "the first ten keep falling as if Count never moved");
+    assert_eq!(grown.velocities, still.velocities);
+    assert_eq!(grown.cube, still.cube, "a loose body's motion is untouched");
+    let at_edit = grown.at_edit;
+    // On the edit's frame the old ten are where their fall had taken them,
+    // and the new copies stand at rest in their places.
+    let scene = copies_scene(&[None, None], Some(cube([0.0, 3.0, 0.0], 0.5)), 1_000.0, 1.1, 16.0, 0.0, GRAVITY, None, &[]);
+    let arrangement = arrangement_of(&scene.groups[0].clone().unwrap(), 1_000);
+    let width = platonic_width(1, 0.5);
+    assert_eq!(at_edit.len(), 1_000);
+    for (index, pose) in at_edit.iter().enumerate().skip(10) {
+        assert_eq!(pose.pos, arrangement.rest(width, index).position, "copy {index}");
+    }
+    for (index, pose) in at_edit[..10].iter().enumerate() {
+        assert!(pose.pos[1] < 2.0, "copy {index} kept falling: {:?}", pose.pos);
+    }
+    // Back down to ten parks the tail; the ten still fall.
+    let mut simulation = RigidSimulation::default().with_step(SimStep::export(FIXED_TICK));
+    for frame in 0..=40 {
+        let count = if (10..20).contains(&frame) { 1_000.0 } else { 10.0 };
+        let scene = copies_scene(&[None, None], Some(cube([0.0, 3.0, 0.0], 0.5)), count, 1.1, 16.0, 0.0, GRAVITY, None, &[]);
+        simulation.advance_scene(&scene, PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+    }
+    assert_eq!(simulation.active_copies(0), 10);
+    // Re-laid at a third of a second they would stand near 2.5 m.
+    assert!(simulation.group_poses(0).iter().all(|pose| pose.pos[1] < 1.5), "the ten kept falling through both edits");
+}
+
+/// Body copies falling onto a floor; at half a second `edit` changes one
+/// layout row. Returns the copies' poses and velocities one tick later.
+fn row_edit_run(edit: impl Fn(&mut CopySpawn)) -> (Vec<Transform>, Vec<[f32; 3]>, Arrangement) {
+    let mut bodies = vec![None; 1];
+    bodies[0] = Some(RigidBody { kind: 0, ..cube([0.0, -0.5, 0.0], 1.0) });
+    bodies[0].as_mut().unwrap().transform.scale = [40.0, 1.0, 40.0];
+    let mut simulation = RigidSimulation::default().with_step(SimStep::export(FIXED_TICK));
+    let mut last = None;
+    for frame in 0..=31 {
+        let mut scene = copies_scene(&bodies, Some(cube([0.0, 3.0, 0.0], 0.5)), 12.0, 1.1, 4.0, 0.0, GRAVITY, None, &[]);
+        if frame >= 30 {
+            edit(&mut scene.groups[0].as_mut().unwrap().spawn);
+        }
+        simulation.advance_scene(&scene, PlayedTime::from_played(f64::from(frame) / 60.0), 1.0, 0.0).unwrap();
+        last = scene.groups[0].clone();
+    }
+    let world = simulation.native_world().unwrap();
+    let velocities = simulation.native_copy_handles(0)[..12].iter().map(|handle| world.linear_velocity(handle.unwrap()).unwrap()).collect();
+    (simulation.group_poses(0).to_vec(), velocities, arrangement_of(&last.unwrap(), 12))
+}
+
+/// A layout row's name and its edit.
+type RowEdit = (&'static str, fn(&mut CopySpawn));
+
+#[test]
+fn layout_spacing_columns_and_turn_re_lay_body_copies_while_dragged() {
+    let width = platonic_width(1, 0.5);
+    let edits: [RowEdit; 4] = [
+        ("layout", |spawn| spawn.layout = 3.0),
+        ("spacing", |spawn| spawn.spacing = 2.0),
+        ("columns", |spawn| spawn.columns = 3.0),
+        ("turn", |spawn| spawn.turn = [0.0, 0.7, 0.0]),
+    ];
+    for (row, edit) in edits {
+        let (poses, velocities, arrangement) = row_edit_run(edit);
+        // Half a second in, the copies fall at about 5 m/s, 1.2 m below their
+        // places. One tick after the edit they are back in their new places,
+        // falling again from rest.
+        for (index, pose) in poses.iter().enumerate() {
+            let rest = arrangement.rest(width, index).position;
+            assert!(distance(pose.pos, rest) < 0.01, "{row}: copy {index} at {:?}, its place {rest:?}", pose.pos);
+        }
+        // Turned copies that overlap their neighbours push apart: an effect.
+        assert!(velocities.iter().all(|velocity| velocity.iter().all(|axis| axis.abs() < 0.5)), "{row}: the pile starts again at rest: {velocities:?}");
+    }
 }
 
 #[test]
@@ -300,7 +441,7 @@ fn a_group_with_physics_off_is_drawn_at_rest_with_no_bodies() {
     assert!(simulation.native_copy_handles(0).is_empty());
     assert_eq!(simulation.copies_not_made(), 0);
     let width = platonic_width(1, 0.5);
-    let line = Arrangement::of(&scene(1.1).groups[0].clone().unwrap(), 9);
+    let line = arrangement_of(&scene(1.1).groups[0].clone().unwrap(), 9);
     assert_eq!(simulation.group_poses(0).len(), 9);
     for (index, pose) in simulation.group_poses(0).iter().enumerate() {
         assert_eq!(pose.pos, line.rest(width, index).position, "still at rest after half a second");
@@ -337,9 +478,9 @@ fn a_held_edit_between_ticks_shows_its_formation_and_lands_on_the_next_tick() {
     simulation.advance_scene(&scene(1.1), PlayedTime::from_played(1.5 / 60.0), 1.0, 0.0).unwrap();
     simulation.advance_scene(&scene(3.0), PlayedTime::from_played(1.5 / 60.0), 0.0, 0.0).unwrap();
     let width = platonic_width(1, 0.5);
-    let wide = Arrangement::of(&scene(3.0).groups[0].clone().unwrap(), 6);
+    let wide = arrangement_of(&scene(3.0).groups[0].clone().unwrap(), 6);
     assert_eq!(simulation.group_poses(0)[5].pos, wide.rest(width, 5).position, "shown at once");
-    let tight = Arrangement::of(&scene(1.1).groups[0].clone().unwrap(), 6);
+    let tight = arrangement_of(&scene(1.1).groups[0].clone().unwrap(), 6);
     assert_eq!(simulation.groups[0].arrangement, Some(tight), "the bodies wait for the next tick start");
     simulation.advance_scene(&scene(3.0), PlayedTime::from_played(2.5 / 60.0), 1.0, 0.0).unwrap();
     assert_eq!(simulation.groups[0].arrangement, Some(wide));
@@ -351,6 +492,6 @@ fn scatter_unit_is_one_formula_with_the_migration() {
     let unit = spacing_unit(true, width);
     let pile = Arrangement { layout: CopyLayout::Scatter, spacing: 1.0, ..group(CopyLayout::Scatter, 8, 1.0, 16) };
     let pose = pile.rest(width, 1);
-    let lattice_x = pile.origin[0] + 0.5 * unit[0];
+    let lattice_x = pile.origin[0] + unit[0];
     assert!((pose.position[0] - lattice_x).abs() <= 0.04 * unit[0] + 1.0e-5);
 }

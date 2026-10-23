@@ -37,6 +37,7 @@ mod rt_t2b_temporal_wiring;
 mod rt_t2c_shadow_temporal_stability;
 mod rt_tl_b_transmission;
 mod rt_tl_c_sun_tint;
+mod rt_update_recovery;
 mod scene_viewport_navigate;
 
 use manifold_nodes_scene as _;
