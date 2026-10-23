@@ -919,8 +919,8 @@ impl Application {
         let insert_index = insert_index.min(local.timeline.layers.len());
         let mut doc = model.scene_doc(&file_str, group.clone());
         doc.models.insert(file_str.clone(), facts);
-        // The model keeps the file's size and place; only its lights and
-        // cameras start at the file's values, as a drop into a scene does.
+        // The model keeps the file's size and place: every item starts at
+        // the file's values, as a drop into a scene does.
         let values = model
             .starting_values(&group)
             .into_iter()

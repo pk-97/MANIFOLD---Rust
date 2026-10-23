@@ -50,11 +50,11 @@ const SCALE_SETS_SIZE: &str = "Scale sets the size";
 const SPHERE_DETAIL: &str = "a sphere has a fixed vertex count";
 const WHOLE_FILE_NODE: &str = "the file node path picks the mesh";
 const FROM_FILE: &str = "read from the model file";
-const OWN_CENTRE: &str = "the part's own centre, so it turns about itself";
+const OWN_SPACE: &str = "a part draws in its file node's own space, so the node's origin is its pivot";
 const GROUP_CLOCK: &str = "the import Group's Animation rows";
 const CLOCK_PAYLOAD: &str = "the clip data loads from the model file";
 
-pub static OBJECT_ROWS: [PropertyRow; 76] = [
+pub static OBJECT_ROWS: [PropertyRow; 78] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -97,6 +97,7 @@ pub static OBJECT_ROWS: [PropertyRow; 76] = [
     // file node; the rest keeps the importer's defaults.
     row("file", MESH, Transform, Exposure::Automatic("the Shape field")).param("path").when(from_file),
     row("file_node", MESH, Transform, Exposure::Automatic("the Shape field")).param("node_path").when(from_file),
+    row("file_own_space", MESH, Transform, Exposure::Automatic(OWN_SPACE)).param("own_space").when(from_file),
     row("file_capacity", MESH, Transform, Exposure::Automatic("the vertex count read at import"))
         .param("max_capacity")
         .when(from_file),
@@ -108,9 +109,9 @@ pub static OBJECT_ROWS: [PropertyRow; 76] = [
     row("file_piece", MESH, Transform, Exposure::Internal("a model is not cut into pieces here")).param("fragment_index").when(from_file),
     row("file_fit", MESH, Transform, Exposure::Internal(SCALE_SETS_SIZE)).param("fit").when(from_file),
     row("file_recenter", MESH, Transform, Exposure::Internal(SCALE_SETS_SIZE)).param("recenter").when(from_file),
-    row("file_shift_x", MESH, Transform, Exposure::Automatic(OWN_CENTRE)).param("translate_x").when(from_file),
-    row("file_shift_y", MESH, Transform, Exposure::Automatic(OWN_CENTRE)).param("translate_y").when(from_file),
-    row("file_shift_z", MESH, Transform, Exposure::Automatic(OWN_CENTRE)).param("translate_z").when(from_file),
+    row("file_shift_x", MESH, Transform, Exposure::Internal(OWN_SPACE)).param("translate_x").when(from_file),
+    row("file_shift_y", MESH, Transform, Exposure::Internal(OWN_SPACE)).param("translate_y").when(from_file),
+    row("file_shift_z", MESH, Transform, Exposure::Internal(OWN_SPACE)).param("translate_z").when(from_file),
     row("file_source_vertices", MESH, Transform, Exposure::Automatic(FROM_FILE)).param("source_vertex_count").when(from_file),
     row("file_source_radius", MESH, Transform, Exposure::Automatic(FROM_FILE)).param("source_bbox_radius").when(from_file),
     // An animated part: its skin, or its node chain as a one-slot palette
@@ -118,6 +119,7 @@ pub static OBJECT_ROWS: [PropertyRow; 76] = [
     row("pose_file", POSE, Transform, Exposure::Automatic("the Shape field")).param("path").when(from_file),
     row("pose_skin", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("skin_index").when(from_file),
     row("pose_slots", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("node_slots").when(from_file),
+    row("pose_space", POSE, Transform, Exposure::Automatic(OWN_SPACE)).param("space_node").when(from_file),
     row("pose_joints", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("joint_count").when(from_file),
     row("pose_duration", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("duration_s").when(from_file),
     row("pose_clip_durations", POSE, Transform, Exposure::Automatic(FROM_FILE)).param("clip_durations").when(from_file),
@@ -148,7 +150,7 @@ pub static OBJECT_ROWS: [PropertyRow; 76] = [
     row("deltas_node", DELTAS, Transform, Exposure::Automatic("the Shape field")).param("node_path").when(from_file),
     row("deltas_material", DELTAS, Transform, Exposure::Automatic("the Shape field's primitives")).param("material_index").when(from_file),
     row("deltas_capacity", DELTAS, Transform, Exposure::Automatic(FROM_FILE)).param("max_capacity").when(from_file),
-    row("deltas_skinned", DELTAS, Transform, Exposure::Automatic("whether the part is skinned")).param("skinned").when(from_file),
+    row("deltas_own_space", DELTAS, Transform, Exposure::Automatic(OWN_SPACE)).param("own_space").when(from_file),
     row("blend_targets", BLEND, Transform, Exposure::Automatic(FROM_FILE)).param("target_count").when(from_file),
 ];
 

@@ -291,5 +291,5 @@ fn rest(item: &Item, shape: &Shape, curve: Curve, cols: u32, rows: u32) -> Optio
         }
         _ => return None,
     };
-    Some(Rest { lo, hi, offset: [0.0; 3], vertices: (cols - 1) * (rows - 1) * 6 })
+    Some(Rest { lo, hi, placed: None, vertices: (cols - 1) * (rows - 1) * 6 })
 }

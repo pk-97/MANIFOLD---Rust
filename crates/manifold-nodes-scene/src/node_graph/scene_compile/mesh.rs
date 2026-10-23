@@ -1,14 +1,15 @@
 //! Shape Mesh: the geometry of a model file (SCENE_DOCUMENT_DESIGN.md section
-//! 7.7 (Imports)). An Object draws one file node's own mesh, already placed
-//! in the file's world; a Group with Combine Meshes on is one object of
-//! every mesh below it, each part keeping its material and animation.
+//! 7.7 (Imports)). An Object draws one file node's own mesh in that node's
+//! own space: its Transform starts at the node's transform, so the node's
+//! origin is its pivot, as in Blender's glTF import. A Group with Combine
+//! Meshes on is one object of every mesh below it, each part keeping its
+//! material and animation, drawn where the file puts it.
 //!
-//! A part keeps what the old importer gave it: a static part is recentred on
-//! its own box so its Transform turns it about itself, and records the
-//! file's radius for mesh modifiers to measure by; a skinned part deforms by
-//! its skin, an animated one by its node chain as a one-slot palette, and a
-//! morphed one blends its targets first, every clock playing the clip its
-//! import Group picks.
+//! Every part records the file's radius for mesh modifiers to measure by. A
+//! skinned part deforms by its skin and an animated one by its node chain
+//! as a one-slot palette, the pose seen from the part's node at rest, so it
+//! draws where the file puts it until its item moves; a morphed one blends
+//! its targets first, every clock playing the clip its import Group picks.
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, ItemFields, ItemId, MeshPrimitives, SceneDoc, Shape};
@@ -65,9 +66,6 @@ pub(crate) struct Part {
     pub source: u32,
     /// The node and port the draw reads its vertices from.
     pub vertices: (u32, &'static str),
-    /// Where the Transform starts: the part's own centre for a static part,
-    /// so it turns about itself.
-    pub center: Option<[f32; 3]>,
     /// Its rest pose: posed parts rest at their bind pose.
     pub rest: Option<Rest>,
 }
@@ -84,8 +82,8 @@ pub(crate) fn emit_part(
     emit_part_in(b, item, file, node_path, vertex_count, primitives, true)
 }
 
-/// [`emit_part`], with a static part recentred on its own box only when
-/// `own_centre`; otherwise it stays where the file puts it.
+/// [`emit_part`], in the node's own space when `own_space`; otherwise
+/// where the file puts it (a Combine Meshes part).
 fn emit_part_in(
     b: &mut Builder<'_>,
     item: &Item,
@@ -93,7 +91,7 @@ fn emit_part_in(
     node_path: &str,
     vertex_count: u32,
     primitives: MeshPrimitives,
-    own_centre: bool,
+    own_space: bool,
 ) -> Part {
     let owner = item.id.as_str();
     let model = model_file(b.doc, file);
@@ -121,42 +119,38 @@ fn emit_part_in(
         if material_param != -1 {
             b.set(source, "material_index", SerializedParamValue::Int { value: material_param });
         }
-        let mut center = None;
+        b.set(source, "own_space", SerializedParamValue::Bool { value: own_space });
         if let Some((model, _)) = facts {
             b.set(source, "source_bbox_radius", SerializedParamValue::Float { value: model.radius });
-            if let Some(part) = part.filter(|_| own_centre) {
-                for (axis, param) in ["translate_x", "translate_y", "translate_z"].into_iter().enumerate() {
-                    b.set(source, param, SerializedParamValue::Float { value: -part.center[axis] });
-                }
-                center = Some(part.center);
-            }
         }
-        // A part rests where the file puts it; a morphing one rests at its
-        // base shape.
-        let rest = part.map(|part| rest_of(part, own_centre, vertex_count));
+        // A morphing part rests at its base shape.
+        let rest = part.map(|part| rest_of(part, own_space, vertex_count));
         let vertices = match morph {
-            Some(morph) => emit_morph(b, item, file, node_path, known, vertex_count, morph, (source, "vertices"), false),
+            Some(morph) => emit_morph(b, item, file, node_path, known, vertex_count, morph, (source, "vertices"), own_space),
             None => (source, "vertices"),
         };
-        return Part { source, vertices, center, rest };
+        return Part { source, vertices, rest };
     };
-    // A skinned or animated part: its vertices stay in the node's own space
-    // and the pose places them.
+    // A skinned or animated part: the pose places its vertices, seen from
+    // its node at rest when it draws in the node's own space.
     let source = b.add(owner, "mesh", "node.gltf_skinned_mesh_source");
     source_params(b, source, file, node_path, vertex_count);
     b.set(source, "material_index", SerializedParamValue::Int { value: known });
     b.set(source, "source_bbox_radius", SerializedParamValue::Float { value: model.radius });
     let pose = b.add(owner, "pose", "node.gltf_skeleton_pose");
     b.set(pose, "path", SerializedParamValue::String { value: file.to_owned() });
-    let (skin_index, joint_count, clips) = match rig {
-        Rig::Skin { skin_index, joint_count, clips } => (*skin_index as i32, *joint_count, clips),
+    let (node, skin_index, joint_count, clips) = match rig {
+        Rig::Skin { node_index, skin_index, joint_count, clips } => (*node_index, *skin_index as i32, *joint_count, clips),
         Rig::Chain { node_index, clips } => {
             // -2 selects the node-slot palette: slot 0 is this part's node.
             let slots = vec![vec![*node_index as f32]];
             b.set(pose, "node_slots", SerializedParamValue::Table { rows: slots });
-            (-2, 1, clips)
+            (*node_index, -2, 1, clips)
         }
     };
+    if own_space {
+        b.set(pose, "space_node", SerializedParamValue::Int { value: node.min(i32::MAX as u32) as i32 });
+    }
     b.set(pose, "skin_index", SerializedParamValue::Int { value: skin_index });
     b.set(pose, "joint_count", SerializedParamValue::Int { value: joint_count as i32 });
     clock_params(b, pose, clips, import_clip(b.doc, &item.id));
@@ -166,28 +160,28 @@ fn emit_part_in(
     b.wire(source, "joints", skin, "joints");
     b.wire(source, "weights", skin, "weights");
     b.wire(pose, "joint_matrices", skin, "matrices");
-    // Morph first, then skin (glTF 2.0 section 3.7.2).
+    // Morph first, then skin (glTF 2.0 section 3.7.2): the deltas stay in
+    // the bind pose's space.
     let deformed = match morph {
         Some(morph) => emit_morph(b, item, file, node_path, known, vertex_count, morph, (source, "vertices"), true),
         None => (source, "vertices"),
     };
     b.wire(deformed.0, deformed.1, skin, "in");
-    // The skin poses the vertices in the file's world, so the part rests at
-    // its bind pose there; a modifier bends the posed result.
-    let rest = part.map(|part| rest_of(part, false, vertex_count));
-    Part { source, vertices: (skin, "out"), center: None, rest }
+    // The part rests at its bind pose; a modifier bends the posed result.
+    let rest = part.map(|part| rest_of(part, own_space, vertex_count));
+    Part { source, vertices: (skin, "out"), rest }
 }
 
-/// A file part's rest pose: about its own centre when its source is
-/// recentred on it (`own_centre`), else where the file puts it.
-fn rest_of(part: &FilePart, own_centre: bool, vertex_count: u32) -> Rest {
-    let half = part.half_extent;
-    let (lo, hi, offset) = if own_centre {
-        (half.map(|h| -h), half, part.center)
-    } else {
-        (std::array::from_fn(|axis| part.center[axis] - half[axis]), std::array::from_fn(|axis| part.center[axis] + half[axis]), [0.0; 3])
+/// A file part's rest pose: its box in the node's own space when it draws
+/// there (`own_space`), else where the file puts it. Either way it records
+/// where the file puts it, for the scene's box.
+fn rest_of(part: &FilePart, own_space: bool, vertex_count: u32) -> Rest {
+    let span = |center: [f32; 3], half: [f32; 3]| -> ([f32; 3], [f32; 3]) {
+        (std::array::from_fn(|axis| center[axis] - half[axis]), std::array::from_fn(|axis| center[axis] + half[axis]))
     };
-    Rest { lo, hi, offset, vertices: part.vertex_count.max(vertex_count) }
+    let placed = span(part.center, part.half_extent);
+    let (lo, hi) = if own_space { span(part.own_center, part.own_half_extent) } else { placed };
+    Rest { lo, hi, placed: Some(placed), vertices: part.vertex_count.max(vertex_count) }
 }
 
 /// Blend `base` with the part's morph targets; returns the blend's output.
@@ -201,7 +195,7 @@ fn emit_morph(
     vertex_count: u32,
     morph: &Morph,
     base: (u32, &'static str),
-    skinned: bool,
+    own_space: bool,
 ) -> (u32, &'static str) {
     let owner = item.id.as_str();
     let weights = b.add(owner, "morph_weights", "node.gltf_morph_weights");
@@ -219,7 +213,7 @@ fn emit_morph(
     b.set(deltas, "material_index", SerializedParamValue::Int { value: deltas_material });
     let capacity = (morph.target_count.max(1) as u64 * u64::from(vertex_count.max(1))).min(i32::MAX as u64);
     b.set(deltas, "max_capacity", SerializedParamValue::Int { value: capacity as i32 });
-    b.set(deltas, "skinned", SerializedParamValue::Bool { value: skinned });
+    b.set(deltas, "own_space", SerializedParamValue::Bool { value: own_space });
     let blend = b.add(owner, "morph_blend", "node.morph_targets_blend");
     b.set(blend, "target_count", SerializedParamValue::Int { value: morph.target_count as i32 });
     b.wire(base.0, base.1, blend, "in");

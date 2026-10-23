@@ -71,7 +71,7 @@ fn builtin_rest(b: &mut Builder<'_>, mesh_type: &str, solid: Option<u32>) -> Opt
     lo.iter().chain(hi.iter()).all(|value| value.is_finite()).then_some(Rest {
         lo,
         hi,
-        offset: [0.0; 3],
+        placed: None,
         vertices: u32::try_from(vertices.len()).unwrap_or(u32::MAX),
     })
 }
@@ -120,11 +120,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         && can_copy(&fields.shape)
         && frame.and_then(|frame| frame.copies).is_none()
         && group_copies.is_some_and(|nest| b.nests.contains_key(&nest));
-    let mut center = None;
     let rest;
     let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
         let part = super::mesh::emit_part(b, item, file, node_path, *vertex_count, *primitives);
-        center = part.center;
         rest = part.rest;
         (part.source, part.vertices)
     } else if ocean {
@@ -156,11 +154,6 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         }
     };
     let transform = b.add(owner, "transform", "node.transform_3d");
-    if let Some(center) = center {
-        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
-            b.set(transform, param, SerializedParamValue::Float { value: center[axis] });
-        }
-    }
     let object = b.add(owner, "object", "node.scene_object");
     if ocean {
         // A sea does not shadow itself; the Shadows row turns it on.

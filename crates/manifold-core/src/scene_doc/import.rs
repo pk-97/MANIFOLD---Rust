@@ -30,10 +30,33 @@ pub struct ImportedNode {
     pub material: Option<String>,
     /// That mesh's vertex count once triangles are expanded; 0 for a Group.
     pub vertex_count: u32,
-    /// The centre of the Object's box in the file's space, where its
-    /// Transform starts (the mesh is drawn about it); zero for a Group.
-    pub center: [f32; 3],
+    /// The file node's own transform in the frame of the item above it,
+    /// where the item's Transform starts. An Object draws its mesh in this
+    /// node's space, so the node's origin is its pivot.
+    pub transform: ImportedTransform,
     pub children: Vec<ImportedNode>,
+}
+
+/// A file node's transform as an item's Transform rows: position in metres,
+/// XYZ Euler rotation in radians, scale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportedTransform {
+    pub position: [f32; 3],
+    pub rotation: [f32; 3],
+    pub scale: [f32; 3],
+}
+
+impl ImportedTransform {
+    pub const IDENTITY: Self = Self { position: [0.0; 3], rotation: [0.0; 3], scale: [1.0; 3] };
+
+    /// `(property, value)` for every Transform row away from its rest.
+    pub fn values(&self) -> impl Iterator<Item = (&'static str, f32)> + '_ {
+        const ROWS: [[&str; 3]; 3] = [["pos_x", "pos_y", "pos_z"], ["rot_x", "rot_y", "rot_z"], ["scale_x", "scale_y", "scale_z"]];
+        [(self.position, 0.0), (self.rotation, 0.0), (self.scale, 1.0)]
+            .into_iter()
+            .zip(ROWS)
+            .flat_map(|((values, rest), names)| names.into_iter().zip(values).filter(move |(_, value)| *value != rest))
+    }
 }
 
 /// One glTF material of the file: a Material item whose texture source is
@@ -118,7 +141,8 @@ impl ImportedModel {
     /// Source is `file`, holding one Object per mesh part (nested where the
     /// file nests), one Material per glTF material, and the file's lights
     /// and cameras; or, for a file with one mesh part and no lights, cameras
-    /// or animation, that Object and its Material beside it.
+    /// or animation, that Object and its Material beside it. Each starts at
+    /// its file node's transform ([`Self::starting_values`]).
     pub fn into_items(&self, file: &str, id: ItemId) -> Vec<Item> {
         if self.is_single_mesh() {
             let only = self.mesh_nodes()[0];
@@ -150,18 +174,29 @@ impl ImportedModel {
         doc
     }
 
-    /// The nodes below an import Group, as the Group holds them.
+    /// The nodes below an import Group, as the Group holds them: a lone
+    /// root group that does not move its parts is the import Group itself.
     pub fn group_children(&self) -> &[ImportedNode] {
         match self.roots.as_slice() {
-            [only] if only.mesh_node.is_none() => &only.children,
+            [only] if only.mesh_node.is_none() && only.transform == ImportedTransform::IDENTITY => &only.children,
             roots => roots,
         }
     }
 
     /// Whether the model is one Object rather than a Group: one mesh part,
-    /// and no lights, cameras or animation clips to hold beside it.
+    /// under no group that moves it, and no lights, cameras or animation
+    /// clips to hold beside it.
     pub fn is_single_mesh(&self) -> bool {
-        self.mesh_nodes().len() == 1 && self.lights.is_empty() && self.cameras.is_empty() && self.clips.is_empty()
+        fn unmoved(nodes: &[ImportedNode]) -> bool {
+            nodes.iter().all(|node| {
+                node.mesh_node.is_some() || (node.transform == ImportedTransform::IDENTITY && unmoved(&node.children))
+            })
+        }
+        self.mesh_nodes().len() == 1
+            && unmoved(&self.roots)
+            && self.lights.is_empty()
+            && self.cameras.is_empty()
+            && self.clips.is_empty()
     }
 
     /// The one mesh part of a model that has exactly one.
@@ -177,18 +212,38 @@ impl ImportedModel {
         self.mesh_nodes().iter().map(|node| node.vertex_count).fold(0, u32::saturating_add)
     }
 
-    /// The card values the file's lights and cameras start at, for the
-    /// import `id`: `(item, property, value)`.
+    /// The card values the import `id` starts at: each part's and group's
+    /// file node transform, and the file's lights and cameras.
+    /// `(item, property, value)`.
     pub fn starting_values(&self, id: &ItemId) -> Vec<(ItemId, &'static str, f32)> {
+        let mut out = Vec::new();
+        if self.is_single_mesh() {
+            let only = self.mesh_nodes()[0];
+            out.extend(only.transform.values().map(|(property, value)| (id.clone(), property, value)));
+        } else {
+            for node in self.group_children() {
+                node.starting_values(id, &mut out);
+            }
+        }
         let lights = self.lights.iter().map(|l| (&l.key, &l.values));
         let cameras = self.cameras.iter().map(|c| (&c.key, &c.values));
-        lights
-            .chain(cameras)
-            .flat_map(|(key, values)| {
-                let item = import_child_id(id, key);
-                values.iter().map(move |(property, value)| (item.clone(), *property, *value))
-            })
-            .collect()
+        for (key, values) in lights.chain(cameras) {
+            let item = import_child_id(id, key);
+            out.extend(values.iter().map(|(property, value)| (item.clone(), *property, *value)));
+        }
+        out
+    }
+}
+
+impl ImportedNode {
+    /// The Transform values this node's item under import `group` starts
+    /// at, and its children's.
+    pub fn starting_values(&self, group: &ItemId, out: &mut Vec<(ItemId, &'static str, f32)>) {
+        let item = import_child_id(group, &self.key);
+        out.extend(self.transform.values().map(|(property, value)| (item.clone(), property, value)));
+        for child in &self.children {
+            child.starting_values(group, out);
+        }
     }
 }
 

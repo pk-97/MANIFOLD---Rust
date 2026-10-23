@@ -33,7 +33,7 @@ use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_core::scene_doc::ImportedModel;
+use manifold_core::scene_doc::{ImportedModel, ImportedTransform};
 use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -418,15 +418,15 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
     let far = 200.0f32.max(distance + 1.5 * radius).min(10_000.0);
 
     // The model at its true size with the old box centre at the origin. A
-    // single Object's position carries its own centre (it is drawn about
-    // it); a Group's starts at zero.
-    let own = model.only_part().filter(|_| model.is_single_mesh()).map_or([0.0; 3], |part| part.center);
-    let model_position = [0, 1, 2].map(|a| own[a] - center[a]);
+    // single Object keeps its file node's transform (it is drawn about the
+    // node's origin); a Group starts at rest.
+    let own = model.only_part().filter(|_| model.is_single_mesh()).map_or(ImportedTransform::IDENTITY, |part| part.transform);
+    let model_position = [0, 1, 2].map(|a| own.position[a] - center[a]);
 
     let mut setup: Vec<(String, f32)> = vec![
-        ("model.scale_x".into(), 1.0),
-        ("model.scale_y".into(), 1.0),
-        ("model.scale_z".into(), 1.0),
+        ("model.scale_x".into(), own.scale[0]),
+        ("model.scale_y".into(), own.scale[1]),
+        ("model.scale_z".into(), own.scale[2]),
         ("model.pos_x".into(), model_position[0]),
         ("model.pos_y".into(), model_position[1]),
         ("model.pos_z".into(), model_position[2]),

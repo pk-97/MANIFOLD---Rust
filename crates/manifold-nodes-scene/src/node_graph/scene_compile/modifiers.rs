@@ -305,11 +305,18 @@ fn placement(b: &mut Builder<'_>, drawn: &Drawn, root: Option<&ItemId>, lineage:
     at
 }
 
+/// The import Group nearest above `item`: the Group whose Source is a file.
+fn import_group<'l>(doc: &SceneDoc, item: &ItemId, lineage: &'l BTreeMap<ItemId, Vec<ItemId>>) -> Option<&'l ItemId> {
+    lineage.get(item)?.iter().rev().find(|above| {
+        doc.find(above).is_some_and(|found| matches!(&found.fields, ItemFields::Group(group) if group.source.is_some()))
+    })
+}
+
 /// A frame's placements: each part's source offset from the frame's rest
 /// centre, and the frame's radius. A part that shares a Group's or the
 /// scene's frame also reads its offset live, so it bends wherever it sits
 /// as it moves. Shatter follows the live body pose instead, so its offset is
-/// only its source's own recentring.
+/// only its source's own shift.
 fn plan(
     b: &mut Builder<'_>,
     card: &Item,
@@ -322,9 +329,22 @@ fn plan(
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
     for (drawn, at) in members.iter().zip(&placed) {
+        // An imported part's box where the file puts it is its box in its
+        // import Group's frame, the scene's while that Group starts at rest:
+        // its own Transform and the groups between start where the file
+        // puts them, which the compiler does not see.
+        let (part_lo, part_hi) = match drawn.rest.placed {
+            Some(box_in_import) if frame.root.is_none() || frame.root.as_ref() == import_group(b.doc, &drawn.item, lineage) => {
+                (box_in_import.0.map(f64::from), box_in_import.1.map(f64::from))
+            }
+            _ => (
+                std::array::from_fn(|axis| at[axis] + f64::from(drawn.rest.lo[axis])),
+                std::array::from_fn(|axis| at[axis] + f64::from(drawn.rest.hi[axis])),
+            ),
+        };
         for axis in 0..3 {
-            lo[axis] = lo[axis].min(at[axis] + f64::from(drawn.rest.lo[axis]));
-            hi[axis] = hi[axis].max(at[axis] + f64::from(drawn.rest.hi[axis]));
+            lo[axis] = lo[axis].min(part_lo[axis]);
+            hi[axis] = hi[axis].max(part_hi[axis]);
         }
     }
     if !(0..3).all(|axis| lo[axis].is_finite() && hi[axis].is_finite()) {

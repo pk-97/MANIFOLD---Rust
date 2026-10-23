@@ -16,6 +16,9 @@ pub struct MeshSelection {
     pub translate: [f32; 3],
     pub fragment_count: u32,
     pub fragment_index: u32,
+    /// A file node's mesh in the node's own space (an imported part placed
+    /// by its item's transform), not where the file puts it.
+    pub own_space: bool,
 }
 
 impl MeshSelection {
@@ -38,6 +41,7 @@ impl MeshSelection {
                 .round()
                 .clamp(1.0, manifold_foundation::mesh_partition::MAX_PIECES as f32) as u32,
             fragment_index: ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32,
+            own_space: matches!(ctx.params.get("own_space"), Some(ParamValue::Bool(true))),
         }
     }
 

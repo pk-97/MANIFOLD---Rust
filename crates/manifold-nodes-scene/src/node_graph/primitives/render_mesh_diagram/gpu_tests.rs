@@ -294,7 +294,7 @@ fn math_view_trails_render_recorded_copy_motion() {
         let view_proj = camera.view_proj(W as f32 / H as f32);
         let u = DiagramUniforms {
             view_proj,
-            model: RenderMeshDiagram::model_matrix(Transform::default(), &camera),
+            model: RenderMeshDiagram::model_matrix(Transform::default(), None, &camera),
             viewport: [W as f32, H as f32, 0.0, 0.0],
             radius: 0.2,
             line_width: 4.0,
@@ -476,7 +476,7 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         let view_proj = camera.view_proj(W as f32 / H as f32);
         let u = DiagramUniforms {
             view_proj,
-            model: RenderMeshDiagram::model_matrix(Transform::default(), &camera),
+            model: RenderMeshDiagram::model_matrix(Transform::default(), None, &camera),
             viewport: [W as f32, H as f32, 0.0, 0.0],
             radius: 0.2,
             line_width: 4.0,
@@ -610,7 +610,7 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
         let view_proj = camera.view_proj(W as f32 / H as f32);
         let u = DiagramUniforms {
             view_proj,
-            model: RenderMeshDiagram::model_matrix(transform, &camera),
+            model: RenderMeshDiagram::model_matrix(transform, None, &camera),
             viewport: [W as f32, H as f32, 0.0, 0.0],
             radius: 0.2,
             line_width: 1.0,

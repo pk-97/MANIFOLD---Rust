@@ -715,21 +715,35 @@ impl Builder<'_> {
                 .attachment_key(modifier, Some(&target), SceneEndpoint::Transform)
                 .ok()
                 .and_then(|key| self.current.get(&key).and_then(Clone::clone));
-            // A copies body's per-axis scale feeds the object; the diagram
-            // reads the same wire so copies draw at their real scale.
-            let copy_scale = self.index.by_ref.get(&target).and_then(|object| {
-                self.derived
-                    .wires
-                    .iter()
-                    .find(|wire| wire.to_node == *object && wire.to_port == "copy_scale")
-                    .map(|wire| (wire.from_node, wire.from_port.clone()))
+            // The diagram reads the object's own wires: a copies body's
+            // per-axis scale, so copies draw at their real scale, and the
+            // frame it draws in (its groups or its body's pose).
+            let object_input = |port: &str| {
+                self.index.by_ref.get(&target).and_then(|object| {
+                    self.derived
+                        .wires
+                        .iter()
+                        .find(|wire| wire.to_node == *object && wire.to_port == port)
+                        .map(|wire| (wire.from_node, wire.from_port.clone()))
+                })
+            };
+            let copy_scale = object_input("copy_scale");
+            // Copies laid out in Group space draw each copy in the frame
+            // instead (render_scene's instance space), which the diagram
+            // does not model.
+            let group_space = self.index.by_ref.get(&target).is_some_and(|object| {
+                self.derived.nodes.iter().any(|node| {
+                    node.id == *object
+                        && node.params.get("instances_space") == Some(&SerializedParamValue::Enum { value: 1 })
+                })
             });
-            resolved.push((target, capture, transform, copy_scale));
+            let parent = object_input("parent_transform").filter(|_| !group_space);
+            resolved.push((target, capture, transform, copy_scale, parent));
         }
 
         let view = modifier.id.as_str();
         let mut diagrams = Vec::with_capacity(resolved.len());
-        for (index, (target, capture, transform, copy_scale)) in resolved.into_iter().enumerate() {
+        for (index, (target, capture, transform, copy_scale, parent)) in resolved.into_iter().enumerate() {
             let parts = |role: &'static str| vec!["math_view", view, role, target.as_str()];
             let current_samples = self.add_math_node(
                 &parts("current_samples"),
@@ -775,6 +789,7 @@ impl Builder<'_> {
                 (Some(capture.reference), "reference_mesh"),
                 (Some(camera.clone()), "camera"),
                 (transform, "transform"),
+                (parent, "parent_transform"),
                 (capture.instances, "instances"),
                 (copy_scale, "copy_scale"),
                 (Some((scene_id, "depth".to_string())), "scene_depth"),

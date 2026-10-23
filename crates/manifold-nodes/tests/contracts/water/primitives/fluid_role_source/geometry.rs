@@ -116,6 +116,7 @@ pub(super) mod tests {
             translate: [0.0; 3],
             fragment_count: 1,
             fragment_index: 0,
+            own_space: false,
         };
         let meshes = prepare_geometry(&path, selection, Transform::default(), Some(&compound))
         .unwrap();
