@@ -1,7 +1,9 @@
 //! Where each copy of a copy group rests. A layout (Grid, Scatter, Line, Ring,
-//! Spiral, Random) is centred on the group's origin, spaced in multiples of
-//! the copy's own box width, and placed as one by the group's rotation. Rest poses are
-//! computed only here; the card and the gizmo show the group, never a copy.
+//! Spiral, Random) grows out from the group's origin, spaced in multiples of
+//! the copy's own box width, and is placed as one by the group's rotation. A
+//! copy's place depends on its index and the layout rows, never on Count, so
+//! a Count change adds or removes copies at the tail. Rest poses are computed
+//! only here; the card and the gizmo show the group, never a copy.
 
 use manifold_core::copies_body::{spacing_unit, SCATTER_JITTER};
 use manifold_node_engine::scene::transform::Transform;
@@ -35,8 +37,8 @@ impl CopyLayout {
     }
 }
 
-/// Everything a group's rest poses depend on besides the copy's size: the
-/// spawner, the made count and the group transform.
+/// A group's layout and how many copies it makes: with the copy's size,
+/// everything its rest poses depend on, the made count aside.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Arrangement {
     pub layout: CopyLayout,
@@ -70,33 +72,37 @@ impl Arrangement {
         }
     }
 
-    /// Whether the two lay out the same shape, wherever the group stands.
-    pub fn same_shape(&self, other: &Self) -> bool {
-        Self { origin: other.origin, rotation: other.rotation, ..*self } == *other
+    /// Whether the two differ in Count alone: the copies that stay keep
+    /// their places.
+    pub fn same_places(&self, other: &Self) -> bool {
+        Self { count: other.count, ..*self } == *other
     }
 
-    /// Copy `index`'s rest pose for a copy whose box is `width` metres.
+    /// Copy `index`'s rest pose for a copy whose box is `width` metres. It
+    /// depends on the index and the layout rows, never on Count, so a Count
+    /// change adds or removes copies at the tail and the rest stay put.
     pub fn rest(&self, width: [f32; 3], index: usize) -> BodyPose {
         let unit = spacing_unit(self.layout == CopyLayout::Scatter, width);
         let step = unit.map(|unit| self.spacing * unit);
         let group = euler_quat(self.rotation);
+        let columns = self.columns.max(1);
+        let laid = |offset: [f32; 3], turn: [f32; 3]| BodyPose {
+            position: place(self.origin, group, offset),
+            rotation: compose(group, euler_quat(turn)),
+        };
         match self.layout {
             CopyLayout::Grid => {
-                let columns = self.columns.min(self.count).max(1);
-                let rows = self.count.div_ceil(columns).min(columns);
                 let (column, row, layer) = (index % columns, (index / columns) % columns, index / (columns * columns));
                 let offset = [
-                    (column as f32 - (columns as f32 - 1.0) * 0.5) * step[0],
+                    centred(column, columns) * step[0],
                     layer as f32 * step[1],
-                    (row as f32 - (rows as f32 - 1.0) * 0.5) * step[2],
+                    centred(row, 1) * step[2],
                 ];
-                BodyPose { position: place(self.origin, group, offset), rotation: compose(group, euler_quat(self.turn)) }
+                laid(offset, self.turn)
             }
             CopyLayout::Scatter => {
-                let columns = ceil_cuberoot(self.count).min(self.columns);
-                let (column, row, layer) = (index % columns, (index / columns) % columns, index / (columns * columns));
-                let center = (columns as f32 - 1.0) * 0.5;
-                let offset = [(column as f32 - center) * step[0], layer as f32 * step[1], (row as f32 - center) * step[2]];
+                let [column, layer, row] = pile_cell(index, columns);
+                let offset = [centred(column, 1) * step[0], layer as f32 * step[1], centred(row, 1) * step[2]];
                 let jitter = [0, 1, 2].map(|axis| bounded_jitter(index, axis, step[axis as usize]));
                 let mut turn = self.turn;
                 for (axis, value) in turn.iter_mut().enumerate() {
@@ -107,14 +113,13 @@ impl Arrangement {
                     rotation: compose(group, euler_quat(turn)),
                 }
             }
-            CopyLayout::Line => {
-                let offset = [(index as f32 - (self.count as f32 - 1.0) * 0.5) * step[0], 0.0, 0.0];
-                BodyPose { position: place(self.origin, group, offset), rotation: compose(group, euler_quat(self.turn)) }
-            }
+            CopyLayout::Line => laid([centred(index, 1) * step[0], 0.0, 0.0], self.turn),
             CopyLayout::Ring => {
-                let angle = std::f32::consts::TAU * index as f32 / self.count.max(1) as f32;
-                let radius = ring_radius(self.count, step[0], width[2]);
-                let offset = [radius * angle.cos(), 0.0, radius * angle.sin()];
+                // Columns copies round each ring; further rings stack up.
+                let (slot, ring) = (index % columns, index / columns);
+                let angle = std::f32::consts::TAU * slot as f32 / columns as f32;
+                let radius = ring_radius(columns, step[0], width[2]);
+                let offset = [radius * angle.cos(), ring as f32 * step[1], radius * angle.sin()];
                 // Each copy's X runs along the ring, so neighbours meet side to side.
                 let (sin, cos) = (-(angle + std::f32::consts::FRAC_PI_2) * 0.5).sin_cos();
                 let yaw = [0.0, sin, 0.0, cos];
@@ -124,40 +129,84 @@ impl Arrangement {
                 }
             }
             CopyLayout::Spiral => {
-                // Evenly spaced along the arm: the angle and radius grow with
-                // the square root of the copy's share, so neighbours sit about a
-                // step apart, and the arms stay at least a step apart.
-                let share = (index as f32 + 0.5) / self.count.max(1) as f32;
-                let reach = (2.0 * self.count as f32 * step[0] / (std::f32::consts::TAU * SPIRAL_TURNS)).max(SPIRAL_TURNS * step[0]);
-                let along = share.sqrt();
-                let angle = std::f32::consts::TAU * SPIRAL_TURNS * along;
-                let offset = [reach * along * angle.cos(), (share - 0.5) * SPIRAL_TURNS * step[1], reach * along * angle.sin()];
-                BodyPose { position: place(self.origin, group, offset), rotation: compose(group, euler_quat(self.turn)) }
+                // An Archimedean arm whose turns sit two steps apart: each copy
+                // is a step further along it (arc length ≈ arm·angle²/2), and the
+                // arm rises a step each turn.
+                let arm = 2.0 * step[0] / std::f32::consts::TAU;
+                let along = (index as f32 + 0.5) * step[0];
+                let angle = (2.0 * along / arm).sqrt();
+                let offset = [arm * angle * angle.cos(), angle / std::f32::consts::TAU * step[1], arm * angle * angle.sin()];
+                laid(offset, self.turn)
             }
             CopyLayout::Random => {
-                // Anywhere in the box a Grid of the same count fills.
-                let side = ceil_cuberoot(self.count) as f32;
+                // Anywhere in the cell Scatter's pile gives the copy.
+                let [column, layer, row] = pile_cell(index, columns);
                 let offset = [
-                    (index_hash_unit(index, 6) - 0.5) * side * step[0],
-                    index_hash_unit(index, 7) * side * step[1],
-                    (index_hash_unit(index, 8) - 0.5) * side * step[2],
+                    (centred(column, 1) + index_hash_unit(index, 6) - 0.5) * step[0],
+                    (layer as f32 + index_hash_unit(index, 7)) * step[1],
+                    (centred(row, 1) + index_hash_unit(index, 8) - 0.5) * step[2],
                 ];
-                BodyPose { position: place(self.origin, group, offset), rotation: compose(group, euler_quat(self.turn)) }
+                laid(offset, self.turn)
             }
         }
     }
 }
 
-/// How many times the Spiral winds round its centre.
-const SPIRAL_TURNS: f32 = 4.0;
+/// Slot `k`'s offset, in steps, in a row of `n` slots centred on zero and
+/// filled from the centre out: 0, +1, -1, +2, ... in an odd row, +0.5, -0.5,
+/// +1.5, ... in an even one. A part-filled row stays centred and a full row
+/// is the whole centred row. An unbounded line is odd, so its first slot
+/// sits on the centre: a Grid's rows grow that way from the group's origin.
+fn centred(k: usize, n: usize) -> f32 {
+    if !n.is_multiple_of(2) {
+        let reach = k.div_ceil(2) as f32;
+        if k.is_multiple_of(2) { -reach } else { reach }
+    } else {
+        let reach = (k / 2) as f32 + 0.5;
+        if k.is_multiple_of(2) { reach } else { -reach }
+    }
+}
 
-/// Neighbours sit `step` apart around the ring, or further when the copies'
-/// inner corners would otherwise meet: at Spacing 1.0 they touch, never overlap.
-fn ring_radius(count: usize, step: f32, depth: f32) -> f32 {
-    if count < 2 {
+/// Copy `index`'s cell, [column, layer, row], in a pile that grows as a cube:
+/// each shell wraps the cube before it, so the first n³ copies fill an
+/// n-cube whatever Count is. Past `side` the pile keeps its footprint and
+/// stacks whole layers.
+fn pile_cell(index: usize, side: usize) -> [usize; 3] {
+    let cube = side * side * side;
+    if index >= cube {
+        let rest = index - cube;
+        let within = rest % (side * side);
+        return [within % side, side + rest / (side * side), within / side];
+    }
+    let mut shell = (index as f64).cbrt() as usize;
+    while (shell + 1).pow(3) <= index {
+        shell += 1;
+    }
+    while shell.pow(3) > index {
+        shell -= 1;
+    }
+    // Shell k: the cells of the (k+1)-cube whose largest coordinate is k.
+    let k = shell;
+    let mut j = index - k * k * k;
+    if j < (k + 1) * (k + 1) {
+        return [k, j / (k + 1), j % (k + 1)];
+    }
+    j -= (k + 1) * (k + 1);
+    if j < k * (k + 1) {
+        return [j % k, k, j / k];
+    }
+    j -= k * (k + 1);
+    [j % k, j / k, k]
+}
+
+/// Neighbours sit `step` apart round a ring of `slots`, or further when the
+/// copies' inner corners would otherwise meet: at Spacing 1.0 they touch,
+/// never overlap.
+fn ring_radius(slots: usize, step: f32, depth: f32) -> f32 {
+    if slots < 2 {
         return 0.0;
     }
-    let half_angle = std::f32::consts::PI / count as f32;
+    let half_angle = std::f32::consts::PI / slots as f32;
     let chord = step / (2.0 * half_angle.sin());
     let inner = 0.5 * depth + 0.5 * step * half_angle.cos() / half_angle.sin();
     chord.max(inner)
@@ -226,14 +275,6 @@ fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
         v[1] + w * t[1] + (z * t[0] - x * t[2]),
         v[2] + w * t[2] + (x * t[1] - y * t[0]),
     ]
-}
-
-pub(crate) fn ceil_cuberoot(count: usize) -> usize {
-    let mut columns: usize = 1;
-    while columns.saturating_mul(columns).saturating_mul(columns) < count {
-        columns += 1;
-    }
-    columns
 }
 
 fn bounded_jitter(index: usize, axis: u32, spacing: f32) -> f32 {

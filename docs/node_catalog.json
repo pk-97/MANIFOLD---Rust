@@ -1410,6 +1410,11 @@
           "name": "reset_trigger",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Array Feedback",
@@ -1421,7 +1426,7 @@
         }
       ],
       "params": [],
-      "purpose": "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state. Optional `reset_trigger` input fires a re-seed on integer-edge changes: when it advances, the next emission copies `seed` into the state buffer (treats the trigger event as a clear+reseed). When `seed` is unwired, `reset_trigger` is a no-op.",
+      "purpose": "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state. Optional `reset_trigger` input fires a re-seed on integer-edge changes: when it advances, the next emission copies `seed` into the state buffer (treats the trigger event as a clear+reseed). When `seed` is unwired, `reset_trigger` is a no-op. Optional `active_count` input: when it rises, the items it adds are copied from `seed` into the state, so a live count grows the loop while the items already in it keep their state.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Holds a list from the previous frame and hands it back this frame, closing a feedback loop for a particle or instance system without a graph cycle.",

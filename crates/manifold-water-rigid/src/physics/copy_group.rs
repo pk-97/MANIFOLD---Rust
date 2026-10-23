@@ -75,10 +75,16 @@ impl CopyGroup {
     /// Publish `arrangement`'s first `count` rest poses, growing storage
     /// only past its high-water mark.
     pub fn show_rest(&mut self, arrangement: &Arrangement, scale: [f32; 3]) {
+        self.show_rest_from(arrangement, scale, 0);
+    }
+
+    /// [`Self::show_rest`] for the copies from `from` on; those before keep
+    /// the poses already published.
+    pub fn show_rest_from(&mut self, arrangement: &Arrangement, scale: [f32; 3], from: usize) {
         if self.poses.len() < arrangement.count {
             self.poses.resize(arrangement.count, Transform::default());
         }
-        for (index, pose) in self.poses[..arrangement.count].iter_mut().enumerate() {
+        for (index, pose) in self.poses[..arrangement.count].iter_mut().enumerate().skip(from) {
             let rest = arrangement.rest(self.width, index);
             *pose = Transform {
                 pos: rest.position,

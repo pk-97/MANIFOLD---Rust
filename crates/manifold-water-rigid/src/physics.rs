@@ -195,8 +195,10 @@ pub struct RigidBody {
 
 /// A copies body's spawner. Layout is 0 Grid, 1 Scatter, 2 Line, 3 Ring, 4
 /// Spiral, 5 Random; spacing is a multiple of the copy's box width along the
-/// layout axis; turn is each copy's own rotation inside the layout. A change
-/// lays the copies out again at the next tick start (`physics/copy_layout.rs`).
+/// layout axis; turn is each copy's own rotation inside the layout. A layout
+/// change lays the copies out again at the next tick start; a Count change
+/// adds or parks tail copies there and the rest keep moving
+/// (`physics/copy_layout.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopySpawn {
@@ -388,6 +390,17 @@ fn moved(old: &RigidBody, new: &RigidBody) -> bool {
 /// collision shape or a new scale.
 fn reshaped(old: &RigidBody, new: &RigidBody) -> bool {
     old.transform.scale != new.transform.scale || !same_collider(old, new)
+}
+
+/// `target` as a group resting in `installed` compares it: an Animated
+/// group's copies follow its transform as it moves, so its own place never
+/// counts as a layout edit.
+fn placed_as(installed: &Arrangement, target: Arrangement, prototype: &RigidBody) -> Arrangement {
+    if prototype.kind == 2 {
+        Arrangement { origin: installed.origin, rotation: installed.rotation, ..target }
+    } else {
+        target
+    }
 }
 
 /// Install `body` with its card mass through the collision-shape gate;
@@ -1728,12 +1741,14 @@ impl RigidSimulation {
 
     /// Lay out again, at the tick starting at `tick_start`, every copy group
     /// whose authored arrangement in effect then differs from the one its
-    /// bodies rest in: the copies move to their new rest poses at zero
-    /// velocity, tail bodies are enabled or disabled for a new Count, and
-    /// bodies are installed only past a group's high-water mark. The
-    /// arrangement in effect is the latest authored sample at or before the
-    /// tick start, so the change lands on the same tick at any frame rate,
-    /// live and in export. Other groups and bodies keep moving.
+    /// bodies rest in. A layout or group edit moves every copy to its new
+    /// rest pose at zero velocity. A Count edit alone leaves the copies that
+    /// stay moving and puts only the new tail at rest in its places; tail
+    /// bodies past it park disabled, and bodies are installed only past a
+    /// group's high-water mark. The arrangement in effect is the latest
+    /// authored sample at or before the tick start, so the change lands on
+    /// the same tick at any frame rate, live and in export. Other groups and
+    /// bodies keep moving.
     fn relayout_due(&mut self, tick_start: f64, body_count: usize) -> Result<(), String> {
         if self.groups.iter().all(|state| state.arrangement.is_none()) {
             return Ok(());
@@ -1763,12 +1778,16 @@ impl RigidSimulation {
                 continue;
             };
             let target = Arrangement::of(prototype, made);
-            let same = if prototype.kind == 2 { installed.same_shape(&target) } else { installed == target };
-            if same {
+            let placed = placed_as(&installed, target, prototype);
+            if installed == placed {
                 continue;
             }
             let prototype = prototype.clone();
-            result = self.lay_out(group, &prototype, target);
+            result = if installed.same_places(&placed) {
+                self.resize(group, &prototype, made)
+            } else {
+                self.lay_out(group, &prototype, target)
+            };
             if result.is_err() {
                 break;
             }
@@ -1789,6 +1808,22 @@ impl RigidSimulation {
 
     /// Put group `group`'s copies at rest in `target`.
     fn lay_out(&mut self, group: usize, prototype: &RigidBody, target: Arrangement) -> Result<(), String> {
+        self.groups[group].deferred_edit = None;
+        self.settle(group, prototype, target, 0)
+    }
+
+    /// Give group `group` `count` copies in the places it rests in: the
+    /// copies that stay keep their motion.
+    fn resize(&mut self, group: usize, prototype: &RigidBody, count: usize) -> Result<(), String> {
+        let Some(installed) = self.groups[group].arrangement else { return Ok(()) };
+        let keep = self.groups[group].active.min(count);
+        self.settle(group, prototype, Arrangement { count, ..installed }, keep)
+    }
+
+    /// Group `group` in `target`, its copies from `from` on at rest in their
+    /// places; those before `from` keep moving. Bodies past `target.count`
+    /// park disabled, and bodies install only past the high-water mark.
+    fn settle(&mut self, group: usize, prototype: &RigidBody, target: Arrangement, from: usize) -> Result<(), String> {
         let world = self.world.as_mut().expect("world constructed above");
         let state = &mut self.groups[group];
         let installed = state.handles.len();
@@ -1800,8 +1835,7 @@ impl RigidSimulation {
             }
         }
         state.arrangement = Some(target);
-        state.deferred_edit = None;
-        for index in 0..target.count {
+        for index in from..target.count {
             let pose = state.rest(index);
             match state.handles[index] {
                 Some(handle) => {
@@ -1908,14 +1942,15 @@ impl RigidSimulation {
                 continue;
             };
             let authored = Arrangement::of(prototype, made[group]);
-            let pending = if prototype.kind == 2 { !installed.same_shape(&authored) } else { installed != authored };
-            if pending {
+            let placed = placed_as(&installed, authored, prototype);
+            // A Count edit alone moves no copy: until the next tick start
+            // adds or parks the tail, the new tail shows at rest.
+            let resized = installed != placed && installed.same_places(&placed);
+            if (installed != placed && !resized) || state.deferred_edit.is_some() {
                 // Shown at rest until the next tick start lays the bodies out.
                 state.show_rest(&authored, scale);
-            } else if state.deferred_edit.is_some() {
-                state.show_rest(&authored, scale);
             } else {
-                for index in 0..state.active {
+                for index in 0..state.active.min(placed.count) {
                     let Some(handle) = state.handles[index] else {
                         continue;
                     };
@@ -1933,7 +1968,10 @@ impl RigidSimulation {
                         ..Default::default()
                     };
                 }
-                state.shown = state.active;
+                if placed.count > state.active {
+                    state.show_rest_from(&placed, scale, state.active);
+                }
+                state.shown = placed.count;
             }
             state.description.clone_from(authored_body);
         }

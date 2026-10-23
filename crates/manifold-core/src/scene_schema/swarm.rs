@@ -114,7 +114,7 @@ pub static SWARM_ROWS: [PropertyRow; 76] = [
     row("sphere_radius", SHAPE, Source, Exposure::Internal("Size scales each particle")).param("radius").default(1.0).when(draws_sphere),
     row("sphere_segments", SHAPE, Source, Exposure::Internal(PARTICLE_SPHERE)).param("segments").default(12.0).when(draws_sphere),
     row("sphere_rings", SHAPE, Source, Exposure::Internal(PARTICLE_SPHERE)).param("rings").default(6.0).when(draws_sphere),
-    row("move_capacity", MOVE, Simulation, Exposure::Internal("every particle is stepped; dead ones pass through")).param("active_count"),
+    row("move_count", MOVE, Simulation, Exposure::Automatic("the swarm's Count: only live particles move")).param("active_count"),
     clock("move_ticks", "ticks"),
     clock("move_first_tick", "first_tick"),
     clock("move_force_lattices", "force_lattices"),

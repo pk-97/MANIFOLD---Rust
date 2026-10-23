@@ -29,11 +29,12 @@ use manifold_node_engine::state_store::NodeState;
 manifold_node_engine::primitive! {
     name: ArrayFeedback,
     type_id: "node.array_feedback",
-    purpose: "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state. Optional `reset_trigger` input fires a re-seed on integer-edge changes: when it advances, the next emission copies `seed` into the state buffer (treats the trigger event as a clear+reseed). When `seed` is unwired, `reset_trigger` is a no-op.",
+    purpose: "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state. Optional `reset_trigger` input fires a re-seed on integer-edge changes: when it advances, the next emission copies `seed` into the state buffer (treats the trigger event as a clear+reseed). When `seed` is unwired, `reset_trigger` is a no-op. Optional `active_count` input: when it rises, the items it adds are copied from `seed` into the state, so a live count grows the loop while the items already in it keep their state.",
     inputs: {
         in: Array(Particle) required,
         seed: Array(Particle) optional,
         reset_trigger: ScalarF32 optional,
+        active_count: ScalarF32 optional,
     },
     outputs: {
         out: Array(Particle),
@@ -55,6 +56,8 @@ manifold_node_engine::primitive! {
         // without firing so the first-alloc path's `seed` copy isn't
         // immediately repeated on the same frame.
         last_reset_trigger: Option<i32> = None,
+        // The last `active_count` seen, so a rise copies only the items it adds.
+        last_count: Option<u32> = None,
     },
 }
 
@@ -108,7 +111,7 @@ impl Primitive for ArrayFeedback {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        emit_delayed(ctx, &mut self.last_reset_trigger);
+        emit_delayed(ctx, &mut self.last_reset_trigger, &mut self.last_count, std::mem::size_of::<Particle>() as u64);
     }
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -117,9 +120,15 @@ impl Primitive for ArrayFeedback {
 }
 
 /// The emit half of a one-frame array delay with ports `in` (a state
-/// capture), `seed`, `reset_trigger` and `out`. Item layout is opaque, so
-/// every typed feedback atom shares it.
-pub(super) fn emit_delayed(ctx: &mut EffectNodeContext<'_, '_>, last_reset_trigger: &mut Option<i32>) {
+/// capture), `seed`, `reset_trigger`, `active_count` and `out`. Items are
+/// `item_bytes` long and otherwise opaque, so every typed feedback atom
+/// shares it.
+pub(super) fn emit_delayed(
+    ctx: &mut EffectNodeContext<'_, '_>,
+    last_reset_trigger: &mut Option<i32>,
+    last_count: &mut Option<u32>,
+    item_bytes: u64,
+) {
     {
         // `evaluate` (= `run`) phase: emit only. The capture lives in
         // `late_capture` because state-capture nodes run BEFORE their
@@ -237,6 +246,29 @@ pub(super) fn emit_delayed(ctx: &mut EffectNodeContext<'_, '_>, last_reset_trigg
                     if copy_size > 0 {
                         gpu.native_enc.copy_buffer_to_buffer(seed_buf, prev, copy_size);
                     }
+                }
+            }
+        }
+
+        // Count rise: the items that join the live range start from the
+        // seed, where a reseed puts them; the rest keep their state.
+        if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("active_count") {
+            let current = v.round().max(0.0) as u32;
+            let previous = last_count.replace(current);
+            if let (Some(previous), Some(seed_buf)) = (previous, ctx.inputs.array("seed"))
+                && current > previous
+            {
+                let start = u64::from(previous) * item_bytes;
+                let end = (u64::from(current) * item_bytes).min(seed_buf.size).min(size);
+                let into = if in_place {
+                    Some(out_buf)
+                } else {
+                    store.get::<ArrayFeedbackState>(node_id, owner_key).and_then(|state| state.prev.as_ref())
+                };
+                if let Some(into) = into
+                    && end > start
+                {
+                    gpu.native_enc.copy_buffer_range(seed_buf, start, into, start, end - start);
                 }
             }
         }

@@ -34,7 +34,10 @@
 //!
 //! Respects the same `reset_trigger` recompute gate as
 //! `seed_particles_from_texture.rs` — seeding happens once per trigger
-//! edge (+ the first frame), never every frame.
+//! edge (+ the first frame), never every frame. Between edges a rise in
+//! `active_count` places only the slots it adds, where the reseed puts them
+//! (a particle's place depends on its slot and `frame_seed`, never on the
+//! count), so a live Count adds particles without moving the others.
 
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
@@ -55,7 +58,8 @@ struct SpawnFromMeshUniforms {
     frame_seed: u32,
     vertex_count: u32,
     triangle_count: u32,
-    _pad0: u32,
+    /// The first slot placed: 0 on a reseed, the old Count when Count grows.
+    first: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -135,7 +139,12 @@ manifold_node_engine::primitive! {
         cached_triangle_count: u32 = 0,
         // Last observed `reset_trigger` integer, for edge-gated recompute.
         // `None` until the first frame (which always recomputes).
-        last_reset_trigger: Option<i32> = None
+        last_reset_trigger: Option<i32> = None,
+        // The Count last placed, so a rise between reseeds places only the
+        // slots it adds.
+        last_active: Option<u32> = None,
+        // The mesh content the cumulative table was built from.
+        scanned: Option<manifold_node_engine::content_revision::ContentVersion> = None
     },
 }
 
@@ -156,13 +165,21 @@ impl Primitive for SpawnFromMesh {
 
         // Execution gate (see the `reset_trigger` input): when wired, recompute
         // the seed only on the trigger's integer edges (+ the first frame).
-        // Cheap edge check before any allocation or dispatch.
+        // Between edges a Count rise places only the slots it adds, where a
+        // reseed would put them. Cheap checks before any allocation or dispatch.
+        let mut first = 0;
         if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
             let current = v.round() as i32;
             let edge = self.last_reset_trigger != Some(current);
             self.last_reset_trigger = Some(current);
             if !edge {
-                return;
+                match self.last_active {
+                    Some(placed) if active_count_param > placed => first = placed,
+                    _ => {
+                        self.last_active = Some(active_count_param);
+                        return;
+                    }
+                }
             }
         }
 
@@ -181,7 +198,9 @@ impl Primitive for SpawnFromMesh {
             return;
         }
         let active_count = active_count_param.min(capacity);
+        let first = first.min(active_count);
         let triangle_count = vertex_count / 3;
+        let content = ctx.inputs.content_version("vertices");
 
         let gpu = ctx.gpu_encoder();
 
@@ -229,6 +248,8 @@ impl Primitive for SpawnFromMesh {
             self.cumulative = Some(gpu.device.create_buffer(bytes));
             self.cached_triangle_count = triangle_count;
         }
+        // The table already holds this mesh's areas: a Count rise reuses it.
+        let table_current = !needs_alloc && content.is_some() && self.scanned == content;
         let cumulative = self.cumulative.as_ref().expect("cumulative just allocated");
 
         let vertices_pipeline = self.pipeline.as_ref().expect("just inserted");
@@ -242,10 +263,12 @@ impl Primitive for SpawnFromMesh {
             frame_seed,
             vertex_count,
             triangle_count,
-            _pad0: 0,
+            first,
             _pad1: 0,
             _pad2: 0,
         };
+        self.last_active = Some(active_count_param);
+        let placed = active_count - first;
 
         let bindings = [
             GpuBinding::Buffer {
@@ -272,7 +295,8 @@ impl Primitive for SpawnFromMesh {
         if mode_idx >= 1 {
             // Surface and volume modes: area → scan → place, each pass reads what the
             // previous wrote, so barrier between every stage.
-            if triangle_count > 0 {
+            if triangle_count > 0 && !table_current {
+                self.scanned = content;
                 gpu.native_enc.dispatch_compute(
                     area_pipeline,
                     &bindings,
@@ -294,14 +318,14 @@ impl Primitive for SpawnFromMesh {
             gpu.native_enc.dispatch_compute(
                 place_pipeline,
                 &bindings,
-                [active_count.div_ceil(256), 1, 1],
+                [placed.div_ceil(256), 1, 1],
                 "node.spawn_from_mesh.place",
             );
         } else {
             gpu.native_enc.dispatch_compute(
                 vertices_pipeline,
                 &bindings,
-                [active_count.div_ceil(256), 1, 1],
+                [placed.div_ceil(256), 1, 1],
                 "node.spawn_from_mesh.vertices",
             );
         }
@@ -357,7 +381,7 @@ mod gpu_tests {
             frame_seed,
             vertex_count,
             triangle_count,
-            _pad0: 0,
+            first: 0,
             _pad1: 0,
             _pad2: 0,
         };

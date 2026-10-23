@@ -1,4 +1,4 @@
-// Deterministic clear -> count -> serial scan -> emit kernel for cut maps.
+// Deterministic clear -> count -> block scan -> emit kernel for cut maps.
 // xyz are barycentrics and w is the source triangle index.
 struct Params {
     mode: u32,
@@ -122,9 +122,33 @@ fn band_polygon(triangle: u32, band: u32) -> Polygon {
         let centroid_band = min(u32(floor(centroid * f32(band_count))), band_count - 1u);
         if band != centroid_band { result.count = 0u; return result; }
     }
+    // Wholly inside its band, the clips would keep every corner.
+    let inside_lower = band == 0u || lo >= f32(band) / f32(band_count);
+    let inside_upper = band + 1u >= band_count || hi <= f32(band + 1u) / f32(band_count);
+    if inside_lower && inside_upper { return result; }
     if band > 0u { result = clip_plane(result, vec3<f32>(0.0), f32(band) / f32(band_count), 1u); }
     if band + 1u < band_count { result = clip_plane(result, vec3<f32>(0.0), f32(band + 1u) / f32(band_count), 2u); }
     return result;
+}
+// The bands `triangle` can reach, first and last. Every band past them clips
+// the triangle to nothing. A thousandth of a band of margin each side, far
+// above float rounding, keeps the records the same as walking every band, at
+// the cost of the bands the triangle spans instead of all of them.
+fn band_range(triangle: u32) -> vec2<u32> {
+    let band_count = max(params.bands, 1u);
+    let n = f32(band_count);
+    let base = triangle * 3u;
+    var lo = 3.402823466e+38;
+    var hi = -3.402823466e+38;
+    for (var i = 0u; i < 3u; i = i + 1u) {
+        let projected = 0.5 + 0.5 * dot(source_position(reference[base + i].position), direction());
+        if !finite(projected) { return vec2<u32>(0u, band_count - 1u); }
+        lo = min(lo, projected);
+        hi = max(hi, projected);
+    }
+    let first = clamp(floor(lo * n - 1.0e-3), 0.0, n - 1.0);
+    let last = clamp(floor(hi * n + 1.0e-3), 0.0, n - 1.0);
+    return vec2<u32>(u32(first), u32(last));
 }
 fn normalized_triangle_polygon(triangle: u32) -> Polygon {
     var result = triangle_polygon(triangle);
@@ -237,7 +261,8 @@ fn candidate_records(candidate: u32) -> CellResult {
     if f32(candidate) > 16777215.0 { return CellResult(0u, false, 3u); }
     if params.mode != 0u { return cell_records(candidate); }
     var result = CellResult(0u, true, 0u);
-    for (var band = 0u; band < max(params.bands, 1u); band = band + 1u) {
+    let bands = band_range(candidate);
+    for (var band = bands.x; band <= bands.y; band = band + 1u) {
         let part = polygon_records(band_polygon(candidate, band));
         if !part.valid { return part; }
         if part.records > params.output_capacity || result.records > params.output_capacity - part.records { return CellResult(0u, false, 1u); }
@@ -323,28 +348,61 @@ fn count_main(
     }
 }
 
-@compute @workgroup_size(1, 1, 1)
-fn scan_main() {
-    atomicStore(&status[0], 0u);
-    atomicStore(&status[1], 0u);
-    atomicStore(&status[2], 0u);
-    var total = 0u;
+// One workgroup scans every block's sum in parallel: each lane owns a run of
+// consecutive blocks, the lanes' run totals are scanned in workgroup memory,
+// then each lane writes its blocks' exclusive offsets. Sums saturate at the
+// output capacity; any saturation or block error invalidates the whole map.
+@compute @workgroup_size(256, 1, 1)
+fn scan_main(@builtin(local_invocation_id) local: vec3<u32>) {
+    let lane = local.x;
+    let tail = params.candidate_count;
+    let limit = params.output_capacity;
     let block_count = (params.candidate_count + 255u) / 256u;
-    for (var block = 0u; block < block_count; block = block + 1u) {
-        let block_sum = counts[params.candidate_count + block];
-        let block_error = prefix[params.candidate_count + block];
-        if block_error != 0u { atomicStore(&status[1], 1u); atomicMax(&status[2], block_error); atomicMax(&status[3], block_error); }
-        prefix[params.candidate_count + block] = total;
-        if block_sum > params.output_capacity || total > params.output_capacity - block_sum {
-            atomicStore(&status[1], 1u);
-            atomicMax(&status[2], 1u);
-            atomicMax(&status[3], 1u);
-            total = params.output_capacity;
-        } else { total = total + block_sum; }
+    let run = (block_count + 255u) / 256u;
+    let first = min(lane * run, block_count);
+    let end = min(first + run, block_count);
+    if lane == 0u { atomicStore(&local_error, 0u); }
+    workgroupBarrier();
+    var sum = 0u;
+    var error = 0u;
+    for (var block = first; block < end; block = block + 1u) {
+        let block_sum = counts[tail + block];
+        error = max(error, prefix[tail + block]);
+        if block_sum > limit || sum > limit - block_sum { error = max(error, 1u); }
+        sum = sat_add(sum, block_sum, limit);
     }
-    atomicStore(&status[0], total);
-    // emit_main writes nothing when status[1] is set, so the live count is 0.
-    live_count[0] = select(total, 0u, atomicLoad(&status[1]) != 0u);
+    if error != 0u { atomicMax(&local_error, error); }
+    local_prefix[lane] = sum;
+    workgroupBarrier();
+    var offset = 1u;
+    loop {
+        if offset >= 256u { break; }
+        var addend = 0u;
+        if lane >= offset { addend = local_prefix[lane - offset]; }
+        workgroupBarrier();
+        if addend > limit || local_prefix[lane] > limit - addend { atomicMax(&local_error, 1u); }
+        local_prefix[lane] = sat_add(local_prefix[lane], addend, limit);
+        workgroupBarrier();
+        offset = offset * 2u;
+    }
+    var running = 0u;
+    if lane > 0u { running = local_prefix[lane - 1u]; }
+    for (var block = first; block < end; block = block + 1u) {
+        let block_sum = counts[tail + block];
+        prefix[tail + block] = running;
+        running = sat_add(running, block_sum, limit);
+    }
+    workgroupBarrier();
+    if lane == 0u {
+        let total = local_prefix[255u];
+        let reason = atomicLoad(&local_error);
+        atomicStore(&status[0], total);
+        atomicStore(&status[1], select(0u, 1u, reason != 0u));
+        atomicStore(&status[2], reason);
+        atomicMax(&status[3], reason);
+        // emit_main writes nothing when status[1] is set, so the live count is 0.
+        live_count[0] = select(total, 0u, reason != 0u);
+    }
 }
 
 fn emit_cells(triangle: u32, start: u32) {
@@ -385,7 +443,8 @@ fn emit_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let start = prefix[id.x] + prefix[params.candidate_count + block];
     if params.mode == 0u {
         var written = 0u;
-        for (var band = 0u; band < max(params.bands, 1u); band = band + 1u) {
+        let bands = band_range(id.x);
+        for (var band = bands.x; band <= bands.y; band = band + 1u) {
             let polygon = band_polygon(id.x, band); let part = polygon_records(polygon);
             if part.valid && part.records > 0u { emit_polygon(polygon, id.x, start + written); written = written + part.records; }
         }
