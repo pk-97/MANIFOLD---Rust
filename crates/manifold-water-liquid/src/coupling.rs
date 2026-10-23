@@ -30,7 +30,7 @@ use crate::fluid_role::PreparedFluidGeometry;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation, Solid};
-use manifold_physics::TriangleMesh;
+use manifold_physics::collision_shape::scaled_mesh;
 use manifold_node_engine::scene::transform::Transform;
 
 /// Where a coupled body's controls come from.
@@ -614,10 +614,7 @@ struct Bound {
 /// box face: its hulls, or for a static collider its exact mesh at its scale.
 fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle, body: Option<&RigidBody>) -> Result<(Arc<PreparedFluidGeometry>, f32), String> {
     let exact = body.and_then(|body| match body.collider.as_deref() {
-        Some(Solid::Mesh(mesh)) => Some(TriangleMesh {
-            vertices: mesh.vertices.iter().map(|v| std::array::from_fn(|axis| v[axis] * body.transform.scale[axis])).collect(),
-            triangles: mesh.triangles.clone(),
-        }),
+        Some(Solid::Mesh(mesh)) => Some(scaled_mesh(mesh, body.transform.scale)),
         _ => None,
     });
     let fixed = exact.is_some();

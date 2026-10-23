@@ -926,7 +926,7 @@ mod tests {
         let at = |node_doc_id: u32, param: &str| ParamAddr { scope_path: Vec::new(), node_doc_id, param_id: param.to_owned() };
         let refusal = |param: Option<&'static str>, reason: &str| BodyRefusalRow { input: "copies_0".into(), param, reason: reason.into() };
         let rows = [
-            refusal(Some("scale_x"), "scale must be finite, between 0.001 and 1000 on every axis"),
+            refusal(Some("scale_x"), "scale must be finite and not zero on any axis"),
             refusal(Some("copy_size_spacing"), "Spacing must be at least 0.01"),
             refusal(None, "Box3D refused the body"),
         ];
@@ -934,7 +934,7 @@ mod tests {
         body_problems(&anchors, rows.iter().map(|row| (&world, row)), &mut out);
         let first: Vec<&ParamAddr> = out.iter().map(|problem| &problem.params[0]).collect();
         assert_eq!(first, [&at(7, "scale_x"), &at(121, "copy_size_spacing"), &at(121, "bounce")]);
-        assert_eq!(out[0].kind.message(), "Scale must be finite, between 0.001 and 1000 on every axis");
+        assert_eq!(out[0].kind.message(), "Scale must be finite and not zero on any axis");
     }
 
     /// BUG-3zq4r (inflow runs out): a pool too full for an inflow is never

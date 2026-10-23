@@ -12,7 +12,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use manifold_physics::collision_shape::{Solid, validate_hull_scaled, validate_position, validate_scale};
+use manifold_physics::collision_shape::{validate_position, validate_scale};
 
 use super::RigidBody;
 use super::copy_group::validate_spawn;
@@ -215,19 +215,7 @@ fn check(body: &RigidBody, passed: Option<&RigidBody>, prototype: bool) -> Resul
             && passed.collider.as_ref().zip(body.collider.as_ref()).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
     });
     if !same_shape {
-        let scale = body.transform.scale;
-        match solid {
-            Solid::Hulls(hulls) => {
-                for hull in hulls {
-                    validate_hull_scaled(hull, scale).map_err(gate("scale_x"))?;
-                }
-            }
-            Solid::Mesh(mesh) => {
-                for vertex in &mesh.vertices {
-                    validate_position(std::array::from_fn(|axis| vertex[axis] * scale[axis])).map_err(gate("scale_x"))?;
-                }
-            }
-        }
+        solid.validate_at(body.transform.scale).map_err(gate("scale_x"))?;
     }
     Ok(())
 }

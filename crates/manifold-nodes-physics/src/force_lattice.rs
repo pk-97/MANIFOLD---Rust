@@ -6,7 +6,7 @@
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, FORCE_NODE_FLOATS, ForceLattice};
+use manifold_physics::force_lattice::{FORCE_LATTICE_RESERVE, FORCE_NODE_FLOATS, ForceLattice, impulse_reserve};
 
 /// Trilinear reads of a force lattice; pure math, included by each atom that
 /// reads one (its own buffer reads stay in its body).
@@ -113,14 +113,15 @@ struct Capacity {
 
 impl Capacity {
     /// Room for `needed` and at least `FORCE_LATTICE_RESERVE` force
-    /// lattices, impulse lattices and tick lengths, so a swarm's first hit,
-    /// or a later hit frame with more ticks, finds the room already there.
+    /// lattices, impulse lattices with their kicks' far terms and tick
+    /// lengths, so a swarm's first hit, or a later hit frame with more ticks,
+    /// finds the room already there.
     fn reserve(needed: Capacity) -> Self {
         let reserve = FORCE_LATTICE_RESERVE as usize;
         Self {
             lattice: needed.lattice,
             forces: needed.forces.max(reserve),
-            impulses: needed.impulses.max(reserve * needed.lattice.node_count()),
+            impulses: needed.impulses.max(impulse_reserve(needed.lattice.node_count())),
             hits: needed.hits,
             ticks: needed.ticks.max(reserve),
             far: needed.far,
@@ -337,6 +338,7 @@ pub fn felt_field(ctx: &EffectNodeContext<'_, '_>, owner: &str) -> Result<Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_physics::force_lattice::FarForces;
 
     /// A swarm uploads before its first hit with no impulse lattice at all.
     /// The reserve made then holds its first hit and a later live hit frame
@@ -345,7 +347,9 @@ mod tests {
     fn lattice_reserve_holds_live_hit_frames() {
         let lattice = ForceLattice::over_box([-2.0; 3], [4.0; 3], 64);
         let nodes = lattice.node_count();
-        let frame = |ticks: usize, hit_lattices: usize| Capacity { lattice, forces: ticks, impulses: hit_lattices * nodes, hits: 0, ticks, far: 0 };
+        // A hit frame packs its kicks' far terms, one a tick, after its lattices.
+        let kicks = |hit_lattices: usize| if hit_lattices == 0 { 0 } else { hit_lattices * nodes + FarForces::words(hit_lattices, 1) };
+        let frame = |ticks: usize, hit_lattices: usize| Capacity { lattice, forces: ticks, impulses: kicks(hit_lattices), hits: 0, ticks, far: 0 };
         let reserved = Capacity::reserve(frame(1, 0));
         for (ticks, hit_lattices) in [(1, 1), (2, 2), (3, 3)] {
             assert!(reserved.holds(&frame(ticks, hit_lattices)), "{ticks} ticks with hits");

@@ -19,7 +19,12 @@
 //! how a body reaches the solver: anything non-finite, out of the world's
 //! range or degenerate is refused with a reason before Box3D sees it, so a
 //! bad scale can never grow a broad-phase tree past its depth limit
-//! (BUG-k787p (Box3D tree query assertion)).
+//! (BUG-k787p (Box3D tree query assertion)). Any finite non-zero scale is a
+//! scale, mirrored included, as in Blender and Unity: the shape it makes is
+//! what the gate checks, against [`MAX_COORDINATE`] and [`MIN_THICKNESS`].
+//! A mirrored scale reflects the shape: Box3D rebuilds each hull from its
+//! reflected points, so its faces point out, and a mirrored mesh has its
+//! triangles turned ([`scaled_mesh`]).
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, OnceLock};
@@ -33,10 +38,6 @@ use crate::{BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, Tri
 /// metres. Box3D treats bounds past 100 km as corrupt; this keeps every
 /// installed bound a factor of ten inside that.
 pub const MAX_COORDINATE: f32 = 10_000.0;
-
-/// Each scale axis must sit in this range: positive, so a mirrored body never
-/// turns its hulls inside out.
-pub const SCALE_RANGE: (f32, f32) = (1.0e-3, 1.0e3);
 
 /// The thinnest a body's hull may be in any direction, in metres.
 pub const MIN_THICKNESS: f32 = 1.0e-4;
@@ -450,6 +451,22 @@ impl Solid {
         }
     }
 
+    /// Whether this solid at `scale` is one the solver can hold, refused in
+    /// the scale's terms: every point within [`MAX_COORDINATE`] of the
+    /// origin and every hull at least [`MIN_THICKNESS`] thick.
+    pub fn validate_at(&self, scale: [f32; 3]) -> Result<(), PhysicsError> {
+        validate_scale(scale)?;
+        let mut far = false;
+        self.for_each_point(|point| far |= validate_position(std::array::from_fn(|axis| point[axis] * scale[axis])).is_err());
+        if far {
+            return Err(PhysicsError::InvalidInput("at this scale the shape reaches past 10 km from the origin, outside the solver's world"));
+        }
+        if self.hulls().is_some_and(|hulls| hulls.iter().any(|hull| validate_hull_scaled(hull, scale).is_err())) {
+            return Err(PhysicsError::InvalidInput("at this scale part of the shape is under 0.1 mm thick, too thin to collide"));
+        }
+        Ok(())
+    }
+
     /// Cook this solid at `scale` once, for any number of bodies to share
     /// ([`PhysicsWorld::add_cooked`]): the gate into Box3D. Refuses a bad
     /// scale, hull or mesh before the solver sees it.
@@ -461,7 +478,10 @@ impl Solid {
                 let refs: Vec<&[[f32; 3]]> = scaled.iter().map(Vec::as_slice).collect();
                 CookedSolid::hulls(&refs, 128)
             }
-            Self::Mesh(mesh) => CookedSolid::mesh(&scaled(&mesh.vertices, scale), &mesh.triangles),
+            Self::Mesh(mesh) => {
+                let mesh = scaled_mesh(mesh, scale);
+                CookedSolid::mesh(&mesh.vertices, &mesh.triangles)
+            }
         }
     }
 
@@ -493,13 +513,30 @@ fn scaled_hulls(hulls: &[Vec<[f32; 3]>], scale: [f32; 3]) -> Vec<Vec<[f32; 3]>> 
     hulls.iter().map(|hull| scaled(hull, scale)).collect()
 }
 
-/// A scale is finite and positive on every axis, within [`SCALE_RANGE`].
+/// Whether `scale` mirrors: an odd number of its axes are negative.
+pub fn mirrors(scale: [f32; 3]) -> bool {
+    scale.iter().filter(|s| s.is_sign_negative()).count() % 2 == 1
+}
+
+/// `mesh` at `scale`. A mirroring scale also turns every triangle, so each
+/// face still winds outward.
+pub fn scaled_mesh(mesh: &TriangleMesh, scale: [f32; 3]) -> TriangleMesh {
+    let triangles = if mirrors(scale) {
+        mesh.triangles.iter().map(|&[a, b, c]| [a, c, b]).collect()
+    } else {
+        mesh.triangles.clone()
+    };
+    TriangleMesh { vertices: scaled(&mesh.vertices, scale), triangles }
+}
+
+/// A scale is finite and not zero on any axis. Mirrored is a scale; what
+/// the scale makes of a shape is checked on the shape ([`validate_hull`],
+/// [`validate_position`]).
 pub fn validate_scale(scale: [f32; 3]) -> Result<(), PhysicsError> {
-    let (low, high) = SCALE_RANGE;
-    if scale.iter().all(|s| s.is_finite() && (low..=high).contains(s)) {
+    if scale.iter().all(|s| s.is_finite() && *s != 0.0) {
         Ok(())
     } else {
-        Err(PhysicsError::InvalidInput("scale must be finite, between 0.001 and 1000 on every axis"))
+        Err(PhysicsError::InvalidInput("scale must be finite and not zero on any axis"))
     }
 }
 

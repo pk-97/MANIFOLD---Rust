@@ -47,15 +47,24 @@ fn read_spawn(ctx: &EffectNodeContext<'_, '_>) -> CopySpawn {
 }
 
 /// `transform` with its parent frame folded in: the world pose and scale
-/// the solver takes. A shear the parent chain makes is dropped.
+/// the solver takes. A shear the parent chain makes is dropped. A frame that
+/// mirrors keeps the mirror in the scale, on the item's own first mirrored
+/// axis (else X), so the rotation stays a rotation.
 pub(crate) fn flatten(transform: Transform) -> Transform {
     if transform.parent == IDENTITY_MAT4 {
         return transform;
     }
     let m = transform.world();
-    let scale: [f32; 3] = std::array::from_fn(|col| (0..3).map(|row| m[col][row] * m[col][row]).sum::<f32>().sqrt());
+    let mut scale: [f32; 3] = std::array::from_fn(|col| (0..3).map(|row| m[col][row] * m[col][row]).sum::<f32>().sqrt());
+    let column = |col: usize| [m[col][0], m[col][1], m[col][2]];
+    let [x, y, z] = [column(0), column(1), column(2)];
+    let determinant = x[0] * (y[1] * z[2] - y[2] * z[1]) - x[1] * (y[0] * z[2] - y[2] * z[0]) + x[2] * (y[0] * z[1] - y[1] * z[0]);
+    if determinant < 0.0 {
+        let axis = transform.scale.iter().position(|s| s.is_sign_negative()).unwrap_or(0);
+        scale[axis] = -scale[axis];
+    }
     let rotation: [[f32; 3]; 3] =
-        std::array::from_fn(|row| std::array::from_fn(|col| if scale[col] > 0.0 { m[col][row] / scale[col] } else { 0.0 }));
+        std::array::from_fn(|row| std::array::from_fn(|col| if scale[col] != 0.0 { m[col][row] / scale[col] } else { 0.0 }));
     Transform {
         pos: [m[3][0], m[3][1], m[3][2]],
         rot_euler: rotation_to_render_scene_euler(rotation),
@@ -310,8 +319,10 @@ impl RigidBodyNode {
         // follows the size.
         if form == Form::Mesh {
             asked.scale_steps = [0; 3];
-        } else if scale.iter().all(|s| s.is_finite() && *s > 0.0) {
-            asked.scale_steps = scale.map(|s| (s.log2() * SCALE_STEPS_PER_OCTAVE).round() as i32);
+        } else if scale.iter().all(|s| s.is_finite() && *s != 0.0) {
+            // Hulls are made unscaled and reflected when cooked, so a mirror
+            // asks for the same detail as its size.
+            asked.scale_steps = scale.map(|s| (s.abs().log2() * SCALE_STEPS_PER_OCTAVE).round() as i32);
         }
         asked.path.clear();
         asked.selection = None;
@@ -615,6 +626,26 @@ mod tests {
     fn copy_scale_is_the_scale_beyond_the_x_axis() {
         assert_eq!(copy_scale([10.0, 0.16, 10.0]).scale, [1.0, 0.16 / 10.0, 1.0]);
         assert_eq!(copy_scale([2.0; 3]).scale, [1.0; 3]);
+    }
+
+    /// A body inside a mirrored group keeps the mirror in its scale, so the
+    /// solver's pose is a true rotation and the flattened transform places
+    /// the body exactly where its group does.
+    #[test]
+    fn a_mirrored_parent_flattens_to_a_mirrored_scale() {
+        let mirror_x = [[-1.5, 0.0, 0.0, 0.0], [0.0, 1.5, 0.0, 0.0], [0.0, 0.0, 1.5, 0.0], [0.5, 0.0, 0.0, 1.0]];
+        for own in [[1.0, 1.0, 1.0], [1.0, -1.0, 1.0], [-1.0, -1.0, 0.5]] {
+            let transform = Transform { pos: [1.0, 2.0, 0.0], rot_euler: [0.3, 0.5, -0.2], scale: own, parent: mirror_x, ..IDENTITY_TRANSFORM };
+            let flat = flatten(transform);
+            let (a, b) = (transform.world(), flat.world());
+            for column in 0..4 {
+                for row in 0..4 {
+                    assert!((a[column][row] - b[column][row]).abs() < 1e-5, "{own:?}: {a:?} vs {b:?}");
+                }
+            }
+            let sign = |scale: [f32; 3]| scale.iter().map(|s| s.signum()).product::<f32>();
+            assert_eq!(sign(flat.scale), -sign(own), "{own:?}: the group's mirror stays in the scale: {:?}", flat.scale);
+        }
     }
 
     #[test]
