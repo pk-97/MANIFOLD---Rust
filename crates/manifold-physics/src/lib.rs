@@ -429,7 +429,7 @@ pub fn cook_hull(points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, PhysicsError> {
         )
     };
     if hull == 0 {
-        return Err(PhysicsError::NativeAllocation);
+        return Err(PhysicsError::InvalidInput(collision_shape::TOO_THIN));
     }
     let count = unsafe { ffi::manifold_box3d_hull_copy_points(hull, std::ptr::null_mut(), 0) };
     if count < 4 {

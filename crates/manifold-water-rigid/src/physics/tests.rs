@@ -1731,7 +1731,8 @@ fn a_mirrored_body_on_a_mirrored_collider_settles_mirrored() {
 
 /// Any finite non-zero scale enters the world: a 0.0005-scale cube and a
 /// 2000-scale Collider, and a mirrored copy group. Only zero and a shape
-/// too thin for the solver are refused, each on Scale with its reason.
+/// Box3D's hull builder cannot make (flat for its size) are refused, each
+/// on Scale with its reason.
 #[test]
 fn any_finite_nonzero_scale_enters_the_world() {
     let mut bodies = vec![None; 64];
@@ -1743,7 +1744,7 @@ fn any_finite_nonzero_scale_enters_the_world() {
         ..RigidBody::default()
     });
     bodies[1] = Some(RigidBody { transform: Transform { pos: [0.0, 10.0, 0.0], scale: [0.0005; 3], ..Transform::default() }, ..RigidBody::default() });
-    bodies[2] = Some(RigidBody { transform: Transform { pos: [3.0, 10.0, 0.0], scale: [1.0e-7; 3], ..Transform::default() }, ..RigidBody::default() });
+    bodies[2] = Some(RigidBody { transform: Transform { pos: [3.0, 10.0, 0.0], scale: [0.5, 1.0e-9, 0.5], ..Transform::default() }, ..RigidBody::default() });
     bodies[3] = Some(RigidBody { transform: Transform { pos: [6.0, 10.0, 0.0], scale: [0.0, 1.0, 1.0], ..Transform::default() }, ..RigidBody::default() });
     let prototype = RigidBody { transform: Transform { pos: [-6.0, 10.0, 0.0], scale: [-0.5, 0.5, 0.5], ..Transform::default() }, ..RigidBody::default() };
     let scene = copies_scene(&bodies, Some(prototype), 4.0, 1.25, 2.0, 0.0, GRAVITY, None, &[]);
@@ -1756,7 +1757,7 @@ fn any_finite_nonzero_scale_enters_the_world() {
     let refused: Vec<(Member, Option<&str>)> = simulation.refusals().iter().map(|refusal| (refusal.member, refusal.reason.param())).collect();
     assert_eq!(refused, [(Member::Body(2), Some("scale_x")), (Member::Body(3), Some("scale_x"))]);
     let reasons: Vec<String> = simulation.refusals().iter().map(|refusal| refusal.reason.to_string()).collect();
-    assert!(reasons[0].contains("0.1 mm") && reasons[1].contains("not zero"), "{reasons:?}");
+    assert!(reasons[0].contains("too thin to collide") && reasons[1].contains("not zero"), "{reasons:?}");
     let copies = simulation.group_poses(0);
     assert_eq!(copies.len(), 4);
     assert!(copies.iter().all(|pose| pose.scale == [-0.5, 0.5, 0.5] && pose.pos[1] < 10.0), "the mirrored copies fall, drawn mirrored: {copies:?}");

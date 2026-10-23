@@ -21,7 +21,8 @@
 //! bad scale can never grow a broad-phase tree past its depth limit
 //! (BUG-k787p (Box3D tree query assertion)). Any finite non-zero scale is a
 //! scale, mirrored included, as in Blender and Unity: the shape it makes is
-//! what the gate checks, against [`MAX_COORDINATE`] and [`MIN_THICKNESS`].
+//! what the gate checks, against [`MAX_COORDINATE`] and Box3D's own hull
+//! builder.
 //! A mirrored scale reflects the shape: Box3D rebuilds each hull from its
 //! reflected points, so its faces point out, and a mirrored mesh has its
 //! triangles turned ([`scaled_mesh`]).
@@ -39,8 +40,9 @@ use crate::{BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, Tri
 /// installed bound a factor of ten inside that.
 pub const MAX_COORDINATE: f32 = 10_000.0;
 
-/// The thinnest a body's hull may be in any direction, in metres.
-pub const MIN_THICKNESS: f32 = 1.0e-4;
+/// Why a hull Box3D's builder could not make is refused: its points are
+/// flat, a line or a point for their size.
+pub const TOO_THIN: &str = "part of the shape is too thin to collide";
 
 /// An open surface becomes a solid this fraction of its longest side thick.
 pub const SHELL_FRACTION: f32 = 0.001;
@@ -157,7 +159,7 @@ impl CollisionShape {
             return Err(PhysicsError::InvalidInput("the mesh has no triangle with area"));
         }
         let longest = (0..3).map(|axis| max[axis] - min[axis]).fold(0.0f32, f32::max);
-        if longest.is_nan() || longest < MIN_THICKNESS {
+        if longest.is_nan() || longest <= 0.0 {
             return Err(PhysicsError::InvalidInput("the mesh has no extent"));
         }
         let mut hasher = DefaultHasher::new();
@@ -453,7 +455,7 @@ impl Solid {
 
     /// Whether this solid at `scale` is one the solver can hold, refused in
     /// the scale's terms: every point within [`MAX_COORDINATE`] of the
-    /// origin and every hull at least [`MIN_THICKNESS`] thick.
+    /// origin, and every hull one Box3D's hull builder makes at this scale.
     pub fn validate_at(&self, scale: [f32; 3]) -> Result<(), PhysicsError> {
         validate_scale(scale)?;
         let mut far = false;
@@ -461,8 +463,10 @@ impl Solid {
         if far {
             return Err(PhysicsError::InvalidInput("at this scale the shape reaches past 10 km from the origin, outside the solver's world"));
         }
-        if self.hulls().is_some_and(|hulls| hulls.iter().any(|hull| validate_hull_scaled(hull, scale).is_err())) {
-            return Err(PhysicsError::InvalidInput("at this scale part of the shape is under 0.1 mm thick, too thin to collide"));
+        if let Some(hulls) = self.hulls() {
+            let scaled = scaled_hulls(hulls, scale);
+            let refs: Vec<&[[f32; 3]]> = scaled.iter().map(Vec::as_slice).collect();
+            CookedSolid::hulls(&refs, 128)?;
         }
         Ok(())
     }
@@ -549,40 +553,15 @@ pub fn validate_position(position: [f32; 3]) -> Result<(), PhysicsError> {
     }
 }
 
-/// A hull is at least four points, each a valid position, spanning a volume
-/// at least [`MIN_THICKNESS`] thick in every direction: not a point, a line
-/// or a flat sheet.
+/// A hull is at least four points, each a valid position. Whether they span
+/// a volume is Box3D's hull builder's call: its tolerance is relative to the
+/// points' size, so a small hull is a hull and only a flat, line or point
+/// one fails ([`TOO_THIN`]).
 pub fn validate_hull(points: &[[f32; 3]]) -> Result<(), PhysicsError> {
-    validate_hull_scaled(points, [1.0; 3])
-}
-
-/// [`validate_hull`] for `points` scaled by `scale`, without building the
-/// scaled hull.
-pub fn validate_hull_scaled(points: &[[f32; 3]], scale: [f32; 3]) -> Result<(), PhysicsError> {
     if points.len() < 4 {
         return Err(PhysicsError::InvalidInput("a hull needs at least 4 points"));
     }
-    let at = |i: usize| -> [f32; 3] { std::array::from_fn(|axis| points[i][axis] * scale[axis]) };
-    for i in 0..points.len() {
-        validate_position(at(i))?;
-    }
-    let p = |i: usize| at(i).map(f64::from);
-    let farthest = |score: &dyn Fn([f64; 3]) -> f64| {
-        (0..points.len()).map(|i| (i, score(p(i)))).fold((0, -1.0), |best, next| if next.1 > best.1 { next } else { best })
-    };
-    let a = p(0);
-    let (ib, ab) = farthest(&|q| norm2(sub(q, a)));
-    let b = p(ib);
-    let axis = sub(b, a);
-    let (ic, line) = farthest(&|q| norm2(cross(axis, sub(q, a))) / ab.max(f64::MIN_POSITIVE));
-    let normal = cross(axis, sub(p(ic), a));
-    let normal_length = norm2(normal).sqrt().max(f64::MIN_POSITIVE);
-    let (_, plane) = farthest(&|q| (dot(normal, sub(q, a)) / normal_length).abs());
-    let thin = f64::from(MIN_THICKNESS);
-    if ab.sqrt() < thin || line.sqrt() < thin || plane < thin {
-        return Err(PhysicsError::InvalidInput("a hull must have volume: it is flat, a line or a point"));
-    }
-    Ok(())
+    points.iter().try_for_each(|point| validate_position(*point))
 }
 
 /// Weld an unindexed triangle list by exactly equal coordinates (signed zero

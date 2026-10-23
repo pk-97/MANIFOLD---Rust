@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::collision_shape::{validate_hull, validate_position};
+use super::collision_shape::{TOO_THIN, validate_hull, validate_position};
 use super::mesh::triangle_mesh_mass_properties;
 use super::{PhysicsError, ffi, native_lock};
 
@@ -28,7 +28,8 @@ pub(crate) enum CookedForm {
 
 impl CookedSolid {
     /// Cook convex hulls, each kept to at most `max_vertex_count` vertices.
-    /// Refuses a hull that is not at least 4 valid points spanning a volume.
+    /// Refuses a hull that is not at least 4 valid points, or one the builder
+    /// cannot make because it is flat, a line or a point for its size.
     pub(crate) fn hulls(hulls: &[&[[f32; 3]]], max_vertex_count: i32) -> Result<Arc<Self>, PhysicsError> {
         if hulls.is_empty() {
             return Err(PhysicsError::InvalidInput("body needs at least one hull"));
@@ -49,7 +50,7 @@ impl CookedSolid {
                 for hull in cooked {
                     unsafe { ffi::manifold_box3d_destroy_hull(hull) };
                 }
-                return Err(PhysicsError::NativeAllocation);
+                return Err(PhysicsError::InvalidInput(TOO_THIN));
             }
             cooked.push(native);
         }
