@@ -72,7 +72,7 @@ const fn frame(property: &'static str, param: &'static str) -> PropertyRow {
     row(property, FRAME, Source, Exposure::Automatic(EMIT_FRAME)).param(param)
 }
 
-pub static SWARM_ROWS: [PropertyRow; 76] = [
+pub static SWARM_ROWS: [PropertyRow; 77] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -127,6 +127,7 @@ pub static SWARM_ROWS: [PropertyRow; 76] = [
     clock("move_field_min_y", "field_min_y"),
     clock("move_field_min_z", "field_min_z"),
     clock("move_impulse_tick", "impulse_tick"),
+    clock("move_far_terms", "far_terms"),
     bounds("bounds_pos_x", "pos_x", Exposure::Internal(BOX_OF_SWARM)),
     bounds("bounds_pos_y", "pos_y", Exposure::Internal(BOX_OF_SWARM)),
     bounds("bounds_pos_z", "pos_z", Exposure::Internal(BOX_OF_SWARM)),
