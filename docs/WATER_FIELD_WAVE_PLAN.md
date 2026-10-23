@@ -58,11 +58,11 @@
 - **I12 Modifiers.** Water is not a modifier target today (`scene_schema/fields.rs:95`; never in `b.drawn`, `scene_compile/object.rs:170`), so nothing regresses. R1b adds a one-line refusal reason for water in the Targets menu, following the Ocean precedent (`modifier.rs:445-457`). Loop, Mirror, Copies and deformers on water are a later bead.
 - **I13 Not in this wave, logged:** the 4K half-resolution search, the tracer hit, traced refraction, field versions of Shatter, Surface Peel and Ordered Recon (BUG-l2h3.30.13), and APIC.
 - **I14 Stop rule.** A merged result that breaks the instrument (water explodes, the frame goes black, the app crashes) stops all merges until it is fixed.
-- **Mid-wave rulings** go to `.claude/orchestration/decisions.md` (append-only, the lead writes), and into the design doc as a numbered D-entry before the landing. The first entries record this plan's departures from the standing rules: no per-lane `--cheap` gate; Opus reviews by area instead of a Fable final review; at most three built lanes at once (disk).
+- **Mid-wave rulings** go to section 7 of this plan (append-only, the lead writes, on main so every lane reads the current list at `/Users/peterkiemann/MANIFOLD - Rust/docs/WATER_FIELD_WAVE_PLAN.md`), and into the design doc as a numbered D-entry before the landing.
 
 ## 3. Lanes
 
-Opus lanes run at high effort unless marked medium. S0 is mechanical, so it goes to Sonnet.
+Opus lanes run at high effort unless marked medium. S0 is mechanical but splits kernel files, so it stays on Opus (AGENT_ROUTING: no GPU or kernel work on Sonnet).
 
 | Lane | Model | What | Needs |
 |---|---|---|---|
@@ -75,7 +75,7 @@ Opus lanes run at high effort unless marked medium. S0 is mechanical, so it goes
 | R4 | Opus | Foam field | R2 |
 | R5 | Opus medium | Mist | R2 |
 | R7 | Opus | Wet surfaces | R2 |
-| S0 | Sonnet high | Split the step file, its tests and its WGSL into submodules | — |
+| S0 | Opus medium | Split the step file, its tests and its WGSL into submodules | — |
 | SA | Opus | Sheeting volume fix (diagnosis from round 1, edits after S0) | S0 |
 | SB | Opus | Next tick overlaps this frame's render | — |
 | S1 | Opus | `TileTable` grown into the storage helpers; step kernels onto them | S0 |
@@ -86,9 +86,19 @@ Opus lanes run at high effort unless marked medium. S0 is mechanical, so it goes
 | SP | Opus | Pressure group: fused smoother, warm start, visible tolerance, coarse level jitter | S3 |
 | S5 | Opus | Narrow Band rebuilt on tiles | S4b, SA |
 
-**Order and slots.** At most three lanes hold a built slot at once: disk has about 180 GB free, and a built slot takes 45 to 60 GB. Before round 1 the lead detaches and scrubs the stale slots (slot-7's prototype branch is pushed). The next lane starts as soon as one reports. The render chain (R0, R2, R1b, RD) and the simulation chain (S0, S1, S2, S3, S4, S4b) each keep a slot busy; the third slot serves SB, SA, then R3, R4, R5, R7, SP and S5 as their needs merge. The simulation chain is the long pole.
+**Order and slots.** The number of lanes holding a built slot is set by disk, re-checked before each launch: free space minus the 30 GB reserve, divided by 60 GB per built slot. That is three until the refinement campaign lands and frees its slots, then about five. Read-only work (prep, reviews, audits) needs no slot and runs alongside. The next lane starts as soon as one reports, from a brief written while the others ran. Look items split along their seam: the simulation half (foam splat, spray-to-mist density, wetness writer) starts as soon as a slot is free, proven on CPU references; the shading half joins once R2 merges. The render chain (R0, R2, R1b, RD) and the simulation chain (S0, S1, S2, S3, S4, S4b) each keep a slot busy; the third slot serves SB, SA, then R3, R4, R5, R7, SP and S5 as their needs merge. The simulation chain is the long pole.
 
 The whole set must finish before the landing. Nothing is stretch, because the wave runs until it is done.
+
+**Phases.**
+1. **Clear of the refinement wave:** S0, SA diagnosis, R1a, S1.
+2. **After refinement lands:** main merged into the wave, then R0 and SB.
+3. **Drawing and storage:** R2, then R1b; S2 alongside. Peter gets a launch command once R1b merges.
+4. **Cutover:** RD and S3; R3, R4, R5 and R7 fill free slots.
+5. **Open water:** S4 and SP; the render, look and storage reviews.
+6. **Last pieces:** S4b and S5; the domain and app reviews; fix lanes.
+7. **Audits:** the final audits in section 5.
+8. **Simplify and clean up** (section 5), then the quiet timing batch, the full gate and the one landing.
 
 ## 4. Lane briefs and done checklists
 
@@ -197,7 +207,7 @@ Files: a wetness field on the water's lattice (a new module), its writer from wa
 2. A test checks drying against the exponential closed form.
 3. Stills of the tank floor as the Dam Break wave passes, and 10 s later.
 
-### S0 Split the step files (Sonnet, high)
+### S0 Split the step files (Opus, medium)
 Files: `crates/manifold-water-gpu-flip/src/primitives/gpu_flip_step.rs`, `gpu_flip_step_tests.rs` and `shaders/gpu_flip_step.wgsl`, split into submodules and includes: lattice, tiles, extend, pockets, narrow band, the sheeting block, emit. Mechanical only: no change to logic, names or behaviour.
 1. Clippy and the crate's nextest pass, with an identical test count.
 2. Every new file is under 1500 lines.
@@ -289,6 +299,17 @@ Ferstl et al. 2016, rebuilt on the storage helpers, working with sheeting, the f
   - contradictions between the plan, the design doc, the code and the lanes' named calls;
   - the clean-cut sweep: every deleted name returns zero, with no dead code and no unused params or rows;
   - a literal and cap sweep: every numeric literal and `MAX_*` added in the wave diff is physics, derived or named and sourced.
+- **Simplify and clean up (phase 8).** After the audits' fixes merge, three read-only Opus reviews (render, simulation, app and tests) read the whole wave diff for one thing: is this as simple and clean as it can be? Each finding names the simpler version and what it loses, if anything. They look for:
+  - more machinery than the job needs: helpers used once, interfaces wider than their callers, duplicated logic, abstractions with one user;
+  - anything left over from replaced systems: dead code, unused params and rows, stale comments and doc lines, leftover probes, prints and debug flags;
+  - tests that protect nothing, and tests that duplicate each other;
+  - files grown past 3000 lines, which get one split here;
+  - names and comments that no longer match what the code does.
+
+  Cleanup lanes (Opus, one commit each) apply the findings. Then a last sweep confirms that the clean-cut and literal audits still return zero. Branch and file cleanup comes after the landing:
+  - delete the merged lane branches and the prototype branches (`proto/level-set-*`);
+  - release and scrub every slot;
+  - delete the scratchpad captures.
 - **One quiet timing batch** after the last merge, with no lanes running. `fluid_capture` at 64 and 128 on the Dam Break: main against the wave, alternating, three runs each, reporting `gpu_ms`, `frame_ms` and memory.
 - **Landing.** `scripts/land_branch.py wave/water-field` once, followed with `scripts/watch_land.py --kind land`. Green lands on main. A red gets a typed bead and a fix lane. A red proven on main is named with `--named-red` and `--reason`.
 - **Blockers that need Peter:** decide, log in `decisions.md` and the report, keep going.
@@ -301,3 +322,14 @@ Ferstl et al. 2016, rebuilt on the storage helpers, working with sheeting, the f
 - The timing and memory batch.
 - Images for each look item.
 - Anything parked, with beads.
+
+## 7. Decisions log (append-only)
+
+Lanes read this section from the main checkout before pausing on any fork.
+
+- **W1. One landing of the finished set, no interim landings; no per-lane `--cheap` gate.** The full gate runs once on the finished wave, and it lands on main when green.
+- **W2. Opus reviews by area, the audits and the phase 8 simplify-and-clean-up pass; no Fable final review for this wave.**
+- **W3. At most three lanes hold a built slot at once.** Disk has about 180 GB free, and a built slot takes 45 to 60 GB.
+- **W4. No magic numbers, and contradictions stop the lane** (section 1, rules 4 and 5).
+- **W5. Blockers are decided by the lead, logged here and in the report, and work continues.**
+- **W6. W3 is replaced by the disk rule in section 3** (free space minus the reserve, 60 GB per built slot, re-checked at each launch). Read-only work runs alongside without a slot, and look items start their simulation half before the march merges.
