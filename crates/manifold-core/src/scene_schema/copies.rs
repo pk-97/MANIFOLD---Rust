@@ -16,7 +16,7 @@ use super::fields::{FieldControl, FieldRow, FieldValue, enabled, is_object_or_gr
 use super::modifier::{ModifierTypeEntry, ON_IS_THE_TOGGLE, entry, held, live};
 use super::{Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::copies_body::SPACING_MIN;
-use crate::scene_doc::{Item, ItemFields, ModifierType, Shape};
+use crate::scene_doc::{Item, ItemFields, ModifierTargets, ModifierType, SceneDoc, Shape};
 
 /// The role of the copies body inside its item.
 pub const COPIES_ROLE: &str = "copies";
@@ -216,6 +216,36 @@ pub fn acts_on_copies(modifier: ModifierType) -> bool {
     COPY_FIELD_TYPES.iter().any(|entry| entry.modifier == modifier)
 }
 
+/// Why a copy Modifier is not offered for a target (SCENE_REFINEMENT_DESIGN
+/// ruling 2): it moves whole copies, so it acts only where Copies is on.
+pub const TURN_ON_COPIES: &str = "Turn on Copies to move them";
+
+/// Whether `item`, or anything inside it, has Copies on.
+pub fn holds_copies(item: &Item) -> bool {
+    item.fields.copies() || item.children.iter().any(holds_copies)
+}
+
+/// Why a copy Modifier aimed at `targets` would move nothing: a target
+/// without Copies, or a whole scene where nothing has them.
+pub fn copies_refused(doc: &SceneDoc, targets: &ModifierTargets) -> Option<&'static str> {
+    let moves = match targets {
+        ModifierTargets::Scene => doc.items.iter().any(holds_copies),
+        ModifierTargets::Items(ids) => ids.iter().all(|id| doc.find(id).is_some_and(holds_copies)),
+    };
+    (!moves).then_some(TURN_ON_COPIES)
+}
+
+/// Why the card `item` cannot swap to the copy type `key`: its targets have
+/// no copies to move.
+pub(super) fn type_moves_no_copies(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> Option<&'static str> {
+    let ItemFields::Modifier(card) = &item.fields else { return None };
+    if field != "modifier_type" {
+        return None;
+    }
+    COPY_FIELD_TYPES.iter().find(|entry| entry.key == key && entry.modifier != card.modifier)?;
+    copies_refused(doc, &card.targets)
+}
+
 /// The copy field Modifier types, in menu order.
 pub(super) const COPY_FIELD_TYPES: [ModifierTypeEntry; 4] = [
     entry(ModifierType::CopyWave, "copy_wave", "Copy Wave", "CopyWave", false, &COPY_WAVE_ROWS),
@@ -223,3 +253,38 @@ pub(super) const COPY_FIELD_TYPES: [ModifierTypeEntry; 4] = [
     entry(ModifierType::CopyNoise, "copy_noise", "Copy Noise", "CopyNoise", false, &COPY_NOISE_ROWS),
     entry(ModifierType::CopyBlend, "copy_blend", "Copy Blend", "CopyBlend", false, &COPY_BLEND_ROWS),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_doc::{ItemId, ModifierFields, ObjectFields};
+
+    /// A copy type is offered only where its targets have Copies on
+    /// (SCENE_REFINEMENT_DESIGN ruling 2), in the Type list and the Targets
+    /// picker alike.
+    #[test]
+    fn copy_types_need_copies_on_their_targets() {
+        let scene = |copies: bool| {
+            let cube = Item::new(ItemId::new("cube"), "Cube", ItemFields::Object(ObjectFields { copies, ..ObjectFields::default() }));
+            let card = Item::new(
+                ItemId::new("card"),
+                "Bend",
+                ItemFields::Modifier(ModifierFields {
+                    modifier: ModifierType::Bend,
+                    targets: ModifierTargets::Items(vec![ItemId::new("cube")]),
+                    ..ModifierFields::default()
+                }),
+            );
+            SceneDoc { items: vec![cube, card], ..SceneDoc::default() }
+        };
+        let without = scene(false);
+        let card = without.find(&ItemId::new("card")).unwrap();
+        assert_eq!(super::super::choice_disabled(&without, card, "modifier_type", "copy_wave"), Some(TURN_ON_COPIES));
+        assert_eq!(super::super::choice_disabled(&without, card, "modifier_type", "twist"), None);
+        assert_eq!(copies_refused(&without, &ModifierTargets::Scene), Some(TURN_ON_COPIES));
+        let with = scene(true);
+        let card = with.find(&ItemId::new("card")).unwrap();
+        assert_eq!(super::super::choice_disabled(&with, card, "modifier_type", "copy_wave"), None);
+        assert_eq!(copies_refused(&with, &ModifierTargets::Scene), None);
+    }
+}

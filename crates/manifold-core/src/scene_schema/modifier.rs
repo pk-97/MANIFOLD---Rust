@@ -463,10 +463,17 @@ pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
 }
 
 /// A Modifier's target picks: Objects and Groups; never an Ocean; Shatter
-/// refuses a target it cannot break.
+/// refuses a target it cannot break, a copy type one without Copies.
 fn target_refused(doc: &SceneDoc, modifier: &Item, target: &Item) -> Option<&'static str> {
-    modifier_refuses(target).or_else(|| is_shatter(&modifier.fields).then(|| shatter_refuses(doc, modifier, target)).flatten())
+    let moves_copies = matches!(&modifier.fields, ItemFields::Modifier(card) if super::copies::acts_on_copies(card.modifier));
+    modifier_refuses(target)
+        .or_else(|| is_shatter(&modifier.fields).then(|| shatter_refuses(doc, modifier, target)).flatten())
+        .or_else(|| (moves_copies && !super::copies::holds_copies(target)).then_some(super::copies::TURN_ON_COPIES))
 }
+
+/// The Modifier fields its card header carries instead of rows: Type and On
+/// (SCENE_DOCUMENT_DESIGN.md section 8).
+pub const HEADER_FIELDS: [&str; 2] = ["modifier_type", "on"];
 
 pub static MODIFIER_FIELDS: [FieldRow; 6] = [
     FieldRow {

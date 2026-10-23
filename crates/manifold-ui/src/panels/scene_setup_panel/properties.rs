@@ -35,22 +35,28 @@ struct Slot {
 }
 
 /// A field row, as a row of the shared param surface.
-fn field_param_row(item: &ItemId, field: &FieldRowVm) -> ParamRow {
+pub(super) fn field_param_row(item: &ItemId, field: &FieldRowVm) -> ParamRow {
     let mut row = placeholder_param_info();
     row.id = ParamId::from(format!("{item}#{}", field.id));
     row.spec.name = field.label.clone();
     row.spec.whole_numbers = true;
     row.spec.max = 1.0;
-    row.spec.value_labels = Some(vec![match &field.control {
-        FieldControlVm::Pick { current, .. } => current.clone(),
+    let on = match &field.control {
+        FieldControlVm::Pick { current, .. } => {
+            row.spec.value_labels = Some(vec![current.clone()]);
+            0.0
+        }
         FieldControlVm::File { path, .. } => {
-            if path.is_empty() {
+            let name = if path.is_empty() {
                 "None".to_owned()
             } else {
                 std::path::Path::new(path).file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned())
-            }
+            };
+            row.spec.value_labels = Some(vec![name]);
+            0.0
         }
-    }]);
+        FieldControlVm::Switch { on, .. } => f32::from(u8::from(*on)),
+    };
     row.spec.inactive_reason = field.disabled.clone();
     row.spec.scene = Some(manifold_foundation::scene_surface::SceneParamDesc {
         role: SurfaceRole::Setup,
@@ -62,7 +68,7 @@ fn field_param_row(item: &ItemId, field: &FieldRowVm) -> ParamRow {
         switch: None,
         colour: None,
     });
-    row.value = RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false };
+    row.value = RowValue { base: on, effective: on, exposed: false, driven: false };
     row.affordance = Some(RowAffordance::Field { item: item.clone(), field: field.id.clone(), control: field.control.clone() });
     row
 }
@@ -196,8 +202,10 @@ impl ScenePanel {
             picked.push(((self.group_key(p), 1 + u32::from(switch_first)), i));
         }
         // Structural fields: the item's own, then its Material's, each
-        // addressed at the item that holds it.
-        let mut field_rows: Vec<(&ItemId, &FieldRowVm)> = item.fields.iter().map(|field| (&item.id, field)).collect();
+        // addressed at the item that holds it. Fields the header carries are
+        // not rows.
+        let mut field_rows: Vec<(&ItemId, &FieldRowVm)> =
+            item.fields.iter().filter(|field| !field.header).map(|field| (&item.id, field)).collect();
         if let Some(material) = item.material.as_ref().filter(|material| material.item != item.id) {
             field_rows.extend(material.fields.iter().map(|field| (&material.item, field)));
         }

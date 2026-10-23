@@ -1762,7 +1762,7 @@ pub(crate) fn build_button_row(
             (switch_text(on), toggle_btn_style(on))
         }
     };
-    if disabled_reason.is_some() || (kind == RowKind::Choice && info.spec.inactive_reason.is_some()) {
+    if disabled_reason.is_some() || (matches!(kind, RowKind::Choice | RowKind::Switch) && info.spec.inactive_reason.is_some()) {
         button_style.text_color = color::TEXT_DIMMED_C32;
     }
     let toggle_y = cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5;

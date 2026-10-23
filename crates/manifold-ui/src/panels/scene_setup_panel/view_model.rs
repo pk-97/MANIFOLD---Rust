@@ -27,6 +27,8 @@ pub enum FieldControlVm {
     Pick { current: String, options: Vec<FieldOptionVm> },
     /// A file picker; `path` is the file now, empty for none.
     File { path: String, extensions: Vec<String> },
+    /// On or off, drawn as a switch; a click sends `toggle`.
+    Switch { on: bool, toggle: FieldPick },
 }
 
 /// One structural-field row of an item's card. The panel draws it as a row of
@@ -40,6 +42,8 @@ pub struct FieldRowVm {
     /// Why the row cannot be used right now: drawn disabled, the reason on
     /// hover.
     pub disabled: Option<String>,
+    /// The card header carries it instead of a row (a Modifier's Type and On).
+    pub header: bool,
 }
 
 /// One Add menu entry: what a click on it adds.
@@ -55,6 +59,9 @@ pub struct AddEntryVm {
     pub holders: Vec<ItemKind>,
     /// Why it cannot be added right now: drawn disabled with the reason.
     pub disabled: Option<String>,
+    /// A copy Modifier: offered only for targets that hold copies
+    /// ([`SceneItemVm::holds_copies`]); elsewhere disabled with this reason.
+    pub needs_copies: Option<String>,
 }
 
 /// The Material an item draws with, as its card shows it inline.
@@ -109,6 +116,13 @@ pub struct SceneItemVm {
     /// Why a manifest row cannot be used right now, by param id: drawn
     /// dimmed with the reason on hover.
     pub row_reasons: Vec<(String, String)>,
+    /// It, or something inside it, has Copies on.
+    pub holds_copies: bool,
+    /// Its physics is Body: the tree marks it when it sits inside a Group.
+    pub body: bool,
+    /// A Swarm drawn as a scene item: that item and its name, linked from
+    /// the card as its look.
+    pub look: Option<(ItemId, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
