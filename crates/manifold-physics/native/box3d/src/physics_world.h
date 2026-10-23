@@ -94,6 +94,10 @@ typedef struct b3TaskContext
 	// Used to put islands to sleep
 	b3BitSet awakeIslandBitSet;
 
+	// MANIFOLD patch: the mesh triangles under a contact's query bounds. It grows to fit, so a dense
+	// mesh is never cut short.
+	b3Array( int ) meshTriangleQuery;
+
 	// Per worker split island candidate
 	float splitSleepTime;
 	int splitIslandId;

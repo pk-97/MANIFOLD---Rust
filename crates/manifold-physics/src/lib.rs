@@ -87,6 +87,7 @@ mod ffi {
             friction: f32,
             restitution: f32,
         ) -> u64;
+        pub fn manifold_box3d_keep_mesh_triangles(vertices: *const f32, indices: *mut i32, triangle_count: i32) -> i32;
         pub fn manifold_box3d_cook_mesh(
             vertices: *const f32,
             vertex_count: i32,

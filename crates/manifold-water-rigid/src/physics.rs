@@ -31,6 +31,8 @@ mod impulses;
 mod parity_tests;
 mod targeted_fields;
 #[cfg(test)]
+mod scan_collider_tests;
+#[cfg(test)]
 mod test_scene;
 #[cfg(test)]
 mod tests;

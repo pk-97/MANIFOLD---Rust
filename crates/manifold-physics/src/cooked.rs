@@ -56,8 +56,11 @@ impl CookedSolid {
         Ok(Arc::new(Self { form: CookedForm::Hulls(cooked) }))
     }
 
-    /// Build a static triangle mesh. Refuses a vertex out of range, an index
-    /// out of bounds, and a mesh Box3D would drop triangles from.
+    /// Build a static triangle mesh from already scaled `vertices`. Leaves
+    /// out the slivers Box3D drops (under 0.25 mm², far under its 5 mm
+    /// contact skin, so no body touches them), measured at this scale. Refuses
+    /// a vertex out of range, an index out of bounds, and a mesh with nothing
+    /// left.
     pub(crate) fn mesh(vertices: &[[f32; 3]], triangles: &[[u32; 3]]) -> Result<Arc<Self>, PhysicsError> {
         for vertex in vertices {
             validate_position(*vertex)?;
@@ -72,14 +75,14 @@ impl CookedSolid {
                 indices.push(i32::try_from(index).map_err(|_| PhysicsError::InvalidInput("mesh index is too large"))?);
             }
         }
+        // Every index was checked against `vertices` by the mass properties.
+        let kept = unsafe { ffi::manifold_box3d_keep_mesh_triangles(vertices.as_ptr().cast::<f32>(), indices.as_mut_ptr(), triangles.len() as i32) };
+        if kept < 1 {
+            return Err(PhysicsError::InvalidInput("every mesh triangle is too small to collide with"));
+        }
         let _lock = native_lock();
         let mesh = unsafe {
-            ffi::manifold_box3d_cook_mesh(
-                vertices.as_ptr().cast::<f32>(),
-                vertices.len() as i32,
-                indices.as_ptr(),
-                triangles.len() as i32,
-            )
+            ffi::manifold_box3d_cook_mesh(vertices.as_ptr().cast::<f32>(), vertices.len() as i32, indices.as_ptr(), kept)
         };
         match mesh {
             usize::MAX => Err(PhysicsError::InvalidInput("Box3D discarded degenerate mesh triangles")),

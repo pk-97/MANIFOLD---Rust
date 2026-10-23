@@ -178,6 +178,7 @@ static void b3CreateWorkerContexts( b3World* world )
 		world->taskContexts.data[i].jointStateBitSet = b3CreateBitSet( 1024 );
 		world->taskContexts.data[i].enlargedSimBitSet = b3CreateBitSet( 256 );
 		world->taskContexts.data[i].awakeIslandBitSet = b3CreateBitSet( 256 );
+		b3Array_Reserve( world->taskContexts.data[i].meshTriangleQuery, 256 );
 		world->taskContexts.data[i].splitIslandId = B3_NULL_INDEX;
 
 		world->sensorTaskContexts.data[i].eventBits = b3CreateBitSet( 128 );
@@ -195,6 +196,7 @@ static void b3DestroyWorkerContexts( b3World* world )
 		b3DestroyBitSet( &world->taskContexts.data[i].jointStateBitSet );
 		b3DestroyBitSet( &world->taskContexts.data[i].enlargedSimBitSet );
 		b3DestroyBitSet( &world->taskContexts.data[i].awakeIslandBitSet );
+		b3Array_Destroy( world->taskContexts.data[i].meshTriangleQuery );
 
 		b3DestroyBitSet( &world->sensorTaskContexts.data[i].eventBits );
 	}
@@ -2487,6 +2489,7 @@ void b3World_DumpMemoryStats( b3WorldId worldId )
 		taskContextBytes += b3GetBitSetBytes( &taskContext->hitEventBitSet );
 		taskContextBytes += b3GetBitSetBytes( &taskContext->enlargedSimBitSet );
 		taskContextBytes += b3GetBitSetBytes( &taskContext->awakeIslandBitSet );
+		taskContextBytes += b3Array_ByteCount( taskContext->meshTriangleQuery );
 	}
 
 	int sensorTaskContextBytes = b3Array_ByteCount( world->sensorTaskContexts );
