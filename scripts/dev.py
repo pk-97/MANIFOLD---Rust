@@ -62,7 +62,7 @@ VERBS = [
 
     ("Machine: GPU, worktrees, disk",
      "gpu-queue", "gpu_queue.py",
-     "GPU lock: `-- <cmd>`, `status`; campaign `reserve --owner NAME --reason TEXT --seconds N`, `clear`"),
+     "GPU lock: `-- <cmd>` (waits for the MANIFOLD app to quit, else NOT RUN), `status`; campaign `reserve --owner NAME --reason TEXT --seconds N`, `clear`"),
     ("Machine: GPU, worktrees, disk",
      "worktree", "agent-worktree.py", "the slot ring: acquire <task> <branch>, release, retire, list, reclaim"),
     ("Machine: GPU, worktrees, disk",

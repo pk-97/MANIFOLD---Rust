@@ -188,6 +188,8 @@ pub struct Executor {
     /// — the producing primitive is expected to emit a deterministic
     /// fallback (e.g. magenta clear) alongside the error report.
     error_scratch: Vec<String>,
+    /// The newest error per node: each prints once and reaches the stage.
+    node_errors: crate::exec::node_errors::NodeErrors,
     /// Persistent resources whose first acquisition has been cleared to
     /// opaque black. Subsequent frames find them in this set and skip
     /// the clear — the buffer's contents are now valid producer writes
@@ -594,6 +596,7 @@ impl Executor {
             live_extent_write_scratch: Vec::new(),
             object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
+            node_errors: Default::default(),
             initialized_persistent: ahash::AHashSet::default(),
             live_steps: Vec::new(),
             wired_scratch: Vec::new(),
@@ -688,6 +691,11 @@ impl Executor {
     /// and brings back per-dispatch GPU signposts.
     pub fn set_encode_replay(&mut self, on: bool) {
         self.encode_replay = on;
+    }
+
+    /// The newest error each node reported, for the stage to show once.
+    pub fn node_errors(&self) -> &crate::exec::node_errors::NodeErrors {
+        &self.node_errors
     }
 
     /// What encode replay did, summed over every region this executor runs.
@@ -2506,13 +2514,9 @@ impl Executor {
                     for (slot, value) in self.object_write_scratch.drain(..) {
                         self.backend.set_object(slot, value);
                     }
-                    // Structured errors reported via `ctx.error(...)` —
-                    // log once per occurrence. Primitives are expected
-                    // to ALSO emit a deterministic fallback (e.g. magenta
-                    // clear) alongside the error report, so downstream
-                    // consumers don't read garbage.
-                    // An errored node drew a fallback, so the frame is not
-                    // the one the graph describes: fail it.
+                    // A primitive that reports `ctx.error` also draws a
+                    // deterministic fallback (a magenta clear), so the frame
+                    // is not the one the graph describes: fail it.
                     if !self.error_scratch.is_empty()
                         && let Some(g) = gpu.as_deref_mut()
                     {
@@ -2520,7 +2524,7 @@ impl Executor {
                             crate::runtime::frame_status::FrameRenderFailure::NodeError,
                         ));
                     }
-                    for msg in self.error_scratch.drain(..) {
+                    if let Some(msg) = self.node_errors.record(step.node, false, &mut self.error_scratch) {
                         eprintln!(
                             "[graph error] node {:?} ({}): {msg}",
                             step.node,
@@ -2855,7 +2859,7 @@ impl Executor {
                         crate::runtime::frame_status::FrameRenderFailure::NodeError,
                     ));
                 }
-                for msg in self.error_scratch.drain(..) {
+                if let Some(msg) = self.node_errors.record(step.node, true, &mut self.error_scratch) {
                     eprintln!(
                         "[graph error] node {:?} ({}) late_capture: {msg}",
                         step.node,

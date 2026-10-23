@@ -29,6 +29,7 @@ mod replay;
 mod template;
 mod retire;
 mod shader_compiler;
+mod span_timer;
 mod spirv_msl_fixup;
 pub mod surface;
 mod texture_pool;
@@ -54,6 +55,7 @@ pub use frame_fence::FrameFence;
 pub use profiling::{GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind, ProfileGranularity};
 pub use residency::{GpuResidencyManager, GpuResidencyStats};
 pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
+pub use span_timer::GpuSpanTimer;
 pub use surface::{GpuDrawable, GpuSurface, set_presented_observer};
 pub use texture_pool::TexturePool;
 pub use types::{

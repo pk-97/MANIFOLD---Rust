@@ -642,6 +642,8 @@ pub struct ContentPipeline {
     scene_viewport: scene_viewport_capture::SceneViewportCapture,
     physics_overlay: crate::physics_overlay::PhysicsOverlayObservations,
     setup_fits: crate::setup_check::SetupFitObservations,
+    /// Scene layers' node errors and runaway stops.
+    pub(crate) layer_notices: crate::layer_notices::LayerNoticeFeed,
     /// Clicks on a scene picture waiting for the item drawn there.
     scene_picks: crate::scene_pick::ScenePicks,
     /// The selection outline's requests and mask bridges (D-102).
@@ -825,6 +827,7 @@ impl ContentPipeline {
             scene_viewport: Default::default(),
             physics_overlay: Default::default(),
             setup_fits: Default::default(),
+            layer_notices: Default::default(),
             scene_picks: Default::default(),
             #[cfg(target_os = "macos")]
             outline: Default::default(),
@@ -2151,10 +2154,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if !self.profiling_enabled {
                 self.tap_gpu_time(&mut gen_enc, "Generators");
             }
-            // PERF_BUDGET_GATE_DESIGN P2 / D6: attach the dispatch sampler to
-            // this command buffer when a --profile run is active. Every
-            // generator's executor was already scoped (`gen:{layer_id}`) at
-            // chain-insertion time (`GeneratorRenderer::install_layer_generator`).
+            // PERF_BUDGET_GATE_DESIGN P2 / D6: a --profile run samples every
+            // dispatch; each executor is scoped `gen:{layer_id}` at install.
             if self.profiling_enabled
                 && let Some(sampler) = self.profiling_sampler.clone()
             {
@@ -2173,11 +2174,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     if let Some(gen_renderer) =
                         renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
                     {
-                        // Aim (or clear) the node-output preview before render,
-                        // and enable the full-graph dump on the watched layer
-                        // when the thumbnail atlas is on (so every node's output
-                        // is captured this frame — the generator side of the
-                        // effect compositor's dump).
+                        // Aim the node-output preview, and dump every node of the
+                        // watched layer while the thumbnail atlas is on.
                         match &self.node_preview_generator {
                             Some((layer_id, node_id)) => {
                                 if self.modifier_editor_watched {
@@ -2218,6 +2216,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             project_tempo.as_ref(),
                         );
                         self.scene_picks.collect(gen_renderer);
+                        self.layer_notices.take(gen_renderer, layers);
                         break;
                     }
                 }

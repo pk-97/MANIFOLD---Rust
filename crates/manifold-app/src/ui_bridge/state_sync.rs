@@ -178,6 +178,16 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
         ui.last_graph_edit_diagnostic_sequence = Some(sequence);
     }
 
+    // A scene layer's node error or runaway stop: once each, red.
+    if content_state.layer_notices.version > ui.layer_notice_shown {
+        let mut fresh = content_state.layer_notices.after(ui.layer_notice_shown).map(|notice| &*notice.message);
+        if let Some(first) = fresh.next() {
+            let message = fresh.fold(first.to_owned(), |all, next| all + "; " + next);
+            ui.toast.show_with_accent(message, color::RED_BASE);
+        }
+        ui.layer_notice_shown = content_state.layer_notices.version;
+    }
+
     if let Some(message) = trigger_delivery_diagnostic_toast(
         &mut ui.last_trigger_delivery_failure,
         content_state.trigger_delivery_failure,

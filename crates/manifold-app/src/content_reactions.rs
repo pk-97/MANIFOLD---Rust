@@ -80,6 +80,7 @@ impl ContentThread {
         if seen.sdr_preview != last.sdr_preview {
             runtime.sdr_preview += 1;
         }
+        runtime.layer_notices = self.content_pipeline.layer_notices.notices().version;
         if seen.chain_failures_key != last.chain_failures_key {
             runtime.chain_failures += 1;
             let mut failures = Vec::with_capacity(seen.chain_failures_key.0);

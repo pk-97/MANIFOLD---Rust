@@ -363,6 +363,10 @@ pub struct ContentState {
     /// shows. Rebuilt only when the set changes; `runtime.chain_failures`
     /// moves with it.
     pub chain_failures: ChainFailures,
+
+    /// Scene layers' node errors and runaway stops. Replaced only when they
+    /// change; `runtime.layer_notices` moves with it.
+    pub layer_notices: Arc<crate::layer_notices::LayerNotices>,
 }
 
 /// Failed effect-chain builds by owner layer (`None` = master), each with the
@@ -410,6 +414,7 @@ pub struct RuntimeSeqs {
     pub sdr_preview: u64,
     pub export_progress: u64,
     pub chain_failures: u64,
+    pub layer_notices: u64,
 }
 
 /// Identifies the owner of one param block in a [`ModulationSnapshot`], so
@@ -679,6 +684,7 @@ impl Default for ContentState {
             automation_latched_params: Vec::new(),
             automation_armed: false,
             chain_failures: Arc::from([]),
+            layer_notices: Default::default(),
         }
     }
 }

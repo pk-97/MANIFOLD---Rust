@@ -57,6 +57,7 @@ mod content_reactions;
 mod content_export;
 mod content_pipeline;
 pub(crate) mod content_state;
+mod layer_notices;
 pub(crate) mod content_thread;
 mod file_dialogs;
 #[cfg(target_os = "macos")]
