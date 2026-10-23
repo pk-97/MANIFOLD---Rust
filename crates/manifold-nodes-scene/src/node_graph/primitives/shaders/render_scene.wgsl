@@ -798,6 +798,11 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     // would deliver stale history — this gate is the read side.
     if u.scene_params.w > 0.5 && u.rt_flags.w > 0.5 {
         let ch = u32(slot_f + 0.5);
+        // A caster past the visibility arrays' capacity (memory refused
+        // to grow them) is unshadowed, never another caster's layer.
+        if ch / 4u >= u32(textureNumLayers(rt_shadow_mask)) {
+            return 1.0;
+        }
         return textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), i32(ch / 4u), 0)[ch % 4u];
     }
     let slot = i32(slot_f + 0.5);
@@ -807,6 +812,10 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     let khw_raw = params.y;
     let texel = params.z;
     let light_size = params.w;
+    // Texel 0 marks a caster with no shadow-map layer: unshadowed.
+    if texel <= 0.0 {
+        return 1.0;
+    }
 
     let clip = vp * vec4<f32>(world_pos, 1.0);
     if clip.w <= 0.0 {

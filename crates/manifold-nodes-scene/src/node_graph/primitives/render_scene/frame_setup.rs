@@ -674,7 +674,7 @@ impl RenderScene {
         // real appended entries).
 
         // The caster table both renderers read, one entry per caster slot.
-        let shadow_casters: Vec<manifold_gpu::raytrace::ShadowCaster> =
+        let shadow_casters: Vec<manifold_gpu::ShadowCaster> =
             casters.iter().map(shadow_caster_entry).collect();
 
         let dims_tex = ctx.outputs.texture_2d("color")?;
@@ -1064,7 +1064,7 @@ impl RenderScene {
 
 /// One light's entry in the shared caster table: its shadow-map projection
 /// and filter for the raster, its ray source and colour for the ray tracer.
-fn shadow_caster_entry(l: &manifold_node_engine::scene::light::Light) -> manifold_gpu::raytrace::ShadowCaster {
+fn shadow_caster_entry(l: &manifold_node_engine::scene::light::Light) -> manifold_gpu::ShadowCaster {
     use manifold_node_engine::scene::light::{LightMode, ShadowSoftness};
     let light_size = match l.shadow_softness {
         ShadowSoftness::Contact { light_size } => light_size,
@@ -1085,7 +1085,7 @@ fn shadow_caster_entry(l: &manifold_node_engine::scene::light::Light) -> manifol
             LightMode::Point | LightMode::Spot => ([l.pos[0], l.pos[1], l.pos[2], light_size], 1.0),
         }
     };
-    manifold_gpu::raytrace::ShadowCaster {
+    manifold_gpu::ShadowCaster {
         view_proj: l.shadow_view_proj(),
         shadow: [l.shadow_bias, khw, texel, light_size],
         source,

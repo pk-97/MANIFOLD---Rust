@@ -1153,6 +1153,8 @@ pub struct RenderScene {
     /// One shadow-map layer per caster slot; grows with the caster count
     /// and the largest requested resolution, reused otherwise.
     shadow_maps: Option<ShadowMapArray>,
+    /// A (side, layers) the GPU refused, so it is not retried every frame.
+    shadow_maps_refused: Option<(u32, usize)>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — per-caster shadow
     /// dirty-check key (a 64-bit hash of everything the shadow pass reads
     /// for that caster this frame — see the shadow loop below for the exact
@@ -1173,7 +1175,7 @@ pub struct RenderScene {
     /// array when a scene has no casters or RT is off.
     dummy_depth_array: Option<manifold_gpu::GpuTexture>,
     dummy_mask_array: Option<manifold_gpu::GpuTexture>,
-    /// Byte offset of this frame's [`manifold_gpu::raytrace::ShadowCaster`]
+    /// Byte offset of this frame's [`manifold_gpu::ShadowCaster`]
     /// table inside the light ring buffer (it follows the lights).
     caster_offset: u64,
     /// Cached 1-entry `Array(InstanceTransform)` bound to `instances_n`
@@ -1303,9 +1305,12 @@ pub struct RenderScene {
     /// resource here (unwired/RT-off scenes never allocate these).
     rt_mask_half: Option<manifold_gpu::GpuTexture>,
     rt_mask_full: Option<manifold_gpu::GpuTexture>,
-    /// Layer count of every shadow-visibility array (four casters per
-    /// layer). Grows with the caster count, never shrinks.
-    rt_sv_layers: u32,
+    /// A visibility layer count the GPU refused at the current size, so it
+    /// is not retried every frame. Cleared when the size changes.
+    rt_sv_refused: Option<u32>,
+    /// Set when the visibility arrays grew: their histories restart from
+    /// the current frame while every other RT history carries on.
+    rt_sv_needs_reset: bool,
     rt_mask_width: u32,
     /// Trace-resolution dims of the mask dispatch (RT_QUALITY_SETTINGS_DESIGN.md
     /// D4) — tracked separately from the full-res pair above because the
@@ -1588,7 +1593,7 @@ fn rt_svt_slot(casters: &[manifold_node_engine::scene::light::Light]) -> Option<
 /// traced textures or RT shading substitutions and has no other reset path.
 /// Pure (no state), allocation-free, testable in cfg(test).
 fn compute_rt_lighting_key(
-    rt_casters: &[manifold_gpu::raytrace::ShadowCaster],
+    rt_casters: &[manifold_gpu::ShadowCaster],
     ambient_tint: &[f32],
     envmap_content: Option<ContentVersion>,
     env_rotation: f32,
@@ -1638,7 +1643,7 @@ fn compute_rt_lighting_key(
 /// generation: a strobe or env-brightness scrub leaves this key unchanged
 /// (visibility and transmission tint are geometry terms).
 fn compute_rt_lighting_geo_key(
-    rt_casters: &[manifold_gpu::raytrace::ShadowCaster],
+    rt_casters: &[manifold_gpu::ShadowCaster],
     svt_slot: u32,
 ) -> u64 {
     let mut k = 0x8a5f_3c1e_2b94_0d76u64;
@@ -2041,7 +2046,7 @@ struct FramePrelude<'ctx> {
     light_count: u32,
     casters: Vec<manifold_node_engine::scene::light::Light>,
     /// One entry per caster, in slot order: the table both renderers read.
-    shadow_casters: Vec<manifold_gpu::raytrace::ShadowCaster>,
+    shadow_casters: Vec<manifold_gpu::ShadowCaster>,
     native_width: u32,
     native_height: u32,
     width: u32,

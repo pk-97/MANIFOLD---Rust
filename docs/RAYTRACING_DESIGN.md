@@ -1511,13 +1511,16 @@ the cap raise's 0–4 — about +2% worst-case rays on today's budget.
   byte-identity discipline (T2-B precedent — real `graph-tool render`
   machine diff, never a code-diff argument) is re-run at RS-C's gate.
 - **I-RS6 — one caster table, no cap.** Every shadow-casting light gets a
-  slot in one `ShadowCaster` table (`raytrace/params.rs`), filled once per
+  slot in one `ShadowCaster` table (`manifold-gpu/src/shadow_caster.rs`,
+  backend neutral), filled once per
   frame after the light table and read by the raster pass, the shaft march
   and the ray tracer. The MSL struct is generated from the Rust record and
   the WGSL copies are checked against it by a test. Raster shadow maps are
   one depth array, a layer per caster; shadow visibility is a texture array,
   four casters per layer. Both grow with the caster count and are reused
-  otherwise.
+  otherwise; growing the visibility arrays restarts visibility alone. If
+  memory refuses a larger array the old one stays, casters past it read as
+  unshadowed, and the refusal is logged once.
 
 ### 15.5 Alternatives (priced)
 

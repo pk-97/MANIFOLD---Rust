@@ -106,6 +106,10 @@ fn shadow_vis(slot_f: f32, world_pos: vec3<f32>) -> f32 {
     let vp = casters[slot].view_proj;
     let params = casters[slot].shadow;
     let bias = params.x;
+    // Texel 0 marks a caster with no shadow-map layer: unshadowed.
+    if params.z <= 0.0 {
+        return 1.0;
+    }
 
     let clip = vp * vec4<f32>(world_pos, 1.0);
     if clip.w <= 0.0 {

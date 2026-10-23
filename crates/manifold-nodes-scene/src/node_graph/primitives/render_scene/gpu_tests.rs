@@ -508,12 +508,12 @@
         shadow_enc.commit_and_wait_completed();
 
         let bias = light.shadow_bias;
-        let caster = manifold_gpu::raytrace::ShadowCaster {
+        let caster = manifold_gpu::ShadowCaster {
             view_proj: vp,
             shadow: [bias, 2.0, 1.0 / smap_res as f32, 0.0],
             ..Default::default()
         };
-        let caster_buf = manifold_gpu::raytrace::upload_shadow_casters(&device, &[caster]);
+        let caster_buf = manifold_gpu::upload_shadow_casters(&device, &[caster]);
 
         let shaft_light_data: Vec<[f32; 4]> = light.packed(0.0).into_iter()
             .chain(point_light.packed(-1.0)).collect();
@@ -1488,7 +1488,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mut s = RenderScene::new();
 
         // First allocation resets.
-        assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256, 1));
+        s.ensure_rt_visibility(&device, 128, 128, 256, 256, 4);
+        assert!(s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
         let assert_history_pair = |pair: &[Option<manifold_gpu::GpuTexture>; 2], format| {
             let textures: Vec<_> = pair.iter().flatten().collect();
             assert_eq!(textures.len(), 2);
@@ -1516,9 +1517,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             .iter()
             .map(manifold_gpu::GpuTexture::identity_key)
             .collect();
-        s.ensure_rt_masks(&device, 128, 128, 256, 256, 1);
+        s.ensure_rt_masks(&device, 128, 128, 256, 256);
+        s.ensure_rt_visibility(&device, 128, 128, 256, 256, 4);
         // Same dims: no realloc, no reset.
-        assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256, 1));
+        assert!(!s.ensure_rt_irradiance(&device, 128, 128, 256, 256));
         let same_size_hold_ids: Vec<_> = s
             .rt_sv_hold_history
             .iter()
@@ -1527,12 +1529,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             .collect();
         assert_eq!(same_size_hold_ids, original_hold_ids, "same-size ensure must preserve R16 histories");
         // Tier flip (Half → Native at fixed canvas): trace dims change.
-        assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256, 1));
+        assert!(s.ensure_rt_irradiance(&device, 256, 256, 256, 256));
         assert_eq!(s.rt_irr_trace_w, 256);
         // The truncation hole: canvas 256 → 257 at Quarter (trace 64 → 64).
         // Full-class textures (history included) must still realloc.
-        assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256, 1));
-        assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257, 1));
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 256, 256));
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 257, 257));
+        s.ensure_rt_visibility(&device, 64, 64, 257, 257, 4);
         assert_eq!(s.rt_irr_width, 257);
         assert_history_pair(&s.rt_sv_hold_history, R16Float);
         for texture in s.rt_sv_hold_history.iter().flatten() {
@@ -1558,9 +1561,47 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let values: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast(), (257 * 257) as usize) };
         assert!((f16::from_bits(values[0]).to_f32() - 0.25).abs() < 0.01);
         // Masks guard follows the same dual-pair discipline.
-        s.ensure_rt_masks(&device, 64, 64, 256, 256, 1);
+        s.ensure_rt_masks(&device, 64, 64, 256, 256);
         assert_eq!(s.rt_mask_trace_w, 64);
         assert_eq!(s.rt_mask_width, 256);
+    }
+
+    /// A fifth caster grows only the visibility arrays: irradiance and the
+    /// other histories keep their textures and their accumulation, and only
+    /// visibility is flagged to restart. Fewer casters never shrink them.
+    #[test]
+    fn more_casters_grow_only_the_visibility_arrays() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut s = RenderScene::new();
+        s.ensure_rt_visibility(&device, 64, 64, 128, 128, 4);
+        assert!(s.ensure_rt_irradiance(&device, 64, 64, 128, 128));
+        s.rt_sv_needs_reset = false;
+        let ids = |pair: &[Option<manifold_gpu::GpuTexture>; 2]| -> Vec<_> {
+            pair.iter().flatten().map(manifold_gpu::GpuTexture::identity_key).collect()
+        };
+        let irr = ids(&s.rt_irr_history);
+        let sv = ids(&s.rt_sv_history);
+        assert_eq!(s.rt_mask_full.as_ref().unwrap().depth, 1);
+
+        s.ensure_rt_visibility(&device, 64, 64, 128, 128, 5);
+        assert!(!s.ensure_rt_irradiance(&device, 64, 64, 128, 128), "growth must not reset irradiance");
+        assert_eq!(ids(&s.rt_irr_history), irr);
+        assert_ne!(ids(&s.rt_sv_history), sv);
+        assert!(s.rt_sv_needs_reset, "grown visibility must restart");
+        for texture in [&s.rt_mask_half, &s.rt_mask_full, &s.rt_mask_full_b].into_iter().flatten()
+            .chain(s.rt_sv_history.iter().flatten())
+            .chain(s.rt_sv_m1_history.iter().flatten())
+            .chain(s.rt_sv_m2_history.iter().flatten())
+            .chain(s.rt_sv_hold_history.iter().flatten())
+        {
+            assert_eq!(texture.depth, 2, "every visibility array grows to two layers");
+        }
+
+        s.rt_sv_needs_reset = false;
+        let grown = ids(&s.rt_sv_history);
+        s.ensure_rt_visibility(&device, 64, 64, 128, 128, 1);
+        assert_eq!(ids(&s.rt_sv_history), grown, "fewer casters keep the arrays");
+        assert!(!s.rt_sv_needs_reset);
     }
 
     /// RT-Stage-3 P4 scratch proof: the post-accumulation ping-pong pair may
@@ -1573,8 +1614,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     #[test]
     fn rt_post_scratch_shared_backing_matches_dedicated_across_queued_frames() {
         use manifold_gpu::raytrace::{
-            AtrousParams, AtrousPostParams, MetalShadowRayTracer, ShadowRayTracer,
-        };
+            AtrousParams, AtrousPostParams, MetalShadowRayTracer, ShadowRayTracer};
 
         const W: u32 = 9;
         const H: u32 = 9;
@@ -1583,7 +1623,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pixel_count = (W * H) as usize;
         let device = manifold_gpu::testkit::test_device();
         let mut scene = RenderScene::new();
-        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H, 1));
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H));
 
         let shared_a = scene.rt_irr_filtered.as_ref().expect("filtered alias").clone();
         let shared_b = scene.rt_irr_filtered_b.as_ref().expect("filtered alias b").clone();
@@ -1910,7 +1950,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // A dimension change creates fresh scratch objects and refreshes both
         // post-filter aliases; no stale handle survives the resize.
-        assert!(scene.ensure_rt_irradiance(&device, W, H, W + 1, H + 1, 1));
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W + 1, H + 1));
         let resized_a = scene.rt_irr_filtered.as_ref().expect("resized filtered alias");
         let resized_b = scene.rt_irr_filtered_b.as_ref().expect("resized filtered alias b");
         assert_eq!((resized_a.width, resized_a.height), (W + 1, H + 1));
@@ -1934,8 +1974,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pixel_count = (W * H) as usize;
         let device = manifold_gpu::testkit::test_device();
         let mut scene = RenderScene::new();
-        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H, 1));
-        assert!(!scene.ensure_rt_irradiance(&device, W, H, W, H, 1));
+        assert!(scene.ensure_rt_irradiance(&device, W, H, W, H));
+        assert!(!scene.ensure_rt_irradiance(&device, W, H, W, H));
 
         let shared_scratch = scene.rt_refl_full_b.as_ref().expect("reflection scratch").clone();
         let firefly_scratch = scene.rt_firefly_scratch.as_ref().expect("firefly alias").clone();
@@ -2216,11 +2256,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
 
         let old_scratch_id = shared_scratch.identity_key();
-        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W, H, 1));
+        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W, H));
         let trace_resized = scene.rt_refl_full_b.as_ref().expect("trace-resized scratch").clone();
         assert_ne!(trace_resized.identity_key(), old_scratch_id);
         assert!(trace_resized.ptr_eq(scene.rt_firefly_scratch.as_ref().expect("trace-resized firefly alias")));
-        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W + 1, H + 1, 1));
+        assert!(scene.ensure_rt_irradiance(&device, W + 1, H + 1, W + 1, H + 1));
         let full_resized = scene.rt_refl_full_b.as_ref().expect("full-resized scratch");
         assert_ne!(full_resized.identity_key(), trace_resized.identity_key());
         assert!(full_resized.ptr_eq(scene.rt_firefly_scratch.as_ref().expect("full-resized firefly alias")));

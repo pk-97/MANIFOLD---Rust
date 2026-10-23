@@ -3547,6 +3547,9 @@ kernel void accumulate_irradiance(
     // is double temporal filtering (the fused-path look rejection's
     // confound 1). `alpha_floor` replaces `p.alpha` at every blend below.
     bool denoise_near_raw  = (p.reset & 32u) != 0u;
+    // Bit 6: the visibility arrays were just reallocated (more casters);
+    // only visibility restarts, from the current frame.
+    bool sv_reset          = (p.reset & 64u) != 0u;
     float alpha_floor = denoise_near_raw ? max(p.alpha, 0.25) : p.alpha;
     if ((p.reset & 1u) != 0u) {
         // `.a` = accumulated frame count (BUG-boil): a cold texel has
@@ -3897,7 +3900,7 @@ kernel void accumulate_irradiance(
         float4 sv_m1w = cur_sv;
         float4 sv_m2w = cur_sv * cur_sv;
         float sv_hold_w = 0.0;
-        if (sv_reproj) {
+        if (sv_reproj && !sv_reset) {
             float wsum = sv_wsum;
             float n_full = sv_n_full;
             float4 svsum = float4(0.0);

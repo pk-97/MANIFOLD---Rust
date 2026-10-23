@@ -263,17 +263,24 @@ fn caster_contract_live_rt_and_shadow_toggles() {
         .graph
         .instance_by_node_id(&NodeId::new("scene"))
         .unwrap();
+    let occluder = runtime
+        .graph
+        .instance_by_node_id(&NodeId::new("occ_xform"))
+        .unwrap();
     let target = h.make_target("rt-8caster-live-toggle");
     for frame in 0..RT_WARMUP_FRAMES {
         let _ = render_frame(&mut runtime, &target, frame);
     }
     let mut observations = Vec::new();
-    for (frame, (rt_enabled, rt_shadows)) in [
-        (true, true),
-        (false, false),
-        (true, true),
-        (true, false),
-        (true, true),
+    // On the RT-shadows-off frame the occluder moves away. A live shadow map
+    // follows it and lights the probe; a read gate that kept sampling the
+    // accumulated RT visibility would still show the old shadow.
+    for (frame, (rt_enabled, rt_shadows, occluder_x)) in [
+        (true, true, 0.0),
+        (false, false, 0.0),
+        (true, true, 0.0),
+        (true, false, 6.0),
+        (true, true, 0.0),
     ]
     .into_iter()
     .enumerate()
@@ -285,6 +292,10 @@ fn caster_contract_live_rt_and_shadow_toggles() {
         runtime
             .graph
             .set_param(scene, "rt_shadows", ParamValue::Bool(rt_shadows))
+            .unwrap();
+        runtime
+            .graph
+            .set_param(occluder, "pos_x", ParamValue::Float(occluder_x))
             .unwrap();
         let (bytes, captures, status) =
             render_frame(&mut runtime, &target, RT_WARMUP_FRAMES + frame as i64);
@@ -300,8 +311,8 @@ fn caster_contract_live_rt_and_shadow_toggles() {
         observations[0].1 > 0 && observations[1].1 == 0 && observations[2].1 > 0 && observations[3].1 > 0 && observations[4].1 > 0,
         "RT dispatch must follow on/off/on"
     );
-    // Ray traced or raster, the same lights shadow: with RT or its shadows
-    // switched off live, slot 7 falls back to its shadow map and stays dark.
+    // Ray traced or raster, the same lights shadow: with RT switched off
+    // live, slot 7 falls back to its shadow map and stays dark.
     let (control, _, _, _) =
         render_readback(&caster_scene(0, (1u16 << 7) | (1u16 << 8), true, false));
     let (ocx, ocy) = project_to_pixel(OCCLUDED_WORLD, h.width, h.height);
@@ -309,8 +320,12 @@ fn caster_contract_live_rt_and_shadow_toggles() {
     let lumas: Vec<f64> = observations.iter().map(|o| o.0).collect();
     eprintln!("live toggles: {lumas:?} unshadowed={unshadowed:.6}");
     assert!(
-        lumas.iter().all(|&l| l * 1.02 < unshadowed),
+        [0, 1, 2, 4].iter().all(|&i| lumas[i] * 1.02 < unshadowed),
         "every live toggle state must keep slot 7 shadowed: {lumas:?} vs {unshadowed}"
+    );
+    assert!(
+        (lumas[3] - unshadowed).abs() / unshadowed < 0.05,
+        "with RT shadows off the probe must follow the moved occluder, not stale RT visibility: {lumas:?} vs {unshadowed}"
     );
     assert!(
         (observations[0].0 - observations[2].0).abs() / observations[0].0.max(1e-6) < 0.25,

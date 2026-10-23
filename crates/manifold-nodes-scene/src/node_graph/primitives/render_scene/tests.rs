@@ -75,7 +75,7 @@
     /// is generated outright).
     #[test]
     fn wgsl_caster_struct_matches_the_rust_record() {
-        let generated = manifold_gpu::raytrace::ShadowCaster::WGSL;
+        let generated = manifold_gpu::ShadowCaster::WGSL;
         for (name, src) in [
             ("render_scene.wgsl", include_str!("../shaders/render_scene.wgsl")),
             ("shaft_march.wgsl", include_str!("../shaders/shaft_march.wgsl")),
@@ -864,8 +864,8 @@
 
     #[test]
     fn geo_key_ignores_color() {
-        let c1 = manifold_gpu::raytrace::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [1.0, 0.0, 0.0], 0);
-        let c2 = manifold_gpu::raytrace::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [0.0, 1.0, 0.0], 0);
+        let c1 = manifold_gpu::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [1.0, 0.0, 0.0], 0);
+        let c2 = manifold_gpu::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [0.0, 1.0, 0.0], 0);
         assert_eq!(
             compute_rt_lighting_geo_key(&[c1], 0),
             compute_rt_lighting_geo_key(&[c2], 0),
@@ -875,8 +875,8 @@
 
     #[test]
     fn geo_key_flips_on_position_change() {
-        let c1 = manifold_gpu::raytrace::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
-        let c2 = manifold_gpu::raytrace::ShadowCaster::traced([0.1, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
+        let c1 = manifold_gpu::ShadowCaster::traced([0.0, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
+        let c2 = manifold_gpu::ShadowCaster::traced([0.1, 0.0, 0.0], 0.0, [1.0, 1.0, 1.0], 0);
         assert_ne!(
             compute_rt_lighting_geo_key(&[c1], 0),
             compute_rt_lighting_geo_key(&[c2], 0),

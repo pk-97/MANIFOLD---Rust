@@ -787,7 +787,7 @@ impl RtPipelines {
         // the WGSL path's pinned older version — matches the prototype's
         // `Gpu::compile_library`.
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        let source = format!("{}{prelude}{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}", ShadowCaster::MSL);
+        let source = format!("{}{prelude}{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}", crate::ShadowCaster::MSL);
         let src_ns = NSString::from_str(&source);
         let library = device
             .raw_device()
@@ -2226,7 +2226,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             texture: self.secondary_prefiltered_sheen.as_ref().unwrap_or(prefiltered_env),
         });
         let caster_count = params.caster_count;
-        let table_bytes = u64::from(caster_count) * std::mem::size_of::<ShadowCaster>() as u64;
+        let table_bytes = u64::from(caster_count) * std::mem::size_of::<crate::ShadowCaster>() as u64;
         assert!(caster_count == 0 || (params.caster_data_addr >= casters.gpu_address()
             && params.caster_data_addr + table_bytes <= casters.gpu_address() + casters.size),
             "RT caster table lies outside the buffer passed with it");
@@ -2967,7 +2967,7 @@ mod tests {
     fn normal_map_degenerate_frame_stays_finite() {
         use super::*;
         let device = GpuDevice::new();
-        let source = format!("{}{}\n{}", ShadowCaster::MSL, SHADOW_RAYS_MSL, r#"
+        let source = format!("{}{}\n{}", crate::ShadowCaster::MSL, SHADOW_RAYS_MSL, r#"
         kernel void normal_guard_probe(device const float4* input [[buffer(0)]],
             device float4* output [[buffer(1)]], uint2 tid [[thread_position_in_grid]]) {
             if (tid.y != 0 || tid.x >= 8) return;
@@ -3026,7 +3026,7 @@ mod tests {
     fn trace_diagnostics_records_invalid_ray() {
         use super::*;
         let device = GpuDevice::new();
-        let source = format!("{}{}\n{}", ShadowCaster::MSL, SHADOW_RAYS_MSL, r#"
+        let source = format!("{}{}\n{}", crate::ShadowCaster::MSL, SHADOW_RAYS_MSL, r#"
         kernel void diag_probe(device RtTraceDiagnostics* d [[buffer(0)]],
             device float4* out [[buffer(1)]], uint2 tid [[thread_position_in_grid]]) {
             if (tid.x != 0 || tid.y != 0) return;

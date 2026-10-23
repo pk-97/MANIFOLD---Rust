@@ -25,9 +25,9 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, EmissiveTableStats, GiMaterial, MetalShadowRayTracer, ShadowCaster, upload_shadow_casters,
-    RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    ensure_normal_sources, EmissiveTableStats, GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
 };
+use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_gpu::{
     GpuBuffer, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,

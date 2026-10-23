@@ -22,9 +22,10 @@ use std::slice;
 
 use manifold_gpu::raytrace::{
     ensure_normal_sources, DebugRayQueryHit, DebugRayQueryRay, GiMaterial, MetalShadowRayTracer,
-    RtAccel, ShadowCaster, upload_shadow_casters, RtGeometryChange, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    RtAccel, RtGeometryChange, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
     RT_WALK_MAX_CANDIDATES,
 };
+use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_gpu::{
     GpuBuffer, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage, TRACE_BUFFER_CEILING_SECONDS, TRACE_RESTART_PIXELS_PER_TILE,

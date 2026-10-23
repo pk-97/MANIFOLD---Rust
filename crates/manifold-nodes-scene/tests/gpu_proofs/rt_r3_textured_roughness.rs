@@ -46,9 +46,10 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, upload_shadow_casters, GiMaterial, MetalShadowRayTracer, RtObjectGeometry,
-    ShadowCaster, ShadowRayParams, ShadowRayTracer,
+    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtObjectGeometry,
+    ShadowRayParams, ShadowRayTracer,
 };
+use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;

@@ -13,6 +13,7 @@ use manifold_gpu::raytrace::{
     MetalShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry, ShadowRayTracer,
     MAX_RT_EMISSIVE_TRIANGLES,
 };
+use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::mesh::InstanceTransform;
 
@@ -572,8 +573,7 @@ fn rt_dynamic_emissive_gpu_geometry() {
 // ─── P4b: appearance coverage and indexed hit attributes (A4) ────────────
 
 use manifold_gpu::raytrace::{
-    DebugRayQueryHit, DebugRayQueryRay, ShadowCaster, upload_shadow_casters, ShadowRayParams,
-};
+    DebugRayQueryHit, DebugRayQueryRay, ShadowRayParams};
 use manifold_gpu::{GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 /// CPU mirror of the raster appearance helper (`apply_appearance`,

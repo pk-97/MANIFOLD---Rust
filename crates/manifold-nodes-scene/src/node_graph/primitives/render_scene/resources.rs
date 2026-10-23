@@ -239,13 +239,10 @@ impl RenderScene {
             // irradiance targets, ensured here for the same NLL borrow
             // reason as above.
             if rt_enabled {
-                // Shadow visibility holds four casters per layer; the layer
-                // count grows with the casters and never shrinks.
-                let sv_layers = (casters.len().div_ceil(4).max(1) as u32).max(self.rt_sv_layers);
-                self.ensure_rt_masks(gpu.device, rt_trace_w, rt_trace_h, width, height, sv_layers);
+                self.ensure_rt_visibility(gpu.device, rt_trace_w, rt_trace_h, width, height, casters.len());
+                self.ensure_rt_masks(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_params_buffer(gpu.device);
-                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height, sv_layers);
-                self.rt_sv_layers = sv_layers;
+                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_accumulate_params_buffer(gpu.device);
                 self.ensure_rt_atrous_params_buffer(gpu.device);
                 // The firefly resolve aliases reflection prefilter scratch,
@@ -282,7 +279,7 @@ impl RenderScene {
             // is still reading. The table starts on a 256-byte boundary so it
             // can be bound at an offset; it always has room for one entry so
             // the binding stays valid with no casters.
-            let caster_size = std::mem::size_of::<manifold_gpu::raytrace::ShadowCaster>() as u64;
+            let caster_size = std::mem::size_of::<manifold_gpu::ShadowCaster>() as u64;
             let light_bytes = (light_data.len() * std::mem::size_of::<[f32; 4]>()) as u64;
             let caster_offset = light_bytes.next_multiple_of(256);
             let needed = caster_offset + caster_size * (shadow_casters.len().max(1) as u64);
@@ -298,7 +295,22 @@ impl RenderScene {
             unsafe {
                 let ring = &self.light_buffers[self.light_frame];
                 ring.write(0, bytemuck::cast_slice(light_data));
-                ring.write(caster_offset, bytemuck::cast_slice(shadow_casters));
+                // Each raster entry describes the layer it really has: a
+                // caster past the array (memory refused to grow it) gets
+                // texel 0, which the shaders read as unshadowed, and one
+                // asking for more than the array side renders and samples
+                // at the side.
+                let (side, layers) = self.shadow_maps.as_ref()
+                    .map_or((0, 0), |maps| (maps.side, maps.layers.len()));
+                for (slot, caster) in shadow_casters.iter().enumerate() {
+                    let mut entry = *caster;
+                    entry.shadow[2] = if slot < layers {
+                        entry.shadow[2].max(1.0 / side as f32)
+                    } else {
+                        0.0
+                    };
+                    ring.write(caster_offset + caster_size * slot as u64, bytemuck::bytes_of(&entry));
+                }
             }
         }
     }
@@ -726,6 +738,10 @@ impl RenderScene {
         }
         let side = side.max(have_side);
         let layers = casters.len().max(have_layers);
+        // A refused size is not retried every frame; a smaller request is.
+        if self.shadow_maps_refused.is_some_and(|(s, l)| side >= s && layers >= l) {
+            return;
+        }
         let texture = match device.try_create_texture(&manifold_gpu::GpuTextureDesc {
             width: side,
             height: side,
@@ -746,11 +762,13 @@ impl RenderScene {
                     "render_scene: {layers} shadow maps at {side}px need {megabytes} MB of GPU memory \
                      and the allocation failed ({error}); lower Shadow Resolution on the largest lights"
                 );
+                self.shadow_maps_refused = Some((side, layers));
                 return;
             }
         };
         let layers = (0..layers as u32).map(|layer| texture.layer_view(layer)).collect();
         self.shadow_maps = Some(ShadowMapArray { side, texture, layers });
+        self.shadow_maps_refused = None;
         self.shadow_cache_keys.clear();
         self.shadow_cache_keys.resize(casters.len().max(have_layers), None);
     }
@@ -1065,24 +1083,120 @@ impl RenderScene {
         }
     }
 
-    /// Half-res trace target + full-res upsampled mask, resized with the
-    /// scene's own output resolution (RT-D3's mode-B half-res dispatch,
-    /// D11). RT-P2 widened this from `R32Float` (vis only) to `Rg16Float`
-    /// (r = sun visibility, g = AO). Visibility is now an
-    /// `Rgba16Float` layer array, caster c in channel c % 4 of layer c / 4
-    /// (`sv_layers` layers); AO moved out entirely (folded into
-    /// irradiance in-kernel, never written here) — the SAME texture,
-    /// extending the SAME dispatch (D16's seam note), not a second mask.
-    /// RT-A3a: split into mask and lighting dispatches, each at its own resolution.
-    /// Resolution of the mask dispatch (shadow visibility only). Trace-class sized (trace_w/h),
-    /// full-class sized (full_w/h) — trace dims change per D4 resolution settings.
-    pub(super) fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32, sv_layers: u32) {
+    /// Shadow visibility, four casters per layer (caster c is channel c % 4
+    /// of layer c / 4): the trace-res mask, the full-res mask and its
+    /// à-trous scratch, and the SV-ACCUM histories. The layer count grows
+    /// with the caster count and never shrinks. Growing touches only these
+    /// arrays: the other RT histories carry on and only visibility restarts
+    /// (`rt_sv_needs_reset`). If the GPU refuses a larger set the old
+    /// arrays stay, casters past them go unshadowed, and the refusal is
+    /// logged once per size.
+    pub(super) fn ensure_rt_visibility(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32, casters: usize) {
+        let same_size = self.rt_mask_half.as_ref().is_some_and(|t| t.width == trace_w && t.height == trace_h)
+            && self.rt_mask_full.as_ref().is_some_and(|t| t.width == full_w && t.height == full_h);
+        let have = self.rt_mask_full.as_ref().map_or(0, |t| t.depth);
+        let want = (casters.div_ceil(4).max(1) as u32).max(have);
+        if same_size && want <= have {
+            return;
+        }
+        if !same_size {
+            self.rt_sv_refused = None;
+        }
+        if self.rt_sv_refused.is_some_and(|refused| want >= refused) {
+            return;
+        }
+        let make = |w: u32, h: u32, layers: u32, format: manifold_gpu::GpuTextureFormat, usage: manifold_gpu::GpuTextureUsage, label: &'static str| {
+            device.try_create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: layers,
+                format,
+                dimension: manifold_gpu::GpuTextureDimension::D2Array,
+                usage: usage
+                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::COPY_SRC,
+                label,
+                mip_levels: 1,
+            })
+        };
+        let plain = manifold_gpu::GpuTextureUsage::SHADER_READ;
+        // Hold histories need render-pass sentinel clears.
+        let renderable = manifold_gpu::GpuTextureUsage::RENDER_TARGET;
+        let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
+        let r16 = manifold_gpu::GpuTextureFormat::R16Float;
+        let build = |layers: u32| -> Result<[manifold_gpu::GpuTexture; 11], String> {
+            Ok([
+                make(trace_w, trace_h, layers, rgba16, plain, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)")?,
+                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)")?,
+                // RT-T1-D: à-trous ping-pong scratch.
+                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_mask_full_b (RT-T1-D atrous)")?,
+                // SV-ACCUM history pair: same ping clock as rt_irr_history.
+                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_history_a (SV-ACCUM)")?,
+                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_history_b (SV-ACCUM)")?,
+                // Per-channel first/second visibility moments.
+                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_m1_a (SV-ACCUM)")?,
+                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_m1_b (SV-ACCUM)")?,
+                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_m2_a (SV-ACCUM)")?,
+                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_m2_b (SV-ACCUM)")?,
+                make(full_w, full_h, layers, r16, renderable, "node.render_scene rt_sv_hold_a (SV-ACCUM)")?,
+                make(full_w, full_h, layers, r16, renderable, "node.render_scene rt_sv_hold_b (SV-ACCUM)")?,
+            ])
+        };
+        let set = match build(want) {
+            Ok(set) => set,
+            Err(error) => {
+                // Bytes per layer: eight full-res and one trace-res Rgba16
+                // texture, two full-res R16 holds.
+                let per_layer = u64::from(full_w) * u64::from(full_h) * (8 * 8 + 2 * 2)
+                    + u64::from(trace_w) * u64::from(trace_h) * 8;
+                let megabytes = per_layer * u64::from(want) / (1 << 20);
+                log::error!(
+                    "render_scene: ray-traced shadows for {} casters need {megabytes} MB of GPU memory \
+                     and the allocation failed ({error}); lights past {} casters go unshadowed",
+                    want * 4,
+                    if same_size { have * 4 } else { 4 },
+                );
+                self.rt_sv_refused = Some(want);
+                // A new size still needs a set; one layer is the floor.
+                match (same_size, build(1)) {
+                    (false, Ok(set)) => set,
+                    (false, Err(_)) => {
+                        self.rt_mask_half = None;
+                        self.rt_mask_full = None;
+                        self.rt_mask_full_b = None;
+                        self.rt_sv_history = [None, None];
+                        self.rt_sv_m1_history = [None, None];
+                        self.rt_sv_m2_history = [None, None];
+                        self.rt_sv_hold_history = [None, None];
+                        return;
+                    }
+                    (true, _) => return,
+                }
+            }
+        };
+        let [mask_half, mask_full, mask_full_b, h_a, h_b, m1_a, m1_b, m2_a, m2_b, hold_a, hold_b] = set;
+        self.rt_mask_half = Some(mask_half);
+        self.rt_mask_full = Some(mask_full);
+        self.rt_mask_full_b = Some(mask_full_b);
+        self.rt_sv_history = [Some(h_a), Some(h_b)];
+        self.rt_sv_m1_history = [Some(m1_a), Some(m1_b)];
+        self.rt_sv_m2_history = [Some(m2_a), Some(m2_b)];
+        self.rt_sv_hold_history = [Some(hold_a), Some(hold_b)];
+        // A new size is covered by the full reset its irradiance histories
+        // trigger; a same-size growth restarts visibility alone.
+        self.rt_sv_needs_reset = true;
+    }
+
+    /// Trace-res and full-res sun-transmission tint targets plus the tint
+    /// à-trous scratch, resized with the scene's own output resolution.
+    /// Shadow visibility lives in `ensure_rt_visibility`.
+    pub(super) fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) {
         if self.rt_mask_width == full_w
-            && self.rt_mask_full.as_ref().is_some_and(|mask| mask.depth == sv_layers)
             && self.rt_mask_height == full_h
             && self.rt_mask_trace_w == trace_w
             && self.rt_mask_trace_h == trace_h
-            && self.rt_mask_full.is_some()
+            && self.rt_svt_full.is_some()
         {
             return;
         }
@@ -1101,28 +1215,8 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        // Shadow visibility: layer arrays, four casters per layer.
-        let make_layers = |w: u32, h: u32, label: &'static str| {
-            device.create_texture(&manifold_gpu::GpuTextureDesc {
-                width: w,
-                height: h,
-                depth: sv_layers,
-                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-                dimension: manifold_gpu::GpuTextureDimension::D2Array,
-                usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
-                    | manifold_gpu::GpuTextureUsage::SHADER_READ
-                    | manifold_gpu::GpuTextureUsage::COPY_SRC,
-                label,
-                mip_levels: 1,
-            })
-        };
-        self.rt_mask_half = Some(make_layers(trace_w, trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)"));
-        self.rt_mask_full = Some(make_layers(full_w, full_h, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)"));
-        // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
-        self.rt_mask_full_b = Some(make_layers(full_w, full_h, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
-        // RT-TL-C (section 16 TL5): sun-transmission tint — MASK-class
-        // (written by the mask dispatch), same format and lifecycle as
-        // rt_mask_half/rt_mask_full.
+        // RT-TL-C (section 16 TL5): sun-transmission tint, written by the
+        // mask dispatch.
         self.rt_svt_half = Some(make(trace_w, trace_h, "node.render_scene rt_svt_half (RT-TL-C)"));
         self.rt_svt_full = Some(make(full_w, full_h, "node.render_scene rt_svt_full (RT-TL-C)"));
         // RT-TL-C: à-trous ping-pong scratch — mirrors rt_mask_full_b.
@@ -1141,9 +1235,8 @@ impl RenderScene {
     /// undefined until the caller's next `accumulate_irradiance` call,
     /// which MUST pass `reset: true` in that case (a dimension change is
     /// itself a discontinuity, same as a cut).
-    pub(super) fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32, sv_layers: u32) -> bool {
+    pub(super) fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) -> bool {
         if self.rt_irr_width == full_w
-            && self.rt_sv_history[0].as_ref().is_some_and(|history| history.depth == sv_layers)
             && self.rt_irr_height == full_h
             && self.rt_irr_trace_w == trace_w
             && self.rt_irr_trace_h == trace_h
@@ -1166,8 +1259,7 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        // Hold histories need render-pass sentinel clears; reflection
-        // scratch also serves as the later MSAA scene-color resolve.
+        // Reflection scratch also serves as the later MSAA scene-color resolve.
         let make_renderable = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -1183,24 +1275,6 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        // Shadow-visibility histories: layer arrays, four casters per layer.
-        let make_layers = |format: manifold_gpu::GpuTextureFormat, usage: manifold_gpu::GpuTextureUsage, label: &'static str| {
-            device.create_texture(&manifold_gpu::GpuTextureDesc {
-                width: full_w,
-                height: full_h,
-                depth: sv_layers,
-                format,
-                dimension: manifold_gpu::GpuTextureDimension::D2Array,
-                usage: usage
-                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE
-                    | manifold_gpu::GpuTextureUsage::SHADER_READ
-                    | manifold_gpu::GpuTextureUsage::COPY_SRC,
-                label,
-                mip_levels: 1,
-            })
-        };
-        let plain = manifold_gpu::GpuTextureUsage::SHADER_READ;
-        let renderable = manifold_gpu::GpuTextureUsage::RENDER_TARGET;
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
         // Lighting textures (irradiance, reflection, normal) at trace resolution.
         self.rt_irr_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
@@ -1239,29 +1313,6 @@ impl RenderScene {
         self.rt_refl_history = [
             make(full_w, full_h, rgba16, "node.render_scene rt_refl_history_a (RT-R2)"),
             make(full_w, full_h, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
-        ]
-        .map(Some);
-        // SV-ACCUM: shadow-visibility history pair — same lifecycle, reset
-        // rule, and ping clock as rt_irr_history/rt_refl_history.
-        self.rt_sv_history = [
-            make_layers(rgba16, plain, "node.render_scene rt_sv_history_a (SV-ACCUM)"),
-            make_layers(rgba16, plain, "node.render_scene rt_sv_history_b (SV-ACCUM)"),
-        ]
-        .map(Some);
-        // SV-ACCUM moments: per-channel first/second visibility moments.
-        self.rt_sv_m1_history = [
-            make_layers(rgba16, plain, "node.render_scene rt_sv_m1_a (SV-ACCUM)"),
-            make_layers(rgba16, plain, "node.render_scene rt_sv_m1_b (SV-ACCUM)"),
-        ]
-        .map(Some);
-        self.rt_sv_m2_history = [
-            make_layers(rgba16, plain, "node.render_scene rt_sv_m2_a (SV-ACCUM)"),
-            make_layers(rgba16, plain, "node.render_scene rt_sv_m2_b (SV-ACCUM)"),
-        ]
-        .map(Some);
-        self.rt_sv_hold_history = [
-            make_layers(manifold_gpu::GpuTextureFormat::R16Float, renderable, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
-            make_layers(manifold_gpu::GpuTextureFormat::R16Float, renderable, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
         ]
         .map(Some);
         // RT-TL-C (section 16 TL8): sun-transmission tint history pair —

@@ -66,8 +66,15 @@ impl RenderScene {
 
                 // The shared caster table (one entry per caster slot) sits
                 // after the lights in this frame's ring slot.
-                let rt_casters: &[manifold_gpu::raytrace::ShadowCaster] = shadow_casters;
-                let caster_count = rt_casters.len() as u32;
+                let rt_casters: &[manifold_gpu::ShadowCaster] = shadow_casters;
+                // The visibility arrays hold four casters per layer; casters
+                // past them (memory refused to grow) are not traced and read
+                // as unshadowed. No arrays at all (refused at a new size):
+                // skip the RT pass this frame.
+                let Some(sv_capacity) = self.rt_mask_full.as_ref().map(|mask| mask.depth as usize * 4) else {
+                    return false;
+                };
+                let caster_count = rt_casters.len().min(sv_capacity) as u32;
                 let caster_addr = self.light_buffers[self.light_frame].gpu_address() + self.caster_offset;
                 let Some(inv_view_proj) = mat4_inverse(view_proj) else {
                     // A degenerate camera projection — no camera this file
@@ -519,7 +526,7 @@ impl RenderScene {
                 self.denoiser_lighting_changed = lighting_changed || geo_changed;
                 self.denoiser_gesture_active = lighting_gesture || geo_gesture;
 
-                let accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
+                let mut accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
                     reset,
@@ -537,6 +544,11 @@ impl RenderScene {
                 // frame's beauty, our temporal history caps drop to
                 // near-raw — the network's history replaces ours.
                 .with_denoise_near_raw(denoise_active);
+                // More casters grew the visibility arrays: only visibility
+                // restarts; every other history carries on.
+                if std::mem::take(&mut self.rt_sv_needs_reset) {
+                    accumulate_params.reset |= manifold_gpu::raytrace::ACCUM_FLAG_SV_RESET;
+                }
                 let accumulate_params_buffer =
                     self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
                 // RT-T1-C: ping-pong — read last frame's write slot (same
