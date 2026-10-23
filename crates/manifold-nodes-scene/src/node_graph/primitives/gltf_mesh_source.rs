@@ -1197,7 +1197,9 @@ mod gpu_tests {
     use manifold_gpu::testkit::TestDevice;
     use manifold_core::{Beats, Seconds};
 
-    const CAPACITY: u32 = 20_000;
+    // The node's own default Max Capacity, as a hand-built graph gets it. A
+    // buffer smaller than the mesh refuses it rather than cutting it short.
+    const CAPACITY: u32 = 200_000;
 
     fn frame_time() -> FrameTime {
         FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
@@ -1293,7 +1295,7 @@ mod gpu_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("gltf_mesh_source: parse never settled");
+        panic!("gltf_mesh_source: parse never settled ({:?})", prim.load_error);
     }
 
     fn make_buffer_backend(device: &TestDevice) -> (MetalBackend, ResourceId, Slot) {

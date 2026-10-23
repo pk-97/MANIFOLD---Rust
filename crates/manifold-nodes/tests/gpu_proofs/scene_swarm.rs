@@ -235,7 +235,10 @@ fn keeps_three_copies_a_particle(mut doc: SceneDoc) {
     println!("SCENE_SWARM copies particles={} live={} nested={}", particles.len(), live.len(), nested.len());
     run.still("group_copies");
     assert!(live.len() >= 300, "the swarm is alive: {}", live.len());
-    assert!(nested.len() >= particles.len() * 3, "three copies a particle: {} for {}", nested.len(), particles.len());
+    // The nest holds copies for the live particles only (the swarm's Count),
+    // not its whole capacity, so every live particle must sit in that range.
+    assert!(nested.len() >= live.len() * 3, "three copies a live particle: {} for {}", nested.len(), live.len());
+    assert!(live.iter().all(|&i| i * 3 + 3 <= nested.len()), "every live particle has its copies: {} copies, last live {:?}", nested.len(), live.last());
     for &i in live.iter().take(50) {
         let copies = &nested[i * 3..i * 3 + 3];
         let shown: Vec<[f32; 4]> = copies.iter().map(|c| c.pos_scale).collect();
