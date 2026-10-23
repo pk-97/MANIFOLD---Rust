@@ -2,7 +2,7 @@
 
 <!-- index: Refinement pass on the scene document after the first live tests: draw only real vertices, a last-resort layer cut instead of a frozen Mac, errors that show, physics on all cores, copies of any scale, materials whose features show and leave cleanly, everything updating on drag, the panel finished to its design, one Radial force, collider meshes for scans, smoother AO and a Scene Loop camera button. Water is out of scope. Three phases, eleven lanes. -->
 
-**Status:** APPROVED · building, phase 1. Epic and lane beads are listed in section 5.
+**Status:** SHIPPED · all three phases on main (dd28ded9e). Follow-ups: BUG-673ls (double hull build), BUG-rgx4u (flaky code terminal proof), BUG-6d7z9 (RT glass decision).
 **Document type:** Design and plan. A fresh session builds from this doc plus the base doc.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) section 5 (Phase briefs); [AGENT_ROUTING.md](AGENT_ROUTING.md) for seats, briefs and gates.
 **Base:** [SCENE_DOCUMENT_DESIGN.md](SCENE_DOCUMENT_DESIGN.md). Everything there stands unless a line below changes it.
