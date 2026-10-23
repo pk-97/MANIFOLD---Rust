@@ -98,8 +98,14 @@ pub(crate) struct Rest {
     /// The mesh's bounds about its own origin.
     pub lo: [f32; 3],
     pub hi: [f32; 3],
-    /// Where that origin sits at rest in the frame of what holds the item.
-    pub offset: [f32; 3],
+    /// Its box where it sits at rest in the scene, when the compiler knows
+    /// it (an imported part: where the file puts it); else `lo` and `hi`
+    /// about the scene's origin.
+    pub placed: Option<([f32; 3], [f32; 3])>,
+    /// Whether the mesh draws in its file node's own space, its Transform
+    /// carrying the rotation and scale the file gave it: a frame it shares
+    /// with other parts carries it whole, so it bends as one body with them.
+    pub own_space: bool,
     pub vertices: u32,
 }
 
@@ -615,12 +621,11 @@ impl<'d> Builder<'d> {
     }
 }
 
-/// The box holding every rest pose in `rests`, each placed at its offset.
+/// The box holding every rest pose in `rests`, each where it is placed.
 pub(crate) fn rest_box<'r>(rests: impl IntoIterator<Item = &'r Rest>) -> Option<([f32; 3], [f32; 3])> {
     let mut found: Option<([f32; 3], [f32; 3])> = None;
     for rest in rests {
-        let lo: [f32; 3] = std::array::from_fn(|axis| rest.offset[axis] + rest.lo[axis]);
-        let hi: [f32; 3] = std::array::from_fn(|axis| rest.offset[axis] + rest.hi[axis]);
+        let (lo, hi) = rest.placed.unwrap_or((rest.lo, rest.hi));
         found = Some(match found {
             None => (lo, hi),
             Some((min, max)) => (std::array::from_fn(|axis| min[axis].min(lo[axis])), std::array::from_fn(|axis| max[axis].max(hi[axis]))),

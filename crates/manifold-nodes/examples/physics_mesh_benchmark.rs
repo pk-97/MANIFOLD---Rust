@@ -24,6 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         translate: [0.0; 3],
         fragment_count: 1,
         fragment_index: 0,
+        own_space: false,
     };
     let vertices = selection.load(Path::new(path))?;
     let mut bodies = vec![None; count + 1];

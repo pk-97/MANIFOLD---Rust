@@ -1360,3 +1360,299 @@ fn bends_add_detail_and_a_fragment_cut_draws_its_live_records() {
         assert_eq!(feed(object, "live_count"), Some((map, "live_count".to_owned())), "the object draws the cut's live records");
     }
 }
+
+/// A Bend aimed at an import's Group bends its parts as one body: parts the
+/// file turns and scales (one nested in the other, under a non-uniform
+/// scale) land on the same world-space vertices as the same file imported
+/// with Combine Meshes, whose parts sit flat in the file's space.
+#[test]
+fn a_group_bend_bends_turned_and_scaled_parts_as_one_body() {
+    use manifold_core::scene_doc::transform::{mat4_mul, trs_matrix};
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene_with;
+
+    // Four triangles spanning the bend's axis, drawn by both parts.
+    let raw: [[f32; 3]; 12] = [
+        [-1.0, 0.0, -0.5], [1.0, 0.0, -0.5], [1.0, 2.0, 0.5],
+        [-1.0, 0.0, -0.5], [1.0, 2.0, 0.5], [-1.0, 2.0, 0.5],
+        [-1.0, 0.0, 0.5], [1.0, 1.0, 0.5], [0.0, 2.0, -0.5],
+        [0.0, 0.0, 0.0], [1.0, 1.0, -0.5], [-1.0, 1.5, 0.5],
+    ];
+    let (turn_a, turn_b) = (0.6f32, 0.9f32);
+    let (a_at, a_scale) = ([1.0, 0.0, 0.0], [2.0, 1.0, 0.5]);
+    let (b_at, b_scale) = ([0.0, 1.5, 0.3], [0.5, 1.5, 1.0]);
+    let half = |angle: f32| ((angle / 2.0).sin(), (angle / 2.0).cos());
+    let ((ya, wa), (xb, wb)) = (half(turn_a), half(turn_b));
+    let nodes = serde_json::json!([
+        { "name": "rig", "children": [1] },
+        { "name": "a", "mesh": 0, "translation": a_at, "rotation": [0.0, ya, 0.0, wa], "scale": a_scale, "children": [2] },
+        { "name": "b", "mesh": 0, "translation": b_at, "rotation": [xb, 0.0, 0.0, wb], "scale": b_scale }
+    ]);
+    let mut bin = Vec::new();
+    for value in raw.iter().flatten() {
+        bin.extend_from_slice(&value.to_le_bytes());
+    }
+    let gltf = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": nodes,
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+        "accessors": [{
+            "bufferView": 0, "componentType": 5126, "count": raw.len(), "type": "VEC3",
+            "min": [-1.0, 0.0, -0.5], "max": [1.0, 2.0, 0.5],
+        }],
+        "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": bin.len() }],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let mut json = serde_json::to_vec(&gltf).unwrap();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let mut glb = Vec::new();
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&((12 + 8 + json.len() + 8 + bin.len()) as u32).to_le_bytes());
+    for (chunk, kind) in [(&json, b"JSON"), (&bin, b"BIN\0")] {
+        glb.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+        glb.extend_from_slice(kind);
+        glb.extend_from_slice(chunk);
+    }
+    let path = std::env::temp_dir().join(format!("manifold_group_bend_{}.glb", std::process::id()));
+    std::fs::write(&path, glb).unwrap();
+
+    // Each part's mesh where the file puts it, for a Combine Meshes source.
+    let a_world = trs_matrix(a_at, [0.0, turn_a, 0.0], a_scale);
+    let b_world = mat4_mul(a_world, trs_matrix(b_at, [turn_b, 0.0, 0.0], b_scale));
+    let file_world = |node_path: &str| match node_path.rsplit('/').next() {
+        Some("a") => a_world,
+        Some("b") => b_world,
+        other => panic!("no part {other:?}"),
+    };
+    // The import with one card aimed at its Group, prepared as the loader runs it.
+    let prepared = |combine: bool, modifier: ModifierType| {
+        let (def, _) = compile_model_scene_with(&path, combine, |doc, import| {
+            let mut card = ItemFields::default_for(ItemKind::Modifier);
+            if let ItemFields::Modifier(fields) = &mut card {
+                let targets = ModifierTargets::Items(vec![import.clone()]);
+                *fields = ModifierFields { modifier, on: true, targets, ..fields.clone() };
+            }
+            let end = doc.items.len();
+            doc.insert(None, end, Item::new(ItemId::new("card"), "Card", card)).unwrap();
+        })
+        .unwrap();
+        prepare_scene_modifiers(&def, &PrimitiveRegistry::with_builtin()).unwrap().def
+    };
+    let bent = |combine: bool| {
+        let prepared = prepared(combine, ModifierType::Bend);
+        let eval = CpuMeshes { def: &prepared, raw: &raw, file_world: &file_world };
+        let mut parts: Vec<(String, Vec<[f32; 3]>)> = prepared
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.scene_object")
+            .filter_map(|object| eval.world(object.id))
+            .collect();
+        parts.sort_by(|x, y| x.0.cmp(&y.0));
+        parts
+    };
+    let (carried, combined) = (bent(false), bent(true));
+
+    // A fragment cut carried into the frame and back still draws only the
+    // cut's live records.
+    let cut = prepared(false, ModifierType::VortexFragments);
+    std::fs::remove_file(&path).unwrap();
+    let feed = |to: u32, port: &str| cut.wires.iter().find(|w| w.to_node == to && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()));
+    let carried_out: Vec<u32> = cut
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.scene_object")
+        .map(|n| n.id)
+        .filter(|&object| feed(object, "vertices").is_some_and(|(from, _)| cut.nodes.iter().any(|n| n.id == from && n.type_id == "node.merge_meshes")))
+        .collect();
+    assert_eq!(carried_out.len(), 2, "both parts come back out of the frame");
+    for object in carried_out {
+        let (map, _) = feed(object, "topology").expect("the part draws the cut's triangles");
+        assert_eq!(feed(object, "live_count"), Some((map, "live_count".to_owned())), "the part draws the cut's live records");
+    }
+
+    assert_eq!(carried.len(), 2, "both parts draw");
+    assert_eq!(carried.iter().map(|p| &p.0).collect::<Vec<_>>(), combined.iter().map(|p| &p.0).collect::<Vec<_>>());
+    let mut moved = 0.0f32;
+    for ((part, got), (_, want)) in carried.iter().zip(&combined) {
+        assert_eq!(got.len(), want.len(), "{part}");
+        let flat = file_world(part);
+        for (index, ((g, w), r)) in got.iter().zip(want).zip(&raw).enumerate() {
+            assert!((0..3).all(|axis| (g[axis] - w[axis]).abs() < 1e-4), "{part} vertex {index}: {g:?}, flat in the file {w:?}");
+            let unbent = transform_point(&flat, *r);
+            moved = moved.max((0..3).map(|axis| (w[axis] - unbent[axis]).abs()).fold(0.0, f32::max));
+        }
+    }
+    assert!(moved > 0.05, "the bend moved the model ({moved})");
+}
+
+/// Column-major `m` applied to the point `p`.
+fn transform_point(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|row| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row])
+}
+
+/// The inverse of an affine column-major matrix.
+fn affine_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let a = |col: usize, row: usize| m[col][row];
+    let det = a(0, 0) * (a(1, 1) * a(2, 2) - a(2, 1) * a(1, 2)) - a(1, 0) * (a(0, 1) * a(2, 2) - a(2, 1) * a(0, 2))
+        + a(2, 0) * (a(0, 1) * a(1, 2) - a(1, 1) * a(0, 2));
+    let linear: [[f32; 3]; 3] = std::array::from_fn(|col| {
+        std::array::from_fn(|row| {
+            let (r1, r2) = ((col + 1) % 3, (col + 2) % 3);
+            let (c1, c2) = ((row + 1) % 3, (row + 2) % 3);
+            (a(c1, r1) * a(c2, r2) - a(c2, r1) * a(c1, r2)) / det
+        })
+    });
+    let moved: [f32; 3] = std::array::from_fn(|row| -(0..3).map(|col| linear[col][row] * m[3][col]).sum::<f32>());
+    std::array::from_fn(|col| if col < 3 { [linear[col][0], linear[col][1], linear[col][2], 0.0] } else { [moved[0], moved[1], moved[2], 1.0] })
+}
+
+/// A CPU reading of the prepared mesh chain a Bend card builds on an
+/// imported part: the file's mesh, the frame's carry in and out, the bend
+/// itself (`bend_mesh_body.wgsl`, unmasked) and the transforms the part
+/// draws with.
+struct CpuMeshes<'a> {
+    def: &'a EffectGraphDef,
+    raw: &'a [[f32; 3]],
+    file_world: &'a dyn Fn(&str) -> [[f32; 4]; 4],
+}
+
+impl CpuMeshes<'_> {
+    fn node(&self, id: u32) -> &EffectGraphNode {
+        self.def.nodes.iter().find(|node| node.id == id).unwrap()
+    }
+
+    fn feed(&self, id: u32, port: &str) -> Option<(u32, String)> {
+        self.def.wires.iter().find(|w| w.to_node == id && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()))
+    }
+
+    fn param(&self, id: u32, name: &str) -> f32 {
+        use manifold_core::effect_graph_def::SerializedParamValue as V;
+        match self.node(id).params.get(name) {
+            Some(V::Float { value }) => *value,
+            Some(V::Int { value }) => *value as f32,
+            Some(V::Enum { value }) => *value as f32,
+            Some(V::Bool { value }) => f32::from(u8::from(*value)),
+            None => 0.0,
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    fn scalar(&self, id: u32, port: &str) -> f32 {
+        let Some((from, from_port)) = self.feed(id, port) else {
+            return self.param(id, port);
+        };
+        match self.node(from).type_id.as_str() {
+            "node.value" => self.param(from, "value"),
+            // A live place: the transform inside its parent, seen from the frame.
+            "node.transform_components" => {
+                let axis = ["pos_x", "pos_y", "pos_z"].iter().position(|p| *p == from_port).expect("a live offset reads a position");
+                let placed = manifold_core::scene_doc::transform::mat4_mul(
+                    self.transform(self.feed(from, "parent")),
+                    self.transform(self.feed(from, "transform")),
+                );
+                let seen = manifold_core::scene_doc::transform::mat4_mul(affine_inverse(&self.transform(self.feed(from, "frame"))), placed);
+                seen[3][axis]
+            }
+            "node.math" => {
+                let (a, b) = (self.scalar(from, "a"), self.scalar(from, "b"));
+                match self.param(from, "op") as u32 {
+                    0 => a + b,
+                    1 => a - b,
+                    2 => a * b,
+                    3 => a / b,
+                    op => panic!("math op {op}"),
+                }
+            }
+            other => panic!("scalar from {other}"),
+        }
+    }
+
+    fn transform(&self, at: Option<(u32, String)>) -> [[f32; 4]; 4] {
+        let Some((id, _)) = at else {
+            return trs_identity();
+        };
+        assert_eq!(self.node(id).type_id, "node.transform_3d");
+        let three = |names: [&str; 3]| names.map(|name| self.scalar(id, name));
+        let own = manifold_core::scene_doc::transform::trs_matrix(
+            three(["pos_x", "pos_y", "pos_z"]),
+            three(["rot_x", "rot_y", "rot_z"]),
+            [self.scale(id, "scale_x"), self.scale(id, "scale_y"), self.scale(id, "scale_z")],
+        );
+        manifold_core::scene_doc::transform::mat4_mul(self.transform(self.feed(id, "parent")), own)
+    }
+
+    fn scale(&self, id: u32, name: &str) -> f32 {
+        if self.feed(id, name).is_some() || self.node(id).params.contains_key(name) { self.scalar(id, name) } else { 1.0 }
+    }
+
+    /// The mesh at `(id, port)` and the file node it is drawn from.
+    fn mesh(&self, id: u32) -> (String, Vec<[f32; 3]>) {
+        use manifold_core::effect_graph_def::SerializedParamValue as V;
+        let node = self.node(id);
+        match node.type_id.as_str() {
+            "node.gltf_mesh_source" => {
+                let Some(V::String { value: path }) = node.params.get("node_path") else { panic!("a source with no node path") };
+                let own = matches!(node.params.get("own_space"), Some(V::Bool { value: true }));
+                let place = if own { trs_identity() } else { (self.file_world)(path) };
+                (path.clone(), self.raw.iter().map(|p| transform_point(&place, *p)).collect())
+            }
+            "node.merge_meshes" => {
+                assert!(self.feed(id, "mesh_1").is_none(), "a carry holds one mesh");
+                let placed = |port: &str| self.transform(self.feed(id, port));
+                let to_frame = affine_inverse(&manifold_core::scene_doc::transform::mat4_mul(placed("frame_within"), placed("frame")));
+                let m = manifold_core::scene_doc::transform::mat4_mul(to_frame, manifold_core::scene_doc::transform::mat4_mul(placed("within_0"), placed("place_0")));
+                let (path, mesh) = self.mesh(self.feed(id, "mesh_0").unwrap().0);
+                (path, mesh.iter().map(|p| transform_point(&m, *p)).collect())
+            }
+            "node.bend_mesh" => {
+                if let Some((mask, _)) = self.feed(id, "weights") {
+                    assert_eq!(self.param(mask, "amount"), 0.0, "an unmasked bend weighs every vertex 1");
+                }
+                let axis = self.param(id, "axis") as usize;
+                let (angle, center) = (self.scalar(id, "angle"), self.scalar(id, "center"));
+                let offset = ["source_offset_x", "source_offset_y", "source_offset_z"].map(|port| self.scalar(id, port));
+                let (path, mesh) = self.mesh(self.feed(id, "in").unwrap().0);
+                let companion = (axis + 1) % 3;
+                let bent = mesh
+                    .iter()
+                    .map(|p| {
+                        let mut q: [f32; 3] = std::array::from_fn(|i| p[i] + offset[i]);
+                        let s = q[axis] - center;
+                        let (sn, c) = (angle * s).sin_cos();
+                        let along = q[companion];
+                        q[axis] = center + s * c - along * sn;
+                        q[companion] = s * sn + along * c;
+                        std::array::from_fn(|i| q[i] - offset[i])
+                    })
+                    .collect();
+                (path, bent)
+            }
+            other => panic!("unexpected mesh node {other}"),
+        }
+    }
+
+    /// The world-space vertices `object` draws, by the file node it draws,
+    /// or `None` when it draws no imported part.
+    fn world(&self, object: u32) -> Option<(String, Vec<[f32; 3]>)> {
+        let (vertices, _) = self.feed(object, "vertices")?;
+        if !matches!(self.node(vertices).type_id.as_str(), "node.gltf_mesh_source" | "node.merge_meshes" | "node.bend_mesh") {
+            return None;
+        }
+        let (path, mesh) = self.mesh(vertices);
+        let world = manifold_core::scene_doc::transform::mat4_mul(
+            self.transform(self.feed(object, "parent_transform")),
+            self.transform(self.feed(object, "transform")),
+        );
+        Some((path, mesh.iter().map(|p| transform_point(&world, *p)).collect()))
+    }
+}
+
+fn trs_identity() -> [[f32; 4]; 4] {
+    manifold_core::scene_doc::transform::trs_matrix([0.0; 3], [0.0; 3], [1.0; 3])
+}

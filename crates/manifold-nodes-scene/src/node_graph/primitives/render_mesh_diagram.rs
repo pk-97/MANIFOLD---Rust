@@ -100,6 +100,7 @@ manifold_node_engine::primitive! {
         copy_scale: Transform optional,
         camera: Camera required,
         transform: Transform optional,
+        parent_transform: Transform optional,
         grid: ScalarF32 optional,
         axes: ScalarF32 optional,
         fragments: ScalarF32 optional,
@@ -144,7 +145,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.001, 100.0)), enum_values: &[] },
     ],
     depth_rule: SourceHeight,
-    composition_notes: "Current, reference, and incoming arrays are sampled faces of real meshes. The transparent diagram uses the Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories. Occlusion=1 with Mode=2 tests scene_depth at its own resolution; Mode 1 never occludes. When current_mesh and reference_mesh are both wired and differ in size, reference and incoming read as current (ghosts coincide, arrows hide). Ghosts/trails remain translucent. Optional copy_scale (a copies body's copy_scale) scales each copy per axis inside its instance, as the scene draws it; it applies only with instances wired.",
+    composition_notes: "Current, reference, and incoming arrays are sampled faces of real meshes. The transparent diagram uses the Camera and optional object Transform, inside the optional parent_transform (the frame the object draws in: its groups, or its body's pose), as node.scene_object composes them; Motion trails are temporal history, never parameter-sweep trajectories. Occlusion=1 with Mode=2 tests scene_depth at its own resolution; Mode 1 never occludes. When current_mesh and reference_mesh are both wired and differ in size, reference and incoming read as current (ghosts coincide, arrows hide). Ghosts/trails remain translucent. Optional copy_scale (a copies body's copy_scale) scales each copy per axis inside its instance, as the scene draws it; it applies only with instances wired.",
     examples: [], picker: { label: "Mesh Diagram", category: Atom },
     summary: "Draws sparse evaluated mesh samples as a transparent native diagram.",
     category: Geometry3D, role: Filter, aliases: ["mesh diagram", "math view"], boundary_reason: DrawCall,
@@ -289,13 +290,13 @@ impl RenderMeshDiagram {
         }
     }
 
-    fn model_matrix(t: Transform, camera: &Camera) -> [[f32; 4]; 4] {
-        let rot = if t.billboard {
-            t.billboard_rot_euler(camera.pos)
-        } else {
-            t.rot_euler
-        };
-        super::render_scene::model_matrix(t.pos, rot, t.scale)
+    fn model_matrix(t: Transform, parent: Option<Transform>, camera: &Camera) -> [[f32; 4]; 4] {
+        let turn = |t: &Transform| if t.billboard { t.billboard_rot_euler(camera.pos) } else { t.rot_euler };
+        let own = super::render_scene::model_matrix(t.pos, turn(&t), t.scale);
+        match parent {
+            Some(parent) => manifold_node_engine::mesh::pipeline::mat4_mul(parent.world_with_rotation(turn(&parent)), own),
+            None => own,
+        }
     }
 }
 
@@ -423,6 +424,7 @@ impl Primitive for RenderMeshDiagram {
             view_proj,
             model: Self::model_matrix(
                 ctx.inputs.transform("transform").unwrap_or_default(),
+                ctx.inputs.transform("parent_transform"),
                 &camera,
             ),
             viewport: [width as f32, height as f32, 0.0, 0.0],

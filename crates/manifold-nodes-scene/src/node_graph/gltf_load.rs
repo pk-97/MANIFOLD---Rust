@@ -731,13 +731,15 @@ fn node_instance_transforms(
 #[derive(Clone, Debug)]
 pub(crate) enum GltfMeshSelector {
     /// The mesh of the one file node at `path` (see [`file_node_tree`]),
-    /// world-transformed through its ancestors, children excluded. An
-    /// imported Object's mesh (SCENE_DOCUMENT_DESIGN.md section 7.7).
-    /// `material` keeps the primitives of one material: `-1` every
-    /// primitive, `-2` ([`DEFAULT_MATERIAL_MESH_PARAM`]) the materialless
-    /// ones, else that glTF material index. A node whose mesh carries
-    /// several materials is one Object per material.
-    Node { path: std::sync::Arc<str>, material: i32 },
+    /// children excluded: in the node's own space when `own_space` (an
+    /// imported Object's mesh, placed by its item's transform,
+    /// SCENE_DOCUMENT_DESIGN.md section 7.7), else world-transformed through
+    /// its ancestors (a Combine Meshes part). `material` keeps the
+    /// primitives of one material: `-1` every primitive, `-2`
+    /// ([`DEFAULT_MATERIAL_MESH_PARAM`]) the materialless ones, else that
+    /// glTF material index. A node whose mesh carries several materials is
+    /// one Object per material.
+    Node { path: std::sync::Arc<str>, material: i32, own_space: bool },
     /// Walk the default scene's node tree, world-transforming every
     /// node's mesh primitives and combining them into one buffer. The
     /// proven azalea-fixture path — "just drop a model in."
@@ -987,6 +989,8 @@ pub(crate) struct FileNode {
     /// The node's mesh split by material, in first-use order: one part per
     /// glTF material (`None` is the glTF default material).
     pub parts: Vec<FilePart>,
+    /// The node's own transform, in its parent's frame.
+    pub local: Mat4,
     pub children: Vec<FileNode>,
 }
 
@@ -999,8 +1003,12 @@ pub(crate) struct FilePart {
     /// The centre of their bounding box in the file's world space.
     pub center: [f32; 3],
     /// Half that box's size on each axis: with `center`, the part's rest-pose
-    /// bounds, which a modifier measures it by.
+    /// bounds where the file puts it.
     pub half_extent: [f32; 3],
+    /// The same box in the node's own space, where an imported part draws
+    /// its mesh: the rest-pose bounds a modifier measures it by.
+    pub own_center: [f32; 3],
+    pub own_half_extent: [f32; 3],
 }
 
 /// The file's node tree under the same roots the mesh loader walks
@@ -1020,33 +1028,53 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
             return Vec::new();
         };
         let placements = instance_worlds(node, world, document, buffers);
+        let own_placements = instance_worlds(node, &MAT4_IDENTITY, document, buffers);
         let instances = placements.len();
         // A skinned mesh is where its skin poses it (glTF ignores its node's
-        // transform), the same box `file_bounds` measures.
+        // transform), the same box `file_bounds` measures; in the node's own
+        // space it is that pose seen from the node.
         let joints = node.skin().map(|skin| skin_matrices(&skin, document, buffers, parent_of));
-        let mut parts: Vec<(FilePart, Bounds)> = Vec::new();
+        let into_node = manifold_core::scene_doc::transform::affine_inverse(*world).unwrap_or(MAT4_IDENTITY);
+        let own_joints: Option<Vec<Mat4>> =
+            joints.as_ref().map(|joints| joints.iter().map(|joint| mat4_mul(&into_node, joint)).collect());
+        let mut parts: Vec<(FilePart, Bounds, Bounds)> = Vec::new();
         for p in mesh.primitives() {
             let n = p.indices().map(|a| a.count()).or_else(|| p.get(&gltf::Semantic::Positions).map(|a| a.count()));
             let vertices = (n.unwrap_or(0) / 3 * 3) as u64 * instances as u64;
             let material = p.material().index().map(|index| index as u32);
-            let at = match parts.iter().position(|(part, _)| part.material == material) {
+            let at = match parts.iter().position(|(part, _, _)| part.material == material) {
                 Some(at) => at,
                 None => {
-                    let empty = FilePart { material, vertex_count: 0, center: [0.0; 3], half_extent: [0.0; 3] };
-                    parts.push((empty, None));
+                    let empty = FilePart {
+                        material,
+                        vertex_count: 0,
+                        center: [0.0; 3],
+                        half_extent: [0.0; 3],
+                        own_center: [0.0; 3],
+                        own_half_extent: [0.0; 3],
+                    };
+                    parts.push((empty, None, None));
                     parts.len() - 1
                 }
             };
-            let (part, bounds) = &mut parts[at];
+            let (part, bounds, own_bounds) = &mut parts[at];
             part.vertex_count = (u64::from(part.vertex_count) + vertices).min(u64::from(u32::MAX)) as u32;
             grow_primitive(&p, joints.as_deref(), &placements, buffers, bounds);
+            grow_primitive(&p, own_joints.as_deref(), &own_placements, buffers, own_bounds);
         }
+        let measured = |bounds: Bounds| {
+            bounds.filter(|(lo, hi)| lo.iter().chain(hi.iter()).all(|v| v.is_finite())).map(|(lo, hi)| {
+                ([0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5), [0, 1, 2].map(|axis| (hi[axis] - lo[axis]) * 0.5))
+            })
+        };
         parts
             .into_iter()
-            .map(|(mut part, bounds)| {
-                if let Some((lo, hi)) = bounds.filter(|(lo, hi)| lo.iter().chain(hi.iter()).all(|v| v.is_finite())) {
-                    part.center = [0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5);
-                    part.half_extent = [0, 1, 2].map(|axis| (hi[axis] - lo[axis]) * 0.5);
+            .map(|(mut part, bounds, own_bounds)| {
+                if let Some((center, half)) = measured(bounds) {
+                    (part.center, part.half_extent) = (center, half);
+                }
+                if let Some((center, half)) = measured(own_bounds) {
+                    (part.own_center, part.own_half_extent) = (center, half);
                 }
                 part
             })
@@ -1065,12 +1093,14 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
             .zip(nodes)
             .map(|((segment, name), node)| {
                 let path = if prefix.is_empty() { segment } else { format!("{prefix}/{segment}") };
-                let world = mat4_mul(&parent, &node.transform().matrix());
+                let local = node.transform().matrix();
+                let world = mat4_mul(&parent, &local);
                 let children: Vec<gltf::Node> = node.children().collect();
                 let parts = parts(node, &world, document, buffers, parent_of);
                 FileNode {
                     children: build(&children, &path, world, document, buffers, parent_of),
                     parts,
+                    local,
                     path,
                     name,
                     index: node.index(),
@@ -1257,9 +1287,10 @@ pub(crate) fn load_gltf_mesh_from_buffers(
 ) -> Result<Vec<MeshVertex>, String> {
     let mut out = Vec::new();
     match selector {
-        GltfMeshSelector::Node { path, material } => {
+        GltfMeshSelector::Node { path, material, own_space } => {
             let (node, world) = find_file_node(document, &path)
                 .ok_or_else(|| format!("the file has no node at \"{path}\""))?;
+            let world = if own_space { MAT4_IDENTITY } else { world };
             let filter = match material {
                 DEFAULT_MATERIAL_MESH_PARAM => MaterialFilter::DefaultOnly,
                 index if index >= 0 => MaterialFilter::Material(index as u32),
@@ -3014,24 +3045,16 @@ fn flatten_primitive_morph_deltas(
 /// `GltfMaterialInfo::morph` resolved. Returns `(deltas, target_count,
 /// vertex_count)`.
 ///
-/// `skinned`: BUG-208 — a skin+morph combination on the same object chains
-/// `node.morph_targets_blend` between `node.gltf_skinned_mesh_source` and
-/// `node.skin_mesh` (glTF applies morph THEN skin, section 3.7.2). Per A2/A3,
-/// `flatten_skinned_node`'s base vertices are emitted in UNTRANSFORMED
-/// bind-pose/local space — `node.gltf_skinned_mesh_source` never applies
-/// the mesh-owning node's world matrix, since a skinned object's
-/// positioning comes entirely from its joint palette. Morph deltas for
-/// that combination must land in the SAME untransformed space so
-/// `node.morph_targets_blend`'s additive sum stays index-1:1 with
-/// `node.skin_mesh`'s `in` — `skinned == true` skips the world-transform
-/// step entirely (identity matrices) instead of applying the node's world
-/// matrix. The non-skinned (rigid) path is unchanged: it still applies the
-/// node's world transform, matching `node.gltf_mesh_source`'s own
-/// world-transform of the base mesh.
+/// `own_space`: the deltas stay in the node's own space (identity
+/// matrices), the space its base vertices are in when they are a skinned
+/// part's bind pose (`node.gltf_skinned_mesh_source`, morph then skin, glTF
+/// 2.0 section 3.7.2) or an imported part drawn by its item's transform.
+/// Otherwise they take the node's world transform, matching a base mesh
+/// placed where the file puts it.
 pub(crate) fn load_gltf_morph_deltas(
     path: &std::path::Path,
     material_index: u32,
-    skinned: bool,
+    own_space: bool,
     node_path: &str,
 ) -> Result<(Vec<MeshVertex>, u32, u32), String> {
     let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
@@ -3047,15 +3070,7 @@ pub(crate) fn load_gltf_morph_deltas(
     };
     let roots = if by_path.is_some() { Vec::new() } else { resolve_import_nodes(&document) };
     if let Some(found) = by_path.or_else(|| roots.iter().find_map(|node| find_mesh_node_for_material(node, material_index))) {
-        // The node's own world transform — SAME matrix `walk_gltf_node`
-        // would compose for this node when node.gltf_mesh_source's
-        // Material selector flattens the base mesh (assuming no
-        // EXT_mesh_gpu_instancing on this node; not exercised by the A3
-        // gate fixtures, which each ship a single non-instanced morphed
-        // object — re-derive if a future asset needs it). Skipped entirely
-        // (identity) for a skinned object — see the `skinned` doc comment
-        // above (BUG-208).
-        let (world_linear, normal_mat) = if skinned {
+        let (world_linear, normal_mat) = if own_space {
             (MAT3_IDENTITY, MAT3_IDENTITY)
         } else {
             let world = static_world_matrix(&document, found.index(), &parent_of);

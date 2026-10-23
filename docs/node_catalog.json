@@ -12883,6 +12883,12 @@
           "type": "string"
         },
         {
+          "default": "false",
+          "label": "Own Space",
+          "name": "own_space",
+          "type": "bool"
+        },
+        {
           "default": "-1",
           "label": "Mesh Index",
           "name": "mesh_index",
@@ -13003,7 +13009,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform. node_path (a file node path, empty by default) selects that one node's own mesh instead, already placed in the file's world space.",
+      "purpose": "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform. node_path (a file node path, empty by default) selects that one node's own mesh instead: placed where the file puts it, or in the node's own space with own_space on (an imported part, placed by its item's transform).",
       "role": "Source",
       "stratum": "atom",
       "summary": "Loads a glTF/.glb model file from disk as mesh geometry, so imported 3D assets flow into the render pipeline like any other shape primitive.",
@@ -13062,8 +13068,8 @@
         },
         {
           "default": "false",
-          "label": "Skinned",
-          "name": "skinned",
+          "label": "Own Space",
+          "name": "own_space",
           "type": "bool"
         }
       ],
@@ -13266,6 +13272,16 @@
           "label": "Node Slots",
           "name": "node_slots",
           "type": "table"
+        },
+        {
+          "default": "-1",
+          "label": "Space Node",
+          "name": "space_node",
+          "range": [
+            "-1",
+            "1000000"
+          ],
+          "type": "int"
         },
         {
           "default": "1",
@@ -23776,6 +23792,11 @@
           "type": "Transform"
         },
         {
+          "name": "frame_within",
+          "required": false,
+          "type": "Transform"
+        },
+        {
           "name": "reset_trigger",
           "required": false,
           "type": "f32"
@@ -23835,7 +23856,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Concatenate N triangle-list meshes into one Array<MeshVertex>, each placed by its own transform (`place_k`) inside the frame it is drawn in (`within_k`) and brought into a shared `frame` (each unwired transform is identity): position by the full matrix, normals by its inverse transpose, UVs and colours copied. `parts` sets how many mesh_k/place_k/within_k triples exist, with no cap; output capacity is the sum of the wired meshes. Wire `reset_trigger` to merge only on its integer edges.",
+      "purpose": "Concatenate N triangle-list meshes into one Array<MeshVertex>, each placed by its own transform (`place_k`) inside the frame it is drawn in (`within_k`) and brought into a shared `frame`, itself placed inside `frame_within` (each unwired transform is identity): position by the full matrix, normals by its inverse transpose, UVs and colours copied. `parts` sets how many mesh_k/place_k/within_k triples exist, with no cap; output capacity is the sum of the wired meshes. Wire `reset_trigger` to merge only on its integer edges.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Joins several meshes into one, each where its own transform puts it. The way a whole group becomes one shape to scatter particles over.",
@@ -36112,6 +36133,11 @@
         },
         {
           "name": "transform",
+          "required": false,
+          "type": "Transform"
+        },
+        {
+          "name": "parent_transform",
           "required": false,
           "type": "Transform"
         },

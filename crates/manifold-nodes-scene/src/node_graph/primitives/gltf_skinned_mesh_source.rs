@@ -255,6 +255,8 @@ impl Primitive for GltfSkinnedMeshSource {
                     translate: [0.0; 3],
                     fragment_count: 1,
                     fragment_index: 0,
+                    // A part draws in its node's own space.
+                    own_space: true,
                 },
             });
             ctx.outputs.set_mesh_source("source", source.clone());

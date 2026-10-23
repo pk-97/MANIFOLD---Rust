@@ -65,6 +65,7 @@ fn calibrated_scene_project(old_path: &str, stale_hash: bool) -> (Project, Layer
             scene_radius: 3.5,
             live_offset: None,
             item_radius: None,
+            frame_transform: None,
         });
     (project, layer_id, modifier_id)
 }

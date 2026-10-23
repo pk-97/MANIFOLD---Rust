@@ -134,7 +134,7 @@ fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) ->
 manifold_node_engine::primitive! {
     name: GltfMeshSource,
     type_id: "node.gltf_mesh_source",
-    purpose: "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform. node_path (a file node path, empty by default) selects that one node's own mesh instead, already placed in the file's world space.",
+    purpose: "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform. node_path (a file node path, empty by default) selects that one node's own mesh instead: placed where the file puts it, or in the node's own space with own_space on (an imported part, placed by its item's transform).",
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
@@ -154,6 +154,14 @@ manifold_node_engine::primitive! {
             label: "File Node",
             ty: ParamType::String,
             default: ParamValue::Float(0.0), // String default supplied by the node param; this slot is never read.
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("own_space"),
+            label: "Own Space",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
             range: None,
             enum_values: &[],
         },
@@ -291,8 +299,8 @@ manifold_node_engine::primitive! {
         // port-shadowed performance scalars, so a full re-parse on change
         // is the simple, correct choice over a second CPU-side cache tier.
         // BUG-221: translate_x/y/z joined the tuple the same way.
-        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), String) =
-            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0, (1, 0), String::new()),
+        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), (String, bool)) =
+            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0, (1, 0), (String::new(), false)),
         // Last successfully parsed geometry (CPU-side), retained only until
         // it is uploaded to `staging`.
         cached_verts: Vec<MeshVertex> = Vec::new(),
@@ -391,6 +399,7 @@ impl Primitive for GltfMeshSource {
             Some(ParamValue::String(s)) => s.as_str(),
             _ => "",
         };
+        let requested_own_space = matches!(params.get("own_space"), Some(ParamValue::Bool(true)));
 
         let requested_key_matches = self.last_key.0.as_str() == requested_path
             && self.last_key.1 == requested_mesh_index
@@ -403,7 +412,8 @@ impl Primitive for GltfMeshSource {
             && self.last_key.8 == requested_translate_y
             && self.last_key.9 == requested_translate_z
             && self.last_key.10 == (requested_fragment_count, requested_fragment_index)
-            && self.last_key.11 == requested_node_path;
+            && self.last_key.11.0 == requested_node_path
+            && self.last_key.11.1 == requested_own_space;
         if !requested_key_matches {
             return SourceAssetIdentity::Pending;
         }
@@ -466,6 +476,7 @@ impl Primitive for GltfMeshSource {
             Some(ParamValue::String(s)) => s.as_str().to_owned(),
             _ => String::new(),
         };
+        let own_space = matches!(ctx.params.get("own_space"), Some(ParamValue::Bool(true)));
 
         // 2. Re-trigger a background parse if the effective selection (or
         // the fit/recenter/translate_* authoring choice) changed since the
@@ -482,7 +493,7 @@ impl Primitive for GltfMeshSource {
             translate_y,
             translate_z,
             (fragment_count, fragment_index),
-            node_path.clone(),
+            (node_path.clone(), own_space),
         );
         if key != self.last_key && self.pending_load.is_none() {
             if source_trace_enabled() {
@@ -511,7 +522,7 @@ impl Primitive for GltfMeshSource {
                 // (the importer's per-material object). Otherwise the
                 // mesh_index / primitive_index path applies.
                 let selector = if !node_path.is_empty() {
-                    GltfMeshSelector::Node { path: node_path.as_str().into(), material: material_index }
+                    GltfMeshSelector::Node { path: node_path.as_str().into(), material: material_index, own_space }
                 } else if material_index == DEFAULT_MATERIAL_MESH_PARAM {
                     // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): the
                     // synthetic default-material object — every primitive
@@ -585,7 +596,7 @@ impl Primitive for GltfMeshSource {
                         self.content_version = self.content_version.wrapping_add(1);
                         self.published_source = Some(MeshSource::Gltf {
                             path: Arc::from(self.last_key.0.as_str()),
-                            node_path: (!self.last_key.11.is_empty()).then(|| Arc::from(self.last_key.11.as_str())),
+                            node_path: (!self.last_key.11.0.is_empty()).then(|| Arc::from(self.last_key.11.0.as_str())),
                             selection: MeshSelection {
                                 mesh: mesh_index,
                                 primitive: primitive_index,
@@ -595,6 +606,7 @@ impl Primitive for GltfMeshSource {
                                 translate,
                                 fragment_count,
                                 fragment_index,
+                                own_space,
                             },
                         });
                     }
@@ -856,7 +868,7 @@ mod tests {
         params
     }
 
-    type SourceKey = (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), String);
+    type SourceKey = (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), (String, bool));
 
     fn source_key(path: &str, mesh_index: i32) -> SourceKey {
         (
@@ -871,7 +883,7 @@ mod tests {
             0.0,
             0.0,
             (1, 0),
-            String::new(),
+            (String::new(), false),
         )
     }
 
@@ -1531,7 +1543,7 @@ fn load_physics_mesh_asset(
     use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
     use crate::node_graph::decode_cache::cached_load_gltf_mesh;
         let selector = if let Some(node) = node.filter(|node| !node.is_empty()) {
-            GltfMeshSelector::Node { path: node.into(), material: selection.material }
+            GltfMeshSelector::Node { path: node.into(), material: selection.material, own_space: selection.own_space }
         } else if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
             GltfMeshSelector::DefaultMaterial
         } else if selection.material >= 0 {
@@ -1584,7 +1596,7 @@ mod mesh_asset_source_tests {
         for (mesh, primitive) in [(-1, -1), (0, -1), (0, 0)] {
             let selection = manifold_node_engine::scene::mesh_selection::MeshSelection {
                 mesh, primitive, material: -1, fit: true, recenter: true,
-                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0,
+                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0, own_space: false,
             };
             let direct = super::load_physics_mesh_asset(&path, None, &selection).unwrap();
             let registered = manifold_node_engine::scene::mesh_asset_source::load_mesh(&path, &selection).unwrap();

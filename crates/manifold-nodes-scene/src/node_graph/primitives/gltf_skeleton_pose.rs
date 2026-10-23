@@ -112,6 +112,17 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        // An imported part draws in its node's own space, placed by its
+        // item's transform: the pose is seen from that node at rest, so the
+        // part draws where the file puts it until its item moves.
+        ParamDef {
+            name: Cow::Borrowed("space_node"),
+            label: "Space Node",
+            ty: ParamType::Int,
+            default: ParamValue::Float(-1.0),
+            range: Some((-1.0, 1_000_000.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: Cow::Borrowed("duration_s"),
             label: "Duration (s)",
@@ -246,7 +257,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source's `path`. skin_index selects which document.skins() entry (GltfAnimSet::skins[skin_index]) this node poses — gltf_import.rs stamps both from the object's resolved GltfObjectSkin. Wire `joint_matrices` into node.skin_mesh's `matrices` input (BufferGather — a joint-index lookup, not coincident with skin_mesh's per-vertex dispatch). Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop.",
+    composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source's `path`. skin_index selects which document.skins() entry (GltfAnimSet::skins[skin_index]) this node poses — gltf_import.rs stamps both from the object's resolved GltfObjectSkin. Wire `joint_matrices` into node.skin_mesh's `matrices` input (BufferGather — a joint-index lookup, not coincident with skin_mesh's per-vertex dispatch). space_node (default -1, the file's world) expresses every matrix in that file node's rest space instead: an imported part drawn in its node's own space. Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop.",
     examples: [],
     picker: { label: "glTF Skeleton Pose", category: Driver },
     summary: "Poses an imported glTF character's skeleton and outputs the joint matrices a Skin Mesh node needs to deform it. Wire progress to a beat or LFO to animate the pose.",
@@ -266,6 +277,8 @@ manifold_node_engine::primitive! {
         // flight until it returns; successful sampling retains its Arc.
         pending_load: Option<mpsc::Receiver<Result<Arc<LoadedAnimSet>, String>>> = None,
         load_error: Option<String> = None,
+        // `space_node` and its rest space, worked out once per loaded file.
+        rest_space: Option<(usize, Mat4)> = None,
     },
 }
 
@@ -345,6 +358,15 @@ fn resolve_world_whole_scene(
     };
     memo.insert(node, world);
     world
+}
+
+/// The inverse of file node `node`'s rest world matrix (every node at its
+/// bind TRS): what maps the file's world into that node's own space.
+/// Identity when the node is singular (a zero scale).
+fn rest_space(anim_set: &GltfAnimSet, node: usize) -> Mat4 {
+    let rest = AnimClip { duration_s: 0.0, channels: Vec::new() };
+    let world = resolve_world_whole_scene(node, anim_set, &rest, 0.0, &mut std::collections::HashMap::new(), 0);
+    manifold_core::scene_doc::transform::affine_inverse(world).unwrap_or(MAT4_IDENTITY)
 }
 
 /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): node-slot rigid-palette pose —
@@ -581,6 +603,7 @@ impl Primitive for GltfSkeletonPose {
         if path != self.last_path {
             self.last_path = path.clone();
             self.anim_set = None;
+            self.rest_space = None;
             self.pending_load = None;
             self.load_error = None;
         }
@@ -651,6 +674,23 @@ impl Primitive for GltfSkeletonPose {
         };
         if skin_matrices.is_empty() {
             return;
+        }
+        let mut skin_matrices = skin_matrices;
+        let space_node = ctx.param_f32("space_node", -1.0).round();
+        if space_node >= 0.0 {
+            let node = space_node as usize;
+            let into_node = match self.rest_space {
+                Some((cached, space)) if cached == node => space,
+                _ => {
+                    let space = rest_space(&anim_set, node);
+                    self.rest_space = Some((node, space));
+                    space
+                }
+            };
+            for joint in &mut skin_matrices {
+                let m = mat4_mul(&into_node, &[joint.c0, joint.c1, joint.c2, joint.c3]);
+                *joint = JointMatrix { c0: m[0], c1: m[1], c2: m[2], c3: m[3] };
+            }
         }
 
         let Some(out_buf) = ctx.outputs.array("joint_matrices") else {

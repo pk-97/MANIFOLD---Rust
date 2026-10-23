@@ -390,7 +390,7 @@ fn part(path: &str) -> manifold_core::scene_doc::ImportedNode {
         primitives: manifold_core::scene_doc::MeshPrimitives::All,
         material: None,
         vertex_count: 3,
-        center: [0.0; 3],
+        transform: manifold_core::scene_doc::ImportedTransform::IDENTITY,
         children: Vec::new(),
     }
 }
@@ -405,14 +405,28 @@ fn model(paths: &[&str]) -> manifold_core::scene_doc::ImportedModel {
             primitives: manifold_core::scene_doc::MeshPrimitives::All,
             material: None,
             vertex_count: 0,
-            center: [0.0; 3],
+            transform: manifold_core::scene_doc::ImportedTransform::IDENTITY,
             children: paths.iter().map(|p| part(p)).collect(),
         }],
         materials: Vec::new(),
         lights: Vec::new(),
         cameras: Vec::new(),
         clips: Vec::new(),
-        bounds: None,
+    }
+}
+
+/// An import keeps the file's size and place: it is the Add of its items
+/// and the writes that start each at its file node's transform, nothing
+/// that rescales or recentres it, for one mesh 20 m from the origin and for
+/// a Group alike.
+#[test]
+fn an_import_keeps_the_files_size_and_place() {
+    let (_, layer) = project();
+    for paths in [&["rig/a"][..], &["rig/a", "rig/b"]] {
+        let mut far = model(paths);
+        far.roots[0].children[0].transform.position = [20.0, 0.0, 0.0];
+        let commands = import_model_commands(&layer, None, 0, id("model"), "a.glb", &far);
+        assert_eq!(commands.len(), 2, "{paths:?}: one Add and the part's one moved row");
     }
 }
 

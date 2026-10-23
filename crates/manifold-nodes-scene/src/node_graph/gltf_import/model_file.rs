@@ -30,8 +30,9 @@ pub(crate) struct ClipDurations {
 /// How a part moves.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Rig {
-    /// Skinned against glTF skin `skin_index`.
-    Skin { skin_index: u32, joint_count: u32, clips: ClipDurations },
+    /// Skinned against glTF skin `skin_index`; `node_index` is the skinned
+    /// mesh's own node.
+    Skin { node_index: u32, skin_index: u32, joint_count: u32, clips: ClipDurations },
     /// Not skinned, but its node or an ancestor animates: the node's whole
     /// chain drives it as a one-slot palette.
     Chain { node_index: u32, clips: ClipDurations },
@@ -175,6 +176,7 @@ fn collect(
         {
             let rig = match node.skin() {
                 Some(skin) => skins.get(skin.index()).map(|info| Rig::Skin {
+                    node_index: file_node.index as u32,
                     skin_index: skin.index() as u32,
                     joint_count: info.joint_node_indices.len() as u32,
                     clips: skeleton_pose_clip_durations(info, by_clip),

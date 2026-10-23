@@ -367,6 +367,7 @@ mod scene_card_convergence_tests {
                     scene_radius: 1.0,
                     live_offset: None,
                     item_radius: None,
+                    frame_transform: None,
                 }],
                 legacy_math_view_carrier: None,
                 graph: Box::new(graph.clone()),

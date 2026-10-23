@@ -68,6 +68,15 @@ pub struct SceneMeshReferenceFrame {
     /// `scene_radius`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item_radius: Option<f64>,
+    /// The frame itself as a transform node, when the target's mesh is
+    /// carried whole into it: before the card's stages its vertices enter
+    /// the frame through the transform and parent transform the target
+    /// draws with, and after them they leave it, so the frame's axes and
+    /// units reach the recipe as well as its place. `source_offset` is then
+    /// zero. An imported part drawn in its own node's space needs it to bend
+    /// as one body with the rest of its group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_transform: Option<NodeId>,
 }
 
 /// Return the admission diagnostic for an authored parameter that is part of
