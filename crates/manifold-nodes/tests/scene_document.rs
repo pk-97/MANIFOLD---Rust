@@ -1059,6 +1059,17 @@ fn a_recorded_cut_keeps_its_camera_through_duplicate_add_and_reorder() {
     assert_eq!(deleted.pos, first.pos, "a deleted camera's number no longer shows the first camera");
 }
 
+/// The rows the Scene Loop card hides until a Loop camera exists are exactly
+/// the rows it shares with the Loop cameras that its corridor recipe lacks.
+#[test]
+fn the_rows_waiting_for_a_loop_camera_are_those_the_corridor_does_not_read() {
+    let recipe: serde_json::Value =
+        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/SceneLoop.json"))).unwrap();
+    let corridor: Vec<&str> = recipe["presetMetadata"]["params"].as_array().unwrap().iter().filter_map(|param| param["id"].as_str()).collect();
+    let camera_only: Vec<&str> = manifold_core::scene_schema::LOOP_CAMERA_ROWS.iter().map(|(property, _)| *property).filter(|property| !corridor.contains(property)).collect();
+    assert_eq!(camera_only, manifold_core::scene_schema::LOOP_CAMERA_ONLY);
+}
+
 /// Scene Loop tiles objects that draw many copies: a cube with Copies and a
 /// swarm's particles get every live copy in every corridor cell
 /// (node.nest_copies over the cells), after Scene Mirror shaped one tile, and

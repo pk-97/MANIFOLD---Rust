@@ -9,8 +9,8 @@
 //! material node declares is a card row in the Material section with the
 //! param's own name as its property, placed by its material inspector role,
 //! except the feature-mode params, which the Material's features field sets,
-//! and a texture map's placement and sampling params while that map has no
-//! texture.
+//! a texture map's placement and sampling params while that map has no
+//! texture, Baked Look (Type Unlit does it) and Ambient.
 
 use manifold_foundation::scene_surface::ControlGroup;
 
@@ -28,6 +28,11 @@ pub struct MaterialFamily {
     /// Params the compiler sets from the features field.
     pub automatic: &'static [&'static str],
     pub automatic_reason: &'static str,
+    /// Params left at the node's default, never on the card, each with why.
+    pub internal: &'static [(&'static str, &'static str)],
+    /// Params kept off the card that the looks, the water and imports still
+    /// set, each with why.
+    pub hidden: &'static [(&'static str, &'static str)],
 }
 
 pub const MATERIAL_FAMILY: MaterialFamily = MaterialFamily {
@@ -36,6 +41,8 @@ pub const MATERIAL_FAMILY: MaterialFamily = MaterialFamily {
     section: ControlGroup::Material,
     automatic: crate::material_inspector::MATERIAL_FEATURE_MODE_PARAMS,
     automatic_reason: "the Material's features field",
+    internal: &[("baked_look", "Type Unlit draws a material without lighting")],
+    hidden: &[("ambient", "a flat fill under the lighting; the Environment light lifts the dark side")],
 };
 
 fn layer(fields: &ItemFields) -> bool {

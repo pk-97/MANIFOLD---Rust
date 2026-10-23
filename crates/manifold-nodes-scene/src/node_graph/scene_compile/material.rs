@@ -28,6 +28,7 @@ const SURFACE_FACTS: CardFacts = CardFacts {
     limit: HardLimit::Slider,
     toggle: false,
     range: None,
+    tip: None,
 };
 
 /// Emit every Material item, in tree order.
@@ -81,10 +82,14 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     let fed: Vec<&'static str> = maps.iter().map(|(_, port)| *port).collect();
     b.material_maps.insert(owner.to_owned(), maps);
     for meta in b.type_params(node_type) {
-        if MATERIAL_FAMILY.automatic.contains(&meta.name.as_str()) {
+        let name = meta.name.as_str();
+        if MATERIAL_FAMILY.automatic.contains(&name) || MATERIAL_FAMILY.internal.iter().any(|(param, _)| *param == name) {
             continue;
         }
         let mut facts = SURFACE_FACTS;
+        if MATERIAL_FAMILY.hidden.iter().any(|(param, _)| *param == name) {
+            facts.role = SurfaceRole::Hidden;
+        }
         // A map's placement and sampling rows hide while it has no texture.
         // They stay declared, so their values, modulators and mappings
         // survive the texture leaving and coming back.

@@ -362,7 +362,7 @@ pub fn shatter_parts(doc: &SceneDoc, shatter: &ItemId, body: &Item) -> Result<Ve
     } else if parts.is_empty() {
         Err("Nothing inside to break: add an Object")
     } else if parts.len() > 64 {
-        Err("More than 64 unbent parts: a body breaks into at most 64 pieces")
+        Err("More than 64 unbent parts: each piece loads the whole mesh twice, so 64 is the memory limit")
     } else {
         Ok(parts)
     }

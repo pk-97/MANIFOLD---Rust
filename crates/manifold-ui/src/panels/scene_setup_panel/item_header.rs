@@ -2,7 +2,8 @@
 //! rename), its kind, and Frame, copy and delete where they apply. Each
 //! light's header heads its sub-section inside Lighting. The Camera header
 //! also carries "Use this view" (D14); the World of a layer that stopped
-//! drawing carries Draw Again.
+//! drawing carries Draw Again, and a Scene Loop with no Loop camera carries
+//! Add Loop Camera.
 
 use super::*;
 
@@ -19,6 +20,7 @@ pub(super) struct HeaderButtons {
     use_view: Option<(NodeId, ItemId)>,
     aim_sun: Option<(NodeId, String)>,
     draw_again: Option<NodeId>,
+    add_loop_camera: Option<NodeId>,
 }
 
 impl HeaderButtons {
@@ -30,6 +32,7 @@ impl HeaderButtons {
         self.use_view = None;
         self.aim_sun = None;
         self.draw_again = None;
+        self.add_loop_camera = None;
     }
 }
 
@@ -94,14 +97,23 @@ impl ScenePanel {
             tree.set_name(remove, "scene_setup.properties.remove");
             self.header_buttons.remove.push((remove, item.id.clone()));
         }
-        let cy = cy + ROW_H + ROW_GAP;
-        if !item.draw_again {
-            return cy;
+        let mut cy = cy + ROW_H + ROW_GAP;
+        if item.draw_again {
+            self.header_buttons.draw_again = Some(self.action_button(tree, (inner_x, inner_w), cy, item, "Draw Again", "scene_setup.properties.draw_again"));
+            cy += ROW_H + ROW_GAP;
         }
-        let id = tree.add_button_keyed(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, btn_style(), "Draw Again", item_key(&item.id, "draw_again"));
-        tree.set_name(id, "scene_setup.properties.draw_again");
-        self.header_buttons.draw_again = Some(id);
-        cy + ROW_H + ROW_GAP
+        if item.add_loop_camera {
+            self.header_buttons.add_loop_camera = Some(self.action_button(tree, (inner_x, inner_w), cy, item, "Add Loop Camera", "scene_setup.properties.add_loop_camera"));
+            cy += ROW_H + ROW_GAP;
+        }
+        cy
+    }
+
+    /// A full-width button under the header that acts on the whole item.
+    fn action_button(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, item: &SceneItemVm, label: &str, name: &'static str) -> NodeId {
+        let id = tree.add_button_keyed(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, btn_style(), label, item_key(&item.id, name));
+        tree.set_name(id, name);
+        id
     }
 
     /// One light's header inside Lighting: its name (click to rename) and
@@ -186,6 +198,9 @@ impl ScenePanel {
         }
         if self.header_buttons.draw_again == Some(node_id) {
             return Some(PanelAction::Root(RootAction::SceneDrawAgain(layer())));
+        }
+        if self.header_buttons.add_loop_camera == Some(node_id) {
+            return Some(PanelAction::Project(ProjectAction::SceneAddLoopCamera(layer())));
         }
         if let Some((_, file)) = self.header_buttons.aim_sun.as_ref().filter(|(button, _)| *button == node_id) {
             return Some(PanelAction::Project(ProjectAction::SceneSetupAimSunAtHdri(layer(), file.clone())));

@@ -103,9 +103,6 @@ fn write_surface(b: &mut Builder<'_>, surface: u32, m: &GltfMaterialInfo) {
         0 // Opaque
     };
     b.set(surface, "alpha_mode", SerializedParamValue::Enum { value: alpha_mode });
-    // The performer lights the scene: KHR_materials_unlit never opts a
-    // material out of lighting on import; Baked Look on the card does.
-    b.set(surface, "baked_look", SerializedParamValue::Bool { value: false });
 }
 
 /// One glTF texture-map family.

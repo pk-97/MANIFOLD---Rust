@@ -63,7 +63,7 @@ const fn internal(property: &'static str, param: &'static str, why: &'static str
 }
 
 pub static COPIES_ROWS: [PropertyRow; 32] = [
-    card("count", "copy_count", perform(CardBand::Scene, 0)).default(START_COUNT),
+    card("count", "copy_count", perform(CardBand::Scene, 0)).default(START_COUNT).tip(crate::copies_body::MAX_COPIES_REASON),
     card("layout", "copy_layout", perform(CardBand::Scene, 1)).when(laid_out),
     card("spacing", "copy_size_spacing", perform(CardBand::Scene, 2)).unit(Unit::SizeMultiple).limit(HardLimit::AtLeast(SPACING_MIN)).when(laid_out),
     card("columns", "copy_columns", setup()).when(laid_out),

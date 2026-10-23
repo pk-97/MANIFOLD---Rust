@@ -106,6 +106,9 @@ pub struct SceneItemVm {
     /// The World of a layer that stopped drawing after runaway GPU frames:
     /// its header offers Draw Again.
     pub draw_again: bool,
+    /// A Scene Loop card in a scene with no Loop camera: it offers Add Loop
+    /// Camera.
+    pub add_loop_camera: bool,
     /// Why a manifest row cannot be used right now, by param id: drawn
     /// dimmed with the reason on hover.
     pub row_reasons: Vec<(String, String)>,

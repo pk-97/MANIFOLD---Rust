@@ -546,16 +546,8 @@ const MASK_STOCKS: &[(&str, &str)] = &[
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/OrderedRecon.json")),
     ),
     (
-        "MaskedPeel",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/MaskedPeel.json")),
-    ),
-    (
         "SurfacePeel",
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/SurfacePeel.json")),
-    ),
-    (
-        "OrderedReconHit",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/OrderedReconHit.json")),
     ),
     (
         "VortexFragments",
@@ -567,10 +559,6 @@ const RECON_STOCKS: &[(&str, &str)] = &[
     (
         "OrderedRecon",
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/OrderedRecon.json")),
-    ),
-    (
-        "OrderedReconHit",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/OrderedReconHit.json")),
     ),
 ];
 

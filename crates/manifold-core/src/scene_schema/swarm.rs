@@ -13,11 +13,11 @@ use super::fields::{
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::scene_doc::{DrawAs, EmitFrom, Item, ItemFields, ItemId, SceneDoc, Shape};
 
-/// Count's ceiling: the swarm's particle buffers are laid at this size when
-/// it is built (64 bytes a particle, about 6.4 MB per buffer), so Count can
-/// move live without rebuilding them. Not a memory limit: growing the
-/// buffers live past it is open work.
+/// Count's ceiling, a memory reserve: every particle buffer is laid at this size when the swarm is built (64 bytes a particle, 6.4 MB a buffer), so Count moves live.
 pub const MAX_COUNT: f32 = 100_000.0;
+
+/// [`MAX_COUNT`]'s reason, on the Count row.
+pub const MAX_COUNT_REASON: &str = "Up to 100,000: the swarm reserves memory for that many particles when it is built, so Count moves live";
 
 const T: Reach = Reach::Own("transform");
 const BOUNDS: Reach = Reach::Own("bounds");
@@ -86,7 +86,8 @@ pub static SWARM_ROWS: [PropertyRow; 76] = [
     row("count", SEED, Simulation, perform(CardBand::Scene, 0))
         .param("active_count")
         .default(20_000.0)
-        .limit(HardLimit::Between(0.0, MAX_COUNT)),
+        .limit(HardLimit::Between(0.0, MAX_COUNT))
+        .tip(MAX_COUNT_REASON),
     row("size", COPIES, Simulation, perform(CardBand::Scene, 1)).limit(AT_LEAST_ZERO),
     row("air_drag", FORCES, Simulation, perform(CardBand::Scene, 2)).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
     row("visible", DRAW, Look, setup()).when(draws_solid),

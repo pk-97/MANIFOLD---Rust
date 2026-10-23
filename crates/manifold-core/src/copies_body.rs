@@ -39,12 +39,12 @@ pub const SPACING_MIN: f32 = 0.01;
 pub const COPY_LAYOUT_LABELS: [&str; 6] = ["Grid", "Scatter", "Line", "Ring", "Spiral", "Random"];
 pub const COPY_LAYOUT_SCATTER: u32 = 1;
 
-/// The most copies one world makes across all its groups. A memory ceiling, not
-/// a frame budget: every copy group's instance buffer is allocated at this size
-/// up front, 2 MiB on the GPU and 2 MiB on the CPU. The copy field recipes
-/// (`CopyJitter`, `CopyNoise`) seed one noise sample per copy from a 256 by 256
-/// grid, and `CopyBlend` lays out this many: they follow it by hand.
+/// The most copies one world makes, a memory reserve: each copy group's instance buffer is laid at this size when built (32 bytes a copy, 2 MiB on the GPU and 2 MiB on the CPU), so Count moves live.
+/// The copy field recipes (`CopyJitter`, `CopyNoise`) seed one noise sample per copy from a 256 by 256 grid, and `CopyBlend` lays out this many: they follow it by hand.
 pub const MAX_COPIES: usize = 65_536;
+
+/// [`MAX_COPIES`]'s reason, on the Count row.
+pub const MAX_COPIES_REASON: &str = "Up to 65,536: each copy group reserves memory for that many copies when the scene is built, so Count moves live";
 
 /// Scatter jitters each copy by up to this fraction of its spacing per axis.
 pub const SCATTER_JITTER: f32 = 0.04;
@@ -101,4 +101,19 @@ pub fn size_multiple(metres: f32, unit: f32) -> f32 {
 /// copies body.
 pub fn is_copies_body_param(type_id: &str, param: &str) -> bool {
     type_id == RIGID_BODY_TYPE_ID && COPY_PARAMS.contains(&param)
+}
+
+#[cfg(test)]
+mod tests {
+    /// `12,345` for 12345.
+    fn grouped(n: usize) -> String {
+        format!("{},{:03}", n / 1000, n % 1000)
+    }
+
+    #[test]
+    fn each_count_reason_names_its_ceiling() {
+        assert!(super::MAX_COPIES_REASON.contains(&grouped(super::MAX_COPIES)));
+        let swarm = crate::scene_schema::SWARM_MAX_COUNT as usize;
+        assert!(crate::scene_schema::SWARM_MAX_COUNT_REASON.contains(&grouped(swarm)));
+    }
 }

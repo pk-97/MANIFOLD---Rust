@@ -304,14 +304,13 @@ mod tests {
             .collect();
         assert!(ids.iter().any(|id| id == "ElasticSculpture"));
         assert!(ids.iter().any(|id| id == "SceneFog"));
-        for expected in ["SurfaceWaves", "OrderedRecon", "SpatialEchoes", "MaskedPeel", "OrderedReconHit", "WavesEchoes"] {
+        for expected in ["SurfaceWaves", "OrderedRecon", "SpatialEchoes", "SurfacePeel"] {
             assert!(ids.iter().any(|id| id == expected), "missing {expected}");
         }
         let metadata = loaded_scene_modifier_presets_from_bundled();
-        for id in ["SurfacePeelHit", "OrderedReconHit", "MaskedPeel", "WavesEchoes"] {
-            assert!(!metadata.iter().find(|m| m.id.as_str() == id).unwrap().available,
-                "{id} is retained only for saved-project compatibility");
-        }
+        // The one hidden recipe is the Scene Loop's stage for objects with copies.
+        let hidden: Vec<&str> = metadata.iter().filter(|m| !m.available).map(|m| m.id.as_str()).collect();
+        assert_eq!(hidden, ["SceneLoopCopies"]);
         for id in ["SurfacePeel", "OrderedRecon", "SurfaceWaves", "SpatialEchoes"] {
             assert!(metadata.iter().find(|m| m.id.as_str() == id).unwrap().available);
         }

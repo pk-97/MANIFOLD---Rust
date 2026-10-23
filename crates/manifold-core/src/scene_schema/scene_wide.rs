@@ -14,7 +14,7 @@
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::{Exposure, PropertyRow, Reach, perform, row};
-use crate::scene_doc::{Item, ItemFields, ModifierType, SceneDoc};
+use crate::scene_doc::{CameraRig, Item, ItemFields, ModifierType, SceneDoc};
 
 const M: ControlGroup = ControlGroup::Modifier;
 
@@ -81,6 +81,25 @@ pub const NO_SCENE_LOOP: &str = "Loop rides the scene's Scene Loop: add one from
 /// The scene's Scene Loop card, on or off.
 pub fn scene_loop(doc: &SceneDoc) -> Option<&Item> {
     doc.items.iter().find(|item| matches!(&item.fields, ItemFields::Modifier(card) if card.modifier == ModifierType::SceneLoop))
+}
+
+/// The Scene Loop rows only a Loop camera reads: the corridor recipe has no
+/// Beats, Stride, Home, Near or Far of its own.
+pub const LOOP_CAMERA_ONLY: [&str; 5] = ["bars", "patterns_per_loop", "home", "near", "far"];
+
+/// Whether some camera in `doc` rides the Loop rig.
+pub fn has_loop_camera(doc: &SceneDoc) -> bool {
+    let mut found = false;
+    doc.walk(|item, _| found |= matches!(&item.fields, ItemFields::Camera(camera) if camera.rig == CameraRig::Loop));
+    found
+}
+
+/// Whether `item`'s row `property` stays hidden: a Scene Loop row only a
+/// Loop camera reads, while no camera rides the loop.
+pub fn waits_for_loop_camera(doc: &SceneDoc, item: &Item, property: &str) -> bool {
+    matches!(&item.fields, ItemFields::Modifier(card) if card.modifier == ModifierType::SceneLoop)
+        && LOOP_CAMERA_ONLY.contains(&property)
+        && !has_loop_camera(doc)
 }
 
 /// Why the Add menu cannot add an item with `fields` to `doc` right now:

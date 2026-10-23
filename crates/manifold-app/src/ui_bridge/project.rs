@@ -294,6 +294,10 @@ pub(super) fn dispatch_project(
             let built = crate::scene_edit::aim_sun_at_hdri(project, layer_id, file).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
+        ProjectAction::SceneAddLoopCamera(layer_id) => {
+            let built = crate::scene_edit::add_loop_camera(project, layer_id).map(Some);
+            send_scene_edit(content_tx, layer_id, built)
+        }
         ProjectAction::SceneSetupFrameSelected(layer_id, item) => {
             let built = crate::scene_edit::frame(project, layer_id, item).map(Some);
             send_scene_edit(content_tx, layer_id, built)
