@@ -197,6 +197,7 @@ mod smoothing;
 mod smoothstep_texture;
 mod track_persist;
 mod temporal;
+mod temporal_accumulate;
 pub use temporal::{FEEDBACK_TYPE_ID, Feedback};
 mod texture_advect;
 mod texture_dimensions;

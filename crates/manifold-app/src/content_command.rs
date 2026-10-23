@@ -340,6 +340,8 @@ pub enum ContentCommand {
     /// The scene layer whose rendered camera, lights and fluid domains are
     /// reported for the Scene panel's gizmo overlay; `None` stops reporting.
     SetPhysicsOverlay(Option<manifold_core::LayerId>),
+    /// Draw Again: a scene layer stopped by runaway GPU frames draws again.
+    DrawLayerAgain(manifold_core::LayerId),
     /// The render slots the selection outline covers (D-102) in the output
     /// render and in the scene viewport, each with the layer it was read
     /// from. `None` draws none.

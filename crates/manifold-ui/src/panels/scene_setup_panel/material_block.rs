@@ -108,7 +108,8 @@ impl ScenePanel {
         let (text, button) = match block {
             Some(block) if owner.id == block.item => (format!("Used by {}", block.used_by), None),
             Some(block) if block.used_by > 1 => (format!("{} \u{b7} used by {}", block.name, block.used_by), Some("Make Unique")),
-            Some(block) => (block.name.clone(), None),
+            // A Material only this item uses is part of its card: no name row.
+            Some(block) => return self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w)),
             None => ("Default".to_owned(), Some("New Material")),
         };
         let button_w = button.map_or(0.0, |label| tree.text_width(label, color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0);
@@ -130,16 +131,19 @@ impl ScenePanel {
             self.material_block.unique = Some((id, owner.id.clone()));
         }
         cy += ROW_H + ROW_GAP;
-        if let Some(block) = block.filter(|block| block.pbr) {
-            cy = self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w));
+        match block {
+            Some(block) => self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w)),
+            None => cy,
         }
-        cy
     }
 
     /// The Preset row: the look the Material matches, or Custom; a click
-    /// lists every look.
+    /// lists every look. Only a PBR Material has looks.
     fn build_material_look(&mut self, tree: &mut UITree, inner_x: f32, cy: f32, block: &MaterialBlockVm, (label_width, slider_w): (f32, f32)) -> f32 {
         use crate::panels::param_slider_shared::TOGGLE_BTN_H;
+        if !block.pbr {
+            return cy;
+        }
         tree.add_label(Some(self.content_parent), inner_x, cy, label_width, ROW_H, "Preset", label_style());
         let start = label_width.min(slider_w);
         let current = block.look.map_or("Custom", MaterialLook::label);

@@ -47,7 +47,7 @@ struct Params {
     frame_seed: u32,
     vertex_count: u32,
     triangle_count: u32,
-    _pad0: u32,
+    first: u32,         // the first slot placed: a Count rise places only its new slots
     _pad1: u32,
     _pad2: u32,
 };
@@ -106,7 +106,7 @@ fn dead_particle() -> Particle {
 // Pass (vertices mode) — one particle per vertex, exact silhouette.
 @compute @workgroup_size(256, 1, 1)
 fn vertices_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
+    let i = id.x + params.first;
     if i >= params.active_count {
         return;
     }
@@ -157,7 +157,7 @@ fn scan_main() {
 // Pass 3 (surface mode) — area-weighted triangle pick + barycentric sample.
 @compute @workgroup_size(256, 1, 1)
 fn place_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
+    let i = id.x + params.first;
     if i >= params.active_count {
         return;
     }

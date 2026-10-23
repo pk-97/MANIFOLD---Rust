@@ -13,11 +13,11 @@ use super::fields::{
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::scene_doc::{DrawAs, EmitFrom, Item, ItemFields, ItemId, SceneDoc, Shape};
 
-/// Count's ceiling: the swarm's particle buffers are laid at this size when
-/// it is built (64 bytes a particle, about 6.4 MB per buffer), so Count can
-/// move live without rebuilding them. Not a memory limit: growing the
-/// buffers live past it is open work.
+/// Count's ceiling, a memory reserve: every particle buffer is laid at this size when the swarm is built (64 bytes a particle, 6.4 MB a buffer), so Count moves live.
 pub const MAX_COUNT: f32 = 100_000.0;
+
+/// [`MAX_COUNT`]'s reason, on the Count row.
+pub const MAX_COUNT_REASON: &str = "Up to 100,000 particles, and Count changes live";
 
 const T: Reach = Reach::Own("transform");
 const BOUNDS: Reach = Reach::Own("bounds");
@@ -72,7 +72,7 @@ const fn frame(property: &'static str, param: &'static str) -> PropertyRow {
     row(property, FRAME, Source, Exposure::Automatic(EMIT_FRAME)).param(param)
 }
 
-pub static SWARM_ROWS: [PropertyRow; 76] = [
+pub static SWARM_ROWS: [PropertyRow; 77] = [
     row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
     row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
@@ -86,10 +86,11 @@ pub static SWARM_ROWS: [PropertyRow; 76] = [
     row("count", SEED, Simulation, perform(CardBand::Scene, 0))
         .param("active_count")
         .default(20_000.0)
-        .limit(HardLimit::Between(0.0, MAX_COUNT)),
+        .limit(HardLimit::Between(0.0, MAX_COUNT))
+        .tip(MAX_COUNT_REASON),
     row("size", COPIES, Simulation, perform(CardBand::Scene, 1)).limit(AT_LEAST_ZERO),
     row("air_drag", FORCES, Simulation, perform(CardBand::Scene, 2)).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
-    row("visible", DRAW, Look, setup()).when(draws_solid),
+    row("visible", DRAW, Look, setup()).toggle().when(draws_solid),
     row("cast_shadows", DRAW, Look, setup()).when(draws_solid),
     row("emission_strength", DRAW, Look, setup()).limit(AT_LEAST_ZERO).when(draws_solid),
     row("gain", DRAW, Look, setup()).limit(AT_LEAST_ZERO).when(draws_solid),
@@ -114,7 +115,7 @@ pub static SWARM_ROWS: [PropertyRow; 76] = [
     row("sphere_radius", SHAPE, Source, Exposure::Internal("Size scales each particle")).param("radius").default(1.0).when(draws_sphere),
     row("sphere_segments", SHAPE, Source, Exposure::Internal(PARTICLE_SPHERE)).param("segments").default(12.0).when(draws_sphere),
     row("sphere_rings", SHAPE, Source, Exposure::Internal(PARTICLE_SPHERE)).param("rings").default(6.0).when(draws_sphere),
-    row("move_capacity", MOVE, Simulation, Exposure::Internal("every particle is stepped; dead ones pass through")).param("active_count"),
+    row("move_count", MOVE, Simulation, Exposure::Automatic("the swarm's Count: only live particles move")).param("active_count"),
     clock("move_ticks", "ticks"),
     clock("move_first_tick", "first_tick"),
     clock("move_force_lattices", "force_lattices"),
@@ -126,6 +127,7 @@ pub static SWARM_ROWS: [PropertyRow; 76] = [
     clock("move_field_min_y", "field_min_y"),
     clock("move_field_min_z", "field_min_z"),
     clock("move_impulse_tick", "impulse_tick"),
+    clock("move_far_terms", "far_terms"),
     bounds("bounds_pos_x", "pos_x", Exposure::Internal(BOX_OF_SWARM)),
     bounds("bounds_pos_y", "pos_y", Exposure::Internal(BOX_OF_SWARM)),
     bounds("bounds_pos_z", "pos_z", Exposure::Internal(BOX_OF_SWARM)),
@@ -247,9 +249,9 @@ pub(super) fn pick_unavailable(doc: &SceneDoc, swarm: &Item, field: &str, pick: 
     }
 }
 
-/// One copy source draws an item: another Swarm drawing it, or a Group
-/// above it whose Copies (or whose Swarm) draw it already, leaves nothing
-/// for this swarm to place.
+/// Any number of swarms draw one item, each with its own particles. An item
+/// inside a Group whose Copies (or a Swarm) draw it is placed by that group,
+/// which leaves nothing for this swarm to place.
 fn draw_as_refused(doc: &SceneDoc, swarm: &Item, pick: &Item) -> Option<&'static str> {
     let drawn_by_other = |id: &ItemId| {
         let mut drawn = false;
@@ -263,9 +265,6 @@ fn draw_as_refused(doc: &SceneDoc, swarm: &Item, pick: &Item) -> Option<&'static
         });
         drawn
     };
-    if drawn_by_other(&pick.id) {
-        return Some("Another Swarm draws this already");
-    }
     let mut copied_above = false;
     doc.walk(|other, ancestors| {
         if other.id == pick.id {
@@ -312,7 +311,7 @@ mod tests {
             let row = field_for(&second.fields, field).unwrap();
             set_field(&doc, &second, row, &FieldValue::Item(Some(ItemId::new(id)))).err()
         };
-        assert_eq!(pick("draw_as", "rack").as_deref(), Some("Another Swarm draws this already"));
+        assert_eq!(pick("draw_as", "rack"), None, "two swarms draw one item");
         assert_eq!(pick("draw_as", "ball").as_deref(), Some("Inside a group whose copies draw it already"));
         assert!(pick("draw_as", "sea").is_some_and(|reason| reason.starts_with("An Ocean")));
         assert!(pick("emit_from", "sea").is_some_and(|reason| reason.starts_with("An Ocean")));

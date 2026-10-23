@@ -321,11 +321,21 @@ hand_descriptor!(
 // Mesh merging (merge_meshes.rs)
 hand_descriptor!(
     "node.merge_meshes",
-    "Concatenate N triangle-list meshes into one Array<MeshVertex>, each placed by its own transform (`place_k`) inside the frame it is drawn in (`within_k`) and brought into a shared `frame` (each unwired transform is identity): position by the full matrix, normals by its inverse transpose, UVs and colours copied. `parts` sets how many mesh_k/place_k/within_k triples exist, with no cap; output capacity is the sum of the wired meshes. Wire `reset_trigger` to merge only on its integer edges.",
+    "Concatenate N triangle-list meshes into one Array<MeshVertex>, each placed by its own transform (`place_k`) inside the frame it is drawn in (`within_k`) and brought into a shared `frame`, itself placed inside `frame_within` (each unwired transform is identity): position by the full matrix, normals by its inverse transpose, UVs and colours copied. `parts` sets how many mesh_k/place_k/within_k triples exist, with no cap; output capacity is the sum of the wired meshes. Wire `reset_trigger` to merge only on its integer edges.",
     summary: "Joins several meshes into one, each where its own transform puts it. The way a whole group becomes one shape to scatter particles over.",
     category: Geometry3D,
     role: Filter,
     aliases: ["merge meshes", "combine meshes", "join meshes", "mesh union"],
+);
+
+// Scene Loop cell (loop_cell.rs)
+hand_descriptor!(
+    "node.loop_cell",
+    "The length of one Scene Loop cell: the union of the boxes wired into box_k, each a Transform mapping the unit cube onto one box (position its centre, scale its size) inside the frame within_k (the world when unwired), measured along `axis` (+X/-X/+Y/-Y/+Z/-Z, as node.scene_array), plus `gap` (port-shadowed, metres), at least 0.01. `boxes` sets how many box_k/within_k pairs exist, with no cap. A box of no size measures nothing. Wire cell_size into node.scene_array's and every node.loop_camera's cell_size so the tiles and the flight share one length that follows the live rows: feed rest boxes (an object's transform, a copy group's rest_box, a swarm's lattice box), never moving poses, so the wrap stays pure. CPU-only.",
+    summary: "Measures how long one Scene Loop tile is from everything it tiles, so the tiles follow the scene as you change it, with a gap on top.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["loop cell", "cell size", "corridor cell", "tile length"],
 );
 
 // 3D scene rendering (render_scene.rs)

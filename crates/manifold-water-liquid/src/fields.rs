@@ -357,6 +357,7 @@ impl LiquidFields {
             impulses_dirty: self.impulses_dirty,
             hits: &self.live_hits,
             tick_seconds: &[],
+            far: &[],
         };
         self.gpu.upload(gpu, offline, data)?;
         self.forces.mark_uploaded();

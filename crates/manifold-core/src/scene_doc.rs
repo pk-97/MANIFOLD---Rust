@@ -20,7 +20,7 @@ mod tree;
 pub use base::{BASE_CUBE, BASE_CUBE_MATERIAL};
 pub use manifold_foundation::id::ItemId;
 pub use import::{
-    ImportPlacement, ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, camera_item, import_child_id,
+    ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, ImportedTransform, camera_item, import_child_id,
     is_import_child, light_item, material_item, node_item,
 };
 pub use models::{ModelFacts, SceneModels};
@@ -467,6 +467,23 @@ pub struct FeatureSetting {
     pub mode: u32,
 }
 
+impl FeatureSetting {
+    /// The node's mode values (`node.pbr_material`'s feature modes). A
+    /// feature absent from the list follows its values, as an import's do.
+    pub const ON: u32 = 2;
+    /// A removed feature stays in the list so its values come back when it
+    /// is added again; the node runs it as Off.
+    pub const REMOVED: u32 = 3;
+
+    pub fn on(feature: MaterialFeature) -> Self {
+        Self { feature, mode: Self::ON }
+    }
+
+    pub fn removed(&self) -> bool {
+        self.mode == Self::REMOVED
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct WaterFields {
@@ -568,8 +585,6 @@ pub enum ForceType {
     Vortex,
     Wind,
     Drag,
-    Attractor,
-    Explosion,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

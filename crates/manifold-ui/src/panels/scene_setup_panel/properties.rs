@@ -35,22 +35,28 @@ struct Slot {
 }
 
 /// A field row, as a row of the shared param surface.
-fn field_param_row(item: &ItemId, field: &FieldRowVm) -> ParamRow {
+pub(super) fn field_param_row(item: &ItemId, field: &FieldRowVm) -> ParamRow {
     let mut row = placeholder_param_info();
     row.id = ParamId::from(format!("{item}#{}", field.id));
     row.spec.name = field.label.clone();
     row.spec.whole_numbers = true;
     row.spec.max = 1.0;
-    row.spec.value_labels = Some(vec![match &field.control {
-        FieldControlVm::Pick { current, .. } => current.clone(),
+    let on = match &field.control {
+        FieldControlVm::Pick { current, .. } => {
+            row.spec.value_labels = Some(vec![current.clone()]);
+            0.0
+        }
         FieldControlVm::File { path, .. } => {
-            if path.is_empty() {
+            let name = if path.is_empty() {
                 "None".to_owned()
             } else {
                 std::path::Path::new(path).file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned())
-            }
+            };
+            row.spec.value_labels = Some(vec![name]);
+            0.0
         }
-    }]);
+        FieldControlVm::Switch { on, .. } => f32::from(u8::from(*on)),
+    };
     row.spec.inactive_reason = field.disabled.clone();
     row.spec.scene = Some(manifold_foundation::scene_surface::SceneParamDesc {
         role: SurfaceRole::Setup,
@@ -62,7 +68,7 @@ fn field_param_row(item: &ItemId, field: &FieldRowVm) -> ParamRow {
         switch: None,
         colour: None,
     });
-    row.value = RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false };
+    row.value = RowValue { base: on, effective: on, exposed: false, driven: false };
     row.affordance = Some(RowAffordance::Field { item: item.clone(), field: field.id.clone(), control: field.control.clone() });
     row
 }
@@ -146,14 +152,12 @@ impl ScenePanel {
     ) {
         let item = block.item;
         let owned: ahash::AHashSet<&str> = item.parameter_ids.iter().map(String::as_str).collect();
-        // The item's mode switches, read from their base values (D12).
+        // The item's switches, read from their base values (D12): a mode
+        // switch's mode, or an on/off switch's 0 or 1.
         let modes: Vec<(Feature, u32)> = config.rows[..manifest_len]
             .iter()
             .filter(|row| owned.contains(row.id.as_ref()))
-            .filter_map(|row| {
-                let feature = row.spec.scene?.switch.filter(|feature| feature.has_modes())?;
-                Some((feature, row.value.base.round().max(0.0) as u32))
-            })
+            .filter_map(|row| Some((row.spec.scene?.switch?, row.value.base.round().max(0.0) as u32)))
             .collect();
         // (sort key, index into config.rows)
         let mut picked: Vec<((usize, u32), usize)> = Vec::new();
@@ -171,6 +175,12 @@ impl ScenePanel {
             };
             if let Some(feature) = unread
                 && config.rows[i].is_attached()
+            {
+                config.rows[i].spec.inactive_reason = Some(feature.off_reason().into());
+            }
+            // A row under a switch that is off stays, dimmed with the reason.
+            if let Some(Gate::Dim(feature) | Gate::Fold(feature)) = config.rows[i].spec.scene.and_then(|scene| scene.gate)
+                && modes.contains(&(feature, 0))
             {
                 config.rows[i].spec.inactive_reason = Some(feature.off_reason().into());
             }
@@ -196,8 +206,10 @@ impl ScenePanel {
             picked.push(((self.group_key(p), 1 + u32::from(switch_first)), i));
         }
         // Structural fields: the item's own, then its Material's, each
-        // addressed at the item that holds it.
-        let mut field_rows: Vec<(&ItemId, &FieldRowVm)> = item.fields.iter().map(|field| (&item.id, field)).collect();
+        // addressed at the item that holds it. Fields the header carries are
+        // not rows.
+        let mut field_rows: Vec<(&ItemId, &FieldRowVm)> =
+            item.fields.iter().filter(|field| !field.header).map(|field| (&item.id, field)).collect();
         if let Some(material) = item.material.as_ref().filter(|material| material.item != item.id) {
             field_rows.extend(material.fields.iter().map(|field| (&material.item, field)));
         }
@@ -216,7 +228,9 @@ impl ScenePanel {
                     continue;
                 }
                 let revealed = self.property_explicitly_revealed(p);
-                let dormant = matches!(role, MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..));
+                // A Hidden material row belongs to a map with no texture.
+                let dormant = matches!(role, MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..))
+                    || p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden);
                 let feature_off = row_feature(p).is_some_and(|feature| !material.features.contains(&feature));
                 if (dormant || feature_off) && !revealed {
                     continue;

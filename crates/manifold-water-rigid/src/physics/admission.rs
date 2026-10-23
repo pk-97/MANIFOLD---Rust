@@ -12,10 +12,10 @@
 use std::fmt;
 use std::sync::Arc;
 
-use manifold_physics::collision_shape::{Solid, validate_hull_scaled, validate_position, validate_scale};
+use manifold_physics::collision_shape::{validate_position, validate_scale};
 
 use super::RigidBody;
-use super::copy_group::{validate_copy_prototype, validate_spawn};
+use super::copy_group::validate_spawn;
 
 /// Which world input a refusal is about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,18 +29,30 @@ pub enum Member {
 /// Why a body is out of the world.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RefusalReason {
-    /// The gate refused its pose, scale, contact values or shape.
-    Gate(&'static str),
+    /// The gate refused its pose, scale, contact values or shape. `param`
+    /// is the control it concerns: a body param (`mass`, `copy_size_spacing`)
+    /// or one of its transform's (`pos_x`, `rot_x`, `scale_x`).
+    Gate { reason: &'static str, param: Option<&'static str> },
     /// Its body node could not make a collision shape from its mesh.
     Shape(Arc<str>),
     /// It left the world's range while moving and was taken out.
     Lost,
 }
 
+impl RefusalReason {
+    /// The control the refusal concerns, when one does.
+    pub fn param(&self) -> Option<&'static str> {
+        match self {
+            Self::Gate { param, .. } => *param,
+            Self::Shape(_) | Self::Lost => None,
+        }
+    }
+}
+
 impl fmt::Display for RefusalReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Gate(reason) => f.write_str(reason),
+            Self::Gate { reason, .. } => f.write_str(reason),
             Self::Shape(reason) => f.write_str(reason),
             Self::Lost => f.write_str("it moved out of the world's range and was taken out"),
         }
@@ -163,55 +175,47 @@ fn check(body: &RigidBody, passed: Option<&RigidBody>, prototype: bool) -> Resul
     if !body.enabled {
         return Ok(());
     }
-    let gate = |result: Result<(), manifold_physics::PhysicsError>| {
-        result.map_err(|error| match error {
-            manifold_physics::PhysicsError::InvalidInput(reason) => Some(RefusalReason::Gate(reason)),
-            _ => Some(RefusalReason::Gate("Box3D refused the body")),
-        })
+    let refuse = |reason: &'static str, param: Option<&'static str>| Some(RefusalReason::Gate { reason, param });
+    let gate = |param: &'static str| {
+        move |error: manifold_physics::PhysicsError| match error {
+            manifold_physics::PhysicsError::InvalidInput(reason) => refuse(reason, Some(param)),
+            _ => refuse("Box3D refused the body", None),
+        }
     };
     let Some(solid) = body.collider.as_deref() else {
         return Err(body.refused.clone().map(RefusalReason::Shape));
     };
     if body.kind > 2 {
-        return Err(Some(RefusalReason::Gate("unknown body type")));
+        return Err(refuse("unknown body type", None));
     }
     if body.transform.billboard {
-        return Err(Some(RefusalReason::Gate("a body cannot turn to face the camera")));
+        return Err(refuse("a body cannot turn to face the camera", None));
     }
-    gate(validate_position(body.transform.pos))?;
+    validate_position(body.transform.pos).map_err(gate("pos_x"))?;
     if body.transform.rot_euler.iter().any(|angle| !angle.is_finite()) {
-        return Err(Some(RefusalReason::Gate("rotation must be finite")));
+        return Err(refuse("rotation must be finite", Some("rot_x")));
     }
-    gate(validate_scale(body.transform.scale))?;
+    validate_scale(body.transform.scale).map_err(gate("scale_x"))?;
     if !body.mass.is_finite() || body.mass < 0.0 || (body.kind == 1 && body.mass == 0.0) {
-        return Err(Some(RefusalReason::Gate("mass must be finite and positive")));
+        return Err(refuse("mass must be finite and positive", Some("mass")));
     }
-    if !body.friction.is_finite() || body.friction < 0.0 || !body.bounce.is_finite() || body.bounce < 0.0 {
-        return Err(Some(RefusalReason::Gate("friction and bounce must be finite and not negative")));
+    if !body.friction.is_finite() || body.friction < 0.0 {
+        return Err(refuse("friction must be finite and not negative", Some("friction")));
+    }
+    if !body.bounce.is_finite() || body.bounce < 0.0 {
+        return Err(refuse("bounce must be finite and not negative", Some("bounce")));
     }
     if prototype {
-        validate_spawn(body.spawn).map_err(|reason| Some(RefusalReason::Gate(reason)))?;
-        validate_copy_prototype(body).map_err(|reason| Some(RefusalReason::Gate(reason)))?;
+        validate_spawn(body.spawn).map_err(|(reason, param)| refuse(reason, Some(param)))?;
     }
-    // The shape at this scale was checked when this pair last passed.
+    // The shape at this scale was checked when this pair last passed. A
+    // shape valid unscaled that fails here was made invalid by the scale.
     let same_shape = passed.is_some_and(|passed| {
         passed.transform.scale == body.transform.scale
             && passed.collider.as_ref().zip(body.collider.as_ref()).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
     });
     if !same_shape {
-        let scale = body.transform.scale;
-        match solid {
-            Solid::Hulls(hulls) => {
-                for hull in hulls {
-                    gate(validate_hull_scaled(hull, scale))?;
-                }
-            }
-            Solid::Mesh(mesh) => {
-                for vertex in &mesh.vertices {
-                    gate(validate_position(std::array::from_fn(|axis| vertex[axis] * scale[axis])))?;
-                }
-            }
-        }
+        solid.validate_at(body.transform.scale).map_err(gate("scale_x"))?;
     }
     Ok(())
 }

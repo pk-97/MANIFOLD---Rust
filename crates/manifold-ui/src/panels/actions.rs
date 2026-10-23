@@ -237,6 +237,9 @@ pub enum ProjectAction {
     /// "Aim Sun at HDRI": turn the scene's Sun toward the brightest region of
     /// the HDRI file at the given path. `(layer_id, hdri_file)`.
     SceneSetupAimSunAtHdri(LayerId, String),
+    /// "Add Loop Camera" on the Scene Loop card: a camera on the Loop rig,
+    /// made the World's camera. One undo step.
+    SceneAddLoopCamera(LayerId),
     /// "New 3D Scene" empty-state action: the layer gets the base scene.
     SceneNew(LayerId),
     /// "Frame" in an item's header: point the camera at the item.
@@ -778,6 +781,9 @@ pub enum RootAction {
     /// editor viewport's view into this camera item. The app owns the
     /// viewport camera, so it resolves the pose and builds the command.
     SceneSetupCopyViewportCamera(LayerId, ItemId),
+    /// The World header's Draw Again: the layer stopped by runaway GPU
+    /// frames draws again. Not an edit, so it never enters undo.
+    SceneDrawAgain(LayerId),
     /// An item's name was clicked: `(layer_id, item, current_name)`. Opens
     /// the shared inline text-input session over the name; the commit
     /// renames the item.

@@ -69,9 +69,17 @@ pub static LAMP_SHAPES: [SceneShapeDecl; 1] = [point(POS, "range")];
 
 const CENTRE: ParamTriple = [id("center_x"), id("center_y"), id("center_z")];
 
-/// A force about a centre (Radial, Vortex, Attractor, Explosion): moved by
-/// its centre, its reach scaled by its radius.
-pub static CENTRED_FORCE_SHAPES: [SceneShapeDecl; 1] = [point(CENTRE, "radius")];
+const fn field(axis: Option<ParamTriple>) -> SceneShapeDecl {
+    let shape = SceneShape::Field { center: CENTRE, radius: id("radius"), falloff: id("falloff"), curve: id("curve"), axis };
+    SceneShapeDecl { shape, via: None, extent_limit: None, uniform_scale: false }
+}
+
+/// A Radial force: moved by its centre, its reach scaled by its radius,
+/// its falloff drawn as shells.
+pub static RADIAL_FORCE_SHAPES: [SceneShapeDecl; 1] = [field(None)];
+
+/// A Vortex: a Radial force's centre and radius, swirling round its axis.
+pub static VORTEX_FORCE_SHAPES: [SceneShapeDecl; 1] = [field(Some([id("axis_x"), id("axis_y"), id("axis_z")]))];
 
 /// A force along a direction (Uniform, Wind): turned by its direction.
 pub static DIRECTED_FORCE_SHAPES: [SceneShapeDecl; 1] = [SceneShapeDecl {

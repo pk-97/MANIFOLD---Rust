@@ -1402,6 +1402,7 @@ impl GpuDevice {
             render_cache: RenderBindCache::new(),
             clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
             pass_samples: (0, 0),
+            span_buffers: None,
             profile: None,
             scopes: Vec::new(),
             replay: None,

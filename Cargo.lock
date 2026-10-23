@@ -2640,6 +2640,7 @@ name = "manifold-physics"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "libc",
  "manifold-foundation",
  "serde",
  "serde_json",
@@ -2796,6 +2797,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "bytemuck",
+ "gltf",
  "inventory",
  "log",
  "manifold-core",

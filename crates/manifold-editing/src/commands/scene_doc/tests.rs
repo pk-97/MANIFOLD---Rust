@@ -390,7 +390,7 @@ fn part(path: &str) -> manifold_core::scene_doc::ImportedNode {
         primitives: manifold_core::scene_doc::MeshPrimitives::All,
         material: None,
         vertex_count: 3,
-        center: [0.0; 3],
+        transform: manifold_core::scene_doc::ImportedTransform::IDENTITY,
         children: Vec::new(),
     }
 }
@@ -405,14 +405,28 @@ fn model(paths: &[&str]) -> manifold_core::scene_doc::ImportedModel {
             primitives: manifold_core::scene_doc::MeshPrimitives::All,
             material: None,
             vertex_count: 0,
-            center: [0.0; 3],
+            transform: manifold_core::scene_doc::ImportedTransform::IDENTITY,
             children: paths.iter().map(|p| part(p)).collect(),
         }],
         materials: Vec::new(),
         lights: Vec::new(),
         cameras: Vec::new(),
         clips: Vec::new(),
-        bounds: None,
+    }
+}
+
+/// An import keeps the file's size and place: it is the Add of its items
+/// and the writes that start each at its file node's transform, nothing
+/// that rescales or recentres it, for one mesh 20 m from the origin and for
+/// a Group alike.
+#[test]
+fn an_import_keeps_the_files_size_and_place() {
+    let (_, layer) = project();
+    for paths in [&["rig/a"][..], &["rig/a", "rig/b"]] {
+        let mut far = model(paths);
+        far.roots[0].children[0].transform.position = [20.0, 0.0, 0.0];
+        let commands = import_model_commands(&layer, None, 0, id("model"), "a.glb", &far);
+        assert_eq!(commands.len(), 2, "{paths:?}: one Add and the part's one moved row");
     }
 }
 
@@ -466,4 +480,71 @@ fn a_model_file_swap_keeps_edits_on_surviving_parts() {
     // One undo step restores the scene as it was before the swap.
     assert!(undo.undo(&mut project));
     assert_eq!(state(&project), before, "the swap undoes in one step");
+}
+
+/// Gives the cube an automation lane and an Ableton mapping beside its LFO.
+fn modulate_cube(project: &mut Project) {
+    use manifold_core::ableton_mapping::{AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping};
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+    let value = param_id(&id(CUBE), "value");
+    let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+    let point = AutomationPoint { beat: manifold_core::Beats(4.0), value: 0.25, shape: SegmentShape::Linear };
+    fx.automation_lanes = Some(vec![AutomationLane { param_id: value.clone().into(), enabled: true, points: vec![point] }]);
+    let address = AbletonMacroAddress {
+        track_id: 1,
+        device_id: 2,
+        param_id: 3,
+        device_identity: AbletonDeviceIdentity { device_class_name: "InstrumentGroupDevice".into() },
+        track_name: "Bass".into(),
+        device_name: "Rack".into(),
+        macro_name: "Filter".into(),
+    };
+    fx.ableton_mappings = Some(vec![AbletonParamMapping {
+        param_id: value.into(),
+        address,
+        range_min: 0.0,
+        range_max: 1.0,
+        inverted: false,
+        legacy_param_index: None,
+        last_value: 0.0,
+        status: AbletonMappingStatus::Active,
+    }]);
+}
+
+/// Which rows carry an LFO, an automation lane and an Ableton mapping.
+fn modulated_rows(project: &Project) -> [Vec<String>; 3] {
+    let fx = scene(project);
+    let ids = |ids: Vec<&str>| ids.into_iter().map(str::to_owned).collect::<Vec<_>>();
+    [
+        ids(fx.drivers.iter().flatten().map(|d| &*d.param_id).collect()),
+        ids(fx.automation_lanes.iter().flatten().map(|l| &*l.param_id).collect()),
+        ids(fx.ableton_mappings.iter().flatten().map(|m| &*m.param_id).collect()),
+    ]
+}
+
+/// A duplicate carries everything on its rows, as Ableton and Blender do: the
+/// copy pulses to its own LFO, follows its own automation and answers the same
+/// Ableton macro, while the original keeps its own. One undo removes the copy
+/// and everything on it.
+#[test]
+fn a_duplicate_carries_its_rows_modulators() {
+    let (mut project, layer) = project();
+    modulate_cube(&mut project);
+    let before = (state(&project), modulated_rows(&project));
+    let mut undo = UndoRedoManager::new();
+    let duplicate = AddSceneItemCommand::new(layer.clone(), ItemKind::Object, None, 0, Some(id(CUBE)), id("cube2"));
+    assert!(undo.execute(Box::new(duplicate), &mut project));
+    let (original, copy) = (param_id(&id(CUBE), "value"), param_id(&id("cube2"), "value"));
+    for (kind, rows) in ["LFO", "automation lane", "Ableton mapping"].into_iter().zip(modulated_rows(&project)) {
+        assert_eq!(rows, [original.clone(), copy.clone()], "the copy has its own {kind} and the original keeps its");
+    }
+    assert_eq!(scene(&project).get_base_param(&copy), 0.8, "the copy starts at the source's value");
+    let doc = scene(&project).scene.clone().unwrap();
+    assert_eq!(
+        doc.find(&id("cube2")).unwrap().fields.material(),
+        doc.find(&id(CUBE)).unwrap().fields.material(),
+        "a duplicate shares its source's Material"
+    );
+    assert!(undo.undo(&mut project));
+    assert_eq!((state(&project), modulated_rows(&project)), before, "one undo removes the copy cleanly");
 }

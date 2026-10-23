@@ -13,3 +13,11 @@ the bridge's body dynamics snapshot. These values combine the body's current for
 torque with world gravity and inverse inertia without waking the body,
 consuming queued values, or attempting to predict damping, gyroscopic, or
 contact responses.
+
+The mesh contact triangle query (`src/mesh_contact.c`, `b3RefreshCache`) no
+longer stops at a fixed 256 triangles (upstream `B3_MAX_MESH_CONTACT_TRIANGLES`).
+It collects every triangle under the query bounds into a growable per-worker
+array, `meshTriangleQuery` on `b3TaskContext` (`src/physics_world.h`, created
+and destroyed in `src/physics_world.c`), and takes its matching contact-cache
+scratch from the worker's arena. Upstream dropped the triangles past 256, so a
+body resting on a dense mesh lost the ones it touched and sank.

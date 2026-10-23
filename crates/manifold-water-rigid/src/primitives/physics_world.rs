@@ -179,7 +179,7 @@ pub struct PhysicsWorldNode {
     names: PortNames,
     /// The refusals the card shows, as world input and reason, rebuilt only
     /// when `refusals_shown` stops matching the world's.
-    refusal_rows: Vec<(std::sync::Arc<str>, std::sync::Arc<str>)>,
+    refusal_rows: Vec<manifold_core::physics_members::BodyRefusalRow>,
     refusals_shown: Vec<crate::physics::BodyRefusal>,
 }
 
@@ -231,7 +231,11 @@ impl PhysicsWorldNode {
                 crate::physics::Member::Body(k) => format!("body_{k}"),
                 crate::physics::Member::Copies(k) => format!("copies_{k}"),
             };
-            (std::sync::Arc::from(input), std::sync::Arc::from(refusal.reason.to_string()))
+            manifold_core::physics_members::BodyRefusalRow {
+                input: std::sync::Arc::from(input),
+                param: refusal.reason.param(),
+                reason: std::sync::Arc::from(refusal.reason.to_string()),
+            }
         }));
     }
 
@@ -555,7 +559,7 @@ fn latest<T: Clone + Send + 'static>(slot: &mut Option<T>, inputs: &NodeInputs<'
 }
 
 impl PhysicsNode for PhysicsWorldNode {
-    fn body_refusals(&self) -> &[(std::sync::Arc<str>, std::sync::Arc<str>)] {
+    fn body_refusals(&self) -> &[manifold_core::physics_members::BodyRefusalRow] {
         &self.refusal_rows
     }
 

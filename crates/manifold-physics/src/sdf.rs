@@ -266,7 +266,7 @@ fn signed_solid_angle(p: [f64; 3], [a, b, c]: &[[f64; 3]; 3]) -> f64 {
 
 /// Squared distance from `p` to the closest point of a triangle (Ericson,
 /// Real-Time Collision Detection, section 5.1.5).
-fn distance_squared_to_triangle(p: [f64; 3], [a, b, c]: &[[f64; 3]; 3]) -> f64 {
+pub fn distance_squared_to_triangle(p: [f64; 3], [a, b, c]: &[[f64; 3]; 3]) -> f64 {
     let closest = |q: [f64; 3]| {
         let d = sub(p, q);
         dot(d, d)

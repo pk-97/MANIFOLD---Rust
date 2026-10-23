@@ -22,7 +22,7 @@ pub mod tick_samples;
 pub mod tick_hits;
 pub mod turbulence;
 use coupled_motion::{SupportCount, SupportPoint, MAX_SUPPORT_POINTS};
-pub use field_value::{FieldLeaf, FieldValue};
+pub use field_value::{FarShape, FarTerm, FieldLeaf, FieldValue, sample_far};
 pub use interaction::{
     FalloffCurve, FieldInput, ForceSample, RadialField, SampledField, ScaledField, SumField,
     TickStamp, UniformField, VectorField, VortexField,
@@ -30,15 +30,17 @@ pub use interaction::{
 pub use turbulence::{TurbulenceDrift, TurbulenceField};
 mod mesh;
 pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
-use mesh::triangle_mesh_mass_properties;
 pub mod sdf;
 pub mod collision_shape;
-use collision_shape::{validate_hull, validate_position};
+use collision_shape::validate_position;
+mod cooked;
+pub use cooked::CookedSolid;
+use cooked::CookedForm;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 mod ffi {
     unsafe extern "C" {
@@ -58,7 +60,7 @@ mod ffi {
             capacity: i32,
         ) -> i32;
         pub fn manifold_box3d_destroy_hull(hull: usize);
-        pub fn manifold_box3d_world_create(gx: f32, gy: f32, gz: f32) -> u32;
+        pub fn manifold_box3d_world_create(gx: f32, gy: f32, gz: f32, workers: u32) -> u32;
         pub fn manifold_box3d_world_destroy(world: u32);
         pub fn manifold_box3d_world_set_gravity(world: u32, gx: f32, gy: f32, gz: f32);
         pub fn manifold_box3d_world_set_max_linear_speed(world: u32, speed: f32);
@@ -69,12 +71,10 @@ mod ffi {
             speed: f32,
         );
         pub fn manifold_box3d_world_step(world: u32, dt: f32, substeps: u32);
-        pub fn manifold_box3d_body_create_hulls(
+        pub fn manifold_box3d_body_create_cooked_hulls(
             world: u32,
-            points: *const f32,
-            point_counts: *const i32,
+            hulls: *const usize,
             hull_count: i32,
-            max_vertex_count: i32,
             kind: i32,
             px: f32,
             py: f32,
@@ -86,14 +86,17 @@ mod ffi {
             mass: f32,
             friction: f32,
             restitution: f32,
-            hull_out: *mut usize,
         ) -> u64;
-        pub fn manifold_box3d_mesh_body_create(
-            world: u32,
+        pub fn manifold_box3d_keep_mesh_triangles(vertices: *const f32, indices: *mut i32, triangle_count: i32) -> i32;
+        pub fn manifold_box3d_cook_mesh(
             vertices: *const f32,
             vertex_count: i32,
             indices: *const i32,
             triangle_count: i32,
+        ) -> usize;
+        pub fn manifold_box3d_mesh_body_create_cooked(
+            world: u32,
+            mesh: usize,
             kind: i32,
             px: f32,
             py: f32,
@@ -107,7 +110,6 @@ mod ffi {
             restitution: f32,
             center: *const f32,
             inertia: *const f32,
-            mesh_out: *mut usize,
         ) -> u64;
         pub fn manifold_box3d_body_update(
             body: u64,
@@ -124,27 +126,15 @@ mod ffi {
             restitution: f32,
             move_pose: i32,
         ) -> i32;
-        pub fn manifold_box3d_body_replace_hulls(
+        pub fn manifold_box3d_body_replace_cooked_hulls(
             body: u64,
-            points: *const f32,
-            point_counts: *const i32,
+            hulls: *const usize,
             hull_count: i32,
-            max_vertex_count: i32,
             mass: f32,
             friction: f32,
             restitution: f32,
-            hull_out: *mut usize,
         ) -> i32;
-        pub fn manifold_box3d_body_replace_mesh(
-            body: u64,
-            vertices: *const f32,
-            vertex_count: i32,
-            indices: *const i32,
-            triangle_count: i32,
-            friction: f32,
-            restitution: f32,
-            mesh_out: *mut usize,
-        ) -> i32;
+        pub fn manifold_box3d_body_replace_cooked_mesh(body: u64, mesh: usize, friction: f32, restitution: f32) -> i32;
         pub fn manifold_box3d_body_set_bullet(body: u64, enabled: i32) -> i32;
         pub fn manifold_box3d_body_set_wall(body: u64, wall: i32) -> i32;
         pub fn manifold_box3d_body_set_enabled(body: u64, enabled: i32) -> i32;
@@ -383,7 +373,8 @@ pub struct BodyHandle {
 
 struct BodyRecord {
     native: u64,
-    owned_geometry: OwnedGeometry,
+    /// Shared with every body installed from the same cook.
+    geometry: Arc<CookedSolid>,
     /// Bumped by each in-place shape swap, so a reader that keeps derived
     /// geometry by handle knows when it went stale.
     shape_revision: u32,
@@ -399,11 +390,6 @@ struct ImpulseApplication {
     native: u64,
     linear: [f32; 3],
     angular: [f32; 3],
-}
-
-enum OwnedGeometry {
-    Hulls(Vec<usize>),
-    Mesh(usize),
 }
 
 /// An exclusively owned Box3D simulation world.
@@ -443,7 +429,7 @@ pub fn cook_hull(points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, PhysicsError> {
         )
     };
     if hull == 0 {
-        return Err(PhysicsError::NativeAllocation);
+        return Err(PhysicsError::InvalidInput(collision_shape::TOO_THIN));
     }
     let count = unsafe { ffi::manifold_box3d_hull_copy_points(hull, std::ptr::null_mut(), 0) };
     if count < 4 {
@@ -465,12 +451,54 @@ pub fn cook_hull(points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, PhysicsError> {
     Ok(cooked)
 }
 
+/// The threads the app's scene worlds step on: the performance cores, less
+/// one kept for the UI thread. Box3D counts the thread that calls step (the
+/// content thread) as its first worker, so it is inside this count. Box3D
+/// gains little from efficiency cores, so they are left out. Never below one.
+pub fn default_worker_count() -> u32 {
+    static WORKERS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *WORKERS.get_or_init(|| performance_cores().saturating_sub(1).max(1))
+}
+
+/// Performance cores: on macOS `hw.perflevel0.physicalcpu`, which counts
+/// only the fast cluster; elsewhere, or if that read fails, every core.
+fn performance_cores() -> u32 {
+    #[cfg(target_os = "macos")]
+    {
+        let mut cores: i32 = 0;
+        let mut size = std::mem::size_of::<i32>();
+        let status = unsafe {
+            libc::sysctlbyname(
+                c"hw.perflevel0.physicalcpu".as_ptr(),
+                (&raw mut cores).cast(),
+                &raw mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if status == 0 && cores > 0 {
+            return cores.unsigned_abs();
+        }
+    }
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    u32::try_from(cores).unwrap_or(1)
+}
+
 impl PhysicsWorld {
+    /// A world stepping on one thread. The app's scene path picks its own
+    /// count with [`Self::with_workers`]; tests and tools stay on one.
     pub fn new(gravity: [f32; 3]) -> Result<Self, PhysicsError> {
+        Self::with_workers(gravity, 1)
+    }
+
+    /// A world stepping on `workers` threads, at least one. Box3D solves in
+    /// the same order at any worker count, so the count changes only speed.
+    pub fn with_workers(gravity: [f32; 3], workers: u32) -> Result<Self, PhysicsError> {
         validate_vec3(gravity, "gravity")?;
         let _lock = native_lock();
-        let native =
-            unsafe { ffi::manifold_box3d_world_create(gravity[0], gravity[1], gravity[2]) };
+        let native = unsafe {
+            ffi::manifold_box3d_world_create(gravity[0], gravity[1], gravity[2], workers.max(1))
+        };
         if native == 0 {
             return Err(PhysicsError::NativeAllocation);
         }
@@ -498,8 +526,7 @@ impl PhysicsWorld {
                 "hull needs between 4 and 255 points",
             ));
         }
-        validate_hull(points)?;
-        self.add_hull_batch(&[points], config, 255)
+        self.add_cooked(&CookedSolid::hulls(&[points], 255)?, config)
     }
 
     /// Add several convex hulls as collision shapes on one body.
@@ -514,94 +541,8 @@ impl PhysicsWorld {
         config: BodyConfig,
     ) -> Result<BodyHandle, PhysicsError> {
         let config = validate_config(config)?;
-        if hulls.is_empty() {
-            return Err(PhysicsError::InvalidInput("body needs at least one hull"));
-        }
-        for hull in hulls {
-            validate_hull(hull)?;
-        }
         let hull_refs: Vec<&[[f32; 3]]> = hulls.iter().map(Vec::as_slice).collect();
-        self.add_hull_batch(&hull_refs, config, 128)
-    }
-
-    fn add_hull_batch(
-        &mut self,
-        hulls: &[&[[f32; 3]]],
-        config: BodyConfig,
-        max_vertex_count: i32,
-    ) -> Result<BodyHandle, PhysicsError> {
-        if hulls.len() > i32::MAX as usize {
-            return Err(PhysicsError::InvalidInput("too many hulls"));
-        }
-        let mut point_counts = Vec::with_capacity(hulls.len());
-        let mut total_points = 0usize;
-        for hull in hulls {
-            let point_count = i32::try_from(hull.len())
-                .map_err(|_| PhysicsError::InvalidInput("too many hull points"))?;
-            point_counts.push(point_count);
-            total_points = total_points
-                .checked_add(hull.len())
-                .ok_or(PhysicsError::InvalidInput("too many hull points"))?;
-        }
-        let flat_len = total_points
-            .checked_mul(3)
-            .ok_or(PhysicsError::InvalidInput("too many hull points"))?;
-        let mut flat_points = Vec::with_capacity(flat_len);
-        for hull in hulls {
-            for point in *hull {
-                flat_points.extend_from_slice(point);
-            }
-        }
-
-        let index = self.bodies.len();
-        if index > u32::MAX as usize {
-            return Err(PhysicsError::NativeAllocation);
-        }
-        let mut owned_hulls = vec![0usize; hulls.len()];
-        let _lock = native_lock();
-        let native = unsafe {
-            ffi::manifold_box3d_body_create_hulls(
-                self.native,
-                flat_points.as_ptr(),
-                point_counts.as_ptr(),
-                hulls.len() as i32,
-                max_vertex_count,
-                config.kind.native_value(),
-                config.position[0],
-                config.position[1],
-                config.position[2],
-                config.rotation[0],
-                config.rotation[1],
-                config.rotation[2],
-                config.rotation[3],
-                config.mass,
-                config.friction,
-                config.restitution,
-                owned_hulls.as_mut_ptr(),
-            )
-        };
-        if native == 0 || owned_hulls.contains(&0) {
-            return Err(PhysicsError::NativeAllocation);
-        }
-        if config.wall {
-            native_set_wall(native, true)?;
-        }
-
-        self.bodies.push(BodyRecord {
-            native,
-            owned_geometry: OwnedGeometry::Hulls(owned_hulls),
-            shape_revision: 0,
-        });
-        self.field_seen.push(false);
-        self.field_scratch
-            .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
-        self.impulse_scratch
-            .reserve(self.bodies.len().saturating_sub(self.impulse_scratch.len()));
-        self.reaction_awake.reserve(self.bodies.len().saturating_sub(self.reaction_awake.len()));
-        Ok(BodyHandle {
-            provenance: self.provenance,
-            index: index as u32,
-        })
+        self.add_cooked(&CookedSolid::hulls(&hull_refs, 128)?, config)
     }
 
     /// Add a fixed body whose collision shape is the supplied triangle mesh.
@@ -621,70 +562,78 @@ impl PhysicsWorld {
                 "triangle meshes only support fixed bodies",
             ));
         }
-        for vertex in vertices {
-            validate_position(*vertex)?;
-        }
-        let (center, inertia) = triangle_mesh_mass_properties(vertices, triangles, config.mass)?;
-        if vertices.len() > i32::MAX as usize {
-            return Err(PhysicsError::InvalidInput("too many mesh vertices"));
-        }
-        if triangles.len() > i32::MAX as usize {
-            return Err(PhysicsError::InvalidInput("too many mesh triangles"));
-        }
-        let mut indices = Vec::with_capacity(triangles.len() * 3);
-        for triangle in triangles {
-            for &index in triangle {
-                indices.push(
-                    i32::try_from(index)
-                        .map_err(|_| PhysicsError::InvalidInput("mesh index is too large"))?,
-                );
-            }
-        }
+        self.add_cooked(&CookedSolid::mesh(vertices, triangles)?, config)
+    }
+
+    /// Add a body whose shape is `solid`, cooked once and shared with every
+    /// other body installed from it. A mesh solid takes only a fixed body.
+    pub fn add_cooked(&mut self, solid: &Arc<CookedSolid>, config: BodyConfig) -> Result<BodyHandle, PhysicsError> {
+        let config = validate_config(config)?;
         let index = self.bodies.len();
         if index > u32::MAX as usize {
             return Err(PhysicsError::NativeAllocation);
         }
-
-        let mut owned_mesh = 0usize;
-        let _lock = native_lock();
-        let native = unsafe {
-            ffi::manifold_box3d_mesh_body_create(
-                self.native,
-                vertices.as_ptr().cast::<f32>(),
-                vertices.len() as i32,
-                indices.as_ptr(),
-                triangles.len() as i32,
-                config.kind.native_value(),
-                config.position[0],
-                config.position[1],
-                config.position[2],
-                config.rotation[0],
-                config.rotation[1],
-                config.rotation[2],
-                config.rotation[3],
-                config.mass,
-                config.friction,
-                config.restitution,
-                center.as_ptr(),
-                inertia.as_ptr(),
-                &mut owned_mesh,
-            )
+        let [px, py, pz] = config.position;
+        let [qx, qy, qz, qw] = config.rotation;
+        let native = {
+            let _lock = native_lock();
+            match solid.form() {
+                CookedForm::Hulls(hulls) => unsafe {
+                    ffi::manifold_box3d_body_create_cooked_hulls(
+                        self.native,
+                        hulls.as_ptr(),
+                        hulls.len() as i32,
+                        config.kind.native_value(),
+                        px,
+                        py,
+                        pz,
+                        qx,
+                        qy,
+                        qz,
+                        qw,
+                        config.mass,
+                        config.friction,
+                        config.restitution,
+                    )
+                },
+                CookedForm::Mesh { mesh, center, unit_inertia } => {
+                    if config.kind != BodyKind::Fixed {
+                        return Err(PhysicsError::InvalidInput("triangle meshes only support fixed bodies"));
+                    }
+                    let inertia = unit_inertia.map(|value| value * config.mass);
+                    unsafe {
+                        ffi::manifold_box3d_mesh_body_create_cooked(
+                            self.native,
+                            *mesh,
+                            config.kind.native_value(),
+                            px,
+                            py,
+                            pz,
+                            qx,
+                            qy,
+                            qz,
+                            qw,
+                            config.mass,
+                            config.friction,
+                            config.restitution,
+                            center.as_ptr(),
+                            inertia.as_ptr(),
+                        )
+                    }
+                }
+            }
         };
-        if native == u64::MAX {
-            return Err(PhysicsError::InvalidInput(
-                "Box3D discarded degenerate mesh triangles",
-            ));
-        }
-        if native == 0 || owned_mesh == 0 {
+        if native == 0 {
             return Err(PhysicsError::NativeAllocation);
         }
         if config.wall {
+            let _lock = native_lock();
             native_set_wall(native, true)?;
         }
 
         self.bodies.push(BodyRecord {
             native,
-            owned_geometry: OwnedGeometry::Mesh(owned_mesh),
+            geometry: Arc::clone(solid),
             shape_revision: 0,
         });
         self.field_seen.push(false);
@@ -944,7 +893,7 @@ impl PhysicsWorld {
         move_pose: bool,
     ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
-        if matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Mesh(_))
+        if self.body_record(handle)?.geometry.is_mesh()
             && config.kind != BodyKind::Fixed
         {
             return Err(PhysicsError::InvalidInput(
@@ -986,45 +935,12 @@ impl PhysicsWorld {
         hulls: &[Vec<[f32; 3]>],
         config: BodyConfig,
     ) -> Result<(), PhysicsError> {
-        let config = validate_config(config)?;
-        if hulls.is_empty() {
-            return Err(PhysicsError::InvalidInput("body needs at least one hull"));
-        }
-        for hull in hulls {
-            validate_hull(hull)?;
-        }
-        if !matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Hulls(_)) {
+        validate_config(config)?;
+        if self.body_record(handle)?.geometry.is_mesh() {
             return Err(PhysicsError::InvalidInput("only a hull body can have its hulls replaced"));
         }
-        let point_counts: Vec<i32> = hulls.iter().map(|hull| hull.len() as i32).collect();
-        let flat_points: Vec<f32> = hulls.iter().flatten().flatten().copied().collect();
-        let mut new_hulls = vec![0usize; hulls.len()];
-        let native = self.native_body(handle)?;
-        let _lock = native_lock();
-        let result = unsafe {
-            ffi::manifold_box3d_body_replace_hulls(
-                native,
-                flat_points.as_ptr(),
-                point_counts.as_ptr(),
-                hulls.len() as i32,
-                128,
-                config.mass,
-                config.friction,
-                config.restitution,
-                new_hulls.as_mut_ptr(),
-            )
-        };
-        if result != 0 {
-            return Err(PhysicsError::NativeFailure);
-        }
-        let record = &mut self.bodies[handle.index as usize];
-        record.shape_revision = record.shape_revision.wrapping_add(1);
-        if let OwnedGeometry::Hulls(old) = std::mem::replace(&mut record.owned_geometry, OwnedGeometry::Hulls(new_hulls)) {
-            for hull in old {
-                unsafe { ffi::manifold_box3d_destroy_hull(hull) };
-            }
-        }
-        native_set_wall(native, config.wall)
+        let hull_refs: Vec<&[[f32; 3]]> = hulls.iter().map(Vec::as_slice).collect();
+        self.replace_cooked(handle, &CookedSolid::hulls(&hull_refs, 128)?, config)
     }
 
     /// Swap a fixed mesh body's triangle mesh for `vertices` and `triangles`,
@@ -1041,50 +957,53 @@ impl PhysicsWorld {
         if config.kind != BodyKind::Fixed {
             return Err(PhysicsError::InvalidInput("triangle meshes only support fixed bodies"));
         }
-        if !matches!(&self.body_record(handle)?.owned_geometry, OwnedGeometry::Mesh(_)) {
+        if !self.body_record(handle)?.geometry.is_mesh() {
             return Err(PhysicsError::InvalidInput("only a mesh body can have its mesh replaced"));
         }
-        for vertex in vertices {
-            validate_position(*vertex)?;
+        self.replace_cooked(handle, &CookedSolid::mesh(vertices, triangles)?, config)
+    }
+
+    /// Swap a body's shape for `solid` in place, of the same form (hulls or
+    /// mesh): its pose, its velocity and every other body stay as they are,
+    /// and a moving body takes `config.mass` over its new shape. On `Err`
+    /// the body keeps its old shape.
+    pub fn replace_cooked(&mut self, handle: BodyHandle, solid: &Arc<CookedSolid>, config: BodyConfig) -> Result<(), PhysicsError> {
+        let config = validate_config(config)?;
+        if self.body_record(handle)?.geometry.is_mesh() != solid.is_mesh() {
+            return Err(PhysicsError::InvalidInput("a body's shape is swapped only for one of the same form"));
         }
-        if vertices.len() > i32::MAX as usize || triangles.len() > i32::MAX as usize {
-            return Err(PhysicsError::InvalidInput("too many mesh vertices or triangles"));
-        }
-        let mut indices = Vec::with_capacity(triangles.len() * 3);
-        for triangle in triangles {
-            for &index in triangle {
-                if index as usize >= vertices.len() {
-                    return Err(PhysicsError::InvalidInput("mesh index is out of range"));
-                }
-                indices.push(i32::try_from(index).map_err(|_| PhysicsError::InvalidInput("mesh index is too large"))?);
-            }
-        }
-        let mut new_mesh = 0usize;
         let native = self.native_body(handle)?;
-        let _lock = native_lock();
-        let result = unsafe {
-            ffi::manifold_box3d_body_replace_mesh(
-                native,
-                vertices.as_ptr().cast::<f32>(),
-                vertices.len() as i32,
-                indices.as_ptr(),
-                triangles.len() as i32,
-                config.friction,
-                config.restitution,
-                &mut new_mesh,
-            )
+        let old = {
+            let _lock = native_lock();
+            let result = match solid.form() {
+                CookedForm::Hulls(hulls) => unsafe {
+                    ffi::manifold_box3d_body_replace_cooked_hulls(
+                        native,
+                        hulls.as_ptr(),
+                        hulls.len() as i32,
+                        config.mass,
+                        config.friction,
+                        config.restitution,
+                    )
+                },
+                CookedForm::Mesh { mesh, .. } => {
+                    if config.kind != BodyKind::Fixed {
+                        return Err(PhysicsError::InvalidInput("triangle meshes only support fixed bodies"));
+                    }
+                    unsafe { ffi::manifold_box3d_body_replace_cooked_mesh(native, *mesh, config.friction, config.restitution) }
+                }
+            };
+            if result != 0 {
+                return Err(PhysicsError::NativeFailure);
+            }
+            native_set_wall(native, config.wall)?;
+            let record = &mut self.bodies[handle.index as usize];
+            record.shape_revision = record.shape_revision.wrapping_add(1);
+            std::mem::replace(&mut record.geometry, Arc::clone(solid))
         };
-        match result {
-            0 if new_mesh != 0 => {}
-            3 => return Err(PhysicsError::InvalidInput("Box3D discarded degenerate mesh triangles")),
-            _ => return Err(PhysicsError::NativeFailure),
-        }
-        let record = &mut self.bodies[handle.index as usize];
-        record.shape_revision = record.shape_revision.wrapping_add(1);
-        if let OwnedGeometry::Mesh(old) = std::mem::replace(&mut record.owned_geometry, OwnedGeometry::Mesh(new_mesh)) {
-            unsafe { ffi::manifold_box3d_destroy_mesh(old) };
-        }
-        native_set_wall(native, config.wall)
+        // The old shape is freed outside the native lock: its drop takes it.
+        drop(old);
+        Ok(())
     }
 
     /// How many times `handle`'s shape has been swapped in place.
@@ -1094,10 +1013,7 @@ impl PhysicsWorld {
 
     /// Enable or disable continuous collision detection for a dynamic body.
     pub fn set_bullet(&mut self, handle: BodyHandle, enabled: bool) -> Result<(), PhysicsError> {
-        if matches!(
-            &self.body_record(handle)?.owned_geometry,
-            OwnedGeometry::Mesh(_)
-        ) {
+        if self.body_record(handle)?.geometry.is_mesh() {
             return Err(PhysicsError::InvalidInput(
                 "bullet is unsupported for triangle meshes",
             ));
@@ -1591,20 +1507,10 @@ impl PhysicsWorld {
 
 impl Drop for PhysicsWorld {
     fn drop(&mut self) {
+        // The bodies' shapes go after the world, outside the lock: each
+        // cooked solid takes it as it frees itself.
         let _lock = native_lock();
         unsafe { ffi::manifold_box3d_world_destroy(self.native) };
-        for body in &self.bodies {
-            unsafe {
-                match &body.owned_geometry {
-                    OwnedGeometry::Hulls(hulls) => {
-                        for hull in hulls {
-                            ffi::manifold_box3d_destroy_hull(*hull);
-                        }
-                    }
-                    OwnedGeometry::Mesh(mesh) => ffi::manifold_box3d_destroy_mesh(*mesh),
-                }
-            }
-        }
     }
 }
 
@@ -1733,6 +1639,51 @@ mod tests {
             world.step(Seconds(1.0 / 60.0), 4).unwrap();
         }
         world.pose(cube).unwrap().position[0]
+    }
+
+    /// A pile of 600 turned cubes collapsing onto a wall-tagged floor for 600
+    /// ticks on `workers` threads: every pose, bit for bit.
+    fn collapse_on(workers: u32) -> Vec<[u32; 7]> {
+        let mut world = PhysicsWorld::with_workers([0.0, -9.81, 0.0], workers).unwrap();
+        let floor: Vec<[f32; 3]> = cube(0.5).iter().map(|p| [p[0] * 60.0, p[1], p[2] * 60.0]).collect();
+        let floor_config = BodyConfig { kind: BodyKind::Fixed, position: [0.0, -0.5, 0.0], wall: true, ..BodyConfig::default() };
+        world.add_hull(&floor, floor_config).unwrap();
+        let (sin, cos) = 0.3f32.sin_cos();
+        let bodies: Vec<BodyHandle> = (0..600)
+            .map(|index| {
+                let (x, z, y) = (index % 10, (index / 10) % 10, index / 100);
+                let config = BodyConfig {
+                    position: [x as f32 * 0.9 - 4.0, 0.6 + y as f32 * 1.05, z as f32 * 0.9 - 4.0 + 0.1 * y as f32],
+                    rotation: [0.0, sin, 0.0, cos],
+                    friction: 0.2 + 0.1 * (index % 5) as f32,
+                    restitution: 0.1,
+                    ..BodyConfig::default()
+                };
+                world.add_hull(&cube(0.4), config).unwrap()
+            })
+            .collect();
+        for _ in 0..600 {
+            world.step(Seconds(1.0 / 60.0), 4).unwrap();
+        }
+        bodies
+            .iter()
+            .map(|body| {
+                let pose = world.pose(*body).unwrap();
+                let [px, py, pz] = pose.position.map(f32::to_bits);
+                let [qx, qy, qz, qw] = pose.rotation.map(f32::to_bits);
+                [px, py, pz, qx, qy, qz, qw]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_world_steps_the_same_on_one_thread_and_on_eight() {
+        let one = collapse_on(1);
+        assert!(
+            one[500..].iter().all(|pose| f32::from_bits(pose[1]) < 0.6 + 5.0 * 1.05 - 0.5),
+            "the top layer settles onto the ones below, so contacts were solved"
+        );
+        assert!(one == collapse_on(8), "600 ticks on eight threads give the same poses as on one");
     }
 
     /// A wall-tagged shape gives the touching body its own friction; two

@@ -1764,6 +1764,15 @@ fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderF
         RtAccelError::Encode(_) => FrameRenderFailure::RtEncode,
     }
 }
+
+/// What the card says while ray tracing sits out a frame.
+fn rt_paused_reason(failure: FrameRenderFailure) -> &'static str {
+    match failure {
+        FrameRenderFailure::RtAllocation | FrameRenderFailure::SurfaceAllocation => "Ray tracing paused: not enough GPU memory for this scene. Drawing without it.",
+        FrameRenderFailure::InvalidGeometry => "Ray tracing paused: an object's shape is invalid. Drawing without it.",
+        _ => "Ray tracing paused for this frame. Drawing without it.",
+    }
+}
 // ---- Pass-1 draw record (was local to evaluate(); hoisted for the BUG-trh7
 // stage-2 pass methods — Pass 1 produces, the RT block + Pass 2 consume).
 // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): one ObjectDraw per wired,
@@ -2557,6 +2566,7 @@ impl RenderScene {
             material: inputs.material("material"),
             mesh: inputs.slot_of("vertices"),
             indices: None,
+            live_count: None,
             weights: None,
             topology: None,
             base_color_map: inputs.slot_of("base_color_map"),
@@ -2684,11 +2694,11 @@ impl RenderScene {
         for draw in &mut draws {
             let requested = draw.kind == MaterialKind::Pbr && draw.subsurface.weight > 0.0;
             if requested && draw.points {
-                ctx.error("Subsurface scattering requires a triangle surface; point primitives have no volume boundary.");
+                Self::fail_frame(ctx, Some(draw.slot), "Subsurface scattering requires a triangle surface; point primitives have no volume boundary.");
                 return;
             }
             if requested && draw.routes_to_transparent() {
-                ctx.error("Subsurface scattering requires an opaque PBR surface; use its scattering colour and radius for translucency instead of alpha Blend or glass transmission.");
+                Self::fail_frame(ctx, Some(draw.slot), "Subsurface scattering requires an opaque PBR surface; use its scattering colour and radius for translucency instead of alpha Blend or glass transmission.");
                 return;
             }
             if !draw.routes_to_transparent() && draw.instance_count > 0 {
@@ -2709,10 +2719,13 @@ impl RenderScene {
                     pre.reset_decision |= changed;
                     Some((textures, topo, content))
                 }
+                // Maintenance prepares whatever needs it in this frame, so an
+                // error here is a real failure (memory admission refusing a
+                // huge Count mid-drag): the frame draws raster, the stage
+                // hears once (NodeErrors), and the next frame tries again.
                 Err(failure) => {
-                    ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(failure));
-                    ctx.error(format!("RT current-frame update failed: {failure:?}"));
-                    return;
+                    ctx.error(rt_paused_reason(failure));
+                    None
                 }
             }
         } else { None };
@@ -2733,7 +2746,7 @@ impl RenderScene {
         );
         if has_transmission && let Some(error) = &self.transmissive_depth_error {
             ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::SurfaceAllocation));
-            ctx.error(error);
+            Self::fail_frame(ctx, None, error.as_str());
             return;
         }
         // ---- Split-sum IBL convolution (BUG-trh7 stage 2,
@@ -2770,7 +2783,7 @@ impl RenderScene {
 
         if has_subsurface {
             let Some((textures, _, _)) = rt_tables.as_ref() else {
-                ctx.error("Subsurface scattering has no current-frame geometry acceleration data.");
+                Self::fail_frame(ctx, None, "Subsurface scattering has no current-frame geometry acceleration data.");
                 return;
             };
             if !self.subsurface_trace(ctx, &pre, &opaque_draws, rt_objects, gi_materials_data, textures) {
@@ -2782,7 +2795,7 @@ impl RenderScene {
             if let Err(error) = self.volume_optics.encode(gpu.device, gpu.native_enc, &draws,
                 self.opaque_depth_snapshot.as_ref().expect("transmission depth ensured"),
                 self.identity_instance_stub.as_ref().expect("identity ensured")) {
-                ctx.error(error);
+                Self::fail_frame(ctx, None, error);
                 return;
             }
         }

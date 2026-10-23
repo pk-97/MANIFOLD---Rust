@@ -21,6 +21,11 @@ pub struct GpuEncoder<'a> {
     pub chunking_enabled: bool,
     /// Candidate warmup may prepare RT resources even when its saved toggle is off.
     pub preparing: bool,
+    /// The generator renderer's render pass, one per content tick, which
+    /// moves while the transport is stopped; 0 from a host that keeps none.
+    /// Rendering the same pass again (a warmup pump) is the same frame to a
+    /// node whose noise moves per frame.
+    pub render_pass: u64,
     /// Operations actually encoded by the shared dynamic RT path this frame.
     pub rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
     pub rt_history_resets: u32,
@@ -29,6 +34,9 @@ pub struct GpuEncoder<'a> {
     pub capture_rt_geometry: bool,
     #[cfg(feature = "gpu-proofs")]
     pub force_rt_rebuild: bool,
+    /// The next ray-tracing update on this encoder fails with this, once.
+    #[cfg(feature = "gpu-proofs")]
+    pub fail_rt_update: Option<manifold_gpu::raytrace::RtAccelError>,
     /// Live per-send audio histories used by audio-reactive graph sources.
     /// The registry is content-thread owned and only borrowed for this frame.
     pub audio_visuals: Option<&'a manifold_core::audio_visual::AudioVisualRegistry>,
@@ -55,6 +63,7 @@ impl<'a> GpuEncoder<'a> {
             uniform_arena: None,
             chunking_enabled: false,
             preparing: false,
+            render_pass: 0,
             rt_updates: Default::default(),
             rt_history_resets: 0,
             rt_dispatches: 0,
@@ -62,6 +71,8 @@ impl<'a> GpuEncoder<'a> {
             capture_rt_geometry: false,
             #[cfg(feature = "gpu-proofs")]
             force_rt_rebuild: false,
+            #[cfg(feature = "gpu-proofs")]
+            fail_rt_update: None,
             audio_visuals: None,
             frame_status: crate::runtime::frame_status::FrameRenderStatus::Complete,
         }
@@ -80,6 +91,7 @@ impl<'a> GpuEncoder<'a> {
             uniform_arena: None,
             chunking_enabled: false,
             preparing: false,
+            render_pass: 0,
             rt_updates: Default::default(),
             rt_history_resets: 0,
             rt_dispatches: 0,
@@ -87,6 +99,8 @@ impl<'a> GpuEncoder<'a> {
             capture_rt_geometry: false,
             #[cfg(feature = "gpu-proofs")]
             force_rt_rebuild: false,
+            #[cfg(feature = "gpu-proofs")]
+            fail_rt_update: None,
             audio_visuals: None,
             frame_status: crate::runtime::frame_status::FrameRenderStatus::Complete,
         }

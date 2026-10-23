@@ -23,6 +23,8 @@ pub struct Choice {
 /// How a field row picks its value.
 #[derive(Debug, Clone, Copy)]
 pub enum FieldControl {
+    /// On or off: drawn as a switch. Its value is [`is_on`].
+    OnOff,
     /// A closed set of values.
     Closed(&'static [Choice]),
     /// A closed set, then every item `items` passes.
@@ -125,7 +127,7 @@ pub fn choice_disabled(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> O
         ItemKind::Water => super::water::choice_unavailable(item, field, key),
         ItemKind::WaterSource => super::water_source::choice_unavailable(doc, item, field, key),
         ItemKind::Camera => super::camera::choice_unavailable(doc, field, key),
-        ItemKind::Modifier => super::scene_wide::type_unavailable(doc, item, field, key),
+        ItemKind::Modifier => super::scene_wide::type_unavailable(doc, item, field, key).or_else(|| super::copies::type_moves_no_copies(doc, item, field, key)),
         ItemKind::Object | ItemKind::Group if field == "physics" && key != "none" => physics_refused(doc, item),
         _ => None,
     }
@@ -173,14 +175,18 @@ pub fn set_field(doc: &SceneDoc, item: &Item, row: &FieldRow, value: &FieldValue
     Ok(fields)
 }
 
-const OFF_ON: &[Choice] = &[Choice { key: "off", label: "Off" }, Choice { key: "on", label: "On" }];
-
 pub(super) const fn on_off() -> FieldControl {
-    FieldControl::Closed(OFF_ON)
+    FieldControl::OnOff
 }
 
-pub(super) fn is_on(value: bool) -> FieldValue {
-    FieldValue::Choice(if value { "on" } else { "off" }.to_owned())
+/// The choice key of an on/off field's value.
+pub fn on_off_key(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
+/// What an on/off field holds, or what a pick sets it to.
+pub fn is_on(value: bool) -> FieldValue {
+    FieldValue::Choice(on_off_key(value).to_owned())
 }
 
 /// `true` for an "on" pick, `false` for "off".

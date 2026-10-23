@@ -12,7 +12,7 @@ impl RenderScene {
     /// caller (evaluate) returns immediately, exactly as the inline code did.
     /// BUG-trh7 stage 2, pass 1: validate every object's required inputs,
     /// compose its model matrix + uniforms, and get-or-compile its pipeline.
-    /// None = abort frame — the three structured-error magenta-clear returns.
+    /// None = abort frame: a structured error and a magenta clear.
     /// An empty draw list is returned for the caller to clear all connected
     /// outputs and invalidate temporal history.
     pub(super) fn collect_object_draws<'ctx, 'gpu>(
@@ -82,13 +82,9 @@ impl RenderScene {
             }
             let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                ctx.error(format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "object_{n}: missing required `vertices` input (its scene_object's `vertices` port is unwired); renderer fell back to magenta clear"
                 ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
                 return None;
             };
             // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
@@ -101,12 +97,18 @@ impl RenderScene {
             let indices = object.indices.and_then(|slot| ctx.inputs.array_slot(slot));
             if object.indices.is_some() && indices.is_none() {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                ctx.error(format!("object_{n}: wired index buffer is unavailable"));
+                Self::fail_frame(ctx, Some(n as u32), format!("object_{n}: wired index buffer is unavailable"));
                 return None;
             }
             let indices_content = object.indices.and_then(|slot| ctx.inputs.content_version_of(slot));
-            let live_extent = object.indices.or(mesh_slot).and_then(|s| ctx.inputs.live_extent_slot(s));
             let capacity = indices.map_or_else(|| whole_triangle_vertices(vertices), |buffer| (buffer.size / 4 / 3 * 3).min(u64::from(u32::MAX)) as u32);
+            // A fragment cut pads its mesh far past the live records, and the
+            // primitives after the cut do not forward its extent; the object's
+            // live count stands in so the padding is never drawn.
+            let live_extent = object.indices.or(mesh_slot).and_then(|s| ctx.inputs.live_extent_slot(s)).or_else(|| {
+                let counts = object.live_count.filter(|_| object.indices.is_none()).and_then(|s| ctx.inputs.array_slot(s))?;
+                Some(manifold_node_engine::scene::live_extent::LiveExtent { counts: counts.clone(), offset: 0, per_item: 1, bound: capacity })
+            });
             let (object_vertex_count, point_count) = match &live_extent {
                 Some(extent) => {
                     let bound = extent.bound.min(capacity);
@@ -125,13 +127,9 @@ impl RenderScene {
             let weights = weights_slot.and_then(|s| ctx.inputs.array_slot(s));
             if weights_slot.is_some() && weights.is_none() {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                ctx.error(format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "object_{n}: wired appearance weights input is unavailable; renderer fell back to magenta clear"
                 ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
                 return None;
             }
             let vertex_count = (vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32;
@@ -139,14 +137,10 @@ impl RenderScene {
                 && ((weights.size / std::mem::size_of::<f32>() as u64) as u32) < vertex_count
             {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                ctx.error(format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "object_{n}: appearance weights buffer is shorter than the mesh ({}, need {vertex_count}); renderer fell back to magenta clear",
                     weights.size / std::mem::size_of::<f32>() as u64
                 ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
                 return None;
             }
             // P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): appearance weights and
@@ -155,13 +149,9 @@ impl RenderScene {
             // the coverage/brightness behavior against the raster formula.
             let Some(material) = object.material else {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                ctx.error(format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
                 ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
                 return None;
             };
             // SCENE_RENDER_MODE_DESIGN.md D6/D7/D8: ONE match on the mode
@@ -187,14 +177,10 @@ impl RenderScene {
             }
             if material.requires_envmap() && envmap_wired.is_none() {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                ctx.error(format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "{:?} material on `object_{n}` requires `envmap` input but it is unwired; renderer fell back to magenta",
                     material.kind
                 ));
-                if let Some(target) = ctx.outputs.texture_2d("color") {
-                    let gpu = ctx.gpu_encoder();
-                    gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
-                }
                 return None;
             }
             // `NodeInputs` is `Copy` (bindings.rs) — capture it by value so
@@ -524,6 +510,20 @@ impl RenderScene {
             }
         }
         Some((draws, has_transmission))
+    }
+
+    /// Abort the frame: report why, naming the render object at fault when
+    /// there is one, and clear `color` to magenta. The color target is a
+    /// recycled pool texture, so without the clear it would show whatever
+    /// another frame left in it.
+    pub(super) fn fail_frame(ctx: &mut EffectNodeContext<'_, '_>, object: Option<u32>, message: impl Into<String>) {
+        match object {
+            Some(object) => ctx.error_on_object(object, message),
+            None => ctx.error(message),
+        }
+        if let Some(target) = ctx.outputs.texture_2d("color") {
+            ctx.gpu_encoder().native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
+        }
     }
 
     /// A frame with no visible scene objects still owns every graph output.

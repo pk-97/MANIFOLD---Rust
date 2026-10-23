@@ -1,6 +1,7 @@
 //! Reads a model file into the scene's import tree (SCENE_DOCUMENT_DESIGN.md
 //! section 7.7 (Imports)): one part per material on each mesh-bearing file
-//! node, empty pass-through nodes collapsed, nested where the file nests;
+//! node, empty pass-through nodes collapsed, nested where the file nests,
+//! each at its file node's own transform;
 //! one material per glTF material the parts use; the file's lights and
 //! perspective cameras where the file puts them; and its clip count. The
 //! commands in `manifold-editing` turn the tree into items; the compiler's
@@ -15,9 +16,10 @@ use std::path::Path;
 
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, SerializedParamValue};
 use manifold_core::scene_doc::{
-    ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, ItemId, LightType, MeshPrimitives, ModelFacts,
+    ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, ImportedTransform, ItemId, LightType,
+    MeshPrimitives, ModelFacts, transform,
 };
-use manifold_core::scene_schema::{FAR_CLIP, NEAR_CLIP};
+use manifold_core::scene_schema::CLIP_PLANE;
 
 use super::gltf_load::{self, FileNode, GltfLightKind};
 
@@ -55,10 +57,7 @@ fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Dat
         .map(|(i, m)| m.name().map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| format!("Material {}", i + 1), str::to_owned))
         .collect();
     let mut used = BTreeSet::new();
-    // A skinned part is drawn where its skin puts it, not about its centre.
-    let skinned: BTreeSet<usize> = document.nodes().filter(|n| n.skin().is_some()).map(|n| n.index()).collect();
-    let roots: Vec<ImportedNode> =
-        tree.iter().filter_map(|node| part(node, &names, &skinned, &mut used)).collect();
+    let roots: Vec<ImportedNode> = tree.iter().filter_map(|node| part(node, &names, &mut used)).collect();
     if roots.is_empty() {
         return Err(format!("{}: no meshes — nothing to import", path.display()));
     }
@@ -67,8 +66,7 @@ fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Dat
         .map(|stem| stem.to_string_lossy().into_owned())
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| "Model".to_owned());
-    let bounds = gltf_load::file_bounds(document, buffers);
-    let radius = bounds.map_or(1.0, |(lo, hi)| {
+    let radius = gltf_load::file_bounds(document, buffers).map_or(1.0, |(lo, hi)| {
         ((0..3).map(|axis| (hi[axis] - lo[axis]).powi(2)).sum::<f32>().sqrt() * 0.5).max(1e-3)
     });
     let materials = used
@@ -105,10 +103,9 @@ fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Dat
                 ("pitch", camera.pitch),
                 ("roll", camera.roll),
                 ("fov_y", camera.fov_y),
-                // Held to the card's limits, so an imported camera never starts
-                // with a clip a row could not reach.
-                ("near", NEAR_CLIP.clamp(camera.near, (0.0, 0.0))),
-                ("far", FAR_CLIP.clamp(camera.far, (0.0, 0.0))),
+                // The file's own clip planes, held only above 0 as the rows are.
+                ("near", CLIP_PLANE.clamp(camera.near, (0.0, 0.0))),
+                ("far", CLIP_PLANE.clamp(camera.far, (0.0, 0.0))),
             ],
         })
         .collect();
@@ -116,7 +113,7 @@ fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Dat
         .animations()
         .map(|clip| clip.name().map_or_else(|| format!("Clip {}", clip.index() + 1), str::to_owned))
         .collect();
-    Ok(ImportedModel { name, roots, materials, lights, cameras, clips, bounds })
+    Ok(ImportedModel { name, roots, materials, lights, cameras, clips })
 }
 
 /// A `KHR_lights_punctual` light as the old importer placed it: at its
@@ -179,28 +176,40 @@ fn material_name(material: Option<u32>, names: &[String]) -> String {
 }
 
 /// The model at `path` in the base scene (minus its cube), compiled: the scene
-/// a drop makes, placed to fill the view, its lights and cameras where the
-/// file puts them. For the
-/// render and soak tools, which draw a file without a project around it.
+/// a drop makes, at the file's own size and place, every item starting at
+/// the file's values. For the render and soak tools, which draw a file
+/// without a project around it.
 pub fn compile_model_scene(path: &Path) -> Result<(EffectGraphDef, ImportedModel), String> {
+    compile_model_scene_with(path, false, |_, _| {})
+}
+
+/// [`compile_model_scene`] with the import's Combine Meshes on (a
+/// photoscan's setting): every part drawn where the file puts it, in the
+/// import Group's unturned frame.
+pub fn compile_combined_model_scene(path: &Path) -> Result<(EffectGraphDef, ImportedModel), String> {
+    compile_model_scene_with(path, true, |_, _| {})
+}
+
+/// [`compile_model_scene`] with Combine Meshes `combine`, the scene first
+/// changed by `edit`, which gets the import Group's id: a test adds the
+/// modifiers it bends the model with.
+pub fn compile_model_scene_with(
+    path: &Path,
+    combine: bool,
+    edit: impl FnOnce(&mut manifold_core::scene_doc::SceneDoc, &ItemId),
+) -> Result<(EffectGraphDef, ImportedModel), String> {
     let ReadModel { model, facts, .. } = read_model(path)?;
     let id = ItemId::new("model");
     let file = path.to_string_lossy();
     let mut doc = model.scene_doc(&file, id.clone());
+    if let Some(manifold_core::scene_doc::Item { fields: manifold_core::scene_doc::ItemFields::Group(group), .. }) =
+        doc.items.iter_mut().find(|item| item.id == id)
+    {
+        group.combine_meshes = combine;
+    }
+    edit(&mut doc, &id);
     doc.models.insert(file.into_owned(), facts);
     let mut def = manifold_core::scene_doc::compile(&doc)?;
-    if let Some(placement) = model.placement() {
-        for (property, value) in [
-            ("scale_x", placement.scale),
-            ("scale_y", placement.scale),
-            ("scale_z", placement.scale),
-            ("pos_x", placement.position[0]),
-            ("pos_y", placement.position[1]),
-            ("pos_z", placement.position[2]),
-        ] {
-            start_at(&mut def, &format!("{id}.{property}"), value);
-        }
-    }
     for (item, property, value) in model.starting_values(&id) {
         start_at(&mut def, &format!("{item}.{property}"), value);
     }
@@ -238,18 +247,18 @@ fn start_at(def: &mut EffectGraphDef, param_id: &str, value: f32) {
     }
 }
 
-/// The part a file node becomes, or none when nothing under it has a mesh.
-/// A node with no mesh and one part below it is that part; its path stays
-/// the part's key, so the id survives the collapse. A mesh of several
-/// materials is one Object per material, keyed by the material.
-fn part(
-    node: &FileNode,
-    names: &[String],
-    skinned: &BTreeSet<usize>,
-    used: &mut BTreeSet<Option<u32>>,
-) -> Option<ImportedNode> {
-    let mut children: Vec<ImportedNode> =
-        node.children.iter().filter_map(|child| part(child, names, skinned, used)).collect();
+/// The part a file node becomes, or none when nothing under it has a mesh,
+/// at the node's own transform (Blender's glTF import). A node with no
+/// mesh and one part below it is that part, its transform folded into the
+/// part's; its path stays the part's key, so the id survives the collapse.
+/// When the fold has no exact position, rotation and scale (a turned part
+/// under an unevenly scaled node), the node stays a group. A mesh of
+/// several materials is one Object per material, keyed by the material,
+/// under a group at the node's transform.
+fn part(node: &FileNode, names: &[String], used: &mut BTreeSet<Option<u32>>) -> Option<ImportedNode> {
+    let mut children: Vec<ImportedNode> = node.children.iter().filter_map(|child| part(child, names, used)).collect();
+    let (position, rotation, scale) = transform::decompose(node.local);
+    let own = ImportedTransform { position, rotation, scale };
     let several = node.parts.len() > 1;
     let mut objects: Vec<ImportedNode> = node
         .parts
@@ -273,29 +282,53 @@ fn part(
                 primitives,
                 material: Some(material_key(file_part.material)),
                 vertex_count: file_part.vertex_count,
-                center: if skinned.contains(&node.index) { [0.0; 3] } else { file_part.center },
+                transform: ImportedTransform::IDENTITY,
                 children: Vec::new(),
             }
         })
         .collect();
+    let group = |children: Vec<ImportedNode>| ImportedNode {
+        key: node.path.clone(),
+        name: node.name.clone(),
+        mesh_node: None,
+        primitives: MeshPrimitives::All,
+        material: None,
+        vertex_count: 0,
+        transform: own,
+        children,
+    };
     match (objects.len(), children.len()) {
         (0, 0) => None,
-        (0, 1) => children.pop(),
-        (1, 0) => objects.pop(),
+        (0, 1) => {
+            let mut only = children.pop()?;
+            let child = only.transform;
+            match folded(transform::mat4_mul(node.local, transform::trs_matrix(child.position, child.rotation, child.scale))) {
+                Some(transform) => {
+                    only.transform = transform;
+                    Some(only)
+                }
+                None => Some(group(vec![only])),
+            }
+        }
+        (1, 0) => objects.pop().map(|mut only| {
+            only.transform = own;
+            only
+        }),
         _ => {
             objects.append(&mut children);
-            Some(ImportedNode {
-                key: node.path.clone(),
-                name: node.name.clone(),
-                mesh_node: None,
-                primitives: MeshPrimitives::All,
-                material: None,
-                vertex_count: 0,
-                center: [0.0; 3],
-                children: objects,
-            })
+            Some(group(objects))
         }
     }
+}
+
+/// `m` as a position, rotation and scale, when those rebuild it: a node's
+/// transform folded into its only part's.
+fn folded(m: transform::Mat4) -> Option<ImportedTransform> {
+    let (position, rotation, scale) = transform::decompose(m);
+    let rebuilt = transform::trs_matrix(position, rotation, scale);
+    let size = m.iter().flatten().fold(1.0f32, |size, value| size.max(value.abs()));
+    let exact = m.iter().flatten().zip(rebuilt.iter().flatten()).all(|(a, b)| (a - b).abs() <= 1e-5 * size);
+    exact.then_some(ImportedTransform { position, rotation, scale })
 }
 
 pub(crate) mod model_file;

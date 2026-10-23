@@ -14,15 +14,7 @@ fn identity_instances(id: u32) -> String {
         r#"{{"id":{id},"typeId":"node.arrange_copies","nodeId":"identity","params":{{
             "max_capacity":{{"type":"Int","value":1}},
             "active_count":{{"type":"Int","value":1}},
-            "layout":{{"type":"Enum","value":1}},
-            "seed":{{"type":"Int","value":0}},
-            "extent_x":{{"type":"Float","value":0.0}},
-            "extent_y":{{"type":"Float","value":0.0}},
-            "extent_z":{{"type":"Float","value":0.0}},
-            "base_scale":{{"type":"Float","value":1.0}},
-            "rot_x":{{"type":"Float","value":0.0}},
-            "rot_y":{{"type":"Float","value":0.0}},
-            "rot_z":{{"type":"Float","value":0.0}}}}}}"#
+            "base_scale":{{"type":"Float","value":1.0}}}}}}"#
     )
 }
 

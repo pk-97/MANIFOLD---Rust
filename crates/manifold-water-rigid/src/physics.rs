@@ -31,6 +31,8 @@ mod impulses;
 mod parity_tests;
 mod targeted_fields;
 #[cfg(test)]
+mod scan_collider_tests;
+#[cfg(test)]
 mod test_scene;
 #[cfg(test)]
 mod tests;
@@ -42,7 +44,8 @@ pub use admission::{BodyRefusal, Member, RefusalReason};
 use body_history::PackedRows;
 use manifold_core::scene_schema::SPEED_RANGE;
 use copy_group::CopyGroup;
-use copy_layout::{requested_count, Arrangement};
+use copy_layout::{rest_pose, Arrangement};
+pub(crate) use copy_layout::{arrangement_of, requested_count, RestBox};
 pub use impulses::ResolvedRigidImpulse;
 use targeted_fields::{TargetedFieldHistory, TargetedFields};
 pub use worker::{RigidSceneInputs, RigidSceneObservation};
@@ -195,8 +198,10 @@ pub struct RigidBody {
 
 /// A copies body's spawner. Layout is 0 Grid, 1 Scatter, 2 Line, 3 Ring, 4
 /// Spiral, 5 Random; spacing is a multiple of the copy's box width along the
-/// layout axis; turn is each copy's own rotation inside the layout. A change
-/// lays the copies out again at the next tick start (`physics/copy_layout.rs`).
+/// layout axis; turn is each copy's own rotation inside the layout. A layout
+/// change lays the copies out again at the next tick start; a Count change
+/// adds or parks tail copies there and the rest keep moving
+/// (`physics/copy_layout.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopySpawn {
@@ -288,18 +293,9 @@ impl RigidBody {
 /// Shared scene Rz * Ry * Rx convention, with quaternion stored xyzw.
 #[inline]
 pub fn pose_from_transform(transform: Transform) -> manifold_physics::BodyPose {
-    let [x, y, z] = transform.rot_euler;
-    let (sx, cx) = (x * 0.5).sin_cos();
-    let (sy, cy) = (y * 0.5).sin_cos();
-    let (sz, cz) = (z * 0.5).sin_cos();
     manifold_physics::BodyPose {
         position: transform.pos,
-        rotation: [
-            sx * cy * cz - cx * sy * sz,
-            cx * sy * cz + sx * cy * sz,
-            cx * cy * sz - sx * sy * cz,
-            cx * cy * cz + sx * sy * sz,
-        ],
+        rotation: manifold_core::copy_layout::euler_quat(transform.rot_euler),
     }
 }
 
@@ -390,6 +386,17 @@ fn reshaped(old: &RigidBody, new: &RigidBody) -> bool {
     old.transform.scale != new.transform.scale || !same_collider(old, new)
 }
 
+/// `target` as a group resting in `installed` compares it: an Animated
+/// group's copies follow its transform as it moves, so its own place never
+/// counts as a layout edit.
+fn placed_as(installed: &Arrangement, target: Arrangement, prototype: &RigidBody) -> Arrangement {
+    if prototype.kind == 2 {
+        Arrangement { origin: installed.origin, rotation: installed.rotation, ..target }
+    } else {
+        target
+    }
+}
+
 /// Install `body` with its card mass through the collision-shape gate;
 /// returns the handle and the installed volume, which a fragment's density
 /// derives from. An in-place reshape measures the volume again.
@@ -397,7 +404,14 @@ fn add_body_geometry(
     world: &mut PhysicsWorld,
     body: &RigidBody,
 ) -> Result<(BodyHandle, f32), String> {
-    add_copy(world, body, pose_from_transform(body.transform))
+    let solid = body.collider.as_deref().ok_or("the body has no collision shape")?;
+    let scale = body.transform.scale;
+    let handle = solid.install(world, scale, body.config()).map_err(|error| error.to_string())?;
+    let volume = match solid {
+        Solid::Hulls(_) => installed_volume(world, handle)?,
+        Solid::Mesh(mesh) => mesh_volume(mesh, scale),
+    };
+    Ok((handle, volume))
 }
 
 /// Swap installed body `handle`'s shape for `solid` at `scale` in place,
@@ -414,22 +428,6 @@ fn reshape(
         Solid::Hulls(_) => installed_volume(world, handle),
         Solid::Mesh(mesh) => Ok(mesh_volume(mesh, scale)),
     }
-}
-
-/// [`add_body_geometry`] for a copy of `prototype` resting at `pose`.
-fn add_copy(
-    world: &mut PhysicsWorld,
-    prototype: &RigidBody,
-    pose: manifold_physics::BodyPose,
-) -> Result<(BodyHandle, f32), String> {
-    let solid = prototype.collider.as_deref().ok_or("the body has no collision shape")?;
-    let scale = prototype.transform.scale;
-    let handle = solid.install(world, scale, prototype.config_at(pose)).map_err(|error| error.to_string())?;
-    let volume = match solid {
-        Solid::Hulls(_) => installed_volume(world, handle)?,
-        Solid::Mesh(mesh) => mesh_volume(mesh, scale),
-    };
-    Ok((handle, volume))
 }
 
 /// A static mesh's enclosed volume at `scale`, m³, or its bounding box's
@@ -884,8 +882,26 @@ impl RigidSimulation {
             accepted_interval,
             coupling,
         );
+        if result.is_ok() {
+            self.show_refused(scene, &bodies, &groups);
+        }
         self.admission.restore_admitted(bodies, groups);
         result
+    }
+
+    /// What the gate never let in still draws: a body where it stands, a
+    /// copy group at rest in its layout, as with physics off.
+    fn show_refused(&mut self, scene: SceneRef<'_>, bodies: &[Option<RigidBody>], groups: &[Option<RigidBody>]) {
+        for ((authored, admitted), pose) in scene.bodies.iter().zip(bodies).zip(self.poses.iter_mut()) {
+            if let (Some(authored), None) = (authored, admitted) {
+                *pose = authored.transform;
+            }
+        }
+        for ((authored, admitted), state) in scene.groups.iter().zip(groups).zip(self.groups.iter_mut()) {
+            if let (Some(authored), None) = (authored, admitted) {
+                state.show_refused(authored);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1367,7 +1383,8 @@ impl RigidSimulation {
         let SceneRef { bodies, groups, gravity, acceleration_field, .. } = scene;
         let mut made = std::mem::take(&mut self.pool_made);
         let not_made = copy_pool(groups.iter().map(Option::as_ref), &mut made);
-        let mut world = PhysicsWorld::new(gravity).map_err(|e| e.to_string())?;
+        let mut world = PhysicsWorld::with_workers(gravity, manifold_physics::default_worker_count())
+            .map_err(|e| e.to_string())?;
         self.admission.clear_lost();
         self.resize_for(bodies.len(), groups.len());
         self.handles.fill(None);
@@ -1387,14 +1404,13 @@ impl RigidSimulation {
         for (index, (prototype, state)) in groups.iter().zip(self.groups.iter_mut()).enumerate() {
             state.reset_for(prototype.as_ref());
             if let Some(prototype) = prototype.as_ref().filter(|body| body.enabled) {
-                let arrangement = Arrangement::of(prototype, made[index]);
+                let arrangement = arrangement_of(prototype, made[index]);
                 state.arrangement = Some(arrangement);
                 state.handles.resize(arrangement.count, None);
                 state.bullet_enabled.resize(arrangement.count, false);
                 for copy_index in 0..arrangement.count {
-                    let (installed, volume) = add_copy(&mut world, prototype, state.rest(copy_index))?;
-                    state.handles[copy_index] = Some(installed);
-                    state.volume = volume;
+                    let pose = state.rest(copy_index);
+                    state.handles[copy_index] = Some(state.install(&mut world, prototype, pose)?);
                 }
                 state.active = arrangement.count;
                 state.shown = arrangement.count;
@@ -1402,7 +1418,7 @@ impl RigidSimulation {
                     state.poses.resize(arrangement.count, Transform::default());
                 }
             } else if let Some(prototype) = prototype.as_ref() {
-                state.show_rest(&Arrangement::of(prototype, requested_count(prototype.spawn)), prototype.transform.scale);
+                state.show_rest(&arrangement_of(prototype, requested_count(prototype.spawn)), prototype.transform.scale);
             }
             state.description.clone_from(prototype);
         }
@@ -1522,12 +1538,12 @@ impl RigidSimulation {
             let prototype = prototype.clone();
             self.groups[group].reset_for(Some(&prototype));
             if prototype.enabled {
-                result = self.lay_out(group, &prototype, Arrangement::of(&prototype, made[group]));
+                result = self.lay_out(group, &prototype, arrangement_of(&prototype, made[group]));
                 if result.is_err() {
                     break;
                 }
             } else {
-                let rest = Arrangement::of(&prototype, requested_count(prototype.spawn));
+                let rest = arrangement_of(&prototype, requested_count(prototype.spawn));
                 self.groups[group].show_rest(&rest, prototype.transform.scale);
             }
             self.groups[group].description = Some(prototype);
@@ -1672,21 +1688,20 @@ impl RigidSimulation {
             if old.is_some_and(|old| same_body(old, prototype)) {
                 continue;
             }
-            // Every copy shares the prototype's shape: each one installed,
-            // active or parked, takes the new one in place, keeping its
-            // pose and velocity. Later layouts space by the new width.
-            if let (Some(old), Some(geometry)) = (old, prototype.collider.as_deref())
-                && reshaped(old, prototype)
-            {
+            let animated = prototype.kind == 2;
+            let pose_changed = animated && old.is_some_and(|old| moved(old, prototype));
+            let kind_became_dynamic = prototype.kind == 1 && old.is_some_and(|old| old.kind != 1);
+            // Every copy shares the prototype's shape, cooked once: each one
+            // installed, active or parked, takes the new one in place, keeping
+            // its pose and velocity. Later layouts space by the new width.
+            if old.is_some_and(|old| reshaped(old, prototype)) && prototype.collider.is_some() {
                 for index in 0..state.handles.len() {
                     let Some(handle) = state.handles[index] else { continue };
                     let config = state.config(prototype, state.rest(index));
-                    state.volume = reshape(world, handle, geometry, prototype.transform.scale, config)?;
+                    state.reshape(world, handle, prototype, config)?;
                 }
                 state.width = copy_layout::copy_width(prototype);
             }
-            let animated = prototype.kind == 2;
-            let pose_changed = animated && old.is_some_and(|old| moved(old, prototype));
             let animated_edit = stationary_edit && pose_changed;
             if animated_edit && due_steps > 0 {
                 state.deferred_edit = Some(DeferredAnimatedEdit {
@@ -1702,7 +1717,6 @@ impl RigidSimulation {
                     ..arrangement
                 });
             }
-            let kind_became_dynamic = prototype.kind == 1 && old.is_some_and(|old| old.kind != 1);
             for index in 0..state.active {
                 let Some(handle) = state.handles[index] else {
                     continue;
@@ -1721,12 +1735,14 @@ impl RigidSimulation {
 
     /// Lay out again, at the tick starting at `tick_start`, every copy group
     /// whose authored arrangement in effect then differs from the one its
-    /// bodies rest in: the copies move to their new rest poses at zero
-    /// velocity, tail bodies are enabled or disabled for a new Count, and
-    /// bodies are installed only past a group's high-water mark. The
-    /// arrangement in effect is the latest authored sample at or before the
-    /// tick start, so the change lands on the same tick at any frame rate,
-    /// live and in export. Other groups and bodies keep moving.
+    /// bodies rest in. A layout or group edit moves every copy to its new
+    /// rest pose at zero velocity. A Count edit alone leaves the copies that
+    /// stay moving and puts only the new tail at rest in its places; tail
+    /// bodies past it park disabled, and bodies are installed only past a
+    /// group's high-water mark. The arrangement in effect is the latest
+    /// authored sample at or before the tick start, so the change lands on
+    /// the same tick at any frame rate, live and in export. Other groups and
+    /// bodies keep moving.
     fn relayout_due(&mut self, tick_start: f64, body_count: usize) -> Result<(), String> {
         if self.groups.iter().all(|state| state.arrangement.is_none()) {
             return Ok(());
@@ -1755,13 +1771,17 @@ impl RigidSimulation {
             let Some(prototype) = self.authored_cell(sample, body_count + group).filter(|body| body.enabled) else {
                 continue;
             };
-            let target = Arrangement::of(prototype, made);
-            let same = if prototype.kind == 2 { installed.same_shape(&target) } else { installed == target };
-            if same {
+            let target = arrangement_of(prototype, made);
+            let placed = placed_as(&installed, target, prototype);
+            if installed == placed {
                 continue;
             }
             let prototype = prototype.clone();
-            result = self.lay_out(group, &prototype, target);
+            result = if installed.same_places(&placed) {
+                self.resize(group, &prototype, made)
+            } else {
+                self.lay_out(group, &prototype, target)
+            };
             if result.is_err() {
                 break;
             }
@@ -1782,6 +1802,22 @@ impl RigidSimulation {
 
     /// Put group `group`'s copies at rest in `target`.
     fn lay_out(&mut self, group: usize, prototype: &RigidBody, target: Arrangement) -> Result<(), String> {
+        self.groups[group].deferred_edit = None;
+        self.settle(group, prototype, target, 0)
+    }
+
+    /// Give group `group` `count` copies in the places it rests in: the
+    /// copies that stay keep their motion.
+    fn resize(&mut self, group: usize, prototype: &RigidBody, count: usize) -> Result<(), String> {
+        let Some(installed) = self.groups[group].arrangement else { return Ok(()) };
+        let keep = self.groups[group].active.min(count);
+        self.settle(group, prototype, Arrangement { count, ..installed }, keep)
+    }
+
+    /// Group `group` in `target`, its copies from `from` on at rest in their
+    /// places; those before `from` keep moving. Bodies past `target.count`
+    /// park disabled, and bodies install only past the high-water mark.
+    fn settle(&mut self, group: usize, prototype: &RigidBody, target: Arrangement, from: usize) -> Result<(), String> {
         let world = self.world.as_mut().expect("world constructed above");
         let state = &mut self.groups[group];
         let installed = state.handles.len();
@@ -1793,8 +1829,7 @@ impl RigidSimulation {
             }
         }
         state.arrangement = Some(target);
-        state.deferred_edit = None;
-        for index in 0..target.count {
+        for index in from..target.count {
             let pose = state.rest(index);
             match state.handles[index] {
                 Some(handle) => {
@@ -1811,9 +1846,7 @@ impl RigidSimulation {
                     }
                 }
                 None => {
-                    let (handle, volume) = add_copy(world, prototype, pose)?;
-                    state.handles[index] = Some(handle);
-                    state.volume = volume;
+                    state.handles[index] = Some(state.install(world, prototype, pose)?);
                 }
             }
         }
@@ -1897,20 +1930,21 @@ impl RigidSimulation {
                 // Physics off: the copies are drawn at rest and have no bodies.
                 if state.description.as_ref().is_none_or(|old| !same_authored_body(old, prototype)) {
                     let count = requested_count(prototype.spawn);
-                    state.show_rest(&Arrangement::of(prototype, count), scale);
+                    state.show_rest(&arrangement_of(prototype, count), scale);
                 }
                 state.description.clone_from(authored_body);
                 continue;
             };
-            let authored = Arrangement::of(prototype, made[group]);
-            let pending = if prototype.kind == 2 { !installed.same_shape(&authored) } else { installed != authored };
-            if pending {
+            let authored = arrangement_of(prototype, made[group]);
+            let placed = placed_as(&installed, authored, prototype);
+            // A Count edit alone moves no copy: until the next tick start
+            // adds or parks the tail, the new tail shows at rest.
+            let resized = installed != placed && installed.same_places(&placed);
+            if (installed != placed && !resized) || state.deferred_edit.is_some() {
                 // Shown at rest until the next tick start lays the bodies out.
                 state.show_rest(&authored, scale);
-            } else if state.deferred_edit.is_some() {
-                state.show_rest(&authored, scale);
             } else {
-                for index in 0..state.active {
+                for index in 0..state.active.min(placed.count) {
                     let Some(handle) = state.handles[index] else {
                         continue;
                     };
@@ -1928,7 +1962,10 @@ impl RigidSimulation {
                         ..Default::default()
                     };
                 }
-                state.shown = state.active;
+                if placed.count > state.active {
+                    state.show_rest_from(&placed, scale, state.active);
+                }
+                state.shown = placed.count;
             }
             state.description.clone_from(authored_body);
         }
@@ -2213,7 +2250,7 @@ impl RigidSimulation {
                     continue;
                 };
                 world
-                    .update_body(handle, prototype.config_at(placed.rest(state.width, index)), true)
+                    .update_body(handle, prototype.config_at(rest_pose(&placed, state.width, index)), true)
                     .map_err(|e| e.to_string())?;
             }
             state.arrangement = Some(placed);
@@ -2501,7 +2538,7 @@ impl RigidSimulation {
                     continue;
                 };
                 world
-                    .set_animated_target(handle, prototype.config_at(placed.rest(state.width, index)), dt)
+                    .set_animated_target(handle, prototype.config_at(rest_pose(&placed, state.width, index)), dt)
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -2786,6 +2823,7 @@ fn body_min_extent(body: &RigidBody) -> f32 {
             .transform
             .scale
             .into_iter()
+            .map(f32::abs)
             .fold(f32::INFINITY, f32::min);
     };
     let mut minimum = [f32::INFINITY; 3];
@@ -2808,13 +2846,14 @@ fn body_min_extent(body: &RigidBody) -> f32 {
         body.transform
             .scale
             .into_iter()
+            .map(f32::abs)
             .fold(f32::INFINITY, f32::min)
     }
 }
 
 fn body_collision_radius(body: &RigidBody) -> f32 {
     let Some(geometry) = body.collider.as_ref() else {
-        return body.transform.scale.into_iter().fold(0.0, f32::max);
+        return body.transform.scale.into_iter().map(f32::abs).fold(0.0, f32::max);
     };
     let mut radius = 0.0f32;
     geometry.for_each_point(|point| {
@@ -2824,7 +2863,7 @@ fn body_collision_radius(body: &RigidBody) -> f32 {
     if radius > 0.0 && radius.is_finite() {
         radius
     } else {
-        body.transform.scale.into_iter().fold(0.0, f32::max)
+        body.transform.scale.into_iter().map(f32::abs).fold(0.0, f32::max)
     }
 }
 

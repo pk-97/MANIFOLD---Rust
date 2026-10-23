@@ -71,12 +71,13 @@ fn builtin_rest(b: &mut Builder<'_>, mesh_type: &str, solid: Option<u32>) -> Opt
     lo.iter().chain(hi.iter()).all(|value| value.is_finite()).then_some(Rest {
         lo,
         hi,
-        offset: [0.0; 3],
+        placed: None,
+        own_space: false,
         vertices: u32::try_from(vertices.len()).unwrap_or(u32::MAX),
     })
 }
 
-/// The vertex count a deformed built-in shape is split up to: enough for a
+/// The vertex count a smoothly bent built-in shape is split up to: enough for a
 /// cube face to curve smoothly under a bend or a wave. A quality target, not
 /// a cap: the split stops at the first level past it.
 const DETAIL_VERTICES: u32 = 6000;
@@ -86,13 +87,13 @@ const DETAIL_VERTICES: u32 = 6000;
 const MAX_DETAIL_LEVEL: u32 = 5;
 
 /// How many times to split a built-in shape's triangles: none unless a
-/// deforming Modifier that is on reaches it, then the fewest splits that give
+/// smoothly bending Modifier that is on reaches it, then the fewest splits that give
 /// it [`DETAIL_VERTICES`]. Each split multiplies the count by four.
 fn detail_level(b: &Builder<'_>, item: &Item, rest: Option<&Rest>) -> u32 {
     let Some(rest) = rest else {
         return 0;
     };
-    if !b.deformed.contains(&item.id) {
+    if !b.smoothed.contains(&item.id) {
         return 0;
     }
     let mut level = 0;
@@ -120,11 +121,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         && can_copy(&fields.shape)
         && frame.and_then(|frame| frame.copies).is_none()
         && group_copies.is_some_and(|nest| b.nests.contains_key(&nest));
-    let mut center = None;
     let rest;
     let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
         let part = super::mesh::emit_part(b, item, file, node_path, *vertex_count, *primitives);
-        center = part.center;
         rest = part.rest;
         (part.source, part.vertices)
     } else if ocean {
@@ -156,11 +155,6 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         }
     };
     let transform = b.add(owner, "transform", "node.transform_3d");
-    if let Some(center) = center {
-        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
-            b.set(transform, param, SerializedParamValue::Float { value: center[axis] });
-        }
-    }
     let object = b.add(owner, "object", "node.scene_object");
     if ocean {
         // A sea does not shadow itself; the Shadows row turns it on.

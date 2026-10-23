@@ -27,6 +27,8 @@ pub enum FieldControlVm {
     Pick { current: String, options: Vec<FieldOptionVm> },
     /// A file picker; `path` is the file now, empty for none.
     File { path: String, extensions: Vec<String> },
+    /// On or off, drawn as a switch; a click sends `toggle`.
+    Switch { on: bool, toggle: FieldPick },
 }
 
 /// One structural-field row of an item's card. The panel draws it as a row of
@@ -40,6 +42,8 @@ pub struct FieldRowVm {
     /// Why the row cannot be used right now: drawn disabled, the reason on
     /// hover.
     pub disabled: Option<String>,
+    /// The card header carries it instead of a row (a Modifier's Type and On).
+    pub header: bool,
 }
 
 /// One Add menu entry: what a click on it adds.
@@ -53,7 +57,8 @@ pub struct AddEntryVm {
     pub top_level: bool,
     /// The kinds it can sit inside.
     pub holders: Vec<ItemKind>,
-    /// Why it cannot be added right now: drawn disabled with the reason.
+    /// Why it cannot be added right now, for the current selection: drawn
+    /// disabled with the reason.
     pub disabled: Option<String>,
 }
 
@@ -103,9 +108,20 @@ pub struct SceneItemVm {
     pub environment: bool,
     /// An Environment light in HDRI mode: the file "Aim Sun at HDRI" aims at.
     pub aim_sun_file: Option<String>,
+    /// The World of a layer that stopped drawing after runaway GPU frames:
+    /// its header offers Draw Again.
+    pub draw_again: bool,
+    /// A Scene Loop card in a scene with no Loop camera: it offers Add Loop
+    /// Camera.
+    pub add_loop_camera: bool,
     /// Why a manifest row cannot be used right now, by param id: drawn
     /// dimmed with the reason on hover.
     pub row_reasons: Vec<(String, String)>,
+    /// Its physics is Body: the tree marks it when it sits inside a Group.
+    pub body: bool,
+    /// A Swarm drawn as a scene item: that item and its name, linked from
+    /// the card as its look.
+    pub look: Option<(ItemId, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

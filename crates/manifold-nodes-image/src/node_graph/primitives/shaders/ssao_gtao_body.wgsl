@@ -1,101 +1,79 @@
-// node.ssao_gtao — fusable body (freeze section 12), Pointwise + GatherTexel.
+// node.ssao_gtao — fusable body, Pointwise + GatherTexel.
 //
-// GTAO (docs/CINEMATIC_POST_DESIGN.md D9(a)) — REPLACES node.ssao_from_depth
-// outright (D9(b): the old primitive is deleted, not paralleled). Exact
-// committed algorithm, no substitution:
-//   1. Reconstruct view-space center position P from raw depth (same
-//      linearize_depth + inverse-perspective xy as D3/ssao_from_depth) and
-//      the view-space normal via the SAME ±1-texel finite-difference method
-//      as D3 (no normal G-buffer in v1).
-//   2. V = normalize(-P) (view vector, surface point toward the eye).
-//   3. `radius_px` = the world `radius` projected to a screen-space pixel
-//      length AT the center pixel's depth — transcribed from
-//      ssao_from_depth's existing `sample_ndc_y = sample_pos.y / (tan_half_
-//      fov * view_z)` relation, inverted for a LENGTH rather than a
-//      position: ndc_delta = radius / (tan_half_fov * view_z); px_delta =
-//      ndc_delta * dims.y * 0.5 (NDC's y axis spans dims.y pixels over its
-//      [-1,1] range).
-//   4. 2 slices per pixel, slice angles phi_i = hash_angle(px)*0.5 +
-//      i*(pi/2), i in {0,1} (D2's committed per-pixel rotation hash, halved
-//      into [0,pi) so two slices spread the semicircle).
-//   5. Per slice, per side (+/- the slice's 2D screen direction), 4 steps at
-//      screen-space radii r_j = radius_px * (j+1)/4, j in 0..4. Each step
-//      samples an integer texel offset from center, reconstructs its
-//      view-space position S_j (same reconstruction as P). Range check:
-//      reject a sample whose |S_j - P| exceeds the world `radius` (the D3
-//      halo guard) — rejected samples don't participate in the per-side
-//      max. Horizon cosine per side = max(-1.0, max over in-range samples of
-//      dot(normalize(S_j - P), V)) — the -1.0 floor is the "no occluder
-//      found on this side" default, which (after the h1/h2 clamp below)
-//      integrates to the full unoccluded hemisphere contribution on that
-//      side, not zero.
-//   6. Signed horizon angles: h1 = -acos(hcos_minus), h2 = +acos(hcos_plus).
-//      The surface normal projected into the slice's plane (spanned by V
-//      and the slice's screen direction embedded as a VIEW-SPACE vector
-//      dir3=(dir2.x, -dir2.y, 0) — Y NEGATED to match the Y-flip
-//      `gtao_view_pos`/`gtao_height_pos` apply when reconstructing a
-//      sample's position from its pixel offset (BUG-y5w7 root cause: dir3
-//      must live in the same frame the actual samples do, or `n`/`axis`
-//      are measured relative to a direction no real sample walks along)
-//      gives length ||N_p|| and a signed angle `n` from V (sign by which
-//      side of the plane the slice tangent falls on). Clamp: h1 = n +
-//      max(h1 - n, -pi/2); h2 = n + min(h2 - n, pi/2).
-//   7. Per-side arc a(h) = 0.25*(-cos(2h-n) + cos(n) + 2h*sin(n)); slice
-//      contribution = ||N_p|| * (a(h1) + a(h2)).
-//   8. Pixel visibility = (sum of slice contributions) / (sum of ||N_p|| *
-//      full_ref(n)), where full_ref(n) = cos(n) + n*sin(n) is a(h1)+a(h2)
-//      evaluated at the fully-open horizon (h1=n-pi/2, h2=n+pi/2) — the
-//      analytically-known baseline a genuinely unoccluded slice must
-//      produce. Grazing-angle fix (BUG-y5w7, see gtao_full_ref below):
-//      normalizing by slice count alone (the original D9(a) text) is only
-//      exact when the per-pixel view vector V=normalize(-P) is
-//      fronto-parallel to the normal; full_ref(n) is provably not constant
-//      in n, so tilted V (any off-center pixel under perspective) darkened
-//      genuinely flat, unoccluded surfaces. Dividing by the baseline
-//      instead is exact by construction whenever unoccluded (numerator and
-//      denominator are the same expression), at any view angle.
-//   9. out.r = clamp(1 - intensity*(1 - visibility), 0, 1), broadcast RGB,
-//      alpha 1 — same output contract as D3 (ssao_from_depth), so the
-//      preset's mix wiring and cards are untouched by the swap.
+// Ground Truth Ambient Occlusion (Jimenez et al. 2016), sampled the way
+// Intel's XeGTAO does: per pixel, `slices` screen directions; along each,
+// `steps` depth taps per side; each side keeps its highest horizon; the
+// visible arc between the two horizons, projected on the normal, is the
+// visibility. `ssao_gtao.rs`'s `cpu_reference` is the plain-Rust twin of
+// this file and the module doc there carries the derivation.
 //
-// Total taps: 2 slices * 2 sides * 4 steps = 16 depth taps + the same
-// +/-1-texel normal reconstruction as D3 (4 more) — same sample class as
-// D3's 16-tap SSAO, per Peter's "not hitting the performance harder" bar.
+// Three things keep the result free of fixed patterns:
+//   - Falloff: a tap's horizon fades to the open horizon over the outer
+//     GTAO_FALLOFF_RANGE of `radius` (XeGTAO's falloff), so occlusion
+//     ends smoothly instead of drawing an outline at the radius.
+//   - Step jitter: each pixel offsets its taps along the slice by its own
+//     fraction of a step, so equal tap distances never line up into bands
+//     parallel to an edge.
+//   - The slice angle and the step offset come from XeGTAO's spatio-temporal
+//     noise: a Hilbert-curve index over a 64x64 tile walked by the R2
+//     sequence. With `noise_per_frame` on, `noise_frame` (288 per run of
+//     the node) moves the pattern every frame for a temporal filter to
+//     average. Off, the pattern holds still.
 //
-// No temporal accumulation, no thickness heuristic (D9(a) rejects both —
-// deterministic single-frame budget only).
+// The Hilbert index, the R2 noise and the falloff are ported from XeGTAO
+// (Intel, MIT license; see THIRD_PARTY_NOTICES.md).
 //
-// `depth` is GatherTexel (integer textureLoad, manual ClampToEdge — no
-// sampler), same convention as ssao_from_depth_body.wgsl.
-//
-// `camera` reads fov_y/near/far entirely via the three DERIVED_UNIFORMS
-// below — never a GPU binding (P0/D7).
-//
-// PARAMS: [radius, intensity] — `bias` has no successor (D9(b): the range
-// check subsumes it). DERIVED_UNIFORMS: [fov_y, near, far].
-// Matches ssao_gtao.wgsl (the hand parity oracle) — kept independent (not
-// sharing source) so the gpu_tests parity check is a real cross-check.
-// Rounding uses an explicit round-half-away-from-zero helper rather than
-// WGSL's `round()` builtin (round-half-to-even/banker's rounding per the
-// WGSL spec) specifically so the CPU reference (plain Rust, which has no
-// matching builtin either) can implement the IDENTICAL formula and agree
-// bit-for-bit on tie cases instead of inheriting a language-level rounding
-// mismatch on top of the already-accepted trig-rounding tolerance class
-// (see ssao_from_depth.rs's `generated_ssao_matches_cpu_reference_on_
-// synthetic_ramp` doc comment for the precedent this avoids compounding).
+// `depth` is raw [0,1] reversed-Z depth, read texel-exact (integer
+// textureLoad, manual ClampToEdge). `camera` reaches the kernel only through
+// the derived fov_y/near/far uniforms. Rounding uses a half-away-from-zero
+// helper instead of WGSL's banker's `round()` so the CPU twin matches ties.
 
-// Slice/step counts arrive as PARAMS (quality knobs;
-// defaults 2/4 keep the original 16-tap D9(a) budget bit-identical).
 const GTAO_HALF_PI: f32 = 1.5707963267948966;
+const GTAO_TAU: f32 = 6.283185307179586;
+// XeGTAO's DEFAULT_FALLOFF_RANGE: the fraction of the radius over which a
+// tap's weight falls from 1 to 0.
+const GTAO_FALLOFF_RANGE: f32 = 0.615;
+// XeGTAO's pixel-too-close threshold: the first tap sits at least this
+// far out, where the finite-difference normal no longer misreads the
+// surface itself as an occluder.
+const GTAO_MIN_TAP_PX: f32 = 1.3;
+// XeGTAO's DEFAULT_RADIUS_MULTIPLIER: taps reach this far past `radius`, so
+// with the falloff, occlusion is about half faded at `radius` itself.
+const GTAO_RADIUS_MULTIPLIER: f32 = 1.457;
 
-// D2's committed per-pixel rotation hash (docs/CINEMATIC_POST_DESIGN.md D2) —
-// identical to ssao_from_depth_body.wgsl's ssao_hash_angle.
-fn gtao_hash_angle(px: vec2<f32>) -> f32 {
-    return fract(sin(dot(px, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.283185307;
+const GTAO_HILBERT_WIDTH: u32 = 64u;
+
+// XeGTAO's HilbertIndex: the pixel's position along a Hilbert curve that
+// fills a 64x64 tile, so neighbouring pixels take distant noise values.
+fn gtao_hilbert_index(x_in: u32, y_in: u32) -> u32 {
+    var x = x_in;
+    var y = y_in;
+    var index = 0u;
+    for (var level = GTAO_HILBERT_WIDTH / 2u; level > 0u; level = level / 2u) {
+        let rx = select(0u, 1u, (x & level) > 0u);
+        let ry = select(0u, 1u, (y & level) > 0u);
+        index = index + level * level * ((3u * rx) ^ ry);
+        if ry == 0u {
+            if rx == 1u {
+                x = GTAO_HILBERT_WIDTH - 1u - x;
+                y = GTAO_HILBERT_WIDTH - 1u - y;
+            }
+            let t = x;
+            x = y;
+            y = t;
+        }
+    }
+    return index;
 }
 
-// Round half away from zero, expressed without WGSL's `round()` builtin
-// (see file header) so the CPU-Rust twin agrees on every tie exactly.
+// XeGTAO's SpatioTemporalNoise: (slice, step) in [0,1) from the R2
+// sequence at the pixel's Hilbert index plus the frame's offset.
+fn gtao_noise(c: vec2<i32>, frame_offset: u32) -> vec2<f32> {
+    let cc = vec2<u32>(c) % vec2<u32>(GTAO_HILBERT_WIDTH, GTAO_HILBERT_WIDTH);
+    let index = f32(gtao_hilbert_index(cc.x, cc.y) + frame_offset);
+    return fract(vec2<f32>(0.5, 0.5) + index * vec2<f32>(0.7548776662466927, 0.5698402909980532));
+}
+
 fn gtao_round(x: f32) -> f32 {
     if x >= 0.0 {
         return floor(x + 0.5);
@@ -103,9 +81,6 @@ fn gtao_round(x: f32) -> f32 {
     return -floor(-x + 0.5);
 }
 
-// Reconstruct a view-space position at integer texel `c` (clamped to the
-// texture bounds) from `depth`'s raw [0,1] value — identical formula to
-// ssao_from_depth_body.wgsl's `ssao_view_pos`.
 fn gtao_view_pos(
     depth: texture_2d<f32>,
     c: vec2<i32>,
@@ -128,25 +103,20 @@ fn gtao_view_pos(
     return vec3<f32>(view_x, view_y, view_z);
 }
 
-// Committed a(h) integral (D9(a) step 7).
+// The arc integral a(h) for one side of a slice.
 fn gtao_integrate_arc(h: f32, n: f32) -> f32 {
     return 0.25 * (-cos(2.0 * h - n) + cos(n) + 2.0 * h * sin(n));
 }
 
-// `gtao_integrate_arc` evaluated at the fully-open horizon (h1=n-pi/2,
-// h2=n+pi/2) — the closed-form arc a genuinely unoccluded slice must
-// produce. NOT constant across `n` (grazing-angle fix, BUG-y5w7): see
-// `ssao_gtao.rs`'s `cpu_reference::full_ref` doc comment for the full
-// derivation. `body()` normalizes the accumulated visibility by the sum of
-// this per-slice baseline instead of by slice count.
+// a(h1) + a(h2) with both horizons fully open: what an unoccluded slice
+// gives. It is not constant in `n`, so visibility divides by it instead of
+// by the slice count, or flat ground darkens at grazing angles (BUG-y5w7).
 fn gtao_full_ref(n: f32) -> f32 {
     return cos(n) + n * sin(n);
 }
 
 // Heightfield-mode position: orthographic frame, `depth` read as a raw
-// height map. x/y in uv units (x aspect-corrected), z = (1 - raw) * relief
-// so brighter (taller) content sits nearer the ortho camera at z = -inf
-// side. All fp32, no linearization — the anti-banding mode.
+// height map, x/y in uv units (x aspect-corrected), z = (1 - raw) * relief.
 fn gtao_height_pos(
     depth: texture_2d<f32>,
     c: vec2<i32>,
@@ -160,7 +130,6 @@ fn gtao_height_pos(
     return vec3<f32>(uv.x * aspect, 1.0 - uv.y, (1.0 - raw) * relief);
 }
 
-// Mode dispatch — `hf` >= 0.5 selects the heightfield frame.
 fn gtao_pos(
     depth: texture_2d<f32>,
     c: vec2<i32>,
@@ -178,6 +147,17 @@ fn gtao_pos(
     return gtao_view_pos(depth, c, dims_i, tan_half_fov, aspect, near, far);
 }
 
+// One side's horizon cosine after a tap: the tap's cosine faded toward the
+// open horizon `low_cos` by the falloff weight, then the running maximum.
+fn gtao_horizon(hcos: f32, d: vec3<f32>, view_vec: vec3<f32>, radius: f32, low_cos: f32) -> f32 {
+    let len = length(d);
+    if len <= 1e-5 {
+        return hcos;
+    }
+    let weight = clamp((radius - len) / (GTAO_FALLOFF_RANGE * radius), 0.0, 1.0);
+    return max(hcos, mix(low_cos, dot(d / len, view_vec), weight));
+}
+
 fn body(
     depth: texture_2d<f32>,
     uv: vec2<f32>,
@@ -188,10 +168,13 @@ fn body(
     steps: f32,
     projection: u32,
     relief: f32,
+    noise_per_frame: u32,
     fov_y: f32,
     near: f32,
     far: f32,
+    noise_frame: u32,
 ) -> vec4<f32> {
+    let reach = radius * GTAO_RADIUS_MULTIPLIER;
     let n_slices = max(1u, u32(gtao_round(slices)));
     let n_steps = max(1u, u32(gtao_round(steps)));
     let hf = select(0.0, 1.0, projection == 1u);
@@ -202,59 +185,51 @@ fn body(
 
     let p_c = gtao_pos(depth, c, dims_i, tan_half_fov, aspect, near, far, hf, relief);
 
-    // Normal reconstruction — identical to D3 (ssao_from_depth).
-    let p_xp = gtao_pos(depth, c + vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
-    let p_xm = gtao_pos(depth, c - vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
-    let p_yp = gtao_pos(depth, c + vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
-    let p_ym = gtao_pos(depth, c - vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
-    let ddx = p_xp - p_xm;
-    let ddy = p_yp - p_ym;
-    var normal = cross(ddx, ddy);
-    let normal_len = length(normal);
-    if normal_len > 1e-8 {
-        normal = normal / normal_len;
-    } else {
-        normal = vec3<f32>(0.0, 0.0, -1.0);
+    // Edge-aware normal (view_normal_common.wgsl), so pixels beside a
+    // silhouette keep their own surface's normal. A height field has no view
+    // depth to weigh edges by, so all four corners count.
+    let p_l = gtao_pos(depth, c - vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_r = gtao_pos(depth, c + vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_t = gtao_pos(depth, c - vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_b = gtao_pos(depth, c + vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    var edges = vec4<f32>(1.0);
+    if hf < 0.5 {
+        edges = view_normal_edges(p_c.z, p_l.z, p_r.z, p_t.z, p_b.z);
     }
+    let normal = view_normal(edges, p_c, p_l, p_r, p_t, p_b);
 
-    // Heightfield mode: fixed ortho view direction + uv-unit radius; the
-    // perspective projection of `radius` to pixels doesn't apply.
+    // Heightfield mode: fixed ortho view direction and a uv-unit radius.
     var view_vec = vec3<f32>(0.0, 0.0, -1.0);
-    var radius_px = radius * dims.y;
+    var radius_px = reach * dims.y;
     if hf < 0.5 {
         view_vec = normalize(-p_c);
         let center_vz = max(p_c.z, 1e-4);
-        radius_px = (radius / (tan_half_fov * center_vz)) * (dims.y * 0.5);
+        radius_px = (reach / (tan_half_fov * center_vz)) * (dims.y * 0.5);
     }
 
-    let rot = gtao_hash_angle(vec2<f32>(c));
+    let noise = gtao_noise(c, select(0u, noise_frame, noise_per_frame != 0u));
+    let rot = noise.x * GTAO_TAU;
+    let step_offset = noise.y;
 
     var visibility_sum = 0.0;
     var baseline_sum = 0.0;
     for (var s: u32 = 0u; s < n_slices; s = s + 1u) {
-        // Spread N slices across the semicircle (pi/N spacing) — reduces to
-        // the committed i*(pi/2) at the default N=2.
+        // Slices spread over the half circle, pi/N apart.
         let phi = rot * 0.5 + f32(s) * (2.0 * GTAO_HALF_PI / f32(n_slices));
         let dir2 = vec2<f32>(cos(phi), sin(phi));
-        // `dir3`: the VIEW-SPACE direction a +dir2 PIXEL-space step
-        // reconstructs to. `gtao_view_pos`/`gtao_height_pos` both flip Y
-        // (`ndc_y = 1.0 - v*2.0` / `1.0 - v`, screen-down to view/world-up)
-        // when reconstructing a sample position, so `dir3` must flip Y too
-        // to stay in the SAME frame `n_signed`/`axis` are measured in
-        // (BUG-y5w7 root cause — see ssao_gtao.rs's cpu_reference doc
-        // comment for the derivation and measured magnitude).
+        // The view-space direction of a +dir2 pixel step: Y flips because
+        // the position reconstruction flips screen-down to view-up (BUG-y5w7).
         let dir3 = vec3<f32>(dir2.x, -dir2.y, 0.0);
 
-        // Slice-plane projection of the normal (standard GTAO
-        // screen-direction-as-tangent construction, D9(a) step 6).
+        // The normal projected into the slice plane: its length and its
+        // signed angle from the view vector.
         let axis = cross(dir3, view_vec);
         let axis_len = length(axis);
-        var proj_normal = normal;
         var proj_len = 0.0;
         var n_signed = 0.0;
         if axis_len > 1e-6 {
             let axis_n = axis / axis_len;
-            proj_normal = normal - axis_n * dot(normal, axis_n);
+            let proj_normal = normal - axis_n * dot(normal, axis_n);
             proj_len = length(proj_normal);
             if proj_len > 1e-6 {
                 let cos_n = clamp(dot(proj_normal, view_vec) / proj_len, -1.0, 1.0);
@@ -264,28 +239,23 @@ fn body(
             }
         }
 
+        // The open horizon on each side, where a faded tap ends up.
+        let low_plus = cos(n_signed + GTAO_HALF_PI);
+        let low_minus = cos(n_signed - GTAO_HALF_PI);
         var hcos_minus = -1.0;
         var hcos_plus = -1.0;
         for (var j: u32 = 0u; j < n_steps; j = j + 1u) {
-            let r_j = radius_px * (f32(j) + 1.0) / f32(n_steps);
+            let r_j = radius_px * (f32(j) + step_offset) / f32(n_steps) + GTAO_MIN_TAP_PX;
 
             let off_plus = vec2<i32>(vec2<f32>(gtao_round(dir2.x * r_j), gtao_round(dir2.y * r_j)));
             let c_plus = clamp(c + off_plus, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
             let s_plus = gtao_pos(depth, c_plus, dims_i, tan_half_fov, aspect, near, far, hf, relief);
-            let d_plus = s_plus - p_c;
-            let len_plus = length(d_plus);
-            if len_plus > 1e-5 && len_plus <= radius {
-                hcos_plus = max(hcos_plus, dot(d_plus / len_plus, view_vec));
-            }
+            hcos_plus = gtao_horizon(hcos_plus, s_plus - p_c, view_vec, reach, low_plus);
 
             let off_minus = vec2<i32>(vec2<f32>(gtao_round(-dir2.x * r_j), gtao_round(-dir2.y * r_j)));
             let c_minus = clamp(c + off_minus, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
             let s_minus = gtao_pos(depth, c_minus, dims_i, tan_half_fov, aspect, near, far, hf, relief);
-            let d_minus = s_minus - p_c;
-            let len_minus = length(d_minus);
-            if len_minus > 1e-5 && len_minus <= radius {
-                hcos_minus = max(hcos_minus, dot(d_minus / len_minus, view_vec));
-            }
+            hcos_minus = gtao_horizon(hcos_minus, s_minus - p_c, view_vec, reach, low_minus);
         }
 
         var h1 = -acos(clamp(hcos_minus, -1.0, 1.0));

@@ -78,8 +78,8 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: Cow::Borrowed("skinned"),
-            label: "Skinned",
+            name: Cow::Borrowed("own_space"),
+            label: "Own Space",
             ty: ParamType::Bool,
             default: ParamValue::Bool(false),
             range: None,
@@ -87,7 +87,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source/node.gltf_skinned_mesh_source. max_capacity is the pre-allocation ceiling in delta ELEMENTS (target_count * vertex_count, not just vertex_count) — gltf_import.rs sets it from the parsed target_count * the object's vertex_count. `skinned` (BUG-208): set true when this object also carries a glTF skin — the deltas are then loaded in the SAME untransformed bind-pose space as node.gltf_skinned_mesh_source's vertices (no node world-transform applied), so node.morph_targets_blend's output can feed node.skin_mesh's `in` directly. Leave false for a rigid (non-skinned) morphed object, where deltas ARE world-transformed to match node.gltf_mesh_source's base vertices.",
+    composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source/node.gltf_skinned_mesh_source. max_capacity is the pre-allocation ceiling in delta ELEMENTS (target_count * vertex_count, not just vertex_count) — gltf_import.rs sets it from the parsed target_count * the object's vertex_count. `own_space`: true keeps the deltas in the node's own space, the space its base vertices are in when they are a skinned part's bind pose (node.gltf_skinned_mesh_source, so node.morph_targets_blend's output feeds node.skin_mesh's `in`) or an imported part drawn in its node's space (node.gltf_mesh_source with own_space on). False world-transforms them to match a base mesh placed where the file puts it.",
     examples: [],
     picker: { label: "glTF Morph Deltas", category: Atom },
     summary: "Loads an imported glTF asset's morph-target position/normal deltas, ready to be blended onto its base mesh by a Morph Targets Blend node.",
@@ -96,7 +96,7 @@ manifold_node_engine::primitive! {
     aliases: ["gltf morph deltas", "morph target source", "blend shape deltas"],
     boundary_reason: IoBridge,
     extra_fields: {
-        // (path, material_index, skinned, node_path) last parsed (or in flight).
+        // (path, material_index, own_space, node_path) last parsed (or in flight).
         last_key: (String, i32, bool, String) = (String::new(), i32::MIN, false, String::new()),
         cached_deltas: Vec<MeshVertex> = Vec::new(),
         staging: Option<manifold_gpu::GpuBuffer> = None,
@@ -123,16 +123,13 @@ impl Primitive for GltfMorphDeltasSource {
             Some(ParamValue::Float(n)) => n.round() as i32,
             _ => 0,
         };
-        // BUG-208: threaded straight to `load_gltf_morph_deltas` — see its
-        // `skinned` doc comment for why the deltas' coordinate space
-        // depends on it.
-        let skinned = matches!(ctx.params.get("skinned"), Some(ParamValue::Bool(true)));
+        let own_space = matches!(ctx.params.get("own_space"), Some(ParamValue::Bool(true)));
 
         let node_path = match ctx.params.get("node_path") {
             Some(ParamValue::String(s)) => s.as_str().to_owned(),
             _ => String::new(),
         };
-        let key = (path.clone(), material_index, skinned, node_path.clone());
+        let key = (path.clone(), material_index, own_space, node_path.clone());
         if key != self.last_key && self.pending_load.is_none() {
             self.last_key = key;
             self.cached_deltas.clear();
@@ -152,7 +149,7 @@ impl Primitive for GltfMorphDeltasSource {
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = load_gltf_morph_deltas(&path_buf, load_material_index, skinned, &node_path);
+                    let result = load_gltf_morph_deltas(&path_buf, load_material_index, own_space, &node_path);
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);

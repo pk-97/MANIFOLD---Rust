@@ -310,11 +310,16 @@ impl SceneDoc {
         Ok(())
     }
 
+    /// The cut number the next Camera to enter the scene gets.
+    pub fn upcoming_cut(&self) -> u32 {
+        self.next_cut.max(self.cut_count())
+    }
+
     /// Give every Camera in `item` the next cut number. Counts on from past
     /// every number the scene holds, so a document built by hand never
     /// hands one out twice.
     pub(super) fn number_cameras(&mut self, item: &mut Item) {
-        let mut next = self.next_cut.max(self.cut_count());
+        let mut next = self.upcoming_cut();
         fn visit(item: &mut Item, next: &mut u32) {
             if let ItemFields::Camera(camera) = &mut item.fields {
                 camera.cut = *next;

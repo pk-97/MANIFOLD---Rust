@@ -10,7 +10,8 @@ completion with `--no-fail-fast`. Never nextest — process-per-test
 defeats the GPU device lock. The test binaries are compiled first with no
 lock held (`cargo test --no-run`, same arguments); then the test run holds the
 machine-wide GPU queue (scripts/gpu_queue.py) and waits its turn behind any
-other GPU run. `--build-only` stops after the compile; `--check-only` type-checks
+other GPU run, and for the MANIFOLD app to quit; an app still open after the
+queue's wait is NOT RUN (exit 75), never a red. `--build-only` stops after the compile; `--check-only` type-checks
 the same targets (`cargo check --profile test`) and stops, for `landing_gate.py --cheap`. Landing nextest and
 catalog checks use the same proof feature to reuse the renderer artifacts.
 Builds disable incremental compilation so sccache can cache workspace crates.
@@ -1008,6 +1009,14 @@ def all_runs(workspace: Workspace) -> list[dict]:
 
 
 def main() -> int:
+    try:
+        return gate_main()
+    except gpu_queue.AppStillOpen:
+        print("GPU-PROOFS GATE: NOT RUN (MANIFOLD stayed open; nothing ran, nothing failed)", flush=True)
+        return gpu_queue.NOT_RUN_EXIT
+
+
+def gate_main() -> int:
     try:
         with cancellation_signals(), gate_passes.session():
             return _main()

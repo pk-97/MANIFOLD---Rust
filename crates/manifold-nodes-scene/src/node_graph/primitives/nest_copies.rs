@@ -11,8 +11,9 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuBuffer};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -96,7 +97,7 @@ impl Primitive for NestCopies {
     // count in storage this node grows, which the codegen cannot size yet
     // (BUG-bokbd (nest_copies live-product domain)).
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
-        self.pipeline.get_or_insert_with(|| device.create_compute_pipeline(include_str!("shaders/nest_copies.wgsl"), "cs_main", "node.nest_copies"));
+        self.pipeline.get_or_insert_with(|| nest_pipeline(device));
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -146,27 +147,43 @@ impl Primitive for NestCopies {
         };
         let total = wanted.min(u64::from(u32::MAX)) as u32;
         if total > 0 {
-            let pipeline = self
-                .pipeline
-                .get_or_insert_with(|| gpu.device.create_compute_pipeline(include_str!("shaders/nest_copies.wgsl"), "cs_main", "node.nest_copies"));
-            let uniforms = NestUniforms { inner_count: inner_count as u32, total, _pad0: 0, _pad1: 0 };
-            gpu.native_enc.dispatch_compute(
-                pipeline,
-                &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                    GpuBinding::Buffer { binding: 1, buffer: outer, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: inner, offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: storage, offset: 0 },
-                ],
-                [total.div_ceil(256), 1, 1],
-                "node.nest_copies",
-            );
+            nest(gpu, &mut self.pipeline, [outer, inner, storage], inner_count as u32, total);
         }
         ctx.outputs.set_scalar("count", ParamValue::Float(total as f32));
         if let Some(error) = refusal {
             ctx.error(error);
         }
     }
+}
+
+pub(crate) fn nest_pipeline(device: &GpuDevice) -> GpuComputePipeline {
+    device.create_compute_pipeline(include_str!("shaders/nest_copies.wgsl"), "cs_main", "node.nest_copies")
+}
+
+/// One dispatch of the nest kernel: the first `total` copies of `nested`
+/// are inner copy `k % inner_count` carried by outer copy `k / inner_count`.
+/// `node.arrange_copies` places its laid-out copies by the group's frame
+/// this way, as one outer copy.
+pub(crate) fn nest(
+    gpu: &mut GpuEncoder<'_>,
+    pipeline: &mut Option<GpuComputePipeline>,
+    [outer, inner, nested]: [&GpuBuffer; 3],
+    inner_count: u32,
+    total: u32,
+) {
+    let pipeline = pipeline.get_or_insert_with(|| nest_pipeline(gpu.device));
+    let uniforms = NestUniforms { inner_count, total, _pad0: 0, _pad1: 0 };
+    gpu.native_enc.dispatch_compute(
+        pipeline,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: outer, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: inner, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: nested, offset: 0 },
+        ],
+        [total.div_ceil(256), 1, 1],
+        "node.nest_copies",
+    );
 }
 
 /// The copies the storage holds once a frame needs `wanted`, given it holds

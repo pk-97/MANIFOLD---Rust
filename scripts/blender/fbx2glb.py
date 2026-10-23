@@ -22,13 +22,26 @@ src, dst = argv[0], argv[1]
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 lower = src.lower()
+# Models keep their true size in metres. FBX and COLLADA state their units and
+# are converted to metres; OBJ has none and is read as metres. glTF out is
+# metres.
 if lower.endswith(".fbx"):
-    bpy.ops.import_scene.fbx(filepath=src)
+    # The importer always applies the file's UnitScaleFactor.
+    bpy.ops.import_scene.fbx(filepath=src, global_scale=1.0)
 elif lower.endswith(".obj"):
-    bpy.ops.wm.obj_import(filepath=src)
+    bpy.ops.wm.obj_import(filepath=src, global_scale=1.0)
 elif lower.endswith(".dae"):
-    bpy.ops.wm.collada_import(filepath=src)
+    bpy.ops.wm.collada_import(filepath=src, import_units=True)
 else:
     raise SystemExit(f"unsupported input extension: {src}")
+# COLLADA's units land on the scene's unit scale, which glTF export ignores:
+# fold it into the top-level objects so the file comes out in metres.
+metres_per_unit = bpy.context.scene.unit_settings.scale_length
+if metres_per_unit != 1.0:
+    for obj in bpy.context.scene.objects:
+        if obj.parent is None:
+            obj.location *= metres_per_unit
+            obj.scale *= metres_per_unit
+    bpy.context.scene.unit_settings.scale_length = 1.0
 bpy.ops.export_scene.gltf(filepath=dst, export_format="GLB", export_animations=True)
 print("wrote", dst)

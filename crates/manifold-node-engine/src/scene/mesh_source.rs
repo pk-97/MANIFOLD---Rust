@@ -249,6 +249,7 @@ mod tests {
                 translate: [1.0, 2.0, 3.0],
                 fragment_count: 2,
                 fragment_index: 1,
+                own_space: false,
             },
         }
     }
@@ -389,6 +390,7 @@ mod tests {
                 translate: [0.0; 3],
                 fragment_count: 1,
                 fragment_index: 1,
+                own_space: false,
             },
         }
         .load_vertices()

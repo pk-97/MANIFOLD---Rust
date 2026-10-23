@@ -6,9 +6,10 @@
 //! The swarm simulates in its emitter's frame, the item's Transform, and is
 //! drawn through that frame, so moving, turning or scaling the swarm carries
 //! the particles, the forces' lattice and the drawn copies together. The
-//! bounds box is fixed in that frame, wider than the seed box (the lattice
-//! holds its edge value outside it, so the Attractor and the gusts keep their
-//! shape over the whole stirred cloud). Forces are ordinary scene forces: the
+//! bounds box is fixed in that frame, wider than the seed box; past it a
+//! particle reads radial and vortex forces from their formulas and uniform
+//! pushes and air at their constant value, so a particle that leaves still
+//! feels the Pull. Forces are ordinary scene forces: the
 //! load passes lay every force that targets everything onto the swarm's
 //! lattice (`forces.rs` compiles them). They act in the world: the lattice
 //! samples them where each node sits in the world and turns them into the
@@ -24,6 +25,7 @@
 //! is drawn by a swarm), [`finish`] after it (Emit From an item reads that
 //! item's compiled mesh and frame).
 
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{DrawAs, EmitFrom, Item, ItemFields, ItemId};
 use manifold_core::scene_schema::SWARM_MAX_COUNT;
@@ -48,13 +50,13 @@ const BOUNDS_SIZE: f32 = 6.0;
 
 /// Where a swarm's particles spread, in its emitter's frame: the lattice
 /// box, which the stirred cloud fills. The Scene Loop sizes its cells by it.
-pub(crate) const SPREAD: Rest = Rest { lo: [-0.5 * BOUNDS_SIZE; 3], hi: [0.5 * BOUNDS_SIZE; 3], offset: [0.0; 3], vertices: 0 };
+pub(crate) const SPREAD: Rest = Rest { lo: [-0.5 * BOUNDS_SIZE; 3], hi: [0.5 * BOUNDS_SIZE; 3], placed: None, own_space: false, vertices: 0 };
 
 /// The forces node's clock and field scalars go to the mover port for port;
 /// `epoch` also restarts the seed and the particle loop.
-const CLOCK_PORTS: [&str; 14] = [
+const CLOCK_PORTS: [&str; 16] = [
     "forces", "ticks", "first_tick", "force_lattices", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing",
-    "field_min_x", "field_min_y", "field_min_z", "tick_seconds", "impulses", "impulse_tick",
+    "field_min_x", "field_min_y", "field_min_z", "tick_seconds", "impulses", "impulse_tick", "far_forces", "far_terms",
 ];
 
 /// The value node that follows each World control a swarm takes, in
@@ -126,7 +128,6 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     }
     let state = b.add(owner, "state", "node.array_feedback");
     let mover = b.add(owner, "move", "node.move_swarm");
-    b.set_number(mover, "active_count", SWARM_MAX_COUNT);
     let copies = b.add(owner, "copies", "node.swarm_to_copies");
     // How many particles are live (Count): the draw reads only those, so a
     // stage that nests the copies (the Scene Loop) sizes by Count, not by
@@ -134,6 +135,8 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     let live = b.add(owner, "live_count", "node.value");
     b.wire(forces, "epoch", seed, "reset_trigger");
     b.wire(forces, "epoch", state, "reset_trigger");
+    // A Count rise copies the seed's new particles into the loop.
+    b.wire(live, "out", state, "active_count");
     b.wire(seed, "particles", state, "seed");
     b.wire(state, "out", mover, "in");
     b.wire(mover, "out", state, "in");
@@ -162,11 +165,10 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             b.object_items.push(item.id.clone());
         }
         None => {
-            // One copy source draws an item: the first swarm in tree order
-            // keeps it (the Draw As picker refuses a second, with its reason).
-            if let DrawAs::Item(prototype) = &fields.draw_as
-                && !b.swarm_draws.contains_key(prototype)
-            {
+            // The item compiles once, drawn by the first swarm in tree
+            // order; every later swarm draws copies of those draws
+            // ([`draw_alike`]).
+            if let DrawAs::Item(prototype) = &fields.draw_as {
                 // A Group or Object with Copies on keeps them: its whole
                 // layout rides every particle ([`nest_layout`] wires the
                 // layout in).
@@ -183,18 +185,64 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
                 } else {
                     copies
                 };
-                b.swarm_draws.insert(prototype.clone(), draws);
                 b.swarm_frames.insert(draws, (transform, live));
+                if b.swarm_draws.contains_key(prototype) {
+                    b.swarm_extra.push((prototype.clone(), item.id.clone(), draws));
+                } else {
+                    b.swarm_draws.insert(prototype.clone(), draws);
+                }
             }
         }
     }
     b.swarms.push(item.id.clone());
     b.rows(item);
     b.follow(seed, "active_count", live, "value");
+    // Only the live particles move.
+    b.follow(seed, "active_count", mover, "active_count");
     // Only the live particles carry the drawn layout, so the nest sizes by
     // Count, not by the seed's capacity.
     if let (Some(seed), Some(nest)) = (b.id(owner, "seed"), b.id(owner, "nest")) {
         b.follow(seed, "active_count", nest, "outer_count");
+    }
+}
+
+/// Draw each item a later swarm draws as with that swarm's particles too:
+/// every scene object the first swarm's particles draw, copied with its
+/// rows and its inputs, its particles, frame and Count swapped for this
+/// swarm's. A nest of the item's own copies shares their layout. Modifier
+/// cards bend the copies with their originals (`modifiers.rs`).
+pub(crate) fn draw_alike(b: &mut Builder<'_>) {
+    for (prototype, swarm, draws) in std::mem::take(&mut b.swarm_extra) {
+        let Some(&first) = b.swarm_draws.get(&prototype) else {
+            continue;
+        };
+        let (Some(&(first_frame, first_live)), Some(&(frame, live))) = (b.swarm_frames.get(&first), b.swarm_frames.get(&draws)) else {
+            continue;
+        };
+        let remap = [(first, draws), (first_frame, frame), (first_live, live)];
+        if let Some(&layout) = b.nests.get(&first) {
+            b.copy_inputs(first, draws, &[], Some("outer"));
+            b.nests.insert(draws, layout);
+        }
+        let originals: Vec<(u32, ItemId)> = b
+            .objects
+            .iter()
+            .zip(&b.object_items)
+            .filter(|(object, _)| b.input(**object, "instances").is_some_and(|(source, _)| source == first))
+            .map(|(&object, item)| (object, item.clone()))
+            .collect();
+        for (object, item) in originals {
+            let Some(original) = b.node_id_of(object) else {
+                continue;
+            };
+            // `<item>:object@<swarm>`: the stage still names the item drawn.
+            let copy = NodeId::new(format!("{}@{}", original.as_str(), swarm.as_str()));
+            if let Some(copy) = b.copy_node(object, copy, &remap, None) {
+                b.objects.push(copy);
+                b.object_items.push(item);
+                b.alike.push((object, copy, swarm.clone()));
+            }
+        }
     }
 }
 

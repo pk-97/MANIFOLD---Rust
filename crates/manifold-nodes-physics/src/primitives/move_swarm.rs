@@ -13,6 +13,8 @@ use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 
+use manifold_physics::force_lattice::{FAR_HEADER, FAR_TERM};
+
 use crate::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
 
 /// Generated uniform layout: the params in order, then `dispatch_count`.
@@ -31,10 +33,10 @@ pub(crate) struct MoveSwarmUniforms {
     pub(crate) field_min_y: f32,
     pub(crate) field_min_z: f32,
     pub(crate) impulse_tick: i32,
+    pub(crate) far_terms: i32,
     pub(crate) dispatch_count: u32,
     pub(crate) _pad0: u32,
     pub(crate) _pad1: u32,
-    pub(crate) _pad2: u32,
 }
 
 const fn int(name: &'static str, label: &'static str, default: f32, max: f32) -> ParamDef {
@@ -48,12 +50,13 @@ const fn float(name: &'static str, label: &'static str, default: f32, range: (f3
 manifold_node_engine::primitive! {
     name: MoveSwarm,
     type_id: "node.move_swarm",
-    purpose: "Advance each live particle through this frame's fixed ticks under the scene's force lattice: per tick, the trilinear read of that tick's lattice at the particle gives the push a, the air's drag rate k and its wind w; v moves to v·e^(−k·dt) + (a + k·w)(1 − e^(−k·dt))/k (v + a·dt with no air), then v gains that tick's impulse lattice kick at the particle (scene hits, each once on its own tick; a frame with hits carries one impulse lattice per tick from impulse_tick), then x += v·dt (dt = that tick's entry in tick_seconds, so a Speed ramp lands the same at any frame rate). Each tick reads its own lattice (one per tick from first_tick, or one for every tick when force_lattices is 1; 0 or forces unwired: no force), so the swarm moves the same at any frame rate. Dead particles (life <= 0) pass through unchanged.",
+    purpose: "Advance each live particle through this frame's fixed ticks under the scene's force lattice: per tick, the trilinear read of that tick's lattice at the particle gives the push a, the air's drag rate k and its wind w; v moves to v·e^(−k·dt) + (a + k·w)(1 − e^(−k·dt))/k (v + a·dt with no air), then v gains that tick's impulse lattice kick at the particle (scene hits, each once on its own tick; a frame with hits carries one impulse lattice per tick from impulse_tick), then x += v·dt (dt = that tick's entry in tick_seconds, so a Speed ramp lands the same at any frame rate). Each tick reads its own lattice (one per tick from first_tick, or one for every tick when force_lattices is 1; 0 or forces unwired: no force), so the swarm moves the same at any frame rate. A particle past the lattice reads that tick's far terms instead (far_forces, far_terms per lattice; 0 or unwired reads the lattice's edge): radial and vortex forces from their formulas, uniform pushes and air at their constant value; a kick there reads the far terms packed after the frame's impulse lattices the same way (a header of 0 terms reads the edge). Dead particles (life <= 0) pass through unchanged.",
     inputs: {
         in: Array(Particle) required,
         forces: Array(f32) optional,
         tick_seconds: Array(f32) optional,
         impulses: Array(f32) optional,
+        far_forces: Array(f32) optional,
         active_count: ScalarF32 optional,
         ticks: ScalarF32 optional,
         first_tick: ScalarF32 optional,
@@ -66,6 +69,7 @@ manifold_node_engine::primitive! {
         field_min_y: ScalarF32 optional,
         field_min_z: ScalarF32 optional,
         impulse_tick: ScalarF32 optional,
+        far_terms: ScalarF32 optional,
     },
     outputs: {
         out: Array(Particle),
@@ -83,9 +87,10 @@ manifold_node_engine::primitive! {
         float("field_min_y", "Field Min Y", 0.0, (-1.0e4, 1.0e4)),
         float("field_min_z", "Field Min Z", 0.0, (-1.0e4, 1.0e4)),
         ParamDef { name: Cow::Borrowed("impulse_tick"), label: "Impulse Tick", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 16_777_216.0)), enum_values: &[] },
+        int("far_terms", "Far Terms", 0.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The swarm integrator. Wire forces, tick_seconds, impulses and every scalar but active_count from node.swarm_forces (its ticks, first_tick, force_lattices, field_nodes_x/y/z, field_spacing, field_min_x/y/z and impulse_tick), particles from a node.array_feedback loop (its out into in, out back into its in, the seeder into its seed, node.swarm_forces epoch into its reset_trigger), then node.swarm_to_copies from out. in/out alias one buffer, so the graph compiler keeps the loop in place. Scene forces reach it through node.swarm_forces's acceleration_field, the same force list water and rigid bodies read.",
+    composition_notes: "The swarm integrator. Wire forces, tick_seconds, impulses, far_forces and every scalar but active_count from node.swarm_forces (its ticks, first_tick, force_lattices, field_nodes_x/y/z, field_spacing, field_min_x/y/z, impulse_tick and far_terms), particles from a node.array_feedback loop (its out into in, out back into its in, the seeder into its seed, node.swarm_forces epoch into its reset_trigger), then node.swarm_to_copies from out. in/out alias one buffer, so the graph compiler keeps the loop in place. Scene forces reach it through node.swarm_forces's acceleration_field, the same force list water and rigid bodies read.",
     examples: ["Swarm"],
     picker: { label: "Move Swarm", category: Atom },
     summary: "Moves every swarm particle by the scene's forces, one fixed step per simulation tick.",
@@ -94,7 +99,7 @@ manifold_node_engine::primitive! {
     aliases: ["swarm", "move swarm", "particle forces", "force particles"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/move_swarm_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather],
     wgsl_includes: [FORCE_LATTICE],
 }
 
@@ -119,7 +124,7 @@ impl Primitive for MoveSwarm {
     /// The moved particles come from the particles and the forces that move
     /// them: the scene force trace reaches node.swarm_forces through here.
     fn physical_sources(&self, output: &str) -> Option<&'static [&'static str]> {
-        (output == "out").then_some(&["in", "forces", "impulses"])
+        (output == "out").then_some(&["in", "forces", "impulses", "far_forces"])
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -160,6 +165,15 @@ impl Primitive for MoveSwarm {
             ctx.error(format!("Move Swarm: {ticks} ticks need {ticks} impulse lattices; wire impulses from node.swarm_forces"));
             return;
         }
+        // Past the lattice a particle reads the far terms, when they come
+        // with a buffer that holds them all; otherwise the lattice's edge.
+        let far = ctx.inputs.array("far_forces");
+        let far_terms = if far.is_some() { int(ctx, "far_terms", 0.0) } else { 0 };
+        let far_words = (FAR_HEADER + field.force_lattices.max(1) as usize * far_terms as usize * FAR_TERM) as u64 * 16;
+        if far_terms > 0 && far.is_some_and(|far| far.size < far_words) {
+            ctx.error(format!("Move Swarm: {far_terms} far terms per lattice need a longer far_forces; wire it from node.swarm_forces"));
+            return;
+        }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = MoveSwarmUniforms {
@@ -175,10 +189,10 @@ impl Primitive for MoveSwarm {
             field_min_y: field.min[1],
             field_min_z: field.min[2],
             impulse_tick: field.impulse_tick,
+            far_terms,
             dispatch_count: active,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         // `in`/`out` alias the particle buffer; an unwired lattice is never
         // read (force_lattices 0, impulse_tick −1), so the particles stand
@@ -191,7 +205,8 @@ impl Primitive for MoveSwarm {
                 GpuBinding::Buffer { binding: 2, buffer: field.forces.unwrap_or(particles), offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: tick_seconds, offset: 0 },
                 GpuBinding::Buffer { binding: 4, buffer: field.impulses.unwrap_or(particles), offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: particles, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: far.unwrap_or(particles), offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: particles, offset: 0 },
             ],
             [active.div_ceil(256), 1, 1],
             "node.move_swarm",
@@ -213,7 +228,8 @@ mod tests {
         assert!(wgsl.contains("buf_forces: array<f32>"), "{wgsl}");
         assert!(wgsl.contains("@binding(3) var<storage, read> buf_tick_seconds: array<f32>"), "{wgsl}");
         assert!(wgsl.contains("@binding(4) var<storage, read> buf_impulses: array<f32>"), "{wgsl}");
-        assert!(wgsl.contains("field_min_z: f32,\n    impulse_tick: i32,\n    dispatch_count: u32,"), "{wgsl}");
+        assert!(wgsl.contains("@binding(5) var<storage, read> buf_far_forces: array<f32>"), "{wgsl}");
+        assert!(wgsl.contains("field_min_z: f32,\n    impulse_tick: i32,\n    far_terms: i32,\n    dispatch_count: u32,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<MoveSwarmUniforms>(), 64);
     }
 }

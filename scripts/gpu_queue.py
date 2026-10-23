@@ -27,6 +27,16 @@ and `cargo nextest run` receive `--no-run` before their runtime `--` separator;
 `cargo build` is also completed without taking the lock. Unsupported or
 ambiguous Cargo invocations fail before any lock is taken.
 
+Every GPU run waits for the MANIFOLD app to quit first, through `-- <command>`
+and `hold()` alike: a GPU run beside an open show starves the window server
+and can freeze the Mac. It waits `MANIFOLD_GPU_APP_WAIT` seconds (default 8
+minutes, inside a 10-minute foreground call; `off` skips the wait, for tests),
+then nothing runs and it reports NOT RUN: the command line exits 75, and
+`hold()` raises `AppStillOpen`, a `SystemExit` with code 75, so a caller that
+does not catch it stops as not run, never as a red. The app is the `manifold`
+process, matched by exact name; headless tools have their own names and never
+count. A run nested inside a holder does not wait again.
+
 Importable: `with gpu_queue.hold("label"): ...` for scripts that take the lock
 for a whole multi-process run. Waiting is poll-based, not first-come
 first-served. A landing announces itself with `landing_pending()` before it
@@ -59,6 +69,11 @@ LANDING_PENDING_DIR = "landing.pending"
 NIGHTLY_WAITING = "nightly.waiting"
 ADMISSION_LOCK = "gpu.admission"
 RESERVATION = "gpu.reservation"
+APP_PROCESS = "manifold"
+APP_WAIT_ENV = "MANIFOLD_GPU_APP_WAIT"
+APP_WAIT_DEFAULT_SECONDS = 8 * 60
+APP_POLL_SECONDS = 5.0
+NOT_RUN_EXIT = 75  # EX_TEMPFAIL: nothing ran, try again later
 
 # Same-process nesting: `hold()` inside `hold()` must not block on itself.
 _held_depth = 0
@@ -607,6 +622,8 @@ def hold(label, priority="normal", **kwargs):
         finally:
             _held_depth -= 1
         return
+    if not _token_matches(read_holder(Path(kwargs.get("directory") or queue_dir()))):
+        await_app_quit(label, kwargs.get("out"))
     held = acquire(label, priority=priority, **kwargs)
     _held_depth = 1
     try:
@@ -764,8 +781,74 @@ def _cargo_has_no_run(command):
     return "--no-run" in command[:separator]
 
 
+def app_pids():
+    """Pids of running MANIFOLD apps: exact process name, so neither a
+    headless tool nor this script's own shell ever matches."""
+    try:
+        out = subprocess.run(["pgrep", "-x", APP_PROCESS], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [int(pid) for pid in out.split() if pid.isdigit()]
+
+
+def app_wait_seconds():
+    """Seconds to wait for the app to quit, or None when the wait is off."""
+    value = os.environ.get(APP_WAIT_ENV, "").strip()
+    if value == "off":
+        return None
+    try:
+        return max(0.0, float(value)) if value else float(APP_WAIT_DEFAULT_SECONDS)
+    except ValueError:
+        return float(APP_WAIT_DEFAULT_SECONDS)
+
+
+def wait_for_app_to_quit(seconds, out=None, poll=APP_POLL_SECONDS, report=REPORT_SECONDS,
+                         pids=None):
+    """Block until no MANIFOLD app runs, at most `seconds`. False when one
+    still runs at the deadline."""
+    out = out or sys.stderr
+    pids = pids or app_pids
+    started = time.monotonic()
+    last_report = None
+    while running := pids():
+        waited = time.monotonic() - started
+        if waited >= seconds:
+            return False
+        if last_report is None or time.monotonic() - last_report >= report:
+            print(f"[gpu-queue] waiting for MANIFOLD to quit (pid {', '.join(map(str, running))}); "
+                  f"waited {format_age(waited)} of {format_age(seconds)}", file=out, flush=True)
+            last_report = time.monotonic()
+        time.sleep(min(poll, max(0.0, seconds - waited)))
+    if last_report is not None:
+        print(f"[gpu-queue] MANIFOLD quit after {format_age(time.monotonic() - started)}",
+              file=out, flush=True)
+    return True
+
+
+class AppStillOpen(SystemExit):
+    """Nothing ran: MANIFOLD stayed open through the wait. Uncaught, it ends
+    the process with NOT_RUN_EXIT and no traceback."""
+
+    def __init__(self, label, seconds):
+        super().__init__(NOT_RUN_EXIT)
+        self.message = (f"[gpu-queue] NOT RUN: MANIFOLD is still open after {format_age(seconds)}; "
+                        f"rerun once it quits: {label}")
+
+
+def await_app_quit(label, out=None):
+    """Wait for the MANIFOLD app to quit before a GPU run; raise
+    `AppStillOpen` when it outlasts the wait."""
+    seconds = app_wait_seconds()
+    if seconds is not None and not wait_for_app_to_quit(seconds, out=out):
+        error = AppStillOpen(label, seconds)
+        print(error.message, file=out or sys.stderr, flush=True)
+        raise error
+
+
 def run_queued(command, label=None, **kwargs):
-    """Build Cargo commands before the lock, then run the GPU phase under it."""
+    """Build Cargo commands before the lock, then run the GPU phase under it.
+    NOT_RUN_EXIT when the MANIFOLD app stays open (`hold`)."""
     label = label or " ".join(command)
     try:
         kind = _cargo_kind(command)
@@ -797,7 +880,11 @@ def run_queued(command, label=None, **kwargs):
         print("[NO REUSE] gpu-proofs: inputs changed after build planning; "
               "refusing stale GPU admission", flush=True)
         return 2
-    with hold(label, **kwargs):
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(hold(label, **kwargs))
+        except AppStillOpen:
+            return NOT_RUN_EXIT
         if passed and gate_passes.changed_passes([passed]):
             print('[NO REUSE] gpu-proofs: inputs changed while waiting for the GPU', flush=True)
             return 2

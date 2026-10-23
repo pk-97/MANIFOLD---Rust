@@ -328,6 +328,11 @@ impl PresetRuntime {
         into.merge(&self.executor.take_sim_metrics());
     }
 
+    /// The nodes of this runtime failing now, and the ones that just started.
+    pub fn node_errors_mut(&mut self) -> &mut crate::exec::node_errors::NodeErrors {
+        self.executor.node_errors_mut()
+    }
+
     /// Drain this chain's per-step CPU profiles recorded on the last profiled
     /// frame (each entry's `tag` is the scoped GPU-span join key).
     pub fn take_step_profiles(&mut self) -> Vec<crate::exec::execution::StepProfile> {

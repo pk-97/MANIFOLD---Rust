@@ -649,6 +649,7 @@ pub(crate) fn default_selection() -> MeshSelection {
         translate: [0.0; 3],
         fragment_count: 1,
         fragment_index: 0,
+        own_space: false,
     }
 }
 }
@@ -832,6 +833,7 @@ fn resolve_selection(ctx: &EffectNodeContext<'_, '_>) -> Result<MeshSelection, S
         translate: [translate[0], translate[1], translate[2]],
         fragment_count: fragment_count as u32,
         fragment_index: fragment_index as u32,
+        own_space: false,
     })
 }
 

@@ -19,27 +19,30 @@
 //! how a body reaches the solver: anything non-finite, out of the world's
 //! range or degenerate is refused with a reason before Box3D sees it, so a
 //! bad scale can never grow a broad-phase tree past its depth limit
-//! (BUG-k787p (Box3D tree query assertion)).
+//! (BUG-k787p (Box3D tree query assertion)). Any finite non-zero scale is a
+//! scale, mirrored included, as in Blender and Unity: the shape it makes is
+//! what the gate checks, against [`MAX_COORDINATE`] and Box3D's own hull
+//! builder.
+//! A mirrored scale reflects the shape: Box3D rebuilds each hull from its
+//! reflected points, so its faces point out, and a mirrored mesh has its
+//! triangles turned ([`scaled_mesh`]).
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use manifold_foundation::mesh_partition::partition;
 
 use crate::sdf::{DistanceLattice, MAX_LATTICE_NODES, signed_distance_union_within, union_lattice_nodes};
-use crate::{BodyConfig, BodyHandle, PhysicsError, PhysicsWorld, TriangleMesh, closed_triangles, cook_hull, cook_hull_mesh};
+use crate::{BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, TriangleMesh, closed_triangles, cook_hull, cook_hull_mesh};
 
 /// The farthest any position or hull point may sit from the origin, in
 /// metres. Box3D treats bounds past 100 km as corrupt; this keeps every
 /// installed bound a factor of ten inside that.
 pub const MAX_COORDINATE: f32 = 10_000.0;
 
-/// Each scale axis must sit in this range: positive, so a mirrored body never
-/// turns its hulls inside out.
-pub const SCALE_RANGE: (f32, f32) = (1.0e-3, 1.0e3);
-
-/// The thinnest a body's hull may be in any direction, in metres.
-pub const MIN_THICKNESS: f32 = 1.0e-4;
+/// Why a hull Box3D's builder could not make is refused: its points are
+/// flat, a line or a point for their size.
+pub const TOO_THIN: &str = "part of the shape is too thin to collide";
 
 /// An open surface becomes a solid this fraction of its longest side thick.
 pub const SHELL_FRACTION: f32 = 0.001;
@@ -156,7 +159,7 @@ impl CollisionShape {
             return Err(PhysicsError::InvalidInput("the mesh has no triangle with area"));
         }
         let longest = (0..3).map(|axis| max[axis] - min[axis]).fold(0.0f32, f32::max);
-        if longest.is_nan() || longest < MIN_THICKNESS {
+        if longest.is_nan() || longest <= 0.0 {
             return Err(PhysicsError::InvalidInput("the mesh has no extent"));
         }
         let mut hasher = DefaultHasher::new();
@@ -450,17 +453,45 @@ impl Solid {
         }
     }
 
-    /// Install this solid at `scale` as one body: the gate into Box3D.
-    /// Refuses a bad scale, pose, hull or mesh before the solver sees it.
-    pub fn install(&self, world: &mut PhysicsWorld, scale: [f32; 3], config: BodyConfig) -> Result<BodyHandle, PhysicsError> {
+    /// Whether this solid at `scale` is one the solver can hold, refused in
+    /// the scale's terms: every point within [`MAX_COORDINATE`] of the
+    /// origin, and every hull one Box3D's hull builder makes at this scale.
+    pub fn validate_at(&self, scale: [f32; 3]) -> Result<(), PhysicsError> {
+        validate_scale(scale)?;
+        let mut far = false;
+        self.for_each_point(|point| far |= validate_position(std::array::from_fn(|axis| point[axis] * scale[axis])).is_err());
+        if far {
+            return Err(PhysicsError::InvalidInput("at this scale the shape reaches past 10 km from the origin, outside the solver's world"));
+        }
+        if let Some(hulls) = self.hulls() {
+            let scaled = scaled_hulls(hulls, scale);
+            let refs: Vec<&[[f32; 3]]> = scaled.iter().map(Vec::as_slice).collect();
+            CookedSolid::hulls(&refs, 128)?;
+        }
+        Ok(())
+    }
+
+    /// Cook this solid at `scale` once, for any number of bodies to share
+    /// ([`PhysicsWorld::add_cooked`]): the gate into Box3D. Refuses a bad
+    /// scale, hull or mesh before the solver sees it.
+    pub fn cook(&self, scale: [f32; 3]) -> Result<Arc<CookedSolid>, PhysicsError> {
         validate_scale(scale)?;
         match self {
-            Self::Hulls(hulls) => world.add_hulls(&scaled_hulls(hulls, scale), config),
+            Self::Hulls(hulls) => {
+                let scaled = scaled_hulls(hulls, scale);
+                let refs: Vec<&[[f32; 3]]> = scaled.iter().map(Vec::as_slice).collect();
+                CookedSolid::hulls(&refs, 128)
+            }
             Self::Mesh(mesh) => {
-                let vertices = scaled(&mesh.vertices, scale);
-                world.add_triangle_mesh(&vertices, &mesh.triangles, config)
+                let mesh = scaled_mesh(mesh, scale);
+                CookedSolid::mesh(&mesh.vertices, &mesh.triangles)
             }
         }
+    }
+
+    /// Install this solid at `scale` as one body, through [`Self::cook`].
+    pub fn install(&self, world: &mut PhysicsWorld, scale: [f32; 3], config: BodyConfig) -> Result<BodyHandle, PhysicsError> {
+        world.add_cooked(&self.cook(scale)?, config)
     }
 
     /// Swap an installed body's shape for this solid at `scale` in place,
@@ -468,11 +499,7 @@ impl Solid {
     /// stay as they are. The body must already be the same form (hulls or
     /// exact mesh).
     pub fn replace(&self, world: &mut PhysicsWorld, handle: BodyHandle, scale: [f32; 3], config: BodyConfig) -> Result<(), PhysicsError> {
-        validate_scale(scale)?;
-        match self {
-            Self::Hulls(hulls) => world.replace_hulls(handle, &scaled_hulls(hulls, scale), config),
-            Self::Mesh(mesh) => world.replace_triangle_mesh(handle, &scaled(&mesh.vertices, scale), &mesh.triangles, config),
-        }
+        world.replace_cooked(handle, &self.cook(scale)?, config)
     }
 
     /// Whether `self` and `other` install as the same form, so one can
@@ -490,13 +517,30 @@ fn scaled_hulls(hulls: &[Vec<[f32; 3]>], scale: [f32; 3]) -> Vec<Vec<[f32; 3]>> 
     hulls.iter().map(|hull| scaled(hull, scale)).collect()
 }
 
-/// A scale is finite and positive on every axis, within [`SCALE_RANGE`].
+/// Whether `scale` mirrors: an odd number of its axes are negative.
+pub fn mirrors(scale: [f32; 3]) -> bool {
+    scale.iter().filter(|s| s.is_sign_negative()).count() % 2 == 1
+}
+
+/// `mesh` at `scale`. A mirroring scale also turns every triangle, so each
+/// face still winds outward.
+pub fn scaled_mesh(mesh: &TriangleMesh, scale: [f32; 3]) -> TriangleMesh {
+    let triangles = if mirrors(scale) {
+        mesh.triangles.iter().map(|&[a, b, c]| [a, c, b]).collect()
+    } else {
+        mesh.triangles.clone()
+    };
+    TriangleMesh { vertices: scaled(&mesh.vertices, scale), triangles }
+}
+
+/// A scale is finite and not zero on any axis. Mirrored is a scale; what
+/// the scale makes of a shape is checked on the shape ([`validate_hull`],
+/// [`validate_position`]).
 pub fn validate_scale(scale: [f32; 3]) -> Result<(), PhysicsError> {
-    let (low, high) = SCALE_RANGE;
-    if scale.iter().all(|s| s.is_finite() && (low..=high).contains(s)) {
+    if scale.iter().all(|s| s.is_finite() && *s != 0.0) {
         Ok(())
     } else {
-        Err(PhysicsError::InvalidInput("scale must be finite, between 0.001 and 1000 on every axis"))
+        Err(PhysicsError::InvalidInput("scale must be finite and not zero on any axis"))
     }
 }
 
@@ -509,40 +553,15 @@ pub fn validate_position(position: [f32; 3]) -> Result<(), PhysicsError> {
     }
 }
 
-/// A hull is at least four points, each a valid position, spanning a volume
-/// at least [`MIN_THICKNESS`] thick in every direction: not a point, a line
-/// or a flat sheet.
+/// A hull is at least four points, each a valid position. Whether they span
+/// a volume is Box3D's hull builder's call: its tolerance is relative to the
+/// points' size, so a small hull is a hull and only a flat, line or point
+/// one fails ([`TOO_THIN`]).
 pub fn validate_hull(points: &[[f32; 3]]) -> Result<(), PhysicsError> {
-    validate_hull_scaled(points, [1.0; 3])
-}
-
-/// [`validate_hull`] for `points` scaled by `scale`, without building the
-/// scaled hull.
-pub fn validate_hull_scaled(points: &[[f32; 3]], scale: [f32; 3]) -> Result<(), PhysicsError> {
     if points.len() < 4 {
         return Err(PhysicsError::InvalidInput("a hull needs at least 4 points"));
     }
-    let at = |i: usize| -> [f32; 3] { std::array::from_fn(|axis| points[i][axis] * scale[axis]) };
-    for i in 0..points.len() {
-        validate_position(at(i))?;
-    }
-    let p = |i: usize| at(i).map(f64::from);
-    let farthest = |score: &dyn Fn([f64; 3]) -> f64| {
-        (0..points.len()).map(|i| (i, score(p(i)))).fold((0, -1.0), |best, next| if next.1 > best.1 { next } else { best })
-    };
-    let a = p(0);
-    let (ib, ab) = farthest(&|q| norm2(sub(q, a)));
-    let b = p(ib);
-    let axis = sub(b, a);
-    let (ic, line) = farthest(&|q| norm2(cross(axis, sub(q, a))) / ab.max(f64::MIN_POSITIVE));
-    let normal = cross(axis, sub(p(ic), a));
-    let normal_length = norm2(normal).sqrt().max(f64::MIN_POSITIVE);
-    let (_, plane) = farthest(&|q| (dot(normal, sub(q, a)) / normal_length).abs());
-    let thin = f64::from(MIN_THICKNESS);
-    if ab.sqrt() < thin || line.sqrt() < thin || plane < thin {
-        return Err(PhysicsError::InvalidInput("a hull must have volume: it is flat, a line or a point"));
-    }
-    Ok(())
+    points.iter().try_for_each(|point| validate_position(*point))
 }
 
 /// Weld an unindexed triangle list by exactly equal coordinates (signed zero

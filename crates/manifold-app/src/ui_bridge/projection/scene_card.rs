@@ -31,6 +31,16 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
         // A pinned row stays whatever its gate: Show on Card and every
         // modulator attach write the pin (D6 (attached rows)).
         let pinned = param.choices.pin == Some(CardPin::Shown);
+        // A Scene Loop row only a Loop camera reads waits for one; pinned,
+        // it stays dimmed.
+        if let (Some(item), Some((_, property))) = (item, split_param_id(row.id.as_ref()))
+            && manifold_core::scene_schema::waits_for_loop_camera(doc, item, property)
+        {
+            if !pinned {
+                continue;
+            }
+            row.spec.inactive_reason = Some(manifold_core::scene_schema::NO_LOOP_CAMERA.into());
+        }
         let Some(place) = Placement::of(param, item) else {
             continue;
         };

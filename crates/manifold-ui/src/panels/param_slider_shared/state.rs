@@ -523,31 +523,21 @@ pub fn param_value_text<'a>(
     if let Some(labels) = value_labels {
         return &labels[label_index(val, min, labels.len())];
     }
-    write_value(buf, val, whole_numbers, is_angle, unit, 2, true);
+    write_value(buf, val, whole_numbers, is_angle, unit.map_or("", |unit| unit.suffix()), 2);
     buf.as_str()
 }
 
-fn write_value(
-    buf: &mut ParamValueText,
-    val: f32,
-    whole_numbers: bool,
-    is_angle: bool,
-    unit: Option<manifold_foundation::scene_surface::Unit>,
-    decimals: usize,
-    with_unit: bool,
-) {
+/// `val` with `decimals` places and the unit text `suffix`.
+fn write_value(buf: &mut ParamValueText, val: f32, whole_numbers: bool, is_angle: bool, suffix: &str, decimals: usize) {
     use std::fmt::Write;
     buf.clear();
     let _ = if is_angle {
         // `val` is radians; the user always sees and edits degrees.
         write!(buf, "{:.0}°", val.to_degrees())
+    } else if whole_numbers {
+        write!(buf, "{}{suffix}", val.round() as i32)
     } else {
-        let suffix = if with_unit { unit.map_or("", |unit| unit.suffix()) } else { "" };
-        if whole_numbers {
-            write!(buf, "{}{suffix}", val.round() as i32)
-        } else {
-            write!(buf, "{val:.decimals$}{suffix}")
-        }
+        write!(buf, "{val:.decimals$}{suffix}")
     };
 }
 
@@ -590,9 +580,10 @@ fn value_text_width(measure: &dyn crate::text::TextMeasure, text: &str, font_siz
 }
 
 /// [`param_value_text`] that fits `max_width` as `measure` measures it, so a
-/// value box never clips a digit. Precision goes first (fewer decimals, then
-/// none), then a compact thousands form that keeps the unit, and the unit
-/// goes last. A value label is returned whole (its box elides it).
+/// value box never clips a digit. The unit goes first: it shortens ("4.00m"),
+/// then drops. Only then does precision go (fewer decimals, then none), and
+/// last a compact thousands form. A value label is returned whole (its box
+/// elides it).
 #[allow(clippy::too_many_arguments)]
 pub fn param_value_text_fit<'a>(
     buf: &'a mut ParamValueText,
@@ -611,25 +602,21 @@ pub fn param_value_text_fit<'a>(
         return &labels[label_index(val, min, labels.len())];
     }
     let fits = |text: &str| value_text_width(measure, text, font_size) <= max_width;
-    for with_unit in [true, false] {
-        for decimals in [2, 1, 0] {
-            write_value(buf, val, whole_numbers, is_angle, unit, decimals, with_unit);
-            if fits(buf.as_str()) {
-                return buf.as_str();
-            }
+    for suffix in [unit.map_or("", |unit| unit.suffix()), unit.map_or("", |unit| unit.short_suffix()), ""] {
+        write_value(buf, val, whole_numbers, is_angle, suffix, 2);
+        if fits(buf.as_str()) {
+            return buf.as_str();
         }
-        if !is_angle && val.abs() >= 1000.0 {
-            let suffix = if with_unit { unit.map_or("", |unit| unit.suffix()) } else { "" };
-            buf.clear();
-            let _ = if val.abs() >= 1.0e6 {
-                write!(buf, "{:.1}M{suffix}", val / 1.0e6)
-            } else {
-                write!(buf, "{:.1}k{suffix}", val / 1.0e3)
-            };
-            if fits(buf.as_str()) {
-                return buf.as_str();
-            }
+    }
+    for decimals in [1, 0] {
+        write_value(buf, val, whole_numbers, is_angle, "", decimals);
+        if fits(buf.as_str()) {
+            return buf.as_str();
         }
+    }
+    if !is_angle && val.abs() >= 1000.0 {
+        buf.clear();
+        let _ = if val.abs() >= 1.0e6 { write!(buf, "{:.1}M", val / 1.0e6) } else { write!(buf, "{:.1}k", val / 1.0e3) };
     }
     buf.as_str()
 }
@@ -885,15 +872,25 @@ mod value_fit_tests {
         param_value_text_fit(&mut buf, val, 0.0, whole, false, None, unit, tree.measurer(), FONT_SIZE, CARD_VALUE_TEXT_W).to_owned()
     }
 
-    /// Precision goes before the unit: a decimal value sheds decimals while
-    /// the unit stays.
+    /// The unit shortens, then drops, before a digit does: a value shown
+    /// with fewer than two decimals, or in compact form, carries no unit.
     #[test]
-    fn precision_goes_before_the_unit() {
-        let metres = Some(Unit::Metres);
-        assert_eq!(fit(4.0, false, metres), "4.00 m", "a short value keeps everything");
-        assert_eq!(fit(12345.5, false, metres), "12345.5 m", "one decimal fits where two do not");
-        assert_eq!(fit(123_456_792.0, false, metres), "123.5M m", "compact form keeps the unit");
+    fn the_unit_goes_before_the_digits() {
+        assert_eq!(fit(4.0, false, Some(Unit::Metres)), "4.00 m", "a short value keeps everything");
         assert_eq!(fit(600.0, true, Some(Unit::Kilograms)), "600 kg");
+        let mut shortened = false;
+        for unit in [Unit::Metres, Unit::MetresPerSecondSquared, Unit::Radius] {
+            for val in [1.0, 12.5, 123.45, 1234.5, 12345.5, 123_456.7, 123_456_792.0] {
+                let text = fit(val, false, Some(unit));
+                let digits = text.trim_end_matches(|c: char| !c.is_ascii_digit());
+                let full_precision = digits.split_once('.').is_some_and(|(_, decimals)| decimals.len() == 2);
+                // A compact "123.5M" is a magnitude, not a unit.
+                let bare = digits == text.trim_end_matches(['k', 'M']);
+                assert!(full_precision || bare, "{val} {unit:?} lost digits but kept its unit: {text:?}");
+                shortened |= text.ends_with(unit.short_suffix()) && !text.ends_with(unit.suffix());
+            }
+        }
+        assert!(shortened, "some value showed its short unit before dropping it");
     }
 
     /// Only when nothing with the unit fits does the unit go; the leading

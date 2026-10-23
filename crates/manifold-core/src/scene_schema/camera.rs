@@ -29,9 +29,9 @@ const FIELD_OF_VIEW: HardLimit = HardLimit::Between(0.017_453_292, 3.124_139_4);
 /// (24 mm tall): 2·atan(12/50).
 const FIFTY_MM: f32 = 0.471_239;
 
-/// The closest an Orbit camera comes to what it orbits: nearer, the lens
-/// sits inside the object at the pivot and the view goes black.
-const CLOSEST: f32 = 1.0;
+/// The closest an Orbit camera comes to what it orbits: at 0 the lens sits
+/// on the point it looks at and has no direction to look in.
+pub const ORBIT_CLOSEST: f32 = 0.001;
 
 /// The nearest Focus Distance. The lens reads 0 as "no depth of field", so
 /// a card that reached it would switch the blur off behind the switch.
@@ -57,10 +57,10 @@ const fn metres(property: &'static str, order: u8) -> PropertyRow {
     row(property, RIG, Camera, perform(CardBand::Camera, order)).unit(Unit::Metres).limit(HardLimit::Unlimited)
 }
 
-/// Near stays above 0 and at most 5 m; Far stays at least 10 m. The two ranges
-/// do not overlap, so Near is always below Far whichever row moves.
-pub const NEAR_CLIP: HardLimit = HardLimit::Between(0.001, 5.0);
-pub const FAR_CLIP: HardLimit = HardLimit::AtLeast(10.0);
+/// Near and Far each stay above 0: a plane at the lens divides the projection
+/// by zero. One micrometre is Blender's own floor. Far stays past Near where
+/// the camera is built (`Camera::clip_planes`), so neither row limits the other.
+pub const CLIP_PLANE: HardLimit = HardLimit::AtLeast(1e-6);
 
 /// A new camera's Far: 10 km, past the horizon from any camera under about
 /// 8 m, so an Ocean runs to the horizon with the default view. The renderer's
@@ -68,8 +68,8 @@ pub const FAR_CLIP: HardLimit = HardLimit::AtLeast(10.0);
 /// one, so nothing else pays for it.
 const HORIZON_FAR: f32 = 10_000.0;
 
-const fn clip(property: &'static str, limit: HardLimit) -> PropertyRow {
-    row(property, RIG, Camera, setup()).unit(Unit::Metres).limit(limit)
+const fn clip(property: &'static str) -> PropertyRow {
+    row(property, RIG, Camera, setup()).unit(Unit::Metres).limit(CLIP_PLANE)
 }
 
 const fn place(property: &'static str) -> PropertyRow {
@@ -83,15 +83,15 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     row("tilt", RIG, Camera, perform(CardBand::Camera, 1)).default(0.35).when(orbit),
     row("distance", RIG, Camera, perform(CardBand::Camera, 2))
         .unit(Unit::Metres)
-        .range(CLOSEST, 100.0)
-        .limit(HardLimit::AtLeast(CLOSEST))
+        .range(ORBIT_CLOSEST, 100.0)
+        .limit(HardLimit::AtLeast(ORBIT_CLOSEST))
         .default(10.0)
         .when(orbit),
     row("look_y", RIG, Camera, perform(CardBand::Camera, 3)).unit(Unit::Metres).limit(HardLimit::Unlimited).when(orbit),
     row("fov_y", RIG, Camera, perform(CardBand::Camera, 4)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(orbit),
     row("roll", RIG, Camera, setup()).limit(HardLimit::Unlimited).when(orbit),
-    clip("near", NEAR_CLIP).when(orbit),
-    clip("far", FAR_CLIP).default(HORIZON_FAR).when(orbit),
+    clip("near").when(orbit),
+    clip("far").default(HORIZON_FAR).when(orbit),
     // Free.
     row("yaw", RIG, Camera, perform(CardBand::Camera, 0)).limit(HardLimit::Unlimited).when(free),
     row("pitch", RIG, Camera, perform(CardBand::Camera, 1)).when(free),
@@ -100,8 +100,8 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     metres("pos_z", 4).when(free),
     row("fov_y", RIG, Camera, perform(CardBand::Camera, 5)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(free),
     row("roll", RIG, Camera, setup()).limit(HardLimit::Unlimited).when(free),
-    clip("near", NEAR_CLIP).when(free),
-    clip("far", FAR_CLIP).default(HORIZON_FAR).when(free),
+    clip("near").when(free),
+    clip("far").default(HORIZON_FAR).when(free),
     // Look At. With a Target item picked, Target X/Y/Z offset from its origin.
     row("fov_y", RIG, Camera, perform(CardBand::Camera, 0)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(look_at),
     place("pos_x").when(look_at),
@@ -110,8 +110,8 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     place("target_x").when(look_at),
     place("target_y").when(look_at),
     place("target_z").when(look_at),
-    clip("near", NEAR_CLIP).when(look_at),
-    clip("far", FAR_CLIP).default(HORIZON_FAR).when(look_at),
+    clip("near").when(look_at),
+    clip("far").default(HORIZON_FAR).when(look_at),
     // Lens.
     row("focus_distance", LENS, DepthOfField, perform(CardBand::Look, 1))
         .gate(Gate::Dim(Feature::DepthOfField))
@@ -246,4 +246,38 @@ pub static CAMERA_FIELDS: [FieldRow; 2] = [FieldRow {
 /// the scene's Scene Loop, so it waits for one.
 pub(super) fn choice_unavailable(doc: &crate::scene_doc::SceneDoc, field: &str, key: &str) -> Option<&'static str> {
     (field == "rig" && key == "loop" && super::scene_loop(doc).is_none()).then_some(super::NO_SCENE_LOOP)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limits(property: &str) -> Vec<HardLimit> {
+        CAMERA_ROWS
+            .iter()
+            .filter(|row| row.property == property)
+            .filter_map(|row| match row.exposure {
+                Exposure::Card(facts) => Some(facts.limit),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The camera rows stop only where the maths does: a 1 cm orbit, a Near
+    /// past 5 m and a Far under 10 m all hold, and nothing reaches 0.
+    #[test]
+    fn camera_rows_stop_only_above_zero() {
+        for limit in limits("distance") {
+            assert_eq!(limit.clamp(0.01, (0.0, 0.0)), 0.01);
+            assert!(limit.clamp(0.0, (0.0, 0.0)) > 0.0);
+        }
+        let clips: Vec<HardLimit> = limits("near").into_iter().chain(limits("far")).collect();
+        assert_eq!(clips.len(), 6, "Near and Far on the Orbit, Free and Look At rigs");
+        for limit in clips {
+            for metres in [0.01, 6.0, 30.0, 50_000.0] {
+                assert_eq!(limit.clamp(metres, (0.0, 0.0)), metres);
+            }
+            assert!(limit.clamp(0.0, (0.0, 0.0)) > 0.0);
+        }
+    }
 }

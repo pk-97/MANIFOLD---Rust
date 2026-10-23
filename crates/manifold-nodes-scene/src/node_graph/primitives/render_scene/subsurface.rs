@@ -188,11 +188,11 @@ impl RenderScene {
         textures: &[&manifold_gpu::GpuTexture],
     ) -> bool {
         if let Some(error) = &self.subsurface_pass.allocation_error {
-            ctx.error(error);
+            Self::fail_frame(ctx, None, error.as_str());
             return false;
         }
         let Some(inv_view_proj) = mat4_inverse(pre.view_proj) else {
-            ctx.error("Subsurface scattering requires an invertible camera projection.");
+            Self::fail_frame(ctx, None, "Subsurface scattering requires an invertible camera projection.");
             return false;
         };
         let rows: arrayvec::ArrayVec<SubsurfaceMaterial, { OBJECT_SAFETY_MAX as usize }> = draws

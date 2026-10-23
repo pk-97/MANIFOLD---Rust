@@ -803,6 +803,12 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::Root(RootAction::SceneDrawAgain(layer_id)) => {
+                    if let Some(content_tx) = self.content_tx.as_ref() {
+                        crate::content_command::ContentCommand::send(content_tx, crate::content_command::ContentCommand::DrawLayerAgain(layer_id.clone()));
+                    }
+                    continue;
+                }
                 PanelAction::Root(RootAction::OpenGeneratorGraphEditor) => {
                     // Ask the content thread to snapshot the active layer's
                     // generator graph and set the unified watched_graph_target

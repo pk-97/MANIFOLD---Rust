@@ -14,6 +14,12 @@
 // `impulses` are gathered. A frame with scene hits carries one impulse lattice
 // per tick from impulse_tick (zero on ticks no hit landed on), so each hit
 // lands once on its own tick; impulse_tick is −1 on every frame without one.
+// A particle past the lattice reads the tick's far terms instead (far_terms
+// per lattice; 0 reads the lattice's edge): radial and vortex forces from
+// their formulas, uniform pushes and air at their constant value. A hit's
+// kick past the lattice reads, the same way, the far terms packed after the
+// frame's impulse lattices (their header counts the terms; 0 reads the
+// edge). Layout and CPU twin: `manifold_physics::force_lattice::FarForces`.
 
 // The tick's force at x: push and drag rate, then drag rate × wind.
 struct MoveSwarmForce {
@@ -46,6 +52,91 @@ fn move_swarm_impulse(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<
     return kick;
 }
 
+// Floats in the far header and in one far term (FAR_HEADER and FAR_TERM
+// four-float words).
+const MOVE_SWARM_FAR_HEADER: u32 = 32u;
+const MOVE_SWARM_FAR_TERM: u32 = 16u;
+
+// Word w of the far terms: of far_forces, or (kick) of impulses, where the
+// kicks' far terms follow the frame's impulse lattices.
+fn move_swarm_far_word(w: u32, kick: bool) -> vec4<f32> {
+    if kick {
+        return vec4<f32>(buf_impulses[w], buf_impulses[w + 1u], buf_impulses[w + 2u], buf_impulses[w + 3u]);
+    }
+    return vec4<f32>(buf_far_forces[w], buf_far_forces[w + 1u], buf_far_forces[w + 2u], buf_far_forces[w + 3u]);
+}
+
+// A falloff curve's strength at distance d (`FalloffCurve::magnitude`):
+// curve 0 Edge, 1 Inverse.
+fn move_swarm_falloff(d: f32, radius: f32, power: f32, curve: f32) -> f32 {
+    if curve > 0.5 {
+        return pow(radius / max(d, radius), power);
+    }
+    if d >= radius {
+        return 0.0;
+    }
+    return pow(1.0 - d / radius, power);
+}
+
+// A radial (kind 1) or vortex (kind 2) leaf's vector at world x, as
+// `RadialField` and `VortexField` sample it. `head` is (kind, curve, radius,
+// falloff).
+fn move_swarm_far_leaf(x: vec3<f32>, head: vec4<f32>, center: vec3<f32>, axis: vec3<f32>) -> vec3<f32> {
+    let vortex = head.x > 1.5;
+    var arm = x - center;
+    if vortex {
+        arm = arm - axis * dot(arm, axis);
+    }
+    let d = length(arm);
+    if d <= 1.1920929e-7 {
+        return vec3<f32>(0.0);
+    }
+    let m = move_swarm_falloff(d, head.z, head.w, head.y) / d;
+    if vortex {
+        return cross(axis, arm) * m;
+    }
+    return arm * m;
+}
+
+// The force past the lattice at x (in the swarm's frame) from slot `slot`'s
+// `terms` far terms packed from float `base` (move_swarm_far_word): summed in
+// the world, turned back into the frame.
+fn move_swarm_far(x: vec3<f32>, base: u32, slot: u32, terms: u32, kick: bool) -> MoveSwarmForce {
+    let world = move_swarm_far_word(base + 16u, kick).xyz + move_swarm_far_word(base + 4u, kick).xyz * x.x
+        + move_swarm_far_word(base + 8u, kick).xyz * x.y + move_swarm_far_word(base + 12u, kick).xyz * x.z;
+    var push = vec3<f32>(0.0);
+    var drag = 0.0;
+    var drag_wind = vec3<f32>(0.0);
+    for (var i = 0u; i < terms; i = i + 1u) {
+        let w = base + MOVE_SWARM_FAR_HEADER + (slot * terms + i) * MOVE_SWARM_FAR_TERM;
+        let head = move_swarm_far_word(w, kick);
+        let a = move_swarm_far_word(w + 4u, kick);
+        let b = move_swarm_far_word(w + 8u, kick);
+        drag = drag + b.w;
+        if head.x < 0.5 {
+            push = push + a.xyz;
+            drag_wind = drag_wind + b.xyz;
+        } else {
+            let f = move_swarm_far_leaf(world, head, a.xyz, b.xyz);
+            push = push + f * a.w;
+            drag_wind = drag_wind + f * move_swarm_far_word(w + 12u, kick).x;
+        }
+    }
+    let r0 = move_swarm_far_word(base + 20u, kick).xyz;
+    let r1 = move_swarm_far_word(base + 24u, kick).xyz;
+    let r2 = move_swarm_far_word(base + 28u, kick).xyz;
+    var f: MoveSwarmForce;
+    f.push_drag = vec4<f32>(dot(r0, push), dot(r1, push), dot(r2, push), drag);
+    f.drag_wind = vec3<f32>(dot(r0, drag_wind), dot(r1, drag_wind), dot(r2, drag_wind));
+    return f;
+}
+
+// Whether x lies past the lattice's last node on any axis.
+fn move_swarm_past_lattice(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> bool {
+    let g = (x - origin) / spacing;
+    return any(g < vec3<f32>(0.0)) || any(g > vec3<f32>(dims - vec3<u32>(1u)));
+}
+
 fn body(
     idx: u32,
     count: u32,
@@ -62,6 +153,7 @@ fn body(
     field_min_y: f32,
     field_min_z: f32,
     impulse_tick: i32,
+    far_terms: i32,
 ) -> Element {
     var p = e_in;
     if p.life <= 0.0 {
@@ -73,15 +165,26 @@ fn body(
         let dt = buf_tick_seconds[u32(t)];
         if force_lattices > 0 {
             let base = force_lattice_base(first_tick + t, first_tick, force_lattices, dims);
-            let f = move_swarm_force(p.position, origin, field_spacing, dims, base);
+            var f: MoveSwarmForce;
+            if far_terms > 0 && move_swarm_past_lattice(p.position, origin, field_spacing, dims) {
+                f = move_swarm_far(p.position, 0u, u32(clamp(t, 0, force_lattices - 1)), u32(far_terms), false);
+            } else {
+                f = move_swarm_force(p.position, origin, field_spacing, dims, base);
+            }
             for (var axis = 0; axis < 3; axis = axis + 1) {
                 p.velocity[axis] = force_lattice_drag_step(p.velocity[axis], f.push_drag[axis], f.push_drag.w, f.drag_wind[axis], dt);
             }
         }
         let slot = first_tick + t - impulse_tick;
         if impulse_tick >= 0 && slot >= 0 && slot < ticks {
-            let base = u32(slot) * dims.x * dims.y * dims.z;
-            p.velocity = p.velocity + move_swarm_impulse(p.position, origin, field_spacing, dims, base);
+            let nodes = dims.x * dims.y * dims.z;
+            let far = u32(ticks) * nodes * 4u;
+            let kick_terms = u32(buf_impulses[far]);
+            if kick_terms > 0u && move_swarm_past_lattice(p.position, origin, field_spacing, dims) {
+                p.velocity = p.velocity + move_swarm_far(p.position, far, u32(slot), kick_terms, true).push_drag.xyz;
+            } else {
+                p.velocity = p.velocity + move_swarm_impulse(p.position, origin, field_spacing, dims, u32(slot) * nodes);
+            }
         }
         p.position = p.position + p.velocity * dt;
         p.age = p.age + dt;

@@ -229,15 +229,13 @@ impl Primitive for GltfSkinnedMeshSource {
                     self.uploaded = false;
                     self.content_version = self.content_version.wrapping_add(1);
                 }
-                Ok(Err(e)) => {
-                    log::error!("node.gltf_skinned_mesh_source: {e}");
-                }
+                // A file that cannot be read is a node error: the stage
+                // names the layer and the part once, the log the cause.
+                Ok(Err(e)) => ctx.error(e),
                 Err(mpsc::TryRecvError::Empty) => {
                     self.pending_load = Some(rx);
                 }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    log::error!("node.gltf_skinned_mesh_source: background load channel disconnected");
-                }
+                Err(mpsc::TryRecvError::Disconnected) => ctx.error("background load channel disconnected"),
             }
         }
 
@@ -257,6 +255,8 @@ impl Primitive for GltfSkinnedMeshSource {
                     translate: [0.0; 3],
                     fragment_count: 1,
                     fragment_index: 0,
+                    // A part draws in its node's own space.
+                    own_space: true,
                 },
             });
             ctx.outputs.set_mesh_source("source", source.clone());

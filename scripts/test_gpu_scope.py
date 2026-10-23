@@ -862,6 +862,14 @@ class ScopeTests(unittest.TestCase):
         (repo / "crates/x/c.rs").write_text('include_str!("b.wgsl");\n')
         self.assertEqual(g.default_shader_users(repo, "crates/x/a.wgsl"), ["crates/x/c.rs"])
 
+    def test_rust_comment_naming_a_shader_is_not_a_user(self):
+        repo = self._repo_with("crates/x/src/a.wgsl")
+        (repo / "crates/x/src/doc.rs").write_text("//! packed for `a.wgsl`\n")
+        (repo / "crates/x/src/user.rs").write_text('include_str!("a.wgsl");\n')
+        workspace = type("W", (), {"roots": {"x": "crates/x"}})()
+        self.assertEqual(g.shader_index(repo, workspace)("crates/x/src/a.wgsl"),
+                         ["crates/x/src/user.rs"])
+
     def test_shader_with_no_user_is_unmapped_and_named(self):
         p = plan([P + "shaders/orphan.wgsl"], repo=self._repo_with(P + "shaders/orphan.wgsl"))
         self.assertEqual([x[0] for x in p.unmapped], [P + "shaders/orphan.wgsl"])

@@ -247,12 +247,15 @@ void manifold_box3d_install_assert_handler( void )
 	b3SetAssertFcn( manifold_assert );
 }
 
-uint32_t manifold_box3d_world_create( float gx, float gy, float gz )
+/* Above one worker, Box3D runs its own scheduler: its threads sleep on a
+ * semaphore between steps, and contacts solve in the same order at any
+ * worker count, so a world steps identically on one core or many. */
+uint32_t manifold_box3d_world_create( float gx, float gy, float gz, uint32_t workers )
 {
 	b3WorldDef definition = b3DefaultWorldDef();
 	definition.gravity = (b3Vec3){ gx, gy, gz };
 	definition.frictionCallback = manifold_friction;
-	definition.workerCount = 1;
+	definition.workerCount = workers;
 	b3WorldId world_id = b3CreateWorld( &definition );
 	return b3StoreWorldId( world_id );
 }
@@ -282,12 +285,14 @@ void manifold_box3d_world_step( uint32_t world_id, float dt, uint32_t substeps )
 	b3World_Step( b3LoadWorldId( world_id ), dt, (int)substeps );
 }
 
-static uint64_t box3d_body_create_hulls(
+/* A body whose shapes are `hulls`, cooked beforehand (manifold_box3d_cook_hull).
+ * Box3D copies each hull into its world's hull table, so the caller may
+ * destroy the cooked hulls, or install more bodies from them, at any time.
+ * Copies of one prototype share one cook this way. */
+uint64_t manifold_box3d_body_create_cooked_hulls(
 	uint32_t world_id,
-	const float* points,
-	const int32_t* point_counts,
+	const uintptr_t* hulls,
 	int hull_count,
-	int max_vertex_count,
 	int kind,
 	float px,
 	float py,
@@ -298,11 +303,10 @@ static uint64_t box3d_body_create_hulls(
 	float qw,
 	float mass,
 	float friction,
-	float restitution,
-	uintptr_t* hull_out )
+	float restitution )
 {
 	b3BodyType body_type = box3d_body_type( kind );
-	if ( body_type == b3_bodyTypeCount || points == NULL || point_counts == NULL || hull_out == NULL || hull_count < 1 || max_vertex_count < 4 )
+	if ( body_type == b3_bodyTypeCount || hulls == NULL || hull_count < 1 )
 	{
 		return 0;
 	}
@@ -321,99 +325,86 @@ static uint64_t box3d_body_create_hulls(
 	shape_definition.density = 1.0f;
 	shape_definition.baseMaterial.friction = friction;
 	shape_definition.baseMaterial.restitution = restitution;
-	size_t point_offset = 0;
 	for ( int i = 0; i < hull_count; ++i )
 	{
-		int point_count = point_counts[i];
-		if ( point_count < 4 )
+		if ( hulls[i] == 0 || b3CreateHullShape( body_id, &shape_definition, (const b3HullData*)hulls[i] ).index1 == 0 )
 		{
-			for ( int j = 0; j < i; ++j )
-			{
-				b3DestroyHull( (b3HullData*)hull_out[j] );
-			}
 			b3DestroyBody( body_id );
 			return 0;
 		}
-		b3HullData* hull = b3CreateHull( (const b3Vec3*)( points + 3 * point_offset ), point_count, max_vertex_count );
-		if ( hull == NULL )
-		{
-			for ( int j = 0; j < i; ++j )
-			{
-				b3DestroyHull( (b3HullData*)hull_out[j] );
-			}
-			b3DestroyBody( body_id );
-			return 0;
-		}
-		b3ShapeId shape_id = b3CreateHullShape( body_id, &shape_definition, hull );
-		if ( shape_id.index1 == 0 )
-		{
-			b3DestroyHull( hull );
-			for ( int j = 0; j < i; ++j )
-			{
-				b3DestroyHull( (b3HullData*)hull_out[j] );
-			}
-			b3DestroyBody( body_id );
-			return 0;
-		}
-		hull_out[i] = (uintptr_t)hull;
-		point_offset += (size_t)point_count;
 	}
 
 	box3d_set_mass( body_id, mass );
 	return b3StoreBodyId( body_id );
 }
 
-uint64_t manifold_box3d_body_create(
-	uint32_t world_id,
-	const float* points,
-	int point_count,
-	int kind,
-	float px,
-	float py,
-	float pz,
-	float qx,
-	float qy,
-	float qz,
-	float qw,
-	float mass,
-	float friction,
-	float restitution,
-	uintptr_t* hull_out )
+/* Compact `indices` in place to the triangles b3CreateMesh keeps, and return
+ * how many that is. The area test is b3CreateMesh's own (src/mesh.c), on the
+ * same vertices, so the mesh built from the result loses nothing more. */
+int manifold_box3d_keep_mesh_triangles( const float* vertices, int32_t* indices, int triangle_count )
 {
-	int32_t point_counts[1] = { point_count };
-	return box3d_body_create_hulls( world_id, points, point_counts, 1, point_count, kind, px, py, pz, qx, qy, qz, qw,
-		mass, friction, restitution, hull_out );
+	const b3Vec3* points = (const b3Vec3*)vertices;
+	float minArea = 0.01f * B3_LINEAR_SLOP * B3_LINEAR_SLOP;
+	int kept = 0;
+	for ( int index = 0; index < triangle_count; ++index )
+	{
+		int index1 = indices[3 * index + 0];
+		int index2 = indices[3 * index + 1];
+		int index3 = indices[3 * index + 2];
+
+		b3Vec3 vertex1 = points[index1];
+		b3Vec3 vertex2 = points[index2];
+		b3Vec3 vertex3 = points[index3];
+
+		b3Vec3 normal = b3Cross( b3Sub( vertex2, vertex1 ), b3Sub( vertex3, vertex1 ) );
+		float area = 0.5f * b3Length( normal );
+
+		if ( area < minArea )
+		{
+			continue;
+		}
+		indices[3 * kept + 0] = index1;
+		indices[3 * kept + 1] = index2;
+		indices[3 * kept + 2] = index3;
+		kept += 1;
+	}
+	return kept;
 }
 
-uint64_t manifold_box3d_body_create_hulls(
-	uint32_t world_id,
-	const float* points,
-	const int32_t* point_counts,
-	int hull_count,
-	int max_vertex_count,
-	int kind,
-	float px,
-	float py,
-	float pz,
-	float qx,
-	float qy,
-	float qz,
-	float qw,
-	float mass,
-	float friction,
-	float restitution,
-	uintptr_t* hull_out )
+/* Build a triangle mesh once: 0 on failure, UINTPTR_MAX when Box3D
+ * discarded degenerate triangles (nothing stays built). Shapes read the mesh
+ * in place, so it must outlive every body made from it. */
+uintptr_t manifold_box3d_cook_mesh( const float* vertices, int vertex_count, const int32_t* indices, int triangle_count )
 {
-	return box3d_body_create_hulls( world_id, points, point_counts, hull_count, max_vertex_count, kind, px, py, pz, qx, qy, qz, qw,
-		mass, friction, restitution, hull_out );
+	if ( vertices == NULL || indices == NULL || vertex_count < 3 || triangle_count < 1 )
+	{
+		return 0;
+	}
+	b3MeshDef mesh_definition = { 0 };
+	mesh_definition.vertices = (b3Vec3*)vertices;
+	mesh_definition.indices = (int32_t*)indices;
+	mesh_definition.vertexCount = vertex_count;
+	mesh_definition.triangleCount = triangle_count;
+	mesh_definition.useMedianSplit = true;
+	mesh_definition.identifyEdges = true;
+	b3MeshData* mesh = b3CreateMesh( &mesh_definition, NULL, 0 );
+	if ( mesh == NULL )
+	{
+		return 0;
+	}
+	if ( mesh->triangleCount != triangle_count )
+	{
+		b3DestroyMesh( mesh );
+		return UINTPTR_MAX;
+	}
+	return (uintptr_t)mesh;
 }
 
-uint64_t manifold_box3d_mesh_body_create(
+/* A static body whose shape is the cooked `mesh_value`, with the mass data
+ * the caller measured. The mesh stays the caller's. */
+uint64_t manifold_box3d_mesh_body_create_cooked(
 	uint32_t world_id,
-	const float* vertices,
-	int vertex_count,
-	const int32_t* indices,
-	int triangle_count,
+	uintptr_t mesh_value,
 	int kind,
 	float px,
 	float py,
@@ -426,12 +417,10 @@ uint64_t manifold_box3d_mesh_body_create(
 	float friction,
 	float restitution,
 	const float* center,
-	const float* inertia,
-	uintptr_t* mesh_out )
+	const float* inertia )
 {
 	b3BodyType body_type = box3d_body_type( kind );
-	if ( body_type == b3_bodyTypeCount || vertices == NULL || indices == NULL || center == NULL || inertia == NULL || mesh_out == NULL ||
-		vertex_count < 3 || triangle_count < 1 )
+	if ( body_type == b3_bodyTypeCount || mesh_value == 0 || center == NULL || inertia == NULL )
 	{
 		return 0;
 	}
@@ -446,36 +435,13 @@ uint64_t manifold_box3d_mesh_body_create(
 		return 0;
 	}
 
-	b3MeshDef mesh_definition = { 0 };
-	mesh_definition.vertices = (b3Vec3*)vertices;
-	mesh_definition.indices = (int32_t*)indices;
-	mesh_definition.vertexCount = vertex_count;
-	mesh_definition.triangleCount = triangle_count;
-	mesh_definition.useMedianSplit = true;
-	mesh_definition.identifyEdges = true;
-	b3MeshData* mesh = b3CreateMesh( &mesh_definition, NULL, 0 );
-	if ( mesh == NULL || mesh->triangleCount != triangle_count )
-	{
-		if ( mesh != NULL )
-		{
-			b3DestroyMesh( mesh );
-		}
-		b3DestroyBody( body_id );
-		if ( mesh != NULL )
-		{
-			return UINT64_MAX;
-		}
-		return 0;
-	}
-
 	b3ShapeDef shape_definition = b3DefaultShapeDef();
 	shape_definition.density = 0.0f;
 	shape_definition.baseMaterial.friction = friction;
 	shape_definition.baseMaterial.restitution = restitution;
-	b3ShapeId shape_id = b3CreateMeshShape( body_id, &shape_definition, mesh, b3Vec3_one );
+	b3ShapeId shape_id = b3CreateMeshShape( body_id, &shape_definition, (b3MeshData*)mesh_value, b3Vec3_one );
 	if ( shape_id.index1 == 0 )
 	{
-		b3DestroyMesh( mesh );
 		b3DestroyBody( body_id );
 		return 0;
 	}
@@ -491,7 +457,6 @@ uint64_t manifold_box3d_mesh_body_create(
 	};
 	b3Body_SetMassData( body_id, mass_data );
 	b3Body_SetTransform( body_id, b3Body_GetPosition( body_id ), b3Body_GetRotation( body_id ) );
-	*mesh_out = (uintptr_t)mesh;
 	return b3StoreBodyId( body_id );
 }
 
@@ -558,43 +523,23 @@ int manifold_box3d_body_update(
 	return BOX3D_BRIDGE_OK;
 }
 
-// Swap a body's collision hulls for `hull_count` new ones in place: the
-// body, its pose, its velocity and the rest of the world are untouched, and a
+// Swap a body's collision hulls for the cooked `hulls` in place: the body,
+// its pose, its velocity and the rest of the world are untouched, and a
 // moving body takes `mass` over its new hulls. Every new shape is built before
-// any old shape is destroyed, so a failure leaves the body as it was and frees
-// the new hulls. The caller frees the old hulls after this returns.
-int manifold_box3d_body_replace_hulls(
+// any old shape is destroyed, so a failure leaves the body as it was. The
+// cooked hulls stay the caller's.
+int manifold_box3d_body_replace_cooked_hulls(
 	uint64_t body_value,
-	const float* points,
-	const int32_t* point_counts,
+	const uintptr_t* hulls,
 	int hull_count,
-	int max_vertex_count,
 	float mass,
 	float friction,
-	float restitution,
-	uintptr_t* hull_out )
+	float restitution )
 {
 	b3BodyId body_id = b3LoadBodyId( body_value );
-	if ( points == NULL || point_counts == NULL || hull_out == NULL || hull_count < 1 ||
-		 max_vertex_count < 4 )
+	if ( hulls == NULL || hull_count < 1 )
 	{
 		return BOX3D_BRIDGE_ERROR;
-	}
-
-	size_t point_offset = 0;
-	for ( int i = 0; i < hull_count; ++i )
-	{
-		b3HullData* hull = point_counts[i] < 4 ? NULL : b3CreateHull( (const b3Vec3*)( points + 3 * point_offset ), point_counts[i], max_vertex_count );
-		if ( hull == NULL )
-		{
-			for ( int j = 0; j < i; ++j )
-			{
-				b3DestroyHull( (b3HullData*)hull_out[j] );
-			}
-			return BOX3D_BRIDGE_ERROR;
-		}
-		hull_out[i] = (uintptr_t)hull;
-		point_offset += (size_t)point_counts[i];
 	}
 
 	// The new shapes go on beside the old ones and the old ones go only once
@@ -608,10 +553,6 @@ int manifold_box3d_body_replace_hulls(
 	{
 		box3d_shapes_free( &old );
 		free( new_shapes );
-		for ( int i = 0; i < hull_count; ++i )
-		{
-			b3DestroyHull( (b3HullData*)hull_out[i] );
-		}
 		return BOX3D_BRIDGE_ERROR;
 	}
 
@@ -622,16 +563,12 @@ int manifold_box3d_body_replace_hulls(
 	shape_definition.updateBodyMass = false;
 	for ( int i = 0; i < hull_count; ++i )
 	{
-		new_shapes[i] = b3CreateHullShape( body_id, &shape_definition, (b3HullData*)hull_out[i] );
+		new_shapes[i] = hulls[i] == 0 ? b3_nullShapeId : b3CreateHullShape( body_id, &shape_definition, (const b3HullData*)hulls[i] );
 		if ( new_shapes[i].index1 == 0 )
 		{
 			for ( int j = 0; j < i; ++j )
 			{
 				b3DestroyShape( new_shapes[j], false );
-			}
-			for ( int j = 0; j < hull_count; ++j )
-			{
-				b3DestroyHull( (b3HullData*)hull_out[j] );
 			}
 			box3d_shapes_free( &old );
 			free( new_shapes );
@@ -649,44 +586,15 @@ int manifold_box3d_body_replace_hulls(
 	return BOX3D_BRIDGE_OK;
 }
 
-// Swap a static body's triangle mesh for a new one in place: the body, its
-// pose and the rest of the world are untouched. The new mesh is built before
-// the old shapes go, so a failure leaves the body as it was. Returns
-// BOX3D_BRIDGE_NO_HIT when Box3D discards degenerate triangles. The caller
-// frees the old mesh after this returns.
-int manifold_box3d_body_replace_mesh(
-	uint64_t body_value,
-	const float* vertices,
-	int vertex_count,
-	const int32_t* indices,
-	int triangle_count,
-	float friction,
-	float restitution,
-	uintptr_t* mesh_out )
+// Swap a static body's triangle mesh for the cooked `mesh_value` in place:
+// the body, its pose and the rest of the world are untouched. The mesh stays
+// the caller's and must outlive the body's shape.
+int manifold_box3d_body_replace_cooked_mesh( uint64_t body_value, uintptr_t mesh_value, float friction, float restitution )
 {
 	b3BodyId body_id = b3LoadBodyId( body_value );
-	if ( vertices == NULL || indices == NULL || mesh_out == NULL || vertex_count < 3 || triangle_count < 1 ||
-		 b3Body_GetType( body_id ) != b3_staticBody )
+	if ( mesh_value == 0 || b3Body_GetType( body_id ) != b3_staticBody )
 	{
 		return BOX3D_BRIDGE_ERROR;
-	}
-
-	b3MeshDef mesh_definition = { 0 };
-	mesh_definition.vertices = (b3Vec3*)vertices;
-	mesh_definition.indices = (int32_t*)indices;
-	mesh_definition.vertexCount = vertex_count;
-	mesh_definition.triangleCount = triangle_count;
-	mesh_definition.useMedianSplit = true;
-	mesh_definition.identifyEdges = true;
-	b3MeshData* mesh = b3CreateMesh( &mesh_definition, NULL, 0 );
-	if ( mesh == NULL )
-	{
-		return BOX3D_BRIDGE_ERROR;
-	}
-	if ( mesh->triangleCount != triangle_count )
-	{
-		b3DestroyMesh( mesh );
-		return BOX3D_BRIDGE_NO_HIT;
 	}
 
 	box3d_shape_list old;
@@ -695,7 +603,6 @@ int manifold_box3d_body_replace_mesh(
 	if ( old_shapes == NULL )
 	{
 		box3d_shapes_free( &old );
-		b3DestroyMesh( mesh );
 		return BOX3D_BRIDGE_ERROR;
 	}
 	for ( int i = 0; i < old_count; ++i )
@@ -708,12 +615,10 @@ int manifold_box3d_body_replace_mesh(
 	shape_definition.density = 0.0f;
 	shape_definition.baseMaterial.friction = friction;
 	shape_definition.baseMaterial.restitution = restitution;
-	if ( b3CreateMeshShape( body_id, &shape_definition, mesh, b3Vec3_one ).index1 == 0 )
+	if ( b3CreateMeshShape( body_id, &shape_definition, (b3MeshData*)mesh_value, b3Vec3_one ).index1 == 0 )
 	{
-		b3DestroyMesh( mesh );
 		return BOX3D_BRIDGE_ERROR;
 	}
-	*mesh_out = (uintptr_t)mesh;
 	return BOX3D_BRIDGE_OK;
 }
 

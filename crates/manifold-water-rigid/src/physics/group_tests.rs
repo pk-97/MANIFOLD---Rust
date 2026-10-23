@@ -175,3 +175,38 @@ fn a_body_added_past_the_count_joins_the_running_world() {
     assert_eq!(simulation.poses[3].pos, [1.0, 2.0, 3.0]);
     assert_eq!(simulation.poses[150].pos, [5.0, 2.0, 3.0]);
 }
+
+/// A slab scaled per axis takes Copies, and its copies share one cooked
+/// shape; a group refused before it ever passed still draws at rest in its
+/// layout, and its refusal names Spacing.
+#[test]
+fn per_axis_copies_join_and_a_refused_group_draws_at_rest() {
+    let slab = RigidBody {
+        kind: 0,
+        transform: Transform { scale: [10.0, 0.16, 10.0], ..Transform::default() },
+        spawn: CopySpawn { count: 4.0, spacing: 1.0, columns: 2.0, layout: 0.0, turn: [0.0; 3] },
+        ..RigidBody::default()
+    };
+    let stacked = RigidBody { spawn: CopySpawn { spacing: 0.0, ..spawner([0.0, 3.0, 0.0], 6.0).spawn }, ..at([0.0, 3.0, 0.0]) };
+    let scene = RigidSceneInputs {
+        bodies: Vec::new(),
+        groups: vec![Some(slab), Some(stacked)],
+        gravity: [0.0, -9.8, 0.0],
+        acceleration_field: None,
+        targeted_fields: Vec::new(),
+    };
+    let mut simulation = RigidSimulation::default();
+    simulation.advance_scene(&scene, PlayedTime::ZERO, 1.0, 0.0).unwrap();
+    assert_eq!(simulation.active_copies(0), 4, "a 10 x 0.16 x 10 slab takes Copies");
+    assert_eq!(simulation.groups[0].cook_holders(), 1 + 4, "four copies share one cooked shape");
+    let refusals = simulation.refusals();
+    assert_eq!(refusals.len(), 1);
+    assert_eq!((refusals[0].member, refusals[0].reason.param()), (Member::Copies(1), Some("copy_size_spacing")));
+    assert!(
+        matches!(refusals[0].reason, RefusalReason::Gate { reason: "Spacing must be at least 0.01", .. }),
+        "the reason names the row's own minimum"
+    );
+    let rest = simulation.group_poses(1);
+    assert_eq!(rest.len(), 6, "the refused group draws at rest");
+    assert!(rest.iter().all(|copy| copy.pos == [0.0, 3.0, 0.0]), "at Spacing 0 every copy sits on the group's origin");
+}

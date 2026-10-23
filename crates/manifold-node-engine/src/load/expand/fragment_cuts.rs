@@ -166,6 +166,9 @@ pub fn contains_fragments(def: &EffectGraphDef) -> bool {
     nodes_contain(&def.nodes)
 }
 
+/// `node.merge_meshes`: with one mesh wired it keeps that mesh's layout.
+const MERGE: &str = "node.merge_meshes";
+
 fn is_mesh_multi(type_id: &str) -> bool {
     type_id == "node.morph_mesh"
 }
@@ -208,15 +211,14 @@ fn topo_order(def: &EffectGraphDef, ids: &[u32]) -> Result<Vec<u32>, SceneModifi
     let mut outgoing: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for wire in &def.wires {
         let mesh_dependency = node(def, wire.to_node).is_some_and(|node| {
-            is_fragment(&node.type_id)
+            (is_fragment(&node.type_id)
                 || is_mesh_unary(&node.type_id)
                 || is_mesh_multi(&node.type_id)
                 || is_weight_source(&node.type_id)
-                || node.type_id == "node.scene_object"
-        }) && matches!(
-            wire.to_port.as_str(),
-            "in" | "reference" | "b" | "weights" | "vertices"
-        );
+                || node.type_id == "node.scene_object")
+                && matches!(wire.to_port.as_str(), "in" | "reference" | "b" | "weights" | "vertices")
+                || (node.type_id == MERGE && wire.to_port.starts_with("mesh_"))
+        });
         if mesh_dependency && selected.contains(&wire.from_node) && selected.contains(&wire.to_node)
         {
             *indegree.get_mut(&wire.to_node).expect("selected node") += 1;
@@ -389,6 +391,16 @@ pub(super) fn apply(
         let Some(current_node) = node(def, id).cloned() else {
             continue;
         };
+        // A merge of one mesh copies it vertex for vertex, so it keeps that
+        // mesh's layout: a modifier frame carries a part in and out this way.
+        if current_node.type_id == MERGE {
+            let mut meshes = def.wires.iter().filter(|wire| wire.to_node == id && wire.to_port.starts_with("mesh_"));
+            if let (Some(only), None) = (meshes.next(), meshes.next()) {
+                let lineage = mesh_input_lineage(&lineages, only);
+                lineages.insert((id, "vertices".into()), lineage);
+            }
+            continue;
+        }
         let Some(current_wire) = input(def, id, "in") else {
             continue;
         };
@@ -628,6 +640,9 @@ pub(super) fn apply(
             wire_to(def, object, "weights", aligned);
         }
         wire_to(def, object, "topology", (map_id, "map".into()));
+        // The mesh is padded to the map's capacity; the draw stops at the
+        // map's live records.
+        wire_to(def, object, "live_count", (map_id, "live_count".into()));
     }
     align_mesh_diagrams(def, &mut next_id, &lineages, &mut remap_cache)
 }
@@ -820,6 +835,9 @@ mod tests {
         let morph_input = input(&def, 3, "in").expect("morph input wire");
         assert_eq!(current.from_node, reference.from_node);
         assert_eq!(current.from_node, morph_input.from_node);
+        let map = input(&def, 4, "topology").expect("object topology wire").from_node;
+        let live = input(&def, 4, "live_count").expect("object live count wire");
+        assert_eq!((live.from_node, live.from_port.as_str()), (map, "live_count"), "the draw stops at the cut's live records");
 
         let prepared = def.clone();
         apply(&mut def, &mut binding_sources).expect("prepared graph is an idempotent no-op");

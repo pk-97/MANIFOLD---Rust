@@ -14,11 +14,14 @@
 //! scale follows its own target. In a Group's or the scene's frame each
 //! part's offset is also measured live (`place`), from the part's transform
 //! to the frame's rest centre, so the group bends as one piece wherever its
-//! parts sit and as they move (Blender's deform about an origin object). A
-//! skinned, animated or morphing part bends its posed result. A Copy card
-//! (Copy Wave, Jitter, Noise, Blend) takes the frame its target's copies
-//! live in instead: the world its copies body lays them out in, with the
-//! body's origin as the target's offset ([`copies_plan`]). One instance
+//! parts sit and as they move (Blender's deform about an origin object). An
+//! imported part drawn in its own node's space is carried whole instead:
+//! its mesh enters the frame through its full transform before the card's
+//! stages and leaves after (`SceneMeshReferenceFrame::frame_transform`), so
+//! the file's rotation and scale on its card bend with the group's axes and
+//! units. A skinned, animated or morphing part bends its posed result. A Copy card
+//! (Copy Wave, Jitter, Noise, Blend) takes the world its copies body lays
+//! the copies out in, with no offset ([`copies_plan`]). One instance
 //! per frame, all driven by the card's one set of manifest params,
 //! `<card id>.<param>`.
 //!
@@ -48,6 +51,17 @@ const TARGETS_PER_INSTANCE: usize = 256;
 /// A frame's smallest radius, so a flat or empty box still measures.
 const MIN_RADIUS: f64 = 1e-3;
 
+/// A drawn mesh's own rest radius: half its rest box's diagonal, or the
+/// smallest radius when the box does not measure.
+fn own_radius(drawn: &Drawn) -> f64 {
+    let radius = (0..3)
+        .map(|axis| f64::from(drawn.rest.hi[axis]) - f64::from(drawn.rest.lo[axis]))
+        .map(|size| size * size * 0.25)
+        .sum::<f64>()
+        .sqrt();
+    if radius.is_finite() { radius.max(MIN_RADIUS) } else { MIN_RADIUS }
+}
+
 use manifold_foundation::mesh_partition::MAX_PIECES;
 
 /// Emit every Modifier card, in chain order.
@@ -72,14 +86,14 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
     Ok(())
 }
 
-/// The Objects a deforming card that is on reaches, directly, through a
+/// The Objects a smoothly bending card that is on reaches, directly, through a
 /// Group target, or as the whole scene.
-pub(crate) fn deformed_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
+pub(crate) fn smoothed_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
     let cards: Vec<&ModifierTargets> = doc
         .items
         .iter()
         .filter_map(|item| match &item.fields {
-            ItemFields::Modifier(card) if card.on && modifier_type(card.modifier).deforms => Some(&card.targets),
+            ItemFields::Modifier(card) if card.on && modifier_type(card.modifier).smooth_detail => Some(&card.targets),
             _ => None,
         })
         .collect();
@@ -136,18 +150,32 @@ fn emit(
             continue;
         }
         let role = &frame.role;
-        let plan = if acts_on_copies(card.modifier) {
-            copies_plan(b, item, &frame)
+        let mut plan = if acts_on_copies(card.modifier) {
+            copies_plan(b, &frame)
         } else {
             plan(b, item, &frame, lineage, card.modifier == ModifierType::Shatter)
         };
-        for (chunk, part) in frame.members.chunks(TARGETS_PER_INSTANCE).enumerate() {
+        // A later swarm's copy of a drawn object bends with it, placed as it is.
+        let mut targets = Vec::with_capacity(frame.members.len());
+        for drawn in &frame.members {
+            let original = b.node_id_of(drawn.object).ok_or("a modifier target has no node id")?;
+            targets.push(original.clone());
+            for copy in b.alike_of(drawn.object).collect::<Vec<_>>() {
+                let copy = b.node_id_of(copy).ok_or("a modifier target has no node id")?;
+                let placed: Vec<TargetPlacement> = plan
+                    .placements
+                    .iter()
+                    .filter(|placement| placement.target == original)
+                    .map(|placement| TargetPlacement { target: copy.clone(), ..placement.clone() })
+                    .collect();
+                plan.placements.extend(placed);
+                targets.push(copy);
+            }
+        }
+        for (chunk, part) in targets.chunks(TARGETS_PER_INSTANCE).enumerate() {
             let suffix = if chunk == 0 { role.clone() } else { format!("{role}:{chunk}") };
             let id = node(item.id.as_str(), &format!("mod:{suffix}"));
-            let mut objects = Vec::with_capacity(part.len());
-            for drawn in part {
-                objects.push(b.node_id_of(drawn.object).ok_or("a modifier target has no node id")?);
-            }
+            let objects = part.to_vec();
             let placements = plan.placements.iter().filter(|placement| objects.contains(&placement.target)).cloned().collect();
             let instance = SceneModifierInstanceDef {
                 id: id.clone(),
@@ -294,11 +322,19 @@ fn placement(b: &mut Builder<'_>, drawn: &Drawn, root: Option<&ItemId>, lineage:
     at
 }
 
+/// The import Group nearest above `item`: the Group whose Source is a file.
+fn import_group<'l>(doc: &SceneDoc, item: &ItemId, lineage: &'l BTreeMap<ItemId, Vec<ItemId>>) -> Option<&'l ItemId> {
+    lineage.get(item)?.iter().rev().find(|above| {
+        doc.find(above).is_some_and(|found| matches!(&found.fields, ItemFields::Group(group) if group.source.is_some()))
+    })
+}
+
 /// A frame's placements: each part's source offset from the frame's rest
 /// centre, and the frame's radius. A part that shares a Group's or the
 /// scene's frame also reads its offset live, so it bends wherever it sits
-/// as it moves. Shatter follows the live body pose instead, so its offset is
-/// only its source's own recentring.
+/// as it moves; one drawn in its own node's space is carried into the frame
+/// whole. Shatter follows the live body pose instead, so its offset is
+/// only its source's own shift.
 fn plan(
     b: &mut Builder<'_>,
     card: &Item,
@@ -311,9 +347,22 @@ fn plan(
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
     for (drawn, at) in members.iter().zip(&placed) {
+        // An imported part's box where the file puts it is its box in its
+        // import Group's frame, the scene's while that Group starts at rest:
+        // its own Transform and the groups between start where the file
+        // puts them, which the compiler does not see.
+        let (part_lo, part_hi) = match drawn.rest.placed {
+            Some(box_in_import) if frame.root.is_none() || frame.root.as_ref() == import_group(b.doc, &drawn.item, lineage) => {
+                (box_in_import.0.map(f64::from), box_in_import.1.map(f64::from))
+            }
+            _ => (
+                std::array::from_fn(|axis| at[axis] + f64::from(drawn.rest.lo[axis])),
+                std::array::from_fn(|axis| at[axis] + f64::from(drawn.rest.hi[axis])),
+            ),
+        };
         for axis in 0..3 {
-            lo[axis] = lo[axis].min(at[axis] + f64::from(drawn.rest.lo[axis]));
-            hi[axis] = hi[axis].max(at[axis] + f64::from(drawn.rest.hi[axis]));
+            lo[axis] = lo[axis].min(part_lo[axis]);
+            hi[axis] = hi[axis].max(part_hi[axis]);
         }
     }
     if !(0..3).all(|axis| lo[axis].is_finite() && hi[axis].is_finite()) {
@@ -341,6 +390,14 @@ fn plan(
         let Some(target) = b.node_id_of(drawn.object) else {
             continue;
         };
+        // A part drawn in its own node's space enters the shared frame
+        // whole, rotation and scale included, so it bends in the frame's
+        // axes and units as one body with the rest.
+        if let Some(centre) = centre_node.filter(|_| drawn.rest.own_space) {
+            let frame_transform = b.node_id_of(centre);
+            placements.push(TargetPlacement { target, offset: [0.0; 3], live: None, radius: own_radius(drawn), frame_transform });
+            continue;
+        }
         let live = centre_node.and_then(|centre| place(b, card, &frame.role, drawn, centre));
         let offset = if shatter {
             let source = b.input(drawn.object, "vertices").map(|(source, _)| source);
@@ -351,48 +408,22 @@ fn plan(
         } else {
             std::array::from_fn(|axis| at[axis] - centre[axis])
         };
-        placements.push(TargetPlacement { target, offset, live });
+        placements.push(TargetPlacement { target, offset, live, radius: own_radius(drawn), frame_transform: None });
     }
     FramePlan { placements, radius }
 }
 
-/// A Copy card's frame is where its target's copies live. A copies body lays
-/// them out in the world about its own transform, so a target's offset is
-/// that origin, read live as the target moves: Copy Blend's second layout
-/// sits around it. Copies that live in their surface's frame (On Surface),
-/// and a target with no copies, sit at their own origin.
-fn copies_plan(b: &mut Builder<'_>, card: &Item, frame: &CardFrame) -> FramePlan {
-    let mut placements = Vec::with_capacity(frame.members.len());
-    for drawn in &frame.members {
-        let Some(target) = b.node_id_of(drawn.object) else {
-            continue;
-        };
-        let (offset, live) = copies_origin(b, card, &frame.role, drawn).map_or(([0.0; 3], None), |(rest, live)| (rest, Some(live)));
-        placements.push(TargetPlacement { target, offset, live });
-    }
+/// A Copy card's frame: copy modifiers move whole copies through their
+/// instances, which the copies body already lays out in the world, so a
+/// target needs no offset. Copy Blend reads the body's own layout rows
+/// through the copies context instead.
+fn copies_plan(b: &mut Builder<'_>, frame: &CardFrame) -> FramePlan {
+    let placements = frame.members.iter()
+        .filter_map(|drawn| {
+            Some(TargetPlacement { target: b.node_id_of(drawn.object)?, offset: [0.0; 3], live: None, radius: own_radius(drawn), frame_transform: None })
+        })
+        .collect();
     FramePlan { placements, radius: MIN_RADIUS }
-}
-
-/// The origin `drawn`'s copies body lays its copies out about: the body's
-/// transform at rest (translation only, as the compiler starts it), and the
-/// node that reads it live.
-fn copies_origin(b: &mut Builder<'_>, card: &Item, role: &str, drawn: &Drawn) -> Option<([f64; 3], NodeId)> {
-    let (body, port) = b.input(drawn.object, "instances")?;
-    if port != "instances" || b.node_type(body) != Some(BODY_TYPE_ID) {
-        return None;
-    }
-    let (transform, from_port) = b.input(body, "transform")?;
-    let mut rest = [0.0; 3];
-    let mut at = Some(transform);
-    while let Some(node) = at {
-        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
-            rest[axis] += b.started(node, param).map_or(0.0, f64::from);
-        }
-        at = b.input(node, "parent").map(|(above, _)| above);
-    }
-    let origin = b.add_named(node(card.id.as_str(), &format!("origin:{role}:{}", drawn.item)), "node.transform_components");
-    b.wire(transform, &from_port, origin, "transform");
-    Some((rest, b.node_id_of(origin)?))
 }
 
 /// The transform a Group's parts are placed in: its frame, or `None` at a

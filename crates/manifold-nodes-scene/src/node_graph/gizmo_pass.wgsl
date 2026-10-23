@@ -17,6 +17,7 @@ struct Params {
     _pad: f32,
 };
 
+// `a.w` is 1 for a line with square ends (`WorldLine::caps`), 0 without.
 struct Line {
     a: vec4<f32>,
     b: vec4<f32>,
@@ -27,11 +28,16 @@ struct Line {
 @group(0) @binding(1) var<storage, read> lines: array<Line>;
 @group(0) @binding(2) var scene_depth: texture_2d<f32>;
 
+// `across` is the signed distance from the line's centre in pixels, linear
+// on screen, so the fragment can cover the line's edge by area.
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) edge: f32,
+    @location(1) @interpolate(linear) across: f32,
 };
+
+// Pixels the quad reaches past the line's edge, for the edge's coverage ramp.
+const FEATHER: f32 = 1.0;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
@@ -49,33 +55,43 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
         dir = vec2<f32>(1.0, 0.0);
     }
     let normal = vec2<f32>(-dir.y, dir.x);
-    // Two triangles: (a-, a+, b-) and (b-, a+, b+).
+    // Two triangles: (a-, a+, b-) and (b-, a+, b+). The quad spans the
+    // segment exactly along it, so a curve's pieces meet without
+    // overlapping (an overlap would draw a faint line twice), and reaches a
+    // pixel past the edge across it. A capped line reaches half its width
+    // past each end too, so two box edges fill their shared corner.
     let at_b = corner == 2u || corner == 3u || corner == 5u;
     let plus = corner == 1u || corner == 4u || corner == 5u;
     var clip = ca;
     var screen = sa;
-    var along = -1.0;
     if at_b {
         clip = cb;
         screen = sb;
-        along = 1.0;
     }
     var side = -1.0;
     if plus {
         side = 1.0;
     }
-    let moved = screen + (normal * side + dir * along) * p.half_width;
+    let reach = p.half_width + FEATHER;
+    var along = -1.0;
+    if at_b {
+        along = 1.0;
+    }
+    let cap = line.a.w * p.half_width;
+    let moved = screen + normal * side * reach + dir * along * cap;
     let ndc = moved * 2.0 / p.target_size;
     var out: VsOut;
     out.pos = vec4<f32>(ndc * clip.w, clip.z, clip.w);
     out.color = line.color;
-    out.edge = side;
+    out.across = side * reach;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    var alpha = in.color.a * clamp((1.0 - abs(in.edge)) * p.half_width + 0.5, 0.0, 1.0);
+    // The share of this pixel the line covers: full inside, ramping to none
+    // over the pixel that straddles the edge.
+    var alpha = in.color.a * clamp(p.half_width + 0.5 - abs(in.across), 0.0, 1.0);
     if p.mode != 1u {
         let uv = in.pos.xy / p.target_size;
         let texel = vec2<i32>(clamp(uv * p.depth_size, vec2<f32>(0.0), p.depth_size - vec2<f32>(1.0)));

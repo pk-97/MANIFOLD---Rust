@@ -62,6 +62,21 @@ pub struct SceneMeshReferenceFrame {
     /// value): a part that moves inside a frame it shares with others.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_offset: Option<NodeId>,
+    /// The target's own rest radius, mesh units: Math View sizes its marks
+    /// from it, so a small item in a big scene keeps marks that outline it.
+    /// `None` (a frame captured outside the scene compiler) reads as
+    /// `scene_radius`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_radius: Option<f64>,
+    /// The frame itself as a transform node, when the target's mesh is
+    /// carried whole into it: before the card's stages its vertices enter
+    /// the frame through the transform and parent transform the target
+    /// draws with, and after them they leave it, so the frame's axes and
+    /// units reach the recipe as well as its place. `source_offset` is then
+    /// zero. An imported part drawn in its own node's space needs it to bend
+    /// as one body with the rest of its group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_transform: Option<NodeId>,
 }
 
 /// Return the admission diagnostic for an authored parameter that is part of
@@ -249,6 +264,15 @@ pub enum SceneContextValue {
     SourceOffsetX,
     SourceOffsetY,
     SourceOffsetZ,
+    /// The Scene Loop cell's live length: the owner's `node.loop_cell`
+    /// output. With none in the owner, the stage port stays unwired and the
+    /// node it feeds reads its own param.
+    LoopCell,
+    /// The target's copies body: each stage port takes the body's output of
+    /// the same name (`copy_frame`, `copy_box`, `copy_turn`, `copy_grid`,
+    /// `active_count`). A target whose copies no body lays out leaves the
+    /// port unwired.
+    Copies,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

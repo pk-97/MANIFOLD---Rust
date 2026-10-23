@@ -114,6 +114,7 @@ pub(crate) fn draw_instances(b: &mut Builder<'_>, body: u32, object: u32, group_
 /// emission order, and size the world's copy-group family to match.
 pub(crate) fn join_world(b: &mut Builder<'_>) {
     place_on_surfaces(b);
+    scale_copies(b);
     if b.copy_bodies.is_empty() {
         return;
     }
@@ -135,6 +136,24 @@ pub(crate) fn join_world(b: &mut Builder<'_>) {
         b.wire(*body, "body", world, &format!("copies_{group}"));
     }
     b.set_number(world, "copy_groups", bodies.len() as f32);
+}
+
+/// Draw every laid-out copy at its prototype's per-axis scale: the world's
+/// instances carry one uniform scale, and the body's `copy_scale` the rest,
+/// applied inside each copy in Group space. Copies on a surface draw by the
+/// surface's instances and the item's own transform instead
+/// ([`place_on_surfaces`] has already rewired them).
+fn scale_copies(b: &mut Builder<'_>) {
+    let doc = b.doc;
+    let mut copied = Vec::new();
+    doc.walk(|item, _| copied.push(item));
+    for item in copied {
+        let Some(body) = b.id(item.id.as_str(), COPIES_ROLE) else { continue };
+        for object in draws_of(b, item, body) {
+            b.wire(body, "copy_scale", object, "copy_scale");
+            b.set(object, "instances_space", SerializedParamValue::Enum { value: GROUP_SPACE });
+        }
+    }
 }
 
 /// Sit the copies of every item with On Surface set on that item's surface:

@@ -344,16 +344,17 @@ crate::param_tooltips!("node.grid_points", {
 
 crate::param_tooltips!("node.arrange_copies", {
     "max_capacity" => "The largest number of copies this node can ever hold. It sets the memory allocation, so size it for your worst case and leave it.",
-    "active_count" => "How many copies to actually place this frame, default 64. Slide it freely up to the max capacity to thin out or fill the field.",
-    "layout" => "The pattern the copies fall into, Grid, Ring, Spiral, or Random.",
-    "seed" => "Changes the random layout. Move it to get a different spread. Only matters when the layout is set to Random.",
-    "extent_x" => "How far the layout reaches along X, default 4. Larger values spread the copies wider apart.",
-    "extent_y" => "How far the layout reaches along Y, default 4. Larger values spread the copies wider apart.",
-    "extent_z" => "How far the layout reaches along Z, default 4. Larger values spread the copies wider apart.",
-    "base_scale" => "The size every copy starts at. 1 leaves the base mesh at its native size, higher grows them all together.",
-    "rot_x" => "Tilts every copy around the X axis by the same amount, in degrees.",
-    "rot_y" => "Spins every copy around the Y axis by the same amount, in degrees.",
-    "rot_z" => "Rolls every copy around the Z axis by the same amount, in degrees.",
+    "active_count" => "How many copies to place, default 64. A copies body's count replaces it when wired.",
+    "layout" => "The pattern the copies fall into: Grid, Scatter, Line, Ring, Spiral or Random, laid out as a copies body lays out its own.",
+    "columns" => "Copies a row, or a ring for Ring. A copies body's Columns replaces it when wired.",
+    "spacing" => "How far apart neighbours sit, in copy widths. A copies body's Spacing replaces it when wired.",
+    "box_x" => "One copy's width in metres, the unit Spacing counts along X. A copies body's box replaces it when wired.",
+    "box_y" => "One copy's height in metres, the unit Spacing counts along Y.",
+    "box_z" => "One copy's depth in metres, the unit Spacing counts along Z.",
+    "turn_x" => "Turns each copy about X inside the layout. A copies body's Turn replaces it when wired.",
+    "turn_y" => "Turns each copy about Y inside the layout.",
+    "turn_z" => "Turns each copy about Z inside the layout.",
+    "base_scale" => "Copy Size: scales every copy at this layout. 1 leaves each copy its own size.",
 });
 
 crate::param_tooltips!("node.nested_cubes_geometry", {

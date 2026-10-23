@@ -12,7 +12,7 @@ use manifold_core::scene_modifier_preset::{
 };
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
+use manifold_nodes_scene::node_graph::gltf_import::compile_combined_model_scene;
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 
 pub const MUSHROOM_FIXTURE: &str = concat!(
@@ -21,9 +21,12 @@ pub const MUSHROOM_FIXTURE: &str = concat!(
 );
 
 /// The scene every recipe is qualified against: the imported mushroom in
-/// the base scene.
+/// the base scene, as a photoscan with Combine Meshes on. Its parts sit in
+/// one unturned frame, which the fresh frame capture a recipe is inserted
+/// through requires; the scene compiler's own modifiers measure turned
+/// parts in their own frames instead.
 pub fn mushroom_host() -> Result<EffectGraphDef, String> {
-    compile_model_scene(Path::new(MUSHROOM_FIXTURE))
+    compile_combined_model_scene(Path::new(MUSHROOM_FIXTURE))
         .map(|(def, _)| def)
         .map_err(|error| format!("mushroom validation fixture failed: {error}"))
 }

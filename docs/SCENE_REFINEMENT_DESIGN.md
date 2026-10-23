@@ -50,7 +50,7 @@ Each lane: its own slot and `lane/refine-<name>` branch, one commit, then stop a
 - The uniform-scale and "positive scale up to 100" rules in `physics/copy_group.rs` are deleted. A copied Object's B matrix carries the prototype's per-axis scale only; position and rotation stay in the pose.
 - Spacing: ruling 10, one constant in `copies_body.rs` used by `scene_schema/copies.rs` and `copy_group.rs`.
 - Refusals name the item and the real reason, on the control they concern; no "Out of the physics world", no "can't move" on a Collider. A refused copy group draws at rest; a refused single Body stays where it was.
-- Physics on all cores: `bridge.c` sets `workerCount` to the cores minus two, at least one, using Box3D's built-in scheduler.
+- Physics on the performance cores: `bridge.c` sets `workerCount` to the performance cores minus one (the UI thread's; the content thread counts as a worker), at least one, using Box3D's built-in scheduler.
 - Copies share one collision shape instead of one cooked per copy.
 
 **P1d Materials** (Opus, medium).
@@ -65,7 +65,7 @@ Each lane: its own slot and `lane/refine-<name>` branch, one commit, then stop a
 
 **P2a Live dragging** (Opus, high).
 - The cut map's scan becomes a multi-block scan, so dragging Ordered Recon's Bands and Direction stays smooth.
-- Copies Count is live: a copy's place depends on its index and the layout rows, never on Count, so layouts grow from the first copy. New tail copies install on the tick they land, live and in export; existing copies keep their motion; physics carry adopts the live-added copies.
+- Copies Count is live. Line and Grid grow one way from the first copy, which sits on the origin, as Blender's Array does: no fill from the centre, no re-centring on Count. Ring spreads its copies evenly round the whole circle, up to Columns a ring, then starts the next ring, as Cinema 4D's radial Cloner does, so its copies slide round as Count changes. New tail copies install on the tick they land, live and in export; existing Body copies keep their motion (only the rest layout changes); physics carry adopts the live-added copies.
 - Swarm Count is live: new particles spawn where a reseed would put those slots, seeded by index and epoch; the mover steps only active particles.
 
 **P2b Panel** (Sonnet, high; strict checklist).
@@ -82,13 +82,14 @@ Each lane: its own slot and `lane/refine-<name>` branch, one commit, then stop a
 - Gizmos: smooth anti-aliased lines at a readable width, round circles. A radial force shows its radius and two falloff shells (half strength and a tenth). A Vortex shows a cylinder round its axis, with the axis.
 
 **P2d Scan colliders** (Opus, high).
-- Correctness first: Box3D's per-contact triangle buffer moves to per-worker scratch and grows, so the exact mesh collides correctly at any density; the patch is listed in `native/box3d/README.md`.
-- Then speed without losing the shape: the `CollisionShape` service simplifies a Collider's contact mesh with an error-bounded method (quadric edge collapse with a maximum geometric error, as meshoptimizer's `simplify` does), never by vertex clustering. The maximum distance between the contact mesh and the drawn surface is a named world-space tolerance (start at 5 mm), reported per mesh, and cached by scale. A small body or a splash must rest on the surface it sees. Ported code gets file-header credit and a `THIRD_PARTY_NOTICES.md` entry.
+- Box3D's per-contact triangle buffer is per-worker scratch that grows, so the exact mesh collides correctly at any density; the patch is listed in `native/box3d/README.md`.
+- A Collider's contact mesh is the exact mesh, less the slivers Box3D drops (under 0.25 mm², far under its 5 mm contact skin). It is never simplified: simplification bought no step time. A small body or a splash rests on the surface it sees.
+- Measured cost: worst case 0.78 ms per step, a 1.15 m cube on the cliff scan at 0.049 scale.
 - Water keeps its own distance lattice from the exact mesh; it does not read the contact mesh.
 
 ### Phase 3: polish
 
-**P3a Ambient occlusion** (Opus, high). A falloff at its radius and a per-frame rotation first; the lines must be gone before the next step. Then history: last frame's AO reprojected by the render's velocity output, rejected per pixel where depth disagrees, reset on a camera shot change and a seek, never on a geometry change.
+**P3a Ambient occlusion** (Opus, high). A falloff at its radius and a per-frame rotation first; the lines must be gone before the next step. Then history: last frame's AO reprojected by the render's velocity output, rejected per pixel where depth disagrees, reset on a camera shot change, a resize and a state clear, never on a seek, a loop point or a geometry change.
 
 **P3b Scene Loop** (Opus, medium). Ruling 7. Rows only a Loop camera reads are hidden until one exists. The cell is measured from the rest layout, the copies' layout box included, never from moving bodies.
 
@@ -136,5 +137,5 @@ Those of the base doc, plus:
 
 ## 7. Costs
 
-- A scene saved with an Attractor or an Explosion does not load that scene layer after P2c; the closed format has no fallback (D-119, no old-show compatibility). Peter's clifTesting project holds an Attractor.
+- A project saved with an Attractor or an Explosion does not open at all after P2c: the loader reads the whole project file in one pass, so one unknown force fails the project, not only its scene layer. The closed format has no fallback (D-119, no old-show compatibility). Peter's clifTesting project holds an Attractor.
 - Dragging Layout, Spacing, Columns or Turn on Body copies re-lays that pile each frame, as today.

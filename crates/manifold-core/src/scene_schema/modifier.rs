@@ -20,7 +20,7 @@ use super::fields::{
 };
 use super::{Exposure, PropertyRow, Reach, perform, row};
 use crate::scene_doc::{
-    DEFAULT_PIECES, Item, ItemFields, ItemId, ModifierFields, ModifierTargets, ModifierTexture, ModifierType, PhysicsSetting,
+    DEFAULT_PIECES, Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierTexture, ModifierType, PhysicsSetting,
     SceneDoc, Shape,
 };
 
@@ -196,8 +196,12 @@ pub struct ModifierTypeEntry {
     pub label: &'static str,
     /// The stock scene modifier recipe it compiles.
     pub recipe: &'static str,
-    /// It moves vertices, so a built-in shape it targets gets mesh detail.
+    /// It moves vertices, so Shatter leaves a shape it reaches whole
+    /// ([`shatter_parts`]).
     pub deforms: bool,
+    /// It bends surfaces smoothly, so a built-in shape it reaches is split
+    /// fine enough to curve. Cuts, snaps and breaks keep the shape as it is.
+    pub smooth_detail: bool,
     pub rows: &'static [PropertyRow],
 }
 
@@ -209,14 +213,21 @@ pub(super) const fn entry(
     deforms: bool,
     rows: &'static [PropertyRow],
 ) -> ModifierTypeEntry {
-    ModifierTypeEntry { modifier, key, label, recipe, deforms, rows }
+    ModifierTypeEntry { modifier, key, label, recipe, deforms, smooth_detail: false, rows }
+}
+
+impl ModifierTypeEntry {
+    /// Marks a type whose bends need a smooth surface.
+    pub(super) const fn smooth(self) -> Self {
+        Self { smooth_detail: true, ..self }
+    }
 }
 
 /// The mesh and scene modifiers.
 const CORE_TYPES: [ModifierTypeEntry; 7] = [
     entry(ModifierType::SurfacePeel, "surface_peel", "Surface Peel", "SurfacePeel", true, &SURFACE_PEEL_ROWS),
     entry(ModifierType::OrderedRecon, "ordered_recon", "Ordered Recon", "OrderedRecon", true, &ORDERED_RECON_ROWS),
-    entry(ModifierType::SurfaceWaves, "surface_waves", "Surface Waves", "SurfaceWaves", true, &SURFACE_WAVES_ROWS),
+    entry(ModifierType::SurfaceWaves, "surface_waves", "Surface Waves", "SurfaceWaves", true, &SURFACE_WAVES_ROWS).smooth(),
     entry(ModifierType::SpatialEchoes, "spatial_echoes", "Spatial Echoes", "SpatialEchoes", false, &SPATIAL_ECHOES_ROWS),
     entry(
         ModifierType::ElasticSculpture,
@@ -225,7 +236,8 @@ const CORE_TYPES: [ModifierTypeEntry; 7] = [
         "ElasticSculpture",
         true,
         &ELASTIC_SCULPTURE_ROWS,
-    ),
+    )
+    .smooth(),
     entry(
         ModifierType::VortexFragments,
         "vortex_fragments",
@@ -335,7 +347,7 @@ pub fn shatter_parts(doc: &SceneDoc, shatter: &ItemId, body: &Item) -> Result<Ve
                 .collect();
         }
         let inside = item.id == body.id || ancestors.iter().any(|above| above.id == body.id);
-        if inside && item.kind() == crate::scene_doc::ItemKind::Object {
+        if inside && item.kind() == ItemKind::Object {
             if bending.iter().any(|targets| reaches(targets, item, ancestors)) {
                 bent = true;
             } else {
@@ -350,7 +362,7 @@ pub fn shatter_parts(doc: &SceneDoc, shatter: &ItemId, body: &Item) -> Result<Ve
     } else if parts.is_empty() {
         Err("Nothing inside to break: add an Object")
     } else if parts.len() > 64 {
-        Err("More than 64 unbent parts: a body breaks into at most 64 pieces")
+        Err("More than 64 unbent parts: each piece loads the whole mesh twice, so 64 is the memory limit")
     } else {
         Ok(parts)
     }
@@ -450,11 +462,29 @@ pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
         .then_some("An Ocean is endless: it has no bounds for a modifier to bend in")
 }
 
-/// A Modifier's target picks: Objects and Groups; never an Ocean; Shatter
-/// refuses a target it cannot break.
-fn target_refused(doc: &SceneDoc, modifier: &Item, target: &Item) -> Option<&'static str> {
-    modifier_refuses(target).or_else(|| is_shatter(&modifier.fields).then(|| shatter_refuses(doc, modifier, target)).flatten())
+/// What a new card aims at: the Objects and Groups in `selection` a card can
+/// aim at, or the whole scene when none is selected.
+pub fn new_card_targets(doc: &SceneDoc, selection: &[ItemId]) -> ModifierTargets {
+    let aimed: Vec<ItemId> = selection
+        .iter()
+        .filter(|id| doc.find(id).is_some_and(|item| matches!(item.kind(), ItemKind::Object | ItemKind::Group) && modifier_refuses(item).is_none()))
+        .cloned()
+        .collect();
+    if aimed.is_empty() { ModifierTargets::Scene } else { ModifierTargets::Items(aimed) }
 }
+
+/// A Modifier's target picks: Objects and Groups; never an Ocean; Shatter
+/// refuses a target it cannot break, a copy type one without Copies.
+fn target_refused(doc: &SceneDoc, modifier: &Item, target: &Item) -> Option<&'static str> {
+    let moves_copies = matches!(&modifier.fields, ItemFields::Modifier(card) if super::copies::acts_on_copies(card.modifier));
+    modifier_refuses(target)
+        .or_else(|| is_shatter(&modifier.fields).then(|| shatter_refuses(doc, modifier, target)).flatten())
+        .or_else(|| (moves_copies && !super::copies::holds_copies(target)).then_some(super::copies::TURN_ON_COPIES))
+}
+
+/// The Modifier fields its card header carries instead of rows: Type and On
+/// (SCENE_DOCUMENT_DESIGN.md section 8).
+pub const HEADER_FIELDS: [&str; 2] = ["modifier_type", "on"];
 
 pub static MODIFIER_FIELDS: [FieldRow; 6] = [
     FieldRow {

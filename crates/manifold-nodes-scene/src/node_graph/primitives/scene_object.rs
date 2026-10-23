@@ -40,6 +40,7 @@ manifold_node_engine::primitive! {
     inputs: {
         vertices: Array(MeshVertex) optional,
         indices: Array(u32) optional,
+        live_count: Array(u32) optional,
         weights: Array(f32) optional,
         topology: Array(Vec4Vertex) optional,
         transform: Transform optional,
@@ -67,6 +68,7 @@ manifold_node_engine::primitive! {
         volume_thickness_map: Texture2D optional,
         instances: Array(InstanceTransform) optional,
         instance_count: ScalarF32 optional,
+        copy_scale: Transform optional,
         visible: ScalarF32 optional,
         cast_shadows: ScalarF32 optional,
         gain: ScalarF32 optional,
@@ -131,7 +133,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
+    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. Optional live_count is an Array(u32) whose first GPU word is how many leading vertices are live (a fragment cut map's live_count); an unindexed draw stops there when the vertices carry no live extent of their own. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
     examples: [],
     picker: { label: "Scene Object", category: Driver },
     summary: "Binds one object's mesh, transform, material, maps, instances, and optional live count into a single wire. Wire it into a render_scene object slot.",
@@ -147,7 +149,15 @@ impl Primitive for SceneObjectNode {
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
         let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
         let gain = ctx.scalar_or_param("gain", 1.0);
-        let transform = ctx.inputs.transform("transform").unwrap_or_default();
+        let mut transform = ctx.inputs.transform("transform").unwrap_or_default();
+        // A copy group's instances carry one uniform scale; `copy_scale` is the
+        // rest of the prototype's per-axis scale, applied inside each copy
+        // under the object's own chain (Group space).
+        if let Some(copy) = ctx.inputs.transform("copy_scale") {
+            let [x, y, z] = copy.scale;
+            let scale = [[x, 0.0, 0.0, 0.0], [0.0, y, 0.0, 0.0], [0.0, 0.0, z, 0.0], [0.0, 0.0, 0.0, 1.0]];
+            transform.parent = manifold_node_engine::mesh::pipeline::mat4_mul(scale, transform.parent);
+        }
         let parent_transform = ctx.inputs.transform("parent_transform");
         let parent_visible = ctx.scalar_or_param("parent_visible", 1.0) > 0.5;
         let material = ctx.inputs.material("material");
@@ -191,6 +201,7 @@ impl Primitive for SceneObjectNode {
             material,
             mesh,
             indices: ctx.inputs.slot_of("indices"),
+            live_count: ctx.inputs.slot_of("live_count"),
             weights,
             topology,
             base_color_map,

@@ -786,6 +786,36 @@ fn changing_material_reseeds_sss_history_without_stale_energy() {
     );
 }
 
+/// Subsurface on a transmissive material aborts the frame. The abort clears
+/// to magenta and names its cause, so the picture never keeps what the
+/// recycled target held before: the white picture Subsurface left after Glass.
+#[test]
+fn subsurface_on_a_transmissive_material_draws_magenta_not_the_previous_picture() {
+    let tap = manifold_node_engine::exec::effect_node::NodeErrorTap::new();
+    let stats = render_with_frame_mutation(&scene_json(true, 1.0, [0.4; 3], [0.8; 3], 1, 1), |runtime, frame| {
+        if frame != WARMUP_FRAMES / 2 {
+            return;
+        }
+        let material = runtime.graph.instance_by_node_id(&NodeId::new("mat")).expect("material node must exist");
+        runtime.graph.set_param(material, "transmission", ParamValue::Float(1.0)).expect("transmission param");
+    });
+    let frames = frame_means(&stats);
+    assert!(
+        rgb_luma(frames[WARMUP_FRAMES as usize / 2 - 1]) > 0.05,
+        "the opaque frames before the change must draw a picture: {frames:?}"
+    );
+    let not_magenta = stats.last_rgba.chunks_exact(8).filter(|chunk| {
+        let [r, g, b, a] = std::array::from_fn(|c| f16::from_le_bytes([chunk[c * 2], chunk[c * 2 + 1]]).to_f32());
+        !(r > 0.99 && g < 0.01 && b > 0.99 && a > 0.99)
+    }).count();
+    assert_eq!(not_magenta, 0, "the aborted frame must be magenta everywhere, not the previous picture");
+    let errors = tap.take();
+    assert!(
+        errors.iter().any(|error| error.contains("Subsurface scattering requires an opaque PBR surface")),
+        "the abort must name its cause: {errors:?}"
+    );
+}
+
 #[test]
 fn random_walk_pure_absorption_matches_infinite_slab_transmittance() {
     let radius = 2.0;

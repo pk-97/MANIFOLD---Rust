@@ -636,7 +636,7 @@ fn math_view_arrows_draw_after_every_mesh_modifier() {
     };
     let (w, h) = (320, 180);
     for (name, must_draw_arrows) in [
-        ("VortexFragments", true), ("SurfacePeel", true), ("MaskedPeel", true),
+        ("VortexFragments", true), ("SurfacePeel", true),
         ("OrderedRecon", true), ("SurfaceWaves", true), ("ElasticSculpture", true),
         ("SpatialEchoes", false),
     ] {

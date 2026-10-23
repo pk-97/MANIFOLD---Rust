@@ -1562,8 +1562,6 @@ mod tests {
     const LONG_NAMES: &[&str] = &[
         "Water — Floating Box (Live GPU)",
         "Water — Dam Break (GPU Surface)",
-        "Ordered Recon — Clip Gesture",
-        "Surface Peel - Clip Hit",
         "Blob Track V2 — Colour",
         "Chromatic Aberration",
     ];

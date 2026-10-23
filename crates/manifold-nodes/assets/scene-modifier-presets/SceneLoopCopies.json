@@ -9,13 +9,11 @@
     "available": false,
     "params": [
       { "id": "pattern_length", "name": "Pattern", "min": 1.0, "max": 8.0, "defaultValue": 1.0, "wholeNumbers": true },
-      { "id": "cell_size", "name": "Spacing", "min": 0.01, "max": 1000.0, "defaultValue": 10.0 },
       { "id": "jitter_amount", "name": "Jitter", "min": 0.0, "max": 1.0, "defaultValue": 0.0 },
       { "id": "enabled", "name": "Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "isToggle": true }
     ],
     "bindings": [
       { "id": "pattern_length", "label": "Pattern", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "scene_array", "param": "pattern_length" } },
-      { "id": "cell_size", "label": "Spacing", "defaultValue": 10.0, "target": { "kind": "node", "nodeId": "scene_array", "param": "cell_size" } },
       { "id": "jitter_amount", "label": "Jitter", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "scene_array", "param": "jitter_amount" } },
       { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "loop_switch", "param": "selector" } },
       { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "loop_count_switch", "param": "selector" } }
@@ -30,7 +28,8 @@
           "group": "loop_corridor_stage",
           "scope": "scene",
           "inputs": [
-            { "port": "camera", "source": { "previous": { "endpoint": "camera" } } }
+            { "port": "camera", "source": { "previous": { "endpoint": "camera" } } },
+            { "port": "cell_size", "source": { "context": { "value": "loopCell" } } }
           ],
           "outputs": []
         },
@@ -58,7 +57,7 @@
       "handle": "SceneLoopCorridorStage",
       "group": {
         "interface": {
-          "inputs": [ { "name": "camera", "portType": "Camera" } ],
+          "inputs": [ { "name": "camera", "portType": "Camera" }, { "name": "cell_size", "portType": "Scalar(F32)" } ],
           "outputs": [ { "name": "instances", "portType": "Array(InstanceTransform)" } ]
         },
         "nodes": [
@@ -76,10 +75,12 @@
               "jitter_amount": { "type": "Float", "value": 0.0 }
             }
           },
-          { "id": 3, "nodeId": "loop_corridor_output", "typeId": "system.group_output", "handle": "output" }
+          { "id": 3, "nodeId": "loop_corridor_output", "typeId": "system.group_output", "handle": "output" },
+          { "id": 4, "nodeId": "group_cell_size", "typeId": "system.group_input", "handle": "cell_size" }
         ],
         "wires": [
           { "fromNode": 1, "fromPort": "camera", "toNode": 2, "toPort": "camera" },
+          { "fromNode": 4, "fromPort": "cell_size", "toNode": 2, "toPort": "cell_size" },
           { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "instances" }
         ]
       }

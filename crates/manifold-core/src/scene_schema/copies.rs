@@ -14,8 +14,9 @@ use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{FieldControl, FieldRow, FieldValue, enabled, is_object_or_group, wrong_value};
 use super::modifier::{ModifierTypeEntry, ON_IS_THE_TOGGLE, entry, held, live};
-use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
-use crate::scene_doc::{Item, ItemFields, ModifierType, Shape};
+use super::{Exposure, PropertyRow, Reach, perform, row, setup};
+use crate::copies_body::SPACING_MIN;
+use crate::scene_doc::{Item, ItemFields, ModifierTargets, ModifierType, SceneDoc, Shape};
 
 /// The role of the copies body inside its item.
 pub const COPIES_ROLE: &str = "copies";
@@ -62,9 +63,9 @@ const fn internal(property: &'static str, param: &'static str, why: &'static str
 }
 
 pub static COPIES_ROWS: [PropertyRow; 32] = [
-    card("count", "copy_count", perform(CardBand::Scene, 0)).default(START_COUNT),
+    card("count", "copy_count", perform(CardBand::Scene, 0)).default(START_COUNT).tip(crate::copies_body::MAX_COPIES_REASON),
     card("layout", "copy_layout", perform(CardBand::Scene, 1)).when(laid_out),
-    card("spacing", "copy_size_spacing", perform(CardBand::Scene, 2)).unit(Unit::SizeMultiple).limit(AT_LEAST_ZERO).when(laid_out),
+    card("spacing", "copy_size_spacing", perform(CardBand::Scene, 2)).unit(Unit::SizeMultiple).limit(HardLimit::AtLeast(SPACING_MIN)).when(laid_out),
     card("columns", "copy_columns", setup()).when(laid_out),
     card("turn_x", "copy_turn_x", setup()).limit(HardLimit::Unlimited).when(laid_out),
     card("turn_y", "copy_turn_y", setup()).limit(HardLimit::Unlimited).when(laid_out),
@@ -197,22 +198,49 @@ pub static COPY_NOISE_ROWS: [PropertyRow; 8] = [
     held("enabled", ON_IS_THE_TOGGLE),
 ];
 
-/// Copy Blend: the copies move toward a second layout as Mix rises.
-pub static COPY_BLEND_ROWS: [PropertyRow; 9] = [
+/// Copy Blend: the copies move toward a second layout as Mix rises. The
+/// second layout is the copies' own with only Layout switched, so it takes
+/// their Count, Spacing, Columns and Turn.
+pub static COPY_BLEND_ROWS: [PropertyRow; 4] = [
     live("mix", 1),
     live("layout", 2),
-    live("count", 3),
-    live("width", 4),
-    live("height", 5),
-    live("depth", 6),
-    live("size", 7),
-    live("seed", 8),
+    live("size", 3),
     held("enabled", ON_IS_THE_TOGGLE),
 ];
 
 /// Whether a Modifier type acts on an item's copies rather than its mesh.
 pub fn acts_on_copies(modifier: ModifierType) -> bool {
     COPY_FIELD_TYPES.iter().any(|entry| entry.modifier == modifier)
+}
+
+/// Why a copy Modifier is not offered for a target (SCENE_REFINEMENT_DESIGN
+/// ruling 2): it moves whole copies, so it acts only where Copies is on.
+pub const TURN_ON_COPIES: &str = "Turn on Copies to move them";
+
+/// Whether `item`, or anything inside it, has Copies on.
+pub fn holds_copies(item: &Item) -> bool {
+    item.fields.copies() || item.children.iter().any(holds_copies)
+}
+
+/// Why a copy Modifier aimed at `targets` would move nothing: a target
+/// without Copies, or a whole scene where nothing has them.
+pub fn copies_refused(doc: &SceneDoc, targets: &ModifierTargets) -> Option<&'static str> {
+    let moves = match targets {
+        ModifierTargets::Scene => doc.items.iter().any(holds_copies),
+        ModifierTargets::Items(ids) => ids.iter().all(|id| doc.find(id).is_some_and(holds_copies)),
+    };
+    (!moves).then_some(TURN_ON_COPIES)
+}
+
+/// Why the card `item` cannot swap to the copy type `key`: its targets have
+/// no copies to move.
+pub(super) fn type_moves_no_copies(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> Option<&'static str> {
+    let ItemFields::Modifier(card) = &item.fields else { return None };
+    if field != "modifier_type" {
+        return None;
+    }
+    COPY_FIELD_TYPES.iter().find(|entry| entry.key == key && entry.modifier != card.modifier)?;
+    copies_refused(doc, &card.targets)
 }
 
 /// The copy field Modifier types, in menu order.
@@ -222,3 +250,38 @@ pub(super) const COPY_FIELD_TYPES: [ModifierTypeEntry; 4] = [
     entry(ModifierType::CopyNoise, "copy_noise", "Copy Noise", "CopyNoise", false, &COPY_NOISE_ROWS),
     entry(ModifierType::CopyBlend, "copy_blend", "Copy Blend", "CopyBlend", false, &COPY_BLEND_ROWS),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_doc::{ItemId, ModifierFields, ObjectFields};
+
+    /// A copy type is offered only where its targets have Copies on
+    /// (SCENE_REFINEMENT_DESIGN ruling 2), in the Type list and the Targets
+    /// picker alike.
+    #[test]
+    fn copy_types_need_copies_on_their_targets() {
+        let scene = |copies: bool| {
+            let cube = Item::new(ItemId::new("cube"), "Cube", ItemFields::Object(ObjectFields { copies, ..ObjectFields::default() }));
+            let card = Item::new(
+                ItemId::new("card"),
+                "Bend",
+                ItemFields::Modifier(ModifierFields {
+                    modifier: ModifierType::Bend,
+                    targets: ModifierTargets::Items(vec![ItemId::new("cube")]),
+                    ..ModifierFields::default()
+                }),
+            );
+            SceneDoc { items: vec![cube, card], ..SceneDoc::default() }
+        };
+        let without = scene(false);
+        let card = without.find(&ItemId::new("card")).unwrap();
+        assert_eq!(super::super::choice_disabled(&without, card, "modifier_type", "copy_wave"), Some(TURN_ON_COPIES));
+        assert_eq!(super::super::choice_disabled(&without, card, "modifier_type", "twist"), None);
+        assert_eq!(copies_refused(&without, &ModifierTargets::Scene), Some(TURN_ON_COPIES));
+        let with = scene(true);
+        let card = with.find(&ItemId::new("card")).unwrap();
+        assert_eq!(super::super::choice_disabled(&with, card, "modifier_type", "copy_wave"), None);
+        assert_eq!(copies_refused(&with, &ModifierTargets::Scene), None);
+    }
+}

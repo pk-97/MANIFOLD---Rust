@@ -82,6 +82,12 @@ impl Run {
         }
     }
 
+    /// Write `value` to card row `id` mid-run, as a drag does.
+    fn set(&mut self, id: &str, value: f32) {
+        assert!(self.fx.set_base_param(id, value), "the scene has a {id} row");
+        self.runtime.apply_param_values(&self.fx.params);
+    }
+
     fn array<T: bytemuck::Pod>(&self, node: &str, port: &str) -> Vec<T> {
         let dumps = self.runtime.dump_arrays_all();
         let dump = dumps
@@ -203,6 +209,49 @@ fn a_force_blows_the_same_way_however_the_emitter_turns() {
             "the turned emitter's swarm moves as the unturned one does: {turned:?} vs {still:?}"
         );
     }
+}
+
+/// Count is live: raised from 1,000 to 50,000 mid-play, the first thousand
+/// particles move on exactly as in a run whose Count never moved, and the
+/// new ones join where a reseed would put them, starting on the frame of the
+/// edit.
+#[test]
+fn count_grows_live_and_the_swarm_keeps_moving() {
+    let doc = || {
+        let mut doc = SceneDoc::base();
+        swarm(&mut doc, EmitFrom::Box, DrawAs::Cube);
+        let ItemFields::Force(mut force) = ItemFields::default_for(ItemKind::Force) else { unreachable!() };
+        force.force = ForceType::Uniform;
+        add(&mut doc, None, "push", ItemFields::Force(force));
+        doc
+    };
+    let values = [
+        NO_CUBE,
+        ("swarm.count", 1_000.0),
+        ("push.direction_x", 1.0),
+        ("push.direction_y", 0.0),
+        ("push.direction_z", 0.0),
+        ("swarm.size", 0.05),
+    ];
+    let mut still = Run::new(doc(), &values, &["swarm:move"]);
+    let mut grown = Run::new(doc(), &values, &["swarm:move"]);
+    still.advance(20);
+    grown.advance(20);
+    let before: Vec<Particle> = grown.array("swarm:move", "out");
+    grown.set("swarm.count", 50_000.0);
+    still.advance(10);
+    grown.advance(10);
+    let kept: Vec<Particle> = still.array("swarm:move", "out");
+    let after: Vec<Particle> = grown.array("swarm:move", "out");
+    let bits = |p: &Particle| [p.position, p.velocity].map(|v| v.map(f32::to_bits));
+    let moved = (0..1_000).filter(|&i| after[i].position != before[i].position).count();
+    let new = &after[1_000..50_000];
+    let (old_age, new_age) = (after[0].age, new.iter().map(|p| p.age).fold(f32::MIN, f32::max));
+    println!("SCENE_SWARM count moved={moved} new_alive={} old_age={old_age} new_age={new_age}", new.iter().filter(|p| p.life > 0.0).count());
+    assert!((0..1_000).all(|i| bits(&after[i]) == bits(&kept[i])), "the first thousand move on as if Count never moved");
+    assert_eq!(moved, 1_000, "and they kept moving through the edit");
+    assert!(new.iter().all(|p| p.life > 0.0 && p.position.iter().all(|c| c.abs() < 3.0)), "every new particle is alive in the seed box");
+    assert!(new_age < old_age - 0.2, "the new particles started at the edit: age {new_age} against {old_age}");
 }
 
 #[test]

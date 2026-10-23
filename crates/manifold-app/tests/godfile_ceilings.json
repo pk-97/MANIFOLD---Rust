@@ -39,7 +39,7 @@
     "crates/manifold-ui/src/panels/layer_header.rs": 3549,
     "crates/manifold-ui/src/panels/mod.rs": 450,
     "crates/manifold-ui/src/panels/param_card/mod.rs": 4337,
-    "crates/manifold-ui/src/panels/param_slider_shared/builders.rs": 2508,
+    "crates/manifold-ui/src/panels/param_slider_shared/builders.rs": 2516,
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": 2036,
     "crates/manifold-ui/src/panels/viewport.rs": 2818,
     "crates/manifold-water-gpu-flip/src/primitives/gpu_flip_step.rs": 3142,

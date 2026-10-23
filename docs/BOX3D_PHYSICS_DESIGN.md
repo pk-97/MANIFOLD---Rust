@@ -160,8 +160,11 @@ spawner on the world, or with Spacing in metres, convert at load
 and turn with an index-seeded hash, so Reset repeats the same arrangement.
 Every control acts live: an edit snaps the copies into formation, at rest, at
 the next tick start, and a Count change enables or disables copies in place
-without rebuilding the world. Copies require uniform scale because the existing
-`InstanceTransform` wire has one scale component. The `instances_k` output feeds
+without rebuilding the world. Copies take any per-axis scale: the
+`InstanceTransform` wire has one scale component, so it carries the X scale and
+the body's `copy_scale` output carries the rest into each copy's draw
+(`node.scene_object` `copy_scale`, Group space). Copies of one prototype share
+one cooked collision shape. The `instances_k` output feeds
 `node.scene_object.instances`; `active_count_k` feeds its optional `instance_count`
 input, so drawing, shadows and RT use only active copies rather than the 4,000
 buffer capacity. Unwired instance count preserves existing behavior.
@@ -469,8 +472,14 @@ anywhere · new modulation machinery (D6).
 ## 6. Performance (stated honestly)
 
 Step cost is CPU, on the content thread, inline (D2). The current stress-test
-capacity is 4,000 copies, with 60 Hz outer ticks, four substeps and one worker.
+capacity is 4,000 copies, with 60 Hz outer ticks and four substeps. A scene world
+steps on the performance cores less one for the UI thread, the content thread
+counting as one (`manifold_physics::default_worker_count`), with Box3D's own
+scheduler; `PhysicsWorld::new` (tests, tools) steps on one. Box3D solves in the
+same order at any worker count.
 Capacity is not a measured real-time guarantee; use the HUD to measure the scene.
+A scan Collider collides as its exact mesh: worst case 0.78 ms per step, a
+1.15 m cube on the cliff scan at 0.049 scale.
 Pose upload at 4,000 copies is 128 KB/frame through the existing compute-upload
 path. Preview gives physics one project-frame CPU interval per work batch, with
 no fixed catch-up tick cap and no discarded simulation time. Rendering follows

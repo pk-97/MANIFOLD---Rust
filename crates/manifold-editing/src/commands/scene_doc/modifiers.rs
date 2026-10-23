@@ -6,21 +6,15 @@
 //! never moves a mapping.
 
 use manifold_core::LayerId;
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc};
-use manifold_core::scene_schema::{modifier_refuses, modifier_type};
+use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierType, SceneDoc};
+use manifold_core::scene_schema::{modifier_type, new_card_targets};
 
 use super::commands::{AddSceneItemCommand, ReparentSceneItemCommand};
 
 /// A new card of `modifier`, named after its type, aimed at the Objects and
 /// Groups in `selection`, or at the whole scene when none is selected.
 pub fn new_modifier(doc: &SceneDoc, id: ItemId, modifier: ModifierType, selection: &[ItemId]) -> Item {
-    let aimed: Vec<ItemId> = selection
-        .iter()
-        .filter(|id| doc.find(id).is_some_and(|item| matches!(item.kind(), ItemKind::Object | ItemKind::Group) && modifier_refuses(item).is_none()))
-        .cloned()
-        .collect();
-    let targets = if aimed.is_empty() { ModifierTargets::Scene } else { ModifierTargets::Items(aimed) };
-    let fields = ModifierFields { modifier, targets, ..ModifierFields::default() };
+    let fields = ModifierFields { modifier, targets: new_card_targets(doc, selection), ..ModifierFields::default() };
     Item::new(id, modifier_type(modifier).label, ItemFields::Modifier(fields))
 }
 

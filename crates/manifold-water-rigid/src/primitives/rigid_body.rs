@@ -2,7 +2,7 @@ use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use crate::physics::{CopySpawn, MAX_COPIES, RigidBody, Solid};
+use crate::physics::{arrangement_of, requested_count, CopySpawn, MAX_COPIES, RestBox, RigidBody, Solid};
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use crate::physics_mesh::{PartPorts, is_part_mesh, transform_vertices, validate_transform};
 use manifold_node_engine::primitive::Primitive;
@@ -47,21 +47,55 @@ fn read_spawn(ctx: &EffectNodeContext<'_, '_>) -> CopySpawn {
 }
 
 /// `transform` with its parent frame folded in: the world pose and scale
-/// the solver takes. A shear the parent chain makes is dropped.
+/// the solver takes. A shear the parent chain makes is dropped. A frame that
+/// mirrors keeps the mirror in the scale, on the item's own first mirrored
+/// axis (else X), so the rotation stays a rotation.
 pub(crate) fn flatten(transform: Transform) -> Transform {
     if transform.parent == IDENTITY_MAT4 {
         return transform;
     }
     let m = transform.world();
-    let scale: [f32; 3] = std::array::from_fn(|col| (0..3).map(|row| m[col][row] * m[col][row]).sum::<f32>().sqrt());
+    let mut scale: [f32; 3] = std::array::from_fn(|col| (0..3).map(|row| m[col][row] * m[col][row]).sum::<f32>().sqrt());
+    let column = |col: usize| [m[col][0], m[col][1], m[col][2]];
+    let [x, y, z] = [column(0), column(1), column(2)];
+    let determinant = x[0] * (y[1] * z[2] - y[2] * z[1]) - x[1] * (y[0] * z[2] - y[2] * z[0]) + x[2] * (y[0] * z[1] - y[1] * z[0]);
+    if determinant < 0.0 {
+        let axis = transform.scale.iter().position(|s| s.is_sign_negative()).unwrap_or(0);
+        scale[axis] = -scale[axis];
+    }
     let rotation: [[f32; 3]; 3] =
-        std::array::from_fn(|row| std::array::from_fn(|col| if scale[col] > 0.0 { m[col][row] / scale[col] } else { 0.0 }));
+        std::array::from_fn(|row| std::array::from_fn(|col| if scale[col] != 0.0 { m[col][row] / scale[col] } else { 0.0 }));
     Transform {
         pos: [m[3][0], m[3][1], m[3][2]],
         rot_euler: rotation_to_render_scene_euler(rotation),
         scale,
         billboard: transform.billboard,
         parent: IDENTITY_MAT4,
+    }
+}
+
+/// What a copy draws inside itself beyond its instance's one uniform scale,
+/// the X axis: the rest of the per-axis `scale`, so a 10 x 0.16 x 10 slab
+/// draws as one, never as 10 x 10 x 10.
+fn copy_scale(scale: [f32; 3]) -> Transform {
+    let uniform = if scale[0].is_finite() && scale[0] != 0.0 { scale[0] } else { 1.0 };
+    Transform { scale: [1.0, scale[1] / uniform, scale[2] / uniform], ..IDENTITY_TRANSFORM }
+}
+
+/// A box as a transform, as `node.loop_cell` reads one: the unit cube
+/// placed at the box's centre and scaled to its size, inside the place and
+/// turn of `group`, the frame the box was measured in. The group's scale is
+/// already in the box. No copies is a box of no size, which measures
+/// nothing.
+fn rest_box(bounds: Option<([f32; 3], [f32; 3])>, group: &Transform) -> Transform {
+    let Some((lo, hi)) = bounds else {
+        return Transform { scale: [0.0; 3], ..IDENTITY_TRANSFORM };
+    };
+    Transform {
+        pos: std::array::from_fn(|axis| 0.5 * (lo[axis] + hi[axis])),
+        scale: std::array::from_fn(|axis| hi[axis] - lo[axis]),
+        parent: Transform { pos: group.pos, rot_euler: group.rot_euler, ..IDENTITY_TRANSFORM }.world(),
+        ..IDENTITY_TRANSFORM
     }
 }
 
@@ -222,7 +256,7 @@ manifold_node_engine::primitive! {
   copy_turn_z: ScalarF32 optional,
   acceleration: VectorField optional,
  },
- outputs: { body: RigidBody, pose: Transform, instances: Array(InstanceTransform), active_count: ScalarF32, },
+ outputs: { body: RigidBody, pose: Transform, instances: Array(InstanceTransform), active_count: ScalarF32, copy_scale: Transform, rest_box: Transform, copy_frame: Transform, copy_box: ScalarVec3, copy_turn: ScalarVec3, copy_grid: ScalarVec2, },
 params: [
 ParamDef { name: Cow::Borrowed("enabled"), label: "Enabled", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("motion"), label: "Body Type", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 2.0)), enum_values: &["Fixed", "Moving", "Animated"] },
@@ -253,7 +287,7 @@ ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamTy
 ParamDef { name: Cow::Borrowed("parts"), label: "Parts", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
  ],
  depth_rule: Terminal,
- composition_notes: "One description per body. All bodies that should collide feed the same Physics World. The shape comes from the mesh: wire the object's mesh source into source (one mesh, placed by source_transform) or mesh_k with part_k (a compound body of several meshes, each placed by its part transform, parent frames included); an unwired body reads its mesh file (path and selection), as a shatter piece does. A Fixed body is static and collides as the exact mesh; changing its authored transform teleports it. Moving and Animated bodies collide as convex hulls, detail chosen from size and triangle count, open surfaces given a 0.1% shell. While a new shape is prepared the body keeps its old one; a body with no shape yet stays out of the world until it has one, and the world keeps stepping. The transform's parent frame is folded into the body's world pose. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group with uniform scale. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
+ composition_notes: "One description per body. All bodies that should collide feed the same Physics World. The shape comes from the mesh: wire the object's mesh source into source (one mesh, placed by source_transform) or mesh_k with part_k (a compound body of several meshes, each placed by its part transform, parent frames included); an unwired body reads its mesh file (path and selection), as a shatter piece does. A Fixed body is static and collides as the exact mesh; changing its authored transform teleports it. Moving and Animated bodies collide as convex hulls, detail chosen from size and triangle count, open surfaces given a 0.1% shell. While a new shape is prepared the body keeps its old one; a body with no shape yet stays out of the world until it has one, and the world keeps stepping. The transform's parent frame is folded into the body's world pose. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid and Line grow from the body, Ring spreads evenly round it, Scatter piles round it), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group. The world's instances carry each copy's pose and the X scale; copy_scale carries the rest of the per-axis scale for the draw (node.scene_object copy_scale, Group space). rest_box is the world-aligned box the copies rest in (a transform: centre and size), from the same layout and hull width the world lays them out with, never their moving poses; it follows every Copies row and the body's transform on the frame they change, and wires into node.loop_cell to size a Scene Loop cell. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose. copy_frame (the transform the copies are laid out from), copy_box (one copy's box width, metres), copy_turn and copy_grid (Columns, Spacing) are the copies' layout rows, which node.arrange_copies reads to lay Copy Blend's target out by the same formula.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Rigid Body", category: Atom },
  summary: "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",
@@ -284,6 +318,8 @@ ParamDef { name: Cow::Borrowed("parts"), label: "Parts", ty: ParamType::Int, def
     mesh_seen: bool = false,
     // The part inputs, one pair per part: the `parts` param sizes them.
     part_ports: PartPorts = PartPorts::default(),
+    // The box this body's copies rest in, kept until their layout or shape changes.
+    rest: RestBox = RestBox::default(),
  },
 }
 
@@ -302,8 +338,10 @@ impl RigidBodyNode {
         // follows the size.
         if form == Form::Mesh {
             asked.scale_steps = [0; 3];
-        } else if scale.iter().all(|s| s.is_finite() && *s > 0.0) {
-            asked.scale_steps = scale.map(|s| (s.log2() * SCALE_STEPS_PER_OCTAVE).round() as i32);
+        } else if scale.iter().all(|s| s.is_finite() && *s != 0.0) {
+            // Hulls are made unscaled and reflected when cooked, so a mirror
+            // asks for the same detail as its size.
+            asked.scale_steps = scale.map(|s| (s.abs().log2() * SCALE_STEPS_PER_OCTAVE).round() as i32);
         }
         asked.path.clear();
         asked.selection = None;
@@ -496,6 +534,16 @@ impl Primitive for RigidBodyNode {
             identity: self.identity,
             spawn: read_spawn(ctx),
         };
+        ctx.outputs.set_transform("copy_scale", copy_scale(transform.scale));
+        let (copy_box, group_box) = self.rest.of(&body);
+        ctx.outputs.set_transform("rest_box", rest_box(group_box, &transform));
+        // Everything the copies' layout reads, so Copy Blend lays its target
+        // out by the same rows (`manifold_core::copy_layout`).
+        let arrangement = arrangement_of(&body, requested_count(body.spawn));
+        ctx.outputs.set_transform("copy_frame", transform);
+        ctx.outputs.set_scalar("copy_box", ParamValue::Vec3(copy_box));
+        ctx.outputs.set_scalar("copy_turn", ParamValue::Vec3(arrangement.turn));
+        ctx.outputs.set_scalar("copy_grid", ParamValue::Vec2([arrangement.columns as f32, arrangement.spacing]));
         ctx.outputs.set_cpu_value("body", body);
     }
 }
@@ -597,6 +645,50 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             panic!("the collision shape build did not settle");
+        }
+    }
+
+    /// A copy draws its instance's X scale times `copy_scale`: the slab
+    /// keeps its shape, and a uniform scale draws as it always did.
+    #[test]
+    fn copy_scale_is_the_scale_beyond_the_x_axis() {
+        assert_eq!(copy_scale([10.0, 0.16, 10.0]).scale, [1.0, 0.16 / 10.0, 1.0]);
+        assert_eq!(copy_scale([2.0; 3]).scale, [1.0; 3]);
+    }
+
+    /// The box measured in the group's frame lands where the group is and
+    /// turns with it; the group's scale, already in the box, is not applied
+    /// again.
+    #[test]
+    fn the_rest_box_is_placed_by_the_group_frame() {
+        let bounds = Some(([0.0, -0.5, -0.5], [4.0, 0.5, 0.5]));
+        let group = Transform { pos: [3.0, 1.0, -2.0], scale: [2.0; 3], ..IDENTITY_TRANSFORM };
+        let m = rest_box(bounds, &group).world();
+        assert_eq!([m[3][0], m[3][1], m[3][2]], [5.0, 1.0, -2.0], "the box centre, carried by the group's place");
+        assert_eq!([m[0][0], m[1][1], m[2][2]], [4.0, 1.0, 1.0], "the box's own size");
+        let turned = Transform { rot_euler: [0.0, std::f32::consts::FRAC_PI_2, 0.0], ..group };
+        let m = rest_box(bounds, &turned).world();
+        assert!((m[3][2] - (-4.0)).abs() < 1e-5 && (m[3][0] - 3.0).abs() < 1e-5, "a quarter turn swings the row round: {:?}", m[3]);
+        assert_eq!(rest_box(None, &group).scale, [0.0; 3], "no copies measures nothing");
+    }
+
+    /// A body inside a mirrored group keeps the mirror in its scale, so the
+    /// solver's pose is a true rotation and the flattened transform places
+    /// the body exactly where its group does.
+    #[test]
+    fn a_mirrored_parent_flattens_to_a_mirrored_scale() {
+        let mirror_x = [[-1.5, 0.0, 0.0, 0.0], [0.0, 1.5, 0.0, 0.0], [0.0, 0.0, 1.5, 0.0], [0.5, 0.0, 0.0, 1.0]];
+        for own in [[1.0, 1.0, 1.0], [1.0, -1.0, 1.0], [-1.0, -1.0, 0.5]] {
+            let transform = Transform { pos: [1.0, 2.0, 0.0], rot_euler: [0.3, 0.5, -0.2], scale: own, parent: mirror_x, ..IDENTITY_TRANSFORM };
+            let flat = flatten(transform);
+            let (a, b) = (transform.world(), flat.world());
+            for column in 0..4 {
+                for row in 0..4 {
+                    assert!((a[column][row] - b[column][row]).abs() < 1e-5, "{own:?}: {a:?} vs {b:?}");
+                }
+            }
+            let sign = |scale: [f32; 3]| scale.iter().map(|s| s.signum()).product::<f32>();
+            assert_eq!(sign(flat.scale), -sign(own), "{own:?}: the group's mirror stays in the scale: {:?}", flat.scale);
         }
     }
 

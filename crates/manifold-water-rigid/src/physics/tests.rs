@@ -631,6 +631,12 @@ fn a_body_joins_the_running_world_when_ready_and_bad_input_stays_out() {
     let refused: Vec<Member> = simulation.refusals().iter().map(|refusal| refusal.member).collect();
     assert_eq!(refused, [Member::Body(2), Member::Body(3)], "a refusal names each bad body; an unready one is not refused");
     assert!(simulation.refusals().iter().all(|refusal| !refusal.reason.to_string().is_empty()));
+    assert!(
+        simulation.refusals().iter().all(|refusal| refusal.reason.param() == Some("scale_x")),
+        "a bad scale and a shape its scale flattens both warn on Scale"
+    );
+    let stand = |slot: usize| simulation.poses[slot].pos == bodies[slot].as_ref().unwrap().transform.pos;
+    assert!(stand(2) && stand(3) && stand(4), "refused and unready bodies draw where they stand, never at the origin");
 
     bodies[0].as_mut().unwrap().enabled = true;
     bodies[4].as_mut().unwrap().collider = Some(default_solid());
@@ -1272,9 +1278,8 @@ fn paused_animated_copy_edit_and_undo_update_every_copy_without_ticks() {
     prototype.transform.pos[0] = 5.0;
     prototype.transform.rot_euler[1] = 0.25;
     let edited = advance(prototype.clone());
-    // The group moves and turns as one: its centre moves 5 m, every copy turns.
-    let centre = |poses: &[Transform]| (poses[0].pos[0] + poses[1].pos[0]) * 0.5;
-    assert!((centre(&edited) - centre(&before) - 5.0).abs() < 1.0e-5);
+    // The group moves and turns as one about its first copy, which sits on its origin: that copy moves 5 m, every copy turns.
+    assert!((edited[0].pos[0] - before[0].pos[0] - 5.0).abs() < 1.0e-5);
     for (old, new) in before.iter().zip(&edited) {
         assert!((new.rot_euler[1] - old.rot_euler[1] - 0.25).abs() < 1.0e-5);
     }
@@ -1654,4 +1659,106 @@ fn bulk_fixed_ticks_match_across_frame_partitions() {
         full_velocity.map(|value| value.to_bits()),
         half_velocity.map(|value| value.to_bits())
     );
+}
+
+/// A Fixed wedge 4 m long, rising from 0 at x = 2 to 1 m at x = −2, 2 m deep:
+/// an exact mesh with every face wound outward.
+fn wedge_collider() -> Arc<Solid> {
+    let vertices = vec![[-2.0, 0.0, -1.0], [2.0, 0.0, -1.0], [-2.0, 1.0, -1.0], [-2.0, 0.0, 1.0], [2.0, 0.0, 1.0], [-2.0, 1.0, 1.0]];
+    let triangles = vec![[0, 2, 1], [3, 4, 5], [0, 1, 4], [0, 4, 3], [0, 3, 5], [0, 5, 2], [1, 2, 5], [1, 5, 4]];
+    Arc::new(Solid::Mesh(manifold_physics::TriangleMesh { vertices, triangles }))
+}
+
+/// A doorstop: a box whose top slopes down toward +x, so its mirror is a
+/// different hull.
+fn doorstop() -> Arc<Solid> {
+    let points: Vec<[f32; 3]> = [-0.2f32, 0.2]
+        .into_iter()
+        .flat_map(|z| [[-0.3, -0.2, z], [0.3, -0.2, z], [-0.3, 0.2, z], [0.3, 0.0, z]])
+        .collect();
+    Arc::new(Solid::Hulls(vec![manifold_physics::cook_hull(&points).unwrap()]))
+}
+
+/// A doorstop dropped on the wedge's slope, with friction to hold it there,
+/// after three seconds; `mirror` mirrors both in X, as Scale X −1 does.
+fn doorstop_on_wedge(mirror: f32) -> (Transform, Vec<BodyRefusal>) {
+    let mut bodies = vec![None; 64];
+    bodies[0] = Some(RigidBody {
+        transform: Transform { scale: [mirror, 1.0, 1.0], ..Transform::default() },
+        kind: 0,
+        mass: 0.0,
+        friction: 1.0,
+        collider: Some(wedge_collider()),
+        ..RigidBody::default()
+    });
+    bodies[1] = Some(RigidBody {
+        transform: Transform { pos: [0.3 * mirror, 1.5, 0.0], scale: [mirror, 1.0, 1.0], ..Transform::default() },
+        friction: 1.0,
+        bounce: 0.0,
+        collider: Some(doorstop()),
+        ..RigidBody::default()
+    });
+    let mut simulation = RigidSimulation::default();
+    for frame in 0..=180 {
+        simulation.advance(&bodies, GRAVITY, PlayedTime::from_played(frame as f64 * FRAME), 1.0, 0.0).unwrap();
+    }
+    (simulation.poses[1], simulation.refusals().to_vec())
+}
+
+/// A mirrored Body resting on a mirrored Collider settles where the
+/// unmirrored pair does, mirrored: Box3D rebuilds the reflected hull with
+/// its faces out, and the reflected mesh's turned triangles still face up.
+#[test]
+fn a_mirrored_body_on_a_mirrored_collider_settles_mirrored() {
+    let (plain, plain_refusals) = doorstop_on_wedge(1.0);
+    let (mirrored, mirrored_refusals) = doorstop_on_wedge(-1.0);
+    assert!(plain_refusals.is_empty() && mirrored_refusals.is_empty(), "{plain_refusals:?} {mirrored_refusals:?}");
+    // The slope's height under each body's centre.
+    let slope = |x: f32| (2.0 - x) / 4.0;
+    assert!(plain.pos[1] > slope(plain.pos[0]) && plain.pos[1] < slope(plain.pos[0]) + 0.5, "the doorstop rests on the slope: {plain:?}");
+    assert!(plain.pos[0] > 0.0, "it slid down the slope toward +x before it held: {plain:?}");
+    // Both shapes are symmetric across the slope, so the X mirror is also a
+    // half turn about Y. Box3D's contact solve drifts the doorstop a few mm
+    // across the slope and lands it the half-turned way, so that axis
+    // matches up to sign.
+    let expected = [-plain.pos[0], plain.pos[1], plain.pos[2].abs()];
+    let got = [mirrored.pos[0], mirrored.pos[1], mirrored.pos[2].abs()];
+    for axis in 0..3 {
+        assert!((got[axis] - expected[axis]).abs() < 1e-4, "mirrored {:?} vs plain mirrored {expected:?}", mirrored.pos);
+    }
+    assert_eq!(mirrored.scale, [-1.0, 1.0, 1.0], "the mirrored body draws mirrored");
+}
+
+/// Any finite non-zero scale enters the world: a 0.0005-scale cube and a
+/// 2000-scale Collider, and a mirrored copy group. Only zero and a shape
+/// Box3D's hull builder cannot make (flat for its size) are refused, each
+/// on Scale with its reason.
+#[test]
+fn any_finite_nonzero_scale_enters_the_world() {
+    let mut bodies = vec![None; 64];
+    bodies[0] = Some(RigidBody {
+        transform: Transform { pos: [0.0, -2000.0, 0.0], scale: [2000.0; 3], ..Transform::default() },
+        kind: 0,
+        mass: 0.0,
+        collider: Some(wedge_collider()),
+        ..RigidBody::default()
+    });
+    bodies[1] = Some(RigidBody { transform: Transform { pos: [0.0, 10.0, 0.0], scale: [0.0005; 3], ..Transform::default() }, ..RigidBody::default() });
+    bodies[2] = Some(RigidBody { transform: Transform { pos: [3.0, 10.0, 0.0], scale: [0.5, 1.0e-9, 0.5], ..Transform::default() }, ..RigidBody::default() });
+    bodies[3] = Some(RigidBody { transform: Transform { pos: [6.0, 10.0, 0.0], scale: [0.0, 1.0, 1.0], ..Transform::default() }, ..RigidBody::default() });
+    let prototype = RigidBody { transform: Transform { pos: [-6.0, 10.0, 0.0], scale: [-0.5, 0.5, 0.5], ..Transform::default() }, ..RigidBody::default() };
+    let scene = copies_scene(&bodies, Some(prototype), 4.0, 1.25, 2.0, 0.0, GRAVITY, None, &[]);
+    let mut simulation = RigidSimulation::default();
+    for frame in 0..=30 {
+        simulation.advance_scene(&scene, PlayedTime::from_played(frame as f64 * FRAME), 1.0, 0.0).unwrap();
+    }
+    assert!(simulation.handles[0].is_some() && simulation.handles[1].is_some(), "the 2000-scale Collider and the 0.0005-scale cube are in the world");
+    assert!(simulation.poses[1].pos[1] < 10.0, "the tiny cube falls");
+    let refused: Vec<(Member, Option<&str>)> = simulation.refusals().iter().map(|refusal| (refusal.member, refusal.reason.param())).collect();
+    assert_eq!(refused, [(Member::Body(2), Some("scale_x")), (Member::Body(3), Some("scale_x"))]);
+    let reasons: Vec<String> = simulation.refusals().iter().map(|refusal| refusal.reason.to_string()).collect();
+    assert!(reasons[0].contains("too thin to collide") && reasons[1].contains("not zero"), "{reasons:?}");
+    let copies = simulation.group_poses(0);
+    assert_eq!(copies.len(), 4);
+    assert!(copies.iter().all(|pose| pose.scale == [-0.5, 0.5, 0.5] && pose.pos[1] < 10.0), "the mirrored copies fall, drawn mirrored: {copies:?}");
 }

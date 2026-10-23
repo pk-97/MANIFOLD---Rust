@@ -75,6 +75,10 @@ pub struct LayerGeneratorState {
     pub(super) built_watched: bool,
     /// The `render_all` pass this layer last rendered in.
     pub(super) rendered_pass: Option<u64>,
+    /// Whether runaway GPU frames stopped this layer drawing.
+    pub(super) runaway: super::runaway::RunawayWatch,
+    /// This generator's key in the frame timer.
+    pub(super) span_key: u64,
 }
 
 impl LayerGeneratorState {

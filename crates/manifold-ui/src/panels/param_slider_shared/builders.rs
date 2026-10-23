@@ -289,6 +289,19 @@ pub(crate) fn toggle_btn_style(enabled: bool) -> UIStyle {
     crate::chrome::components::toggle_style(enabled)
 }
 
+/// A switch row's button: on or off, faded while its row does nothing
+/// (`inactive_reason`), so a dimmed row never shows a bright ON.
+pub(crate) fn switch_style(on: bool, inactive: bool) -> UIStyle {
+    let mut style = toggle_btn_style(on);
+    if inactive {
+        style.text_color = color::TEXT_DIMMED_C32;
+        for fill in [&mut style.bg_color, &mut style.hover_bg_color] {
+            fill.a /= 3;
+        }
+    }
+    style
+}
+
 
 /// Style for a dropdown trigger — a control cell that shows the current selection
 /// and opens a `DropdownPanel` on click. The canonical neutral dropdown chip
@@ -1759,10 +1772,10 @@ pub(crate) fn build_button_row(
         ),
         RowKind::Switch | RowKind::Number | RowKind::Colour => {
             let on = info.spec.default > 0.5;
-            (switch_text(on), toggle_btn_style(on))
+            (switch_text(on), switch_style(on, info.spec.inactive_reason.is_some()))
         }
     };
-    if disabled_reason.is_some() || (kind == RowKind::Choice && info.spec.inactive_reason.is_some()) {
+    if disabled_reason.is_some() || (matches!(kind, RowKind::Choice | RowKind::Switch) && info.spec.inactive_reason.is_some()) {
         button_style.text_color = color::TEXT_DIMMED_C32;
     }
     let toggle_y = cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5;

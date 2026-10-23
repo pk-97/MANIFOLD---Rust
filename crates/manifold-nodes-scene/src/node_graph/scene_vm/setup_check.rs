@@ -8,6 +8,7 @@
 //! under the copies bodies' Count rows ([`copies_problems`]).
 
 use manifold_core::NodeId;
+use manifold_core::physics_members::BodyRefusalRow;
 use manifold_core::copies_body::{PHYSICS_WORLD_TYPE_ID, RIGID_BODY_TYPE_ID, copy_group_of_input};
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot};
@@ -68,9 +69,15 @@ impl SetupProblemKind {
             Self::CopiesNotMade(1) => "1 copy not made; the world's copy pool is full".to_owned(),
             Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
             Self::PoolFull => "Water pool is full; the inflow is held back. Add a Drain or lower Resolution".to_owned(),
-            Self::BodyRefused(reason) => format!("Out of the physics world: {reason}"),
+            Self::BodyRefused(reason) => sentence(reason),
         }
     }
+}
+
+/// `reason` as a card line: its first letter capitalised.
+fn sentence(reason: &str) -> String {
+    let mut chars = reason.chars();
+    chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
 }
 
 impl FluidRole {
@@ -387,9 +394,13 @@ pub fn copies_problems<'a>(anchors: &[CopiesAnchor], runtime: impl IntoIterator<
     }
 }
 
-/// The rows a refused body warns under, most telling first: what it bounces
-/// and weighs with, or a copy group's Count.
+/// The rows a refusal no control is named for warns under, most telling
+/// first: what the body bounces and weighs with, or a copy group's Count.
 const BODY_ROWS: [&str; 4] = ["bounce", "mass", "friction", COPY_COUNT];
+
+/// The transform params a refusal can concern: they sit on the node wired
+/// into the body's `transform`, not on the body.
+const TRANSFORM_PREFIXES: [&str; 3] = ["pos_", "rot_", "scale_"];
 
 /// A Physics World and the body wired into each of its inputs (`body_k`,
 /// `copies_k`), for the rows a refused body warns under.
@@ -398,6 +409,8 @@ pub struct BodyAnchor {
     pub world: NodeId,
     /// (world input, body node doc id).
     pub inputs: Vec<(String, u32)>,
+    /// (body node doc id, the node wired into its `transform`).
+    pub transforms: Vec<(u32, u32)>,
     pub scope_path: Vec<u32>,
 }
 
@@ -416,8 +429,12 @@ fn collect_body_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], sc
             .filter(|w| w.to_node == world.id && manifold_core::physics_members::member_input(&w.to_port).is_some())
             .map(|w| (w.to_port.clone(), w.from_node))
             .collect();
+        let transforms = inputs
+            .iter()
+            .filter_map(|(_, body)| wires.iter().find(|w| w.to_node == *body && w.to_port == "transform").map(|w| (*body, w.from_node)))
+            .collect();
         if !inputs.is_empty() {
-            out.push(BodyAnchor { world: world.node_id.clone(), inputs, scope_path: scope.clone() });
+            out.push(BodyAnchor { world: world.node_id.clone(), inputs, transforms, scope_path: scope.clone() });
         }
     }
     for node in nodes {
@@ -429,19 +446,24 @@ fn collect_body_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], sc
     }
 }
 
-/// Each body or copy group a world left out, as a warning under that body's
-/// rows: `refused` is (world, world input, reason).
-pub fn body_problems<'a>(anchors: &[BodyAnchor], refused: impl IntoIterator<Item = (&'a NodeId, &'a str, &'a str)>, out: &mut Vec<SetupProblem>) {
-    for (world, input, reason) in refused {
+/// Each body or copy group a world left out, as a warning on the control it
+/// concerns, then under the body's own rows: `refused` is (world, refusal).
+pub fn body_problems<'a>(anchors: &[BodyAnchor], refused: impl IntoIterator<Item = (&'a NodeId, &'a BodyRefusalRow)>, out: &mut Vec<SetupProblem>) {
+    for (world, row) in refused {
         let Some(anchor) = anchors.iter().find(|anchor| &anchor.world == world) else { continue };
-        let Some(&(_, body)) = anchor.inputs.iter().find(|(port, _)| port == input) else { continue };
-        let params = BODY_ROWS
-            .iter()
-            .map(|param| ParamAddr { scope_path: anchor.scope_path.clone(), node_doc_id: body, param_id: (*param).to_owned() })
-            .collect();
+        let Some(&(_, body)) = anchor.inputs.iter().find(|(port, _)| **port == *row.input) else { continue };
+        let at = |node_doc_id: u32, param: &str| ParamAddr { scope_path: anchor.scope_path.clone(), node_doc_id, param_id: param.to_owned() };
+        let concerned = row.param.and_then(|param| {
+            if !TRANSFORM_PREFIXES.iter().any(|prefix| param.starts_with(prefix)) {
+                return Some(at(body, param));
+            }
+            let &(_, transform) = anchor.transforms.iter().find(|(of, _)| *of == body)?;
+            Some(at(transform, param))
+        });
+        let params = concerned.into_iter().chain(BODY_ROWS.iter().map(|param| at(body, param))).collect();
         out.push(SetupProblem {
             owner: ShapeOwner::World(anchor.world.clone()),
-            kind: SetupProblemKind::BodyRefused(reason.to_owned()),
+            kind: SetupProblemKind::BodyRefused(row.reason.to_string()),
             params,
             bounds: None,
         });
@@ -879,6 +901,40 @@ mod tests {
         assert_eq!(out[0].params, anchors[0].counts);
         assert_eq!((out[0].kind.message(), out[0].bounds), ("250 copies not made; the world's copy pool is full".to_owned(), None));
         assert_eq!(SetupProblemKind::CopiesNotMade(1).message(), "1 copy not made; the world's copy pool is full");
+    }
+
+    /// A refusal warns on the control it concerns: a transform param on the
+    /// node feeding the body's transform, a body param on the body, and
+    /// with none named, under the body's own rows. The line is the reason.
+    #[test]
+    fn a_refusal_warns_on_the_control_it_concerns() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "nodes": [
+                {"id": 40, "nodeId": "world", "typeId": "node.physics_world"},
+                {"id": 121, "nodeId": "ground:copies", "typeId": "node.rigid_body"},
+                {"id": 7, "nodeId": "ground:transform", "typeId": "node.transform_3d"}
+            ],
+            "wires": [
+                {"fromNode": 7, "fromPort": "transform", "toNode": 121, "toPort": "transform"},
+                {"fromNode": 121, "fromPort": "body", "toNode": 40, "toPort": "copies_0"}
+            ]
+        }))
+        .expect("a world with one copies body");
+        let anchors = body_anchors(&def);
+        let world = NodeId::new("world");
+        let at = |node_doc_id: u32, param: &str| ParamAddr { scope_path: Vec::new(), node_doc_id, param_id: param.to_owned() };
+        let refusal = |param: Option<&'static str>, reason: &str| BodyRefusalRow { input: "copies_0".into(), param, reason: reason.into() };
+        let rows = [
+            refusal(Some("scale_x"), "scale must be finite and not zero on any axis"),
+            refusal(Some("copy_size_spacing"), "Spacing must be at least 0.01"),
+            refusal(None, "Box3D refused the body"),
+        ];
+        let mut out = Vec::new();
+        body_problems(&anchors, rows.iter().map(|row| (&world, row)), &mut out);
+        let first: Vec<&ParamAddr> = out.iter().map(|problem| &problem.params[0]).collect();
+        assert_eq!(first, [&at(7, "scale_x"), &at(121, "copy_size_spacing"), &at(121, "bounce")]);
+        assert_eq!(out[0].kind.message(), "Scale must be finite and not zero on any axis");
     }
 
     /// BUG-3zq4r (inflow runs out): a pool too full for an inflow is never

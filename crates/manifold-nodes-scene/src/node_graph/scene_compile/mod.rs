@@ -39,6 +39,7 @@ mod water;
 mod world;
 
 pub(crate) use builder::Builder;
+pub use material::fed_map_ports;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_doc::{Item, ItemKind, SceneDoc};
@@ -60,6 +61,7 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     world::emit(&mut b);
     camera::finish_cut(&mut b);
     copies::join_world(&mut b);
+    swarm::draw_alike(&mut b);
     forces::emit_all(&mut b)?;
     scene_loop::emit(&mut b)?;
     modifiers::emit_all(&mut b)?;
@@ -75,6 +77,7 @@ pub fn drawn_items(doc: &SceneDoc) -> Vec<manifold_foundation::ItemId> {
     swarm::emit_all(&mut b);
     group::emit_tree(&mut b);
     water::emit_all(&mut b);
+    swarm::draw_alike(&mut b);
     b.object_items
 }
 

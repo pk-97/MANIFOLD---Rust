@@ -8,6 +8,7 @@ struct U {
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
     brightness: vec4<f32>, trails_brightness: f32, _brightness_pad0: f32, _brightness_pad1: f32, _brightness_pad2: f32,
     copy_count: u32, instances_wired: u32, instance_history_stride: u32, _instances_pad: u32,
+    copy_inner: vec4<f32>,
 };
 struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32>, color: vec4<f32> };
 struct I { pos_scale: vec4<f32>, rot_pad: vec4<f32> };
@@ -93,8 +94,28 @@ fn sample_position(which: u32, idx: u32) -> vec3<f32> {
     return incoming[idx].position;
 }
 
+// The smallest mark: its farthest corner sits at least this fraction of the
+// item's own radius from its centre, so a dense scan's millimetre faces read as
+// clearly as a coarse shape's.
+const MARK_SIZE: f32 = 0.08;
+
+// Corner `corner` of the sampled face at `base`. A face already that big
+// draws at its own size; a smaller one grows about its centre to the
+// minimum, keeping its shape and turn. Marks never shrink a face.
+fn mark(which: u32, base: u32, corner: u32) -> vec3<f32> {
+    let a = sample_position(which, base);
+    let b = sample_position(which, base + 1u);
+    let c = sample_position(which, base + 2u);
+    let centre = (a + b + c) / 3.0;
+    let extent = max(max(length(a - centre), length(b - centre)), length(c - centre));
+    let grow = max(u.radius * MARK_SIZE / max(extent, 1e-12), 1.0);
+    let p = sample_position(which, base + corner);
+    return select(centre + (p - centre) * grow, p, grow == 1.0);
+}
+
 // Instance copy transform, object space: rotate (XYZ Euler, bit-for-bit the
-// render_scene.wgsl / render_instanced_3d_mesh.wgsl convention), uniform
+// render_scene.wgsl / render_instanced_3d_mesh.wgsl convention), the copy
+// group's per-axis scale (exactly one without one) and uniform
 // scale, then translate. The diagram's clip_point applies the object model
 // matrix afterwards, matching render_scene's model * T_instance order.
 fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
@@ -124,11 +145,10 @@ fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
 }
 
 fn apply_copy(p: vec3<f32>, inst: I) -> vec3<f32> {
-    return euler_xyz(inst.rot_pad.xyz) * (p * inst.pos_scale.w) + inst.pos_scale.xyz;
+    return euler_xyz(inst.rot_pad.xyz) * (p * u.copy_inner.xyz * inst.pos_scale.w) + inst.pos_scale.xyz;
 }
 
-// Producers collapse inactive slots to an all-zero transform (see
-// generate_instance_transforms_body.wgsl and analytic_echo_instances'
+// Producers collapse inactive slots to an all-zero transform (node.arrange_copies' zeroed tail and analytic_echo_instances'
 // "zero scale is the inactive-hole marker"), so the diagram skips them just
 // like the scene's zero-scale no-op draw.
 fn inactive_copy(inst: I) -> bool {
@@ -182,7 +202,7 @@ fn vertex_body(vi: u32, instance: u32) -> O {
         let inst = copy_transform(ii / tri);
         if (u.instances_wired != 0u && inactive_copy(inst)) { return hidden(); }
         let b = t * 3u; let e = vi / 6u;
-        return line(apply_copy(sample_position(0u, b + e), inst), apply_copy(sample_position(0u, b + ((e + 1u) % 3u)), inst), vec4<f32>(hsv(u.geometry_hue), 0.95), vi);
+        return line(apply_copy(mark(0u, b, e), inst), apply_copy(mark(0u, b, (e + 1u) % 3u), inst), vec4<f32>(hsv(u.geometry_hue), 0.95), vi);
     }
     if (ii < per * 2u) {
         if (u.fragments == 0u) { return hidden(); }
@@ -190,7 +210,7 @@ fn vertex_body(vi: u32, instance: u32) -> O {
         let inst = copy_transform((ii - per) / tri);
         if (u.instances_wired != 0u && inactive_copy(inst)) { return hidden(); }
         let b = t * 3u; let e = vi / 6u;
-        return line(apply_copy(sample_position(1u, b + e), inst), apply_copy(sample_position(1u, b + ((e + 1u) % 3u)), inst), vec4<f32>(hsv(u.geometry_hue), 0.28), vi);
+        return line(apply_copy(mark(1u, b, e), inst), apply_copy(mark(1u, b, (e + 1u) % 3u), inst), vec4<f32>(hsv(u.geometry_hue), 0.28), vi);
     }
     if (ii < per * 3u) {
         if (u.ghosts == 0u) { return hidden(); }
@@ -198,7 +218,7 @@ fn vertex_body(vi: u32, instance: u32) -> O {
         let inst = copy_transform((ii - per * 2u) / tri);
         if (u.instances_wired != 0u && inactive_copy(inst)) { return hidden(); }
         let b = t * 3u; let e = vi / 6u;
-        return line(apply_copy(sample_position(2u, b + e), inst), apply_copy(sample_position(2u, b + ((e + 1u) % 3u)), inst), vec4<f32>(hsv(u.path_hue), 0.22), vi);
+        return line(apply_copy(mark(2u, b, e), inst), apply_copy(mark(2u, b, (e + 1u) % 3u), inst), vec4<f32>(hsv(u.path_hue), 0.22), vi);
     }
     if (ii < grid_base) {
         // Without face correspondence there is no displacement to draw.

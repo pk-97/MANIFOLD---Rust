@@ -4,16 +4,23 @@
 //! `parts` sets how many `mesh_k` / `place_k` / `within_k` triples the node
 //! exposes, with no cap: a Group of any size merges whole. Each part's
 //! vertices land at
-//! `frame⁻¹ × within_k × place_k` (each unwired one is identity): a part's
-//! transform inside the frame it is drawn in, as a scene object takes its
-//! transform and parent transform, brought into `frame`. A Group's parts sit
-//! where they sit inside the group. The output holds every part back to
+//! `(frame_within × frame)⁻¹ × within_k × place_k` (each unwired one is
+//! identity): a part's transform inside the frame it is drawn in, as a scene
+//! object takes its transform and parent transform, brought into `frame`,
+//! itself placed inside `frame_within`. A Group's parts sit where they sit
+//! inside the group. The output holds every part back to
 //! back, in port order; positions and normals are placed, UVs and colours
 //! copied.
 //!
 //! A swarm emitting from a Group seeds from this mesh, so every part emits
-//! at its own place. Wired to the seed's `reset_trigger`, it merges only on
-//! that value's integer edges (and the first frame), as the seed reads it.
+//! at its own place. Wired to the seed's `reset_trigger`, it merges on that
+//! value's integer edges (and the first frame), and again only when its
+//! storage was not kept, so the mesh is whole on any frame the seed reads.
+//!
+//! With one part it carries a mesh between spaces: a modifier frame brings an
+//! imported part into the frame (place and within the part's transforms, frame
+//! the frame) and back out (place the frame, frame and frame_within the
+//! part's), so the part bends in the frame's axes and units.
 //!
 //! Hand-written because the port list follows `parts` (`node.camera_switch`
 //! pattern); one dispatch per part of one copy kernel.
@@ -26,6 +33,7 @@ use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, Eff
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
 use manifold_node_engine::scene::transform::Mat4;
 
 use crate::node_graph::gltf_load::{MAT4_IDENTITY, cross3, mat4_mul};
@@ -36,8 +44,8 @@ const DEFAULT_PARTS: usize = 2;
 const SHADER: &str = include_str!("shaders/merge_meshes.wgsl");
 const VERTEX_BYTES: u64 = std::mem::size_of::<MeshVertex>() as u64;
 
-/// Ports before the part pairs.
-const FIXED_INPUTS: usize = 2;
+/// Ports before the part triples.
+const FIXED_INPUTS: usize = 3;
 /// Ports per part: mesh, place, within.
 const PART_PORTS: usize = 3;
 
@@ -74,6 +82,9 @@ struct PartUniforms {
 
 pub struct MergeMeshes {
     inputs: Vec<NodeInput>,
+    /// Each mesh_k's topology: the merged triangles change only when a
+    /// part's do (a moved transform moves positions, never triangles).
+    topology: Vec<MeshDependency>,
     pipeline: Option<GpuComputePipeline>,
     /// Last `reset_trigger` integer seen; `None` until the first frame.
     last_reset_trigger: Option<i32>,
@@ -81,7 +92,7 @@ pub struct MergeMeshes {
 
 impl MergeMeshes {
     pub fn new() -> Self {
-        let mut node = Self { inputs: Vec::new(), pipeline: None, last_reset_trigger: None };
+        let mut node = Self { inputs: Vec::new(), topology: Vec::new(), pipeline: None, last_reset_trigger: None };
         node.rebuild_ports(DEFAULT_PARTS);
         node
     }
@@ -90,6 +101,7 @@ impl MergeMeshes {
         let port = |name: Cow<'static, str>, ty| NodePort { name, ty, kind: PortKind::Input, required: false };
         self.inputs = vec![
             port(Cow::Borrowed("frame"), PortType::Transform),
+            port(Cow::Borrowed("frame_within"), PortType::Transform),
             port(Cow::Borrowed("reset_trigger"), PortType::Scalar(ScalarType::F32)),
         ];
         for k in 0..parts.max(1) {
@@ -97,6 +109,9 @@ impl MergeMeshes {
             self.inputs.push(port(Cow::Owned(format!("place_{k}")), PortType::Transform));
             self.inputs.push(port(Cow::Owned(format!("within_{k}")), PortType::Transform));
         }
+        self.topology = (0..parts.max(1))
+            .map(|k| MeshDependency { input: Cow::Owned(format!("mesh_{k}")), aspect: MeshAspect::Topology })
+            .collect();
     }
 
     fn parts(&self) -> usize {
@@ -177,6 +192,10 @@ impl EffectNode for MergeMeshes {
         outputs()
     }
 
+    fn mesh_output_rule(&self, _port: &str) -> MeshOutputRule<'_> {
+        MeshOutputRule { topology: MeshRevisionRule::Dependencies(&self.topology), positions: MeshRevisionRule::Written }
+    }
+
     fn parameters(&self) -> &[ParamDef] {
         &PARAMS
     }
@@ -206,19 +225,17 @@ impl EffectNode for MergeMeshes {
             let current = v.round() as i32;
             let edge = self.last_reset_trigger != Some(current);
             self.last_reset_trigger = Some(current);
-            if !edge {
+            // Between edges the last merge stands while its storage does: a
+            // seed placing new particles for a Count rise reads it.
+            if !edge && ctx.outputs_retained() {
+                ctx.mark_outputs_unchanged();
                 return;
             }
         }
-        let to_frame = match ctx.inputs.transform("frame") {
-            None => MAT4_IDENTITY,
-            Some(frame) => match affine_inverse(&frame.world()) {
-                Some(inverse) => inverse,
-                None => {
-                    ctx.error("Merge Meshes: the frame must be finite with no zero scale".to_string());
-                    return;
-                }
-            },
+        let placed = |port: &str| ctx.inputs.transform(port).map_or(MAT4_IDENTITY, |t| t.world());
+        let Some(to_frame) = affine_inverse(&mat4_mul(&placed("frame_within"), &placed("frame"))) else {
+            ctx.error("Merge Meshes: the frame must be finite with no zero scale".to_string());
+            return;
         };
         let Some(out) = ctx.outputs.array("vertices") else {
             return;
@@ -349,11 +366,13 @@ mod gpu_tests {
         let place_b = Transform { pos: [0.0, 1.0, -4.0], rot_euler: [0.0, 1.2, 0.4], scale: [2.0; 3], ..Default::default() };
         let within_b = Transform { pos: [-1.0, 0.5, 0.0], rot_euler: [0.7, 0.0, 0.0], scale: [1.5; 3], ..Default::default() };
         let frame = Transform { pos: [5.0, 0.0, 0.0], rot_euler: [0.0, 0.0, 0.5], scale: [0.5; 3], ..Default::default() };
+        let frame_within = Transform { pos: [0.0, -1.0, 2.0], rot_euler: [0.3, 0.0, 0.0], scale: [1.0, 2.0, 1.0], ..Default::default() };
         let (mesh_a, _) = h.array(&a, a.len());
         let (mesh_b, _) = h.array(&b, b.len());
         let (out, _) = h.array::<MeshVertex>(&[], a.len() + b.len() + 3);
         let slots = [
             ("frame", h.transform_input(frame)),
+            ("frame_within", h.transform_input(frame_within)),
             ("mesh_0", mesh_a),
             ("place_0", h.transform_input(place_a)),
             ("mesh_1", mesh_b),
@@ -364,7 +383,7 @@ mod gpu_tests {
         let (_, errors) = h.run(&mut node, &slots, &[("vertices", out)], &ParamValues::default());
         assert!(errors.is_empty(), "{errors:?}");
         let merged: Vec<MeshVertex> = read(&h.buffer(out), a.len() + b.len() + 3);
-        let to_frame = affine_inverse(&frame.world()).unwrap();
+        let to_frame = affine_inverse(&mat4_mul(&frame_within.world(), &frame.world())).unwrap();
         let world_a = place_a.world();
         let world_b = mat4_mul(&within_b.world(), &place_b.world());
         let expected = a.iter().map(|v| (world_a, v)).chain(b.iter().map(|v| (world_b, v)));

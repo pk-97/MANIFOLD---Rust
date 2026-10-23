@@ -466,8 +466,9 @@ mod every_param_has_a_row {
             _ => false,
         });
         let plain_material = owner == "scene" && role == "default_material";
-        // A modifier frame's rest centre is placed by the compiler, not a row.
-        let frame_centre = role.starts_with("centre:")
+        // A modifier frame's rest centre, and the Scene Loop's rest box of
+        // each object it measures, are placed by the compiler, not a row.
+        let frame_centre = (role.starts_with("centre:") || role.starts_with("box:"))
             && doc.find(&ItemId::new(owner)).is_some_and(|item| item.kind() == ItemKind::Modifier);
         let scene_level = SCENE_LEVEL_ROWS.iter().any(|row| matches!(row.reach, Reach::Scene(r) if r == role) && row.param == param);
         found || family || water || plain_material || frame_centre || (owner == "scene" && scene_level)
@@ -574,6 +575,7 @@ mod every_kind_and_choice_survives {
             found
         };
         match control {
+            FieldControl::OnOff => vec![manifold_core::scene_schema::is_on(false), manifold_core::scene_schema::is_on(true)],
             FieldControl::Closed(choices) | FieldControl::ClosedOrLayer(choices) => {
                 choices.iter().map(|c| FieldValue::Choice(c.key.to_owned())).collect()
             }
@@ -796,6 +798,127 @@ fn moving_an_item_between_groups_keeps_it_in_place() {
     assert!(same(world(&project), start), "grouping keeps the cube in place");
 }
 
+/// A copied Object draws at its prototype's per-axis scale: the copies
+/// body's `copy_scale` goes into the draw, applied inside each copy (Group
+/// space), so a 10 x 0.16 x 10 slab draws as one.
+#[test]
+fn a_copied_object_draws_its_per_axis_scale_inside_each_copy() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        object.copies = true;
+    }
+    let def = flat(scene_layer(doc).gen_params().unwrap());
+    let object = def.nodes.iter().find(|n| n.node_id.as_str().ends_with("cube:object")).expect("the cube draws");
+    let wire = def.wires.iter().find(|w| w.to_node == object.id && w.to_port == "copy_scale").expect("the draw takes the copies' scale");
+    let body = def.nodes.iter().find(|n| n.id == wire.from_node).unwrap();
+    assert_eq!((body.type_id.as_str(), wire.from_port.as_str()), ("node.rigid_body", "copy_scale"));
+    assert_eq!(object.params.get("instances_space"), Some(&SerializedParamValue::Enum { value: 1 }), "inside each copy");
+}
+
+/// Math View sizes each item's marks from that item's own rest size, never
+/// from the scene's: a plane beside a cube gets the plane's radius. A copied
+/// item's diagram reads its copies' per-axis scale, as the draw does.
+#[test]
+fn math_view_marks_follow_each_item_and_its_copies_scale() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType, Shape};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        object.copies = true;
+    }
+    let mut plane = ItemFields::default_for(ItemKind::Object);
+    if let ItemFields::Object(object) = &mut plane {
+        object.shape = Shape::Plane;
+    }
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields { modifier: ModifierType::MathView, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+    }
+    for (id, fields) in [("plane", plane), ("card", card)] {
+        let end = doc.items.len();
+        doc.insert(None, end, Item::new(ItemId::new(id), id, fields)).unwrap();
+    }
+    let def = scene_layer(doc).gen_params().unwrap().graph.clone().unwrap();
+    let prepared = prepare_scene_modifiers(&def, &PrimitiveRegistry::with_builtin()).unwrap().def;
+    let feed = |to: u32, port: &str| prepared.wires.iter().find(|w| w.to_node == to && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()));
+    let object = |item: &str| {
+        let id = format!("{item}:object");
+        prepared.nodes.iter().find(|n| n.type_id == "node.scene_object" && n.node_id.as_str() == id).unwrap_or_else(|| panic!("{item} draws")).id
+    };
+    // A diagram samples its item's own mesh.
+    let diagram = |item: &str| {
+        let mesh = feed(object(item), "vertices");
+        prepared
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_mesh_diagram" && feed(n.id, "current_mesh") == mesh)
+            .unwrap_or_else(|| panic!("{item} has a diagram"))
+    };
+    let radius = |item: &str| match diagram(item).params.get("radius") {
+        Some(SerializedParamValue::Float { value }) => *value,
+        other => panic!("{item}'s diagram radius: {other:?}"),
+    };
+    let (cube, plane) = (radius("cube"), radius("plane"));
+    assert!((cube - 0.75f32.sqrt()).abs() < 1e-4, "a unit cube's own radius, got {cube}");
+    assert!((plane - 0.5f32.sqrt()).abs() < 1e-4, "a unit plane's own radius, not the scene's, got {plane}");
+    assert!(feed(object("cube"), "copy_scale").is_some(), "the cube's copies carry a scale");
+    assert_eq!(feed(diagram("cube").id, "copy_scale"), feed(object("cube"), "copy_scale"), "the diagram reads the copies' scale");
+    assert_eq!(feed(diagram("plane").id, "copy_scale"), None, "an item without copies has none");
+}
+
+/// Copy Blend on copies placed On Surface lays its second arrangement out in
+/// the frame those copies draw in: the surface's frame, then the item's own
+/// transform. No copies body lays them out, so the arrangement reads no
+/// copies frame and centres on the item where it sits on the surface, never
+/// on the world origin.
+#[test]
+fn copy_blend_on_surface_copies_centres_on_the_item() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType, Shape};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    let mut doc = SceneDoc::base();
+    let mut plane = ItemFields::default_for(ItemKind::Object);
+    if let ItemFields::Object(object) = &mut plane {
+        object.shape = Shape::Plane;
+    }
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields {
+            modifier: ModifierType::CopyBlend,
+            on: true,
+            targets: ModifierTargets::Items(vec![ItemId::new("cube")]),
+            ..fields.clone()
+        };
+    }
+    for (id, fields) in [("plane", plane), ("blend", card)] {
+        let end = doc.items.len();
+        doc.insert(None, end, Item::new(ItemId::new(id), id, fields)).unwrap();
+    }
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        object.copies = true;
+        object.copies_surface = Some(ItemId::new("plane"));
+    }
+    let def = scene_layer(doc).gen_params().unwrap().graph.clone().unwrap();
+    let prepared = prepare_scene_modifiers(&def, &PrimitiveRegistry::with_builtin()).unwrap().def;
+    let feed = |to: u32, port: &str| {
+        prepared.wires.iter().find(|w| w.to_node == to && w.to_port == port).map(|w| {
+            let from = prepared.nodes.iter().find(|n| n.id == w.from_node).unwrap();
+            (from.node_id.as_str().to_owned(), w.from_port.clone())
+        })
+    };
+    let arrange: Vec<_> = prepared.nodes.iter().filter(|n| n.type_id == "node.arrange_copies").collect();
+    assert_eq!(arrange.len(), 1, "one Copy Blend arrangement");
+    for port in ["copy_frame", "copy_box", "copy_turn", "copy_grid", "active_count"] {
+        assert_eq!(feed(arrange[0].id, port), None, "no copies body lays surface copies out, so {port} is unwired");
+    }
+    let object = prepared.nodes.iter().find(|n| n.type_id == "node.scene_object" && n.node_id.as_str() == "cube:object").expect("the cube draws");
+    assert_eq!(object.params.get("instances_space"), Some(&SerializedParamValue::Enum { value: 1 }), "each copy draws inside its instance");
+    assert_eq!(feed(object.id, "parent_transform"), Some(("cube:emit_frame".into(), "transform".into())), "instances sit in the surface's frame");
+    assert_eq!(feed(object.id, "transform"), Some(("cube:transform".into(), "transform".into())), "then the item's own transform");
+}
+
 /// A swarm drawing a group with Copies on nests the layout at its live
 /// particles only: Count drives how many carry it, not the seed's capacity.
 #[test]
@@ -827,6 +950,60 @@ fn a_swarm_nests_a_copied_group_at_its_live_count() {
             && matches!(&binding.target, BindingTarget::Node { node_id, param } if node_id.as_str().ends_with(nest.node_id.as_str()) && param == "outer_count")),
         "Count drives how many particles carry the layout"
     );
+}
+
+/// Two swarms draw one item, each with its own particles: the item draws
+/// once per swarm, and a group with Copies on nests its one layout under
+/// each swarm's particles.
+#[test]
+fn two_swarms_draw_one_item() {
+    use manifold_core::scene_doc::DrawAs;
+    let swarm = |id: &str, draw: &str| {
+        let mut fields = ItemFields::default_for(ItemKind::Swarm);
+        if let ItemFields::Swarm(s) = &mut fields {
+            s.draw_as = DrawAs::Item(ItemId::new(draw));
+        }
+        Item::new(ItemId::new(id), id, fields)
+    };
+    let source = |def: &EffectGraphDef, to: u32, port: &str| {
+        let from = def.wires.iter().find(|w| w.to_node == to && w.to_port == port)?.from_node;
+        def.nodes.iter().find(|n| n.id == from).map(|n| n.node_id.as_str().to_owned())
+    };
+
+    let mut doc = SceneDoc::base();
+    let end = doc.items.len();
+    doc.insert(None, end, swarm("bees", "cube")).unwrap();
+    doc.insert(None, end + 1, swarm("wasps", "cube")).unwrap();
+    let def = flat(scene_layer(doc).gen_params().unwrap());
+    let mut drawn_by: Vec<String> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.scene_object" && n.node_id.as_str().contains("cube:object"))
+        .map(|n| source(&def, n.id, "instances").expect("drawn at particles"))
+        .collect();
+    drawn_by.sort();
+    assert_eq!(drawn_by.len(), 2, "{drawn_by:?}");
+    assert!(drawn_by[0].ends_with("bees:copies") && drawn_by[1].ends_with("wasps:copies"), "{drawn_by:?}");
+
+    let mut doc = SceneDoc::base();
+    let mut group = ItemFields::default_for(ItemKind::Group);
+    if let ItemFields::Group(fields) = &mut group {
+        fields.copies = true;
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("rack"), "Rack", group)).unwrap();
+    doc.reparent(&ItemId::new("cube"), Some(&ItemId::new("rack")), 0).unwrap();
+    doc.insert(None, end + 1, swarm("bees", "rack")).unwrap();
+    doc.insert(None, end + 2, swarm("wasps", "rack")).unwrap();
+    let def = flat(scene_layer(doc).gen_params().unwrap());
+    let nests: Vec<&EffectGraphNode> = def.nodes.iter().filter(|n| n.type_id == "node.nest_copies").collect();
+    assert_eq!(nests.len(), 2);
+    let layouts: Vec<Option<String>> = nests.iter().map(|nest| source(&def, nest.id, "inner")).collect();
+    assert!(layouts[0].is_some() && layouts[0] == layouts[1], "both nest the rack's one layout: {layouts:?}");
+    let objects = def.nodes.iter().filter(|n| n.type_id == "node.scene_object" && n.node_id.as_str().contains("cube:object"));
+    let mut drawn_by: Vec<String> = objects.map(|n| source(&def, n.id, "instances").expect("drawn at particles")).collect();
+    drawn_by.sort();
+    assert!(drawn_by.len() == 2 && drawn_by[0].ends_with("bees:nest") && drawn_by[1].ends_with("wasps:nest"), "{drawn_by:?}");
 }
 
 /// Shatter breaks a built-in shape, not only an imported mesh: the load
@@ -989,6 +1166,17 @@ fn a_recorded_cut_keeps_its_camera_through_duplicate_add_and_reorder() {
     assert_eq!(deleted.pos, first.pos, "a deleted camera's number no longer shows the first camera");
 }
 
+/// The rows the Scene Loop card hides until a Loop camera exists are exactly
+/// the rows it shares with the Loop cameras that its corridor recipe lacks.
+#[test]
+fn the_rows_waiting_for_a_loop_camera_are_those_the_corridor_does_not_read() {
+    let recipe: serde_json::Value =
+        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/SceneLoop.json"))).unwrap();
+    let corridor: Vec<&str> = recipe["presetMetadata"]["params"].as_array().unwrap().iter().filter_map(|param| param["id"].as_str()).collect();
+    let camera_only: Vec<&str> = manifold_core::scene_schema::LOOP_CAMERA_ROWS.iter().map(|(property, _)| *property).filter(|property| !corridor.contains(property)).collect();
+    assert_eq!(camera_only, manifold_core::scene_schema::LOOP_CAMERA_ONLY);
+}
+
 /// Scene Loop tiles objects that draw many copies: a cube with Copies and a
 /// swarm's particles get every live copy in every corridor cell
 /// (node.nest_copies over the cells), after Scene Mirror shaped one tile, and
@@ -1011,14 +1199,14 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
         }
         doc.insert(None, end + 1 + k, Item::new(ItemId::new(id), id, card)).unwrap();
     }
-    // The default cell holds what is drawn: the swarm's 6 m spread, so its
-    // tiles start apart (twice its depth, one of swarm and one of air).
-    let spacing = |doc: SceneDoc| values(scene_layer(doc).gen_params().unwrap()).into_iter().find(|(id, ..)| id == "loop.cell_size").unwrap().2;
-    assert!((spacing(doc.clone()) - 12.0).abs() < 1e-4, "the swarm's spread sizes the cell");
+    // Spacing, the gap between tiles, starts at the depth of what is drawn:
+    // the swarm's 6 m spread, so its tiles start a spread apart.
+    let spacing = |doc: SceneDoc| values(scene_layer(doc).gen_params().unwrap()).into_iter().find(|(id, ..)| id == "loop.spacing").unwrap().2;
+    assert!((spacing(doc.clone()) - 6.0).abs() < 1e-4, "the swarm's spread sizes the gap");
     let mut no_swarm = doc.clone();
     no_swarm.remove(&ItemId::new("swarm")).unwrap();
     // A Copies row at its defaults lies across the travel axis: one cube deep.
-    assert!((spacing(no_swarm) - 2.0).abs() < 1e-4, "the copies' row sizes the cell");
+    assert!((spacing(no_swarm) - 1.0).abs() < 1e-4, "the copies' row sizes the gap");
     // A Water's particle draws (foam, spray, bubbles, Physics View dots)
     // have no live count and stay out of the corridor.
     let end = doc.items.len();
@@ -1046,7 +1234,9 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
         let (switch, _) = source(object.id, "instances");
         let (nest, port) = source(switch.id, "in_1");
         assert_eq!((nest.type_id.as_str(), port), ("node.nest_copies", "copies"), "{}: the tiles carry the copies", object.node_id);
-        assert_eq!(source(nest.id, "outer").0.type_id, "node.scene_array", "one copy set per corridor cell");
+        let (cells, _) = source(nest.id, "outer");
+        assert_eq!(cells.type_id, "node.scene_array", "one copy set per corridor cell");
+        assert_eq!(source(cells.id, "cell_size").0.type_id, "node.loop_cell", "the cells are as long as the live measure");
         assert_eq!(source(nest.id, "inner").0.type_id, "node.reflect_array", "the mirror shaped one tile before the tiling");
         let (count, _) = source(object.id, "instance_count");
         assert_eq!(source(count.id, "in_1"), (nest, "count"), "{}: the draw reads the live product", object.node_id);
@@ -1058,4 +1248,469 @@ fn the_loop_tiles_copies_and_swarms_with_every_live_copy() {
         assert_eq!((live.type_id.as_str(), port), want, "{}: the live count", object.node_id);
     }
     prepared.def.clone().into_graph(&registry, &Default::default()).unwrap();
+}
+
+thread_local! {
+    static CELL: Cell<Option<f32>> = const { Cell::new(None) };
+}
+
+/// Reads the Scene Loop's live cell length.
+struct CellProbe(EffectNodeType);
+
+impl EffectNode for CellProbe {
+    fn is_liveness_root(&self) -> bool {
+        true
+    }
+    fn type_id(&self) -> &EffectNodeType {
+        &self.0
+    }
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        static INPUTS: [NodeInput; 1] = [NodePort {
+            name: Cow::Borrowed("cell"),
+            ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
+            kind: PortKind::Input,
+            required: true,
+        }];
+        &INPUTS
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &[]
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &[]
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        CELL.set(match ctx.inputs.scalar("cell") {
+            Some(ParamValue::Float(value)) => Some(value),
+            _ => None,
+        });
+    }
+}
+
+/// The Scene Loop's cell follows the live rows on the frame they change, as
+/// Blender's Array follows its object: Copies Columns and Count, Copies
+/// Spacing and an Object's scale all move the tiles at once. Bodies physics
+/// moves never move them: the cell measures where things start
+/// (SCENE_REFINEMENT_DESIGN.md P3b).
+#[test]
+fn the_loop_cell_follows_live_rows_and_never_a_moving_body() {
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType, ObjectFields, Shape};
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(cube), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        cube.copies = true;
+        cube.physics = PhysicsSetting::Body;
+    }
+    let ball = ObjectFields { shape: Shape::Cube, physics: PhysicsSetting::Body, ..ObjectFields::default() };
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("ball"), "Ball", ItemFields::Object(ball))).unwrap();
+    let mut card = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut card {
+        *fields = ModifierFields { modifier: ModifierType::SceneLoop, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+    }
+    doc.insert(None, end + 1, Item::new(ItemId::new("loop"), "loop", card)).unwrap();
+    let mut layer = scene_layer(doc);
+    let fx = layer.gen_params_mut().unwrap();
+    // The ball starts 3 m back along the corridor and gravity pulls along it, so a
+    // measure that read moving bodies would change every frame.
+    for (id, value) in [("ball.pos_z", -3.0), ("world.gravity_y", 0.0), ("world.gravity_z", -9.81)] {
+        assert!(fx.set_base_param(id, value), "the scene has {id}");
+    }
+
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.loop_cell", || Box::new(CellProbe(EffectNodeType::new("test.loop_cell"))));
+    registry.register("test.scene_pose", || Box::new(PoseProbe(EffectNodeType::new("test.scene_pose"))));
+    // The load pass runs on the sealed layer graph, as the runtime loads it.
+    let prepared = manifold_node_engine::load::expand::prepare_scene_modifiers(fx.graph.as_ref().unwrap(), &registry).unwrap();
+    let mut def = manifold_core::flatten::flatten_groups(&prepared.def).unwrap();
+    let id = |def: &EffectGraphDef, node_id: &str| def.nodes.iter().find(|n| n.node_id.as_str().ends_with(node_id)).unwrap_or_else(|| panic!("no {node_id}")).id;
+    let (cell, pose) = (id(&def, "scene:loop_cell"), id(&def, "ball:pose_frame"));
+    let next = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
+    for (offset, node_id, type_id) in [(0, "cell_probe", "test.loop_cell"), (1, "pose_probe", "test.scene_pose")] {
+        def.nodes.push(serde_json::from_value(serde_json::json!({"id": next + offset, "nodeId": node_id, "typeId": type_id})).unwrap());
+    }
+    for (from_node, from_port, to_node, to_port) in [(cell, "cell_size", next, "cell"), (pose, "transform", next + 1, "pose")] {
+        def.wires.push(EffectGraphWire { from_node, from_port: from_port.into(), to_node, to_port: to_port.into() });
+    }
+    let mut runtime = PresetRuntime::from_def_for_render(def, &registry, Some(&fx.params), false).unwrap();
+    runtime.apply_param_values(&fx.params);
+
+    let mut frame_count = 0;
+    let mut step = |runtime: &mut PresetRuntime| {
+        CELL.set(None);
+        POSE.set(None);
+        let seconds = f64::from(frame_count) / 30.0;
+        runtime.execute_frame(FrameTime { seconds: Seconds(seconds), beats: Beats(seconds * 2.0), delta: Seconds(1.0 / 30.0), frame_count: i64::from(frame_count) });
+        frame_count += 1;
+        (CELL.get().expect("the cell measure ran"), POSE.get().expect("the ball draws at its pose"))
+    };
+    let write = |fx: &mut PresetInstance, runtime: &mut PresetRuntime, id: &str, value: f32| {
+        assert!(fx.set_base_param(id, value), "the scene has {id}");
+        runtime.apply_param_values(&fx.params);
+    };
+    let close = |cell: f32, want: f32, what: &str| assert!((cell - want).abs() < 1e-4, "{what}: cell {cell}, want {want}");
+
+    // Four copies in one row across the corridor, one cube deep (z from -0.5
+    // to 0.5), and the ball from -3.5 to -2.5: 4 m of scene. Spacing starts
+    // at the 1 m the compiler saw.
+    close(step(&mut runtime).0, 4.0 + 1.0, "at the start");
+    // Nine copies in three rows of three, growing along +Z from the first:
+    // rows at 0, 1.1 and 2.2 m, copies to 2.7.
+    write(fx, &mut runtime, "cube.columns", 3.0);
+    write(fx, &mut runtime, "cube.count", 9.0);
+    close(step(&mut runtime).0, 6.2 + 1.0, "Columns and Count");
+    // Spacing 2 sets the rows 2 m apart: copies to 4.5.
+    write(fx, &mut runtime, "cube.spacing", 2.0);
+    close(step(&mut runtime).0, 8.0 + 1.0, "Copies Spacing");
+    // The group's box rides its frame: across the corridor it changes
+    // nothing, a metre along it carries the copies to 5.5.
+    write(fx, &mut runtime, "cube.pos_x", 4.0);
+    close(step(&mut runtime).0, 8.0 + 1.0, "the group moved across");
+    write(fx, &mut runtime, "cube.pos_z", 1.0);
+    close(step(&mut runtime).0, 9.0 + 1.0, "the group moved along");
+    write(fx, &mut runtime, "cube.pos_z", 0.0);
+    // The ball three times as deep: from -4.5 to -1.5.
+    write(fx, &mut runtime, "ball.scale_z", 3.0);
+    let (scaled, start) = step(&mut runtime);
+    close(scaled, 9.0 + 1.0, "the ball's scale");
+    // The Scene Loop's Spacing is the gap on top.
+    write(fx, &mut runtime, "loop.spacing", 0.5);
+    close(step(&mut runtime).0, 9.0 + 0.5, "the gap");
+
+    let mut moved = start;
+    for _ in 0..20 {
+        let (cell, pose) = step(&mut runtime);
+        close(cell, 9.5, "a moving body");
+        moved = pose;
+    }
+    let (from, to) = (start.world()[3][2], moved.world()[3][2]);
+    assert!(to < from - 0.5, "the ball falls down the corridor: {from} then {to}");
+}
+
+/// Only smooth bends split a built-in shape; a fragment cut keeps the cube
+/// as it is and the cube draws only the cut's live records.
+#[test]
+fn bends_add_detail_and_a_fragment_cut_draws_its_live_records() {
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    let prepared = |modifier| {
+        let mut doc = SceneDoc::base();
+        let mut card = ItemFields::default_for(ItemKind::Modifier);
+        if let ItemFields::Modifier(fields) = &mut card {
+            *fields = ModifierFields { modifier, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+        }
+        let end = doc.items.len();
+        doc.insert(None, end, Item::new(ItemId::new("card"), "Card", card)).unwrap();
+        let def = scene_layer(doc).gen_params().unwrap().graph.clone().unwrap();
+        prepare_scene_modifiers(&def, &PrimitiveRegistry::with_builtin()).unwrap().def
+    };
+    let split = |def: &EffectGraphDef| def.nodes.iter().any(|n| n.type_id == "node.subdivide_mesh");
+    assert!(split(&prepared(ModifierType::Bend)), "a bend splits the cube so it curves");
+    let cut = prepared(ModifierType::VortexFragments);
+    assert!(!split(&cut), "fragments cut the cube as it is");
+    let feed = |object: u32, port: &str| cut.wires.iter().find(|w| w.to_node == object && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()));
+    let objects: Vec<u32> = cut.nodes.iter().filter(|n| n.type_id == "node.scene_object").map(|n| n.id).filter(|&id| feed(id, "topology").is_some()).collect();
+    assert!(!objects.is_empty(), "the cut reaches an object");
+    for object in objects {
+        let (map, _) = feed(object, "topology").unwrap();
+        assert_eq!(feed(object, "live_count"), Some((map, "live_count".to_owned())), "the object draws the cut's live records");
+    }
+}
+
+/// A Bend aimed at an import's Group bends its parts as one body: parts the
+/// file turns and scales (one nested in the other, under a non-uniform
+/// scale) land on the same world-space vertices as the same file imported
+/// with Combine Meshes, whose parts sit flat in the file's space.
+#[test]
+fn a_group_bend_bends_turned_and_scaled_parts_as_one_body() {
+    use manifold_core::scene_doc::transform::{mat4_mul, trs_matrix};
+    use manifold_core::scene_doc::{ModifierFields, ModifierTargets, ModifierType};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+    use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene_with;
+
+    // Four triangles spanning the bend's axis, drawn by both parts.
+    let raw: [[f32; 3]; 12] = [
+        [-1.0, 0.0, -0.5], [1.0, 0.0, -0.5], [1.0, 2.0, 0.5],
+        [-1.0, 0.0, -0.5], [1.0, 2.0, 0.5], [-1.0, 2.0, 0.5],
+        [-1.0, 0.0, 0.5], [1.0, 1.0, 0.5], [0.0, 2.0, -0.5],
+        [0.0, 0.0, 0.0], [1.0, 1.0, -0.5], [-1.0, 1.5, 0.5],
+    ];
+    let (turn_a, turn_b) = (0.6f32, 0.9f32);
+    let (a_at, a_scale) = ([1.0, 0.0, 0.0], [2.0, 1.0, 0.5]);
+    let (b_at, b_scale) = ([0.0, 1.5, 0.3], [0.5, 1.5, 1.0]);
+    let half = |angle: f32| ((angle / 2.0).sin(), (angle / 2.0).cos());
+    let ((ya, wa), (xb, wb)) = (half(turn_a), half(turn_b));
+    let nodes = serde_json::json!([
+        { "name": "rig", "children": [1] },
+        { "name": "a", "mesh": 0, "translation": a_at, "rotation": [0.0, ya, 0.0, wa], "scale": a_scale, "children": [2] },
+        { "name": "b", "mesh": 0, "translation": b_at, "rotation": [xb, 0.0, 0.0, wb], "scale": b_scale }
+    ]);
+    let mut bin = Vec::new();
+    for value in raw.iter().flatten() {
+        bin.extend_from_slice(&value.to_le_bytes());
+    }
+    let gltf = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": nodes,
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+        "accessors": [{
+            "bufferView": 0, "componentType": 5126, "count": raw.len(), "type": "VEC3",
+            "min": [-1.0, 0.0, -0.5], "max": [1.0, 2.0, 0.5],
+        }],
+        "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": bin.len() }],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let mut json = serde_json::to_vec(&gltf).unwrap();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let mut glb = Vec::new();
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&((12 + 8 + json.len() + 8 + bin.len()) as u32).to_le_bytes());
+    for (chunk, kind) in [(&json, b"JSON"), (&bin, b"BIN\0")] {
+        glb.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+        glb.extend_from_slice(kind);
+        glb.extend_from_slice(chunk);
+    }
+    let path = std::env::temp_dir().join(format!("manifold_group_bend_{}.glb", std::process::id()));
+    std::fs::write(&path, glb).unwrap();
+
+    // Each part's mesh where the file puts it, for a Combine Meshes source.
+    let a_world = trs_matrix(a_at, [0.0, turn_a, 0.0], a_scale);
+    let b_world = mat4_mul(a_world, trs_matrix(b_at, [turn_b, 0.0, 0.0], b_scale));
+    let file_world = |node_path: &str| match node_path.rsplit('/').next() {
+        Some("a") => a_world,
+        Some("b") => b_world,
+        other => panic!("no part {other:?}"),
+    };
+    // The import with one card aimed at its Group, prepared as the loader runs it.
+    let prepared = |combine: bool, modifier: ModifierType| {
+        let (def, _) = compile_model_scene_with(&path, combine, |doc, import| {
+            let mut card = ItemFields::default_for(ItemKind::Modifier);
+            if let ItemFields::Modifier(fields) = &mut card {
+                let targets = ModifierTargets::Items(vec![import.clone()]);
+                *fields = ModifierFields { modifier, on: true, targets, ..fields.clone() };
+            }
+            let end = doc.items.len();
+            doc.insert(None, end, Item::new(ItemId::new("card"), "Card", card)).unwrap();
+        })
+        .unwrap();
+        prepare_scene_modifiers(&def, &PrimitiveRegistry::with_builtin()).unwrap().def
+    };
+    let bent = |combine: bool| {
+        let prepared = prepared(combine, ModifierType::Bend);
+        let eval = CpuMeshes { def: &prepared, raw: &raw, file_world: &file_world };
+        let mut parts: Vec<(String, Vec<[f32; 3]>)> = prepared
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.scene_object")
+            .filter_map(|object| eval.world(object.id))
+            .collect();
+        parts.sort_by(|x, y| x.0.cmp(&y.0));
+        parts
+    };
+    let (carried, combined) = (bent(false), bent(true));
+
+    // A fragment cut carried into the frame and back still draws only the
+    // cut's live records.
+    let cut = prepared(false, ModifierType::VortexFragments);
+    std::fs::remove_file(&path).unwrap();
+    let feed = |to: u32, port: &str| cut.wires.iter().find(|w| w.to_node == to && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()));
+    let carried_out: Vec<u32> = cut
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.scene_object")
+        .map(|n| n.id)
+        .filter(|&object| feed(object, "vertices").is_some_and(|(from, _)| cut.nodes.iter().any(|n| n.id == from && n.type_id == "node.merge_meshes")))
+        .collect();
+    assert_eq!(carried_out.len(), 2, "both parts come back out of the frame");
+    for object in carried_out {
+        let (map, _) = feed(object, "topology").expect("the part draws the cut's triangles");
+        assert_eq!(feed(object, "live_count"), Some((map, "live_count".to_owned())), "the part draws the cut's live records");
+    }
+
+    assert_eq!(carried.len(), 2, "both parts draw");
+    assert_eq!(carried.iter().map(|p| &p.0).collect::<Vec<_>>(), combined.iter().map(|p| &p.0).collect::<Vec<_>>());
+    let mut moved = 0.0f32;
+    for ((part, got), (_, want)) in carried.iter().zip(&combined) {
+        assert_eq!(got.len(), want.len(), "{part}");
+        let flat = file_world(part);
+        for (index, ((g, w), r)) in got.iter().zip(want).zip(&raw).enumerate() {
+            assert!((0..3).all(|axis| (g[axis] - w[axis]).abs() < 1e-4), "{part} vertex {index}: {g:?}, flat in the file {w:?}");
+            let unbent = transform_point(&flat, *r);
+            moved = moved.max((0..3).map(|axis| (w[axis] - unbent[axis]).abs()).fold(0.0, f32::max));
+        }
+    }
+    assert!(moved > 0.05, "the bend moved the model ({moved})");
+}
+
+/// Column-major `m` applied to the point `p`.
+fn transform_point(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|row| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row])
+}
+
+/// The inverse of an affine column-major matrix.
+fn affine_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let a = |col: usize, row: usize| m[col][row];
+    let det = a(0, 0) * (a(1, 1) * a(2, 2) - a(2, 1) * a(1, 2)) - a(1, 0) * (a(0, 1) * a(2, 2) - a(2, 1) * a(0, 2))
+        + a(2, 0) * (a(0, 1) * a(1, 2) - a(1, 1) * a(0, 2));
+    let linear: [[f32; 3]; 3] = std::array::from_fn(|col| {
+        std::array::from_fn(|row| {
+            let (r1, r2) = ((col + 1) % 3, (col + 2) % 3);
+            let (c1, c2) = ((row + 1) % 3, (row + 2) % 3);
+            (a(c1, r1) * a(c2, r2) - a(c2, r1) * a(c1, r2)) / det
+        })
+    });
+    let moved: [f32; 3] = std::array::from_fn(|row| -(0..3).map(|col| linear[col][row] * m[3][col]).sum::<f32>());
+    std::array::from_fn(|col| if col < 3 { [linear[col][0], linear[col][1], linear[col][2], 0.0] } else { [moved[0], moved[1], moved[2], 1.0] })
+}
+
+/// A CPU reading of the prepared mesh chain a Bend card builds on an
+/// imported part: the file's mesh, the frame's carry in and out, the bend
+/// itself (`bend_mesh_body.wgsl`, unmasked) and the transforms the part
+/// draws with.
+struct CpuMeshes<'a> {
+    def: &'a EffectGraphDef,
+    raw: &'a [[f32; 3]],
+    file_world: &'a dyn Fn(&str) -> [[f32; 4]; 4],
+}
+
+impl CpuMeshes<'_> {
+    fn node(&self, id: u32) -> &EffectGraphNode {
+        self.def.nodes.iter().find(|node| node.id == id).unwrap()
+    }
+
+    fn feed(&self, id: u32, port: &str) -> Option<(u32, String)> {
+        self.def.wires.iter().find(|w| w.to_node == id && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()))
+    }
+
+    fn param(&self, id: u32, name: &str) -> f32 {
+        use manifold_core::effect_graph_def::SerializedParamValue as V;
+        match self.node(id).params.get(name) {
+            Some(V::Float { value }) => *value,
+            Some(V::Int { value }) => *value as f32,
+            Some(V::Enum { value }) => *value as f32,
+            Some(V::Bool { value }) => f32::from(u8::from(*value)),
+            None => 0.0,
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    fn scalar(&self, id: u32, port: &str) -> f32 {
+        let Some((from, from_port)) = self.feed(id, port) else {
+            return self.param(id, port);
+        };
+        match self.node(from).type_id.as_str() {
+            "node.value" => self.param(from, "value"),
+            // A live place: the transform inside its parent, seen from the frame.
+            "node.transform_components" => {
+                let axis = ["pos_x", "pos_y", "pos_z"].iter().position(|p| *p == from_port).expect("a live offset reads a position");
+                let placed = manifold_core::scene_doc::transform::mat4_mul(
+                    self.transform(self.feed(from, "parent")),
+                    self.transform(self.feed(from, "transform")),
+                );
+                let seen = manifold_core::scene_doc::transform::mat4_mul(affine_inverse(&self.transform(self.feed(from, "frame"))), placed);
+                seen[3][axis]
+            }
+            "node.math" => {
+                let (a, b) = (self.scalar(from, "a"), self.scalar(from, "b"));
+                match self.param(from, "op") as u32 {
+                    0 => a + b,
+                    1 => a - b,
+                    2 => a * b,
+                    3 => a / b,
+                    op => panic!("math op {op}"),
+                }
+            }
+            other => panic!("scalar from {other}"),
+        }
+    }
+
+    fn transform(&self, at: Option<(u32, String)>) -> [[f32; 4]; 4] {
+        let Some((id, _)) = at else {
+            return trs_identity();
+        };
+        assert_eq!(self.node(id).type_id, "node.transform_3d");
+        let three = |names: [&str; 3]| names.map(|name| self.scalar(id, name));
+        let own = manifold_core::scene_doc::transform::trs_matrix(
+            three(["pos_x", "pos_y", "pos_z"]),
+            three(["rot_x", "rot_y", "rot_z"]),
+            [self.scale(id, "scale_x"), self.scale(id, "scale_y"), self.scale(id, "scale_z")],
+        );
+        manifold_core::scene_doc::transform::mat4_mul(self.transform(self.feed(id, "parent")), own)
+    }
+
+    fn scale(&self, id: u32, name: &str) -> f32 {
+        if self.feed(id, name).is_some() || self.node(id).params.contains_key(name) { self.scalar(id, name) } else { 1.0 }
+    }
+
+    /// The mesh at `(id, port)` and the file node it is drawn from.
+    fn mesh(&self, id: u32) -> (String, Vec<[f32; 3]>) {
+        use manifold_core::effect_graph_def::SerializedParamValue as V;
+        let node = self.node(id);
+        match node.type_id.as_str() {
+            "node.gltf_mesh_source" => {
+                let Some(V::String { value: path }) = node.params.get("node_path") else { panic!("a source with no node path") };
+                let own = matches!(node.params.get("own_space"), Some(V::Bool { value: true }));
+                let place = if own { trs_identity() } else { (self.file_world)(path) };
+                (path.clone(), self.raw.iter().map(|p| transform_point(&place, *p)).collect())
+            }
+            "node.merge_meshes" => {
+                assert!(self.feed(id, "mesh_1").is_none(), "a carry holds one mesh");
+                let placed = |port: &str| self.transform(self.feed(id, port));
+                let to_frame = affine_inverse(&manifold_core::scene_doc::transform::mat4_mul(placed("frame_within"), placed("frame")));
+                let m = manifold_core::scene_doc::transform::mat4_mul(to_frame, manifold_core::scene_doc::transform::mat4_mul(placed("within_0"), placed("place_0")));
+                let (path, mesh) = self.mesh(self.feed(id, "mesh_0").unwrap().0);
+                (path, mesh.iter().map(|p| transform_point(&m, *p)).collect())
+            }
+            "node.bend_mesh" => {
+                if let Some((mask, _)) = self.feed(id, "weights") {
+                    assert_eq!(self.param(mask, "amount"), 0.0, "an unmasked bend weighs every vertex 1");
+                }
+                let axis = self.param(id, "axis") as usize;
+                let (angle, center) = (self.scalar(id, "angle"), self.scalar(id, "center"));
+                let offset = ["source_offset_x", "source_offset_y", "source_offset_z"].map(|port| self.scalar(id, port));
+                let (path, mesh) = self.mesh(self.feed(id, "in").unwrap().0);
+                let companion = (axis + 1) % 3;
+                let bent = mesh
+                    .iter()
+                    .map(|p| {
+                        let mut q: [f32; 3] = std::array::from_fn(|i| p[i] + offset[i]);
+                        let s = q[axis] - center;
+                        let (sn, c) = (angle * s).sin_cos();
+                        let along = q[companion];
+                        q[axis] = center + s * c - along * sn;
+                        q[companion] = s * sn + along * c;
+                        std::array::from_fn(|i| q[i] - offset[i])
+                    })
+                    .collect();
+                (path, bent)
+            }
+            other => panic!("unexpected mesh node {other}"),
+        }
+    }
+
+    /// The world-space vertices `object` draws, by the file node it draws,
+    /// or `None` when it draws no imported part.
+    fn world(&self, object: u32) -> Option<(String, Vec<[f32; 3]>)> {
+        let (vertices, _) = self.feed(object, "vertices")?;
+        if !matches!(self.node(vertices).type_id.as_str(), "node.gltf_mesh_source" | "node.merge_meshes" | "node.bend_mesh") {
+            return None;
+        }
+        let (path, mesh) = self.mesh(vertices);
+        let world = manifold_core::scene_doc::transform::mat4_mul(
+            self.transform(self.feed(object, "parent_transform")),
+            self.transform(self.feed(object, "transform")),
+        );
+        Some((path, mesh.iter().map(|p| transform_point(&world, *p)).collect()))
+    }
+}
+
+fn trs_identity() -> [[f32; 4]; 4] {
+    manifold_core::scene_doc::transform::trs_matrix([0.0; 3], [0.0; 3], [1.0; 3])
 }

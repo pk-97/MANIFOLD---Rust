@@ -139,7 +139,7 @@ pub fn push_state(
     transport_cache: &mut TransportDisplayCache,
 ) {
     intake_overlay_state(ui, content_state);
-    drain_events(ui, content_state);
+    drain_events(ui, project, content_state);
     push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
     push_clock(ui, project, content_state, transport_cache);
     push_zoom_label(ui);
@@ -151,7 +151,7 @@ pub fn push_state(
 /// One-shot events keyed on their own sequences: toasts and content-driven
 /// selections. Runs every frame, after the build, since the selections find
 /// cards this frame's projection made.
-pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+pub fn drain_events(ui: &mut UIRoot, project: &Project, content_state: &crate::content_state::ContentState) {
     // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
     // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
     // handlers used to show directly (`app_render.rs`). Keyed on
@@ -178,6 +178,16 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
         ui.last_graph_edit_diagnostic_sequence = Some(sequence);
     }
 
+    // A scene layer's node error or runaway stop: once each, red.
+    if content_state.layer_notices.version > ui.layer_notice_shown {
+        let mut fresh = content_state.layer_notices.after(ui.layer_notice_shown).map(|notice| &*notice.message);
+        if let Some(first) = fresh.next() {
+            let message = fresh.fold(first.to_owned(), |all, next| all + "; " + next);
+            ui.toast.show_with_accent(message, color::RED_BASE);
+        }
+        ui.layer_notice_shown = content_state.layer_notices.version;
+    }
+
     if let Some(message) = trigger_delivery_diagnostic_toast(
         &mut ui.last_trigger_delivery_failure,
         content_state.trigger_delivery_failure,
@@ -187,7 +197,7 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
 
     // A body the world newly left out: once, red, beside its card warning.
     if !std::sync::Arc::ptr_eq(&ui.refusal_toast_seen, &content_state.setup_fits) {
-        if let Some(message) = crate::setup_check::new_refusal(&ui.refusal_toast_seen, &content_state.setup_fits) {
+        if let Some(message) = crate::setup_check::new_refusal(&ui.refusal_toast_seen, &content_state.setup_fits, project) {
             ui.toast.show_with_accent(message, color::RED_BASE);
         }
         ui.refusal_toast_seen = content_state.setup_fits.clone();

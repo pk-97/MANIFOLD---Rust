@@ -435,10 +435,12 @@ struct MathViewCapture {
     reference: PortAddress,
     current: PortAddress,
     /// Chain producer of `SceneEndpoint::Instances` at the view's position:
-    /// preceding copy/echo modifiers (SpatialEchoes, WavesEchoes, SceneLoop)
+    /// preceding copy/echo modifiers (SpatialEchoes, SceneLoop)
     /// or a host-wired instances port. `None` when nothing upstream produces
     /// copies — the diagram then behaves exactly as a vertices-only capture.
     instances: Option<PortAddress>,
+    /// The sampled item's own radius (the frame's when the frame has none):
+    /// the diagram sizes its marks, arrow heads and axes from it.
     radius: f64,
 }
 
@@ -600,7 +602,12 @@ impl Builder<'_> {
                 .and_then(|key| self.current.get(&key).and_then(Clone::clone));
             captures.push((
                 target.clone(),
-                MathViewCapture { reference, current, instances, radius: frame.scene_radius },
+                MathViewCapture {
+                    reference,
+                    current,
+                    instances,
+                    radius: frame.item_radius.unwrap_or(frame.scene_radius),
+                },
             ));
         }
         captures
@@ -708,12 +715,35 @@ impl Builder<'_> {
                 .attachment_key(modifier, Some(&target), SceneEndpoint::Transform)
                 .ok()
                 .and_then(|key| self.current.get(&key).and_then(Clone::clone));
-            resolved.push((target, capture, transform));
+            // The diagram reads the object's own wires: a copies body's
+            // per-axis scale, so copies draw at their real scale, and the
+            // frame it draws in (its groups or its body's pose).
+            let object_input = |port: &str| {
+                self.index.by_ref.get(&target).and_then(|object| {
+                    self.derived
+                        .wires
+                        .iter()
+                        .find(|wire| wire.to_node == *object && wire.to_port == port)
+                        .map(|wire| (wire.from_node, wire.from_port.clone()))
+                })
+            };
+            let copy_scale = object_input("copy_scale");
+            // Copies laid out in Group space draw each copy in the frame
+            // instead (render_scene's instance space), which the diagram
+            // does not model.
+            let group_space = self.index.by_ref.get(&target).is_some_and(|object| {
+                self.derived.nodes.iter().any(|node| {
+                    node.id == *object
+                        && node.params.get("instances_space") == Some(&SerializedParamValue::Enum { value: 1 })
+                })
+            });
+            let parent = object_input("parent_transform").filter(|_| !group_space);
+            resolved.push((target, capture, transform, copy_scale, parent));
         }
 
         let view = modifier.id.as_str();
         let mut diagrams = Vec::with_capacity(resolved.len());
-        for (index, (target, capture, transform)) in resolved.into_iter().enumerate() {
+        for (index, (target, capture, transform, copy_scale, parent)) in resolved.into_iter().enumerate() {
             let parts = |role: &'static str| vec!["math_view", view, role, target.as_str()];
             let current_samples = self.add_math_node(
                 &parts("current_samples"),
@@ -759,7 +789,9 @@ impl Builder<'_> {
                 (Some(capture.reference), "reference_mesh"),
                 (Some(camera.clone()), "camera"),
                 (transform, "transform"),
+                (parent, "parent_transform"),
                 (capture.instances, "instances"),
+                (copy_scale, "copy_scale"),
                 (Some((scene_id, "depth".to_string())), "scene_depth"),
             ] {
                 if let Some(from) = from {
@@ -942,7 +974,7 @@ impl Builder<'_> {
         {
             return Err(SceneModifierExpandError::DuplicateIdentity {
                 path: node_id.to_string(),
-                detail: "generated Math View node collides with an existing node".into(),
+                detail: "generated node collides with an existing node".into(),
             });
         }
         let id = self.next_id;
@@ -1023,11 +1055,9 @@ impl Builder<'_> {
                 self.constant_node(identity_key, "node.transform_3d", params, "transform")?
             }
             SceneEndpoint::Instances => {
+                // One unwired copy sits on the origin, unturned.
                 for (key, value) in [("max_capacity", 1), ("active_count", 1)] {
                     params.insert(key.into(), SerializedParamValue::Int { value });
-                }
-                for key in ["extent_x", "extent_y", "extent_z"] {
-                    params.insert(key.into(), SerializedParamValue::Float { value: 0.0 });
                 }
                 params.insert(
                     "base_scale".into(),
@@ -1281,6 +1311,38 @@ impl Builder<'_> {
             },
         );
         self.constant_node(key, "node.value", params, "out")
+    }
+
+    /// The owner's `node.loop_cell` output: the Scene Loop cell's live
+    /// length. `None` when the owner measures none.
+    fn loop_cell(&self, instance: &SceneModifierInstanceDef) -> Result<Option<PortAddress>, SceneModifierExpandError> {
+        let mut cells = self.index.flat.nodes.iter().filter(|node| node.type_id == "node.loop_cell");
+        let Some(cell) = cells.next() else {
+            return Ok(None);
+        };
+        if cells.next().is_some() {
+            return Err(invalid(instance.id.to_string(), "a scene measures one Scene Loop cell"));
+        }
+        Ok(Some((cell.id, "cell_size".into())))
+    }
+
+    /// Output `port` of the copies body that lays out `target`'s copies:
+    /// the node whose `instances` the target draws before any modifier.
+    /// `None` when no copies body does (copies on a surface, or none).
+    fn copies_body(
+        &self,
+        instance: &SceneModifierInstanceDef,
+        target: Option<&NodeId>,
+        port: &str,
+    ) -> Result<Option<PortAddress>, SceneModifierExpandError> {
+        let target = target.ok_or_else(|| invalid(instance.id.to_string(), "copies context is per object"))?;
+        let Some(wire) = self.index.input(target, endpoint_port(SceneEndpoint::Instances))? else {
+            return Ok(None);
+        };
+        let body = self.index.flat.nodes.iter().find(|node| node.id == wire.from_node);
+        Ok(body
+            .filter(|node| node.type_id == manifold_core::copies_body::RIGID_BODY_TYPE_ID)
+            .map(|node| (node.id, port.into())))
     }
 
 manifold_core::testkit_visible! {
@@ -1591,6 +1653,17 @@ manifold_core::testkit_visible! {
                 });
             }
         }
+        // Targets the frame carries whole, by the frame's transform node; each
+        // mesh carried in, by the target and where it came from (a first
+        // card's current and rest mesh are one); the targets a stage has bent
+        // in the frame.
+        let carried: BTreeMap<&NodeId, &NodeId> = instance
+            .mesh_frames
+            .iter()
+            .filter_map(|frame| frame.frame_transform.as_ref().map(|transform| (&frame.target, transform)))
+            .collect();
+        let mut entered: BTreeMap<(NodeId, PortAddress), PortAddress> = BTreeMap::new();
+        let mut moved: BTreeSet<NodeId> = BTreeSet::new();
         for (position, stage) in recipe.stages.iter().enumerate() {
             let root = local
                 .nodes
@@ -1618,7 +1691,40 @@ manifold_core::testkit_visible! {
                             let key = self.attachment_key(instance, target, *endpoint)?;
                             let reference =
                                 matches!(input.source, SceneStageSource::Reference { .. });
-                            self.endpoint_input(instance, &key, *endpoint, reference)?
+                            let address = self.endpoint_input(instance, &key, *endpoint, reference)?;
+                            // A carried target's stages read its mesh in the
+                            // frame, until one of them writes it there.
+                            match target.filter(|_| *endpoint == SceneEndpoint::Vertices) {
+                                Some(target)
+                                    if carried.contains_key(target)
+                                        && (reference || !moved.contains(target)) =>
+                                {
+                                    let at = (target.clone(), address.clone());
+                                    match entered.get(&at) {
+                                        Some(inside) => inside.clone(),
+                                        None => {
+                                            let way = if reference { Carry::InReference } else { Carry::In };
+                                            let inside = self.carry(instance, target, carried[target], address, way)?;
+                                            entered.insert(at, inside.clone());
+                                            inside
+                                        }
+                                    }
+                                }
+                                _ => address,
+                            }
+                        }
+                        SceneStageSource::Context { value: SceneContextValue::LoopCell } => {
+                            match self.loop_cell(instance)? {
+                                Some(cell) => cell,
+                                // Nothing measures the cell: the node reads its param.
+                                None => continue,
+                            }
+                        }
+                        SceneStageSource::Context { value: SceneContextValue::Copies } => {
+                            match self.copies_body(instance, target, &input.port)? {
+                                Some(output) => output,
+                                None => continue,
+                            }
                         }
                         SceneStageSource::Context { value } => {
                             self.context(owner, instance, target, targets, *value)?
@@ -1708,12 +1814,68 @@ manifold_core::testkit_visible! {
                             ),
                         });
                     }
+                    if let Some(target) = target.filter(|target| output.endpoint == SceneEndpoint::Vertices && carried.contains_key(target)) {
+                        moved.insert(target.clone());
+                    }
                     self.current
                         .insert(key.clone(), Some((copy, output.port.clone())));
                     self.written.insert(key);
                 }
             }
         }
+        // What the stages bent in the frame goes back to the target's space,
+        // where it draws.
+        for target in moved {
+            let key = self.attachment_key(instance, Some(&target), SceneEndpoint::Vertices)?;
+            let bent = self.current.get(&key).and_then(Clone::clone).ok_or_else(|| invalid(instance.id.to_string(), "a carried mesh has no producer"))?;
+            let out = self.carry(instance, &target, carried[&target], bent, Carry::Out)?;
+            self.current.insert(key, Some(out));
+        }
         Ok(leaves)
     }
+
+    /// A single-part `node.merge_meshes` that carries `target`'s mesh at
+    /// `mesh` into `frame` or back out, through the transform and parent
+    /// transform the target draws with
+    /// ([`SceneMeshReferenceFrame::frame_transform`](manifold_core::scene_modifier_preset::SceneMeshReferenceFrame::frame_transform)).
+    fn carry(
+        &mut self,
+        instance: &SceneModifierInstanceDef,
+        target: &NodeId,
+        frame: &NodeId,
+        mesh: PortAddress,
+        way: Carry,
+    ) -> Result<PortAddress, SceneModifierExpandError> {
+        let placed = |port: &str| -> Result<Option<PortAddress>, SceneModifierExpandError> {
+            Ok(self.index.input(target, port)?.map(|wire| (wire.from_node, wire.from_port.clone())))
+        };
+        let (transform, parent) = (placed("transform")?, placed("parent_transform")?);
+        let frame = (self.index.node(frame)?.id, "transform".to_owned());
+        let role = match way {
+            Carry::In => "carry_in",
+            Carry::InReference => "carry_in_reference",
+            Carry::Out => "carry_out",
+        };
+        let params = BTreeMap::from([("parts".to_owned(), SerializedParamValue::Int { value: 1 })]);
+        let id = self.add_math_node(&[instance.id.as_str(), role, target.as_str()], "node.merge_meshes", "Carry", params)?;
+        let wires = match way {
+            Carry::In | Carry::InReference => [(Some(mesh), "mesh_0"), (transform, "place_0"), (parent, "within_0"), (Some(frame), "frame")],
+            Carry::Out => [(Some(mesh), "mesh_0"), (Some(frame), "place_0"), (transform, "frame"), (parent, "frame_within")],
+        };
+        for (from, port) in wires {
+            if let Some(from) = from {
+                self.push_wire(from, id, port);
+            }
+        }
+        Ok((id, "vertices".to_owned()))
+    }
+}
+
+/// Which way [`Builder::carry`] moves a mesh: the current mesh or the rest
+/// mesh into its modifier's frame, or the bent mesh back to its own space.
+#[derive(Clone, Copy)]
+enum Carry {
+    In,
+    InReference,
+    Out,
 }

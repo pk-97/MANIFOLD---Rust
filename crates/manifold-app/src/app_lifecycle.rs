@@ -919,22 +919,13 @@ impl Application {
         let insert_index = insert_index.min(local.timeline.layers.len());
         let mut doc = model.scene_doc(&file_str, group.clone());
         doc.models.insert(file_str.clone(), facts);
+        // The model keeps the file's size and place: every item starts at
+        // the file's values, as a drop into a scene does.
         let values = model
-            .placement()
-            .map(|placement| {
-                let [x, y, z] = placement.position;
-                [
-                    ("scale_x", placement.scale),
-                    ("scale_y", placement.scale),
-                    ("scale_z", placement.scale),
-                    ("pos_x", x),
-                    ("pos_y", y),
-                    ("pos_z", z),
-                ]
-                .map(|(property, value)| (manifold_core::scene_doc::param_id(&group, property), value))
-                .to_vec()
-            })
-            .unwrap_or_default();
+            .starting_values(&group)
+            .into_iter()
+            .map(|(item, property, value)| (manifold_core::scene_doc::param_id(&item, property), value))
+            .collect();
         let display_name = model.name.clone();
 
         // Execute the layer command locally first so the generated LayerId is

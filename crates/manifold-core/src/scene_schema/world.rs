@@ -1,9 +1,9 @@
 //! World: the live camera cut (`node.camera_switch` and the image switch
 //! after the cameras' tails), physics (`node.physics_world`, emitted once an
 //! item has physics), fog (`node.atmosphere`, when the fog field is on), the
-//! render mode (`node.render_mode`), ambient occlusion (`node.ssao_gtao` and
-//! its blur, when the ambient occlusion field is on) and the rest of the
-//! render settings (the scene's `node.render_scene`).
+//! render mode (`node.render_mode`), ambient occlusion (`node.ssao_gtao`, its
+//! history and blur, when the ambient occlusion field is on) and the rest of
+//! the render settings (the scene's `node.render_scene`).
 
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Modes, RgbChannel, Unit};
@@ -17,6 +17,7 @@ const FOG: Reach = Reach::Own("fog");
 const RENDER: Reach = Reach::Scene("render");
 const MODE: Reach = Reach::Own("render_mode");
 const AO: Reach = Reach::Own("ao");
+const AO_HISTORY: Reach = Reach::Own("ao_history");
 const AO_BLUR_H: Reach = Reach::Own("ao_blur_h");
 const AO_BLUR_V: Reach = Reach::Own("ao_blur_v");
 const AO_MULTIPLY: Reach = Reach::Own("ao_multiply");
@@ -50,11 +51,15 @@ const fn ray_tracing(property: &'static str) -> PropertyRow {
     row(property, RENDER, RayTracing, setup())
 }
 
+const fn ray_traced(property: &'static str) -> PropertyRow {
+    ray_tracing(property).gate(Gate::Dim(Feature::RayTracing))
+}
+
 const fn look(property: &'static str, reach: Reach, section: ControlGroup, order: u8) -> PropertyRow {
     row(property, reach, section, perform(CardBand::Look, order))
 }
 
-pub static WORLD_ROWS: [PropertyRow; 55] = [
+pub static WORLD_ROWS: [PropertyRow; 57] = [
     // Camera: which camera renders. A cut is a param write, so it lands on
     // its frame and never recompiles; the choices are the cameras by name.
     // No top limit: a recorded cut past the highest live number is a
@@ -96,15 +101,18 @@ pub static WORLD_ROWS: [PropertyRow; 55] = [
     look("point_size", MODE, Shading, 17).unit(Unit::Pixels).gate(POINTS),
     row("scene_render_mode", RENDER, RenderMode, Exposure::Internal("the World's render mode node drives the render"))
         .param("render_mode"),
-    // Ambient occlusion: contact shadows from the depth buffer, denoised by
-    // a depth-aware blur and multiplied onto the picture where the surface
-    // takes it (`ao_mask`: lit raster surfaces, never under ray tracing).
+    // Ambient occlusion: contact shadows from the depth buffer, averaged over
+    // past frames, denoised by a depth-aware blur and multiplied onto the
+    // picture where the surface takes it (`ao_mask`: lit raster surfaces,
+    // never under ray tracing).
     look("ao_strength", AO, AmbientOcclusion, 20).param("intensity").name("Strength").limit(AT_LEAST_ZERO),
     row("ao_distance", AO, AmbientOcclusion, setup()).param("radius").name("Distance").unit(Unit::Metres).limit(HardLimit::AtLeast(0.01)),
     row("ao_slices", AO, AmbientOcclusion, Exposure::Internal("the sampling quality main shipped")).param("slices"),
     row("ao_steps", AO, AmbientOcclusion, Exposure::Internal("the sampling quality main shipped")).param("steps"),
     row("ao_projection", AO, AmbientOcclusion, Exposure::Internal("a scene reads its depth through the camera, never as a height field")).param("projection"),
     row("ao_relief", AO, AmbientOcclusion, Exposure::Internal("read only by the height field projection")).param("relief"),
+    row("ao_noise_per_frame", AO, AmbientOcclusion, Exposure::Automatic("on, so the history averages a pattern that moves")).param("noise_per_frame"),
+    row("ao_history_frames", AO_HISTORY, AmbientOcclusion, Exposure::Internal("eight past frames settle a change in about eight frames")).param("frames"),
     row("ao_blur_h_axis", AO_BLUR_H, AmbientOcclusion, Exposure::Automatic("the horizontal pass")).param("axis"),
     row("ao_blur_h_sigma", AO_BLUR_H, AmbientOcclusion, Exposure::Internal("the denoise main shipped")).param("depth_sigma"),
     row("ao_blur_v_axis", AO_BLUR_V, AmbientOcclusion, Exposure::Automatic("the vertical pass")).param("axis"),
@@ -112,13 +120,14 @@ pub static WORLD_ROWS: [PropertyRow; 55] = [
     row("ao_multiply_amount", AO_MULTIPLY, AmbientOcclusion, Exposure::Automatic("the whole occlusion")).param("amount"),
     row("ao_multiply_mode", AO_MULTIPLY, AmbientOcclusion, Exposure::Automatic("multiplied onto the picture")).param("mode"),
     row("ao_mask_amount", AO_MASK, AmbientOcclusion, Exposure::Internal("the render's ao mask decides where it lands")).param("amount"),
-    // Render.
-    ray_tracing("rt_enabled"),
+    // Render. Each ray-traced term does nothing while Ray Tracing is off.
+    ray_tracing("rt_enabled").switch(Feature::RayTracing),
     ray_tracing("temporal_upscale"),
-    ray_tracing("rt_reflections"),
-    ray_tracing("rt_shadows"),
-    ray_tracing("rt_ao"),
-    ray_tracing("rt_gi"),
+    ray_traced("rt_reflections"),
+    ray_traced("rt_shadows"),
+    // Its own name: the Ambient Occlusion section below is the screen-space kind.
+    ray_traced("rt_ao").name("Ray-Traced Occlusion"),
+    ray_traced("rt_gi"),
     row("rt_firefly_clamp", RENDER, RayTracing, Exposure::Internal("always on; it only guards against fireflies")),
     row("rt_denoise_feed", RENDER, RayTracing, Exposure::Internal("a debug view of the denoiser input")),
 ];

@@ -9,25 +9,15 @@
     "available": true,
     "params": [
       { "id": "mix", "name": "Mix", "min": 0.0, "max": 1.0, "defaultValue": 0.5 },
-      { "id": "layout", "name": "Layout", "min": 0.0, "max": 3.0, "defaultValue": 1.0, "wholeNumbers": true, "valueLabels": ["Grid", "Ring", "Spiral", "Random"] },
-      { "id": "count", "name": "Count", "min": 1.0, "max": 65536.0, "defaultValue": 64.0, "wholeNumbers": true },
-      { "id": "width", "name": "Width", "min": 0.0, "max": 100.0, "defaultValue": 8.0 },
-      { "id": "height", "name": "Height", "min": 0.0, "max": 100.0, "defaultValue": 4.0 },
-      { "id": "depth", "name": "Depth", "min": 0.0, "max": 100.0, "defaultValue": 8.0 },
+      { "id": "layout", "name": "Layout", "min": 0.0, "max": 5.0, "defaultValue": 3.0, "wholeNumbers": true, "valueLabels": ["Grid", "Scatter", "Line", "Ring", "Spiral", "Random"] },
       { "id": "size", "name": "Copy Size", "min": 0.0, "max": 10.0, "defaultValue": 1.0 },
-      { "id": "seed", "name": "Seed", "min": 0.0, "max": 1000.0, "defaultValue": 0.0, "wholeNumbers": true },
       { "id": "enabled", "name": "Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "isToggle": true }
     ],
     "bindings": [
       { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "enabled", "param": "value" } },
       { "id": "mix", "label": "Mix", "defaultValue": 0.5, "target": { "kind": "node", "nodeId": "blend", "param": "t" } },
-      { "id": "layout", "label": "Layout", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "other", "param": "layout" }, "convert": { "type": "EnumRound" } },
-      { "id": "count", "label": "Count", "defaultValue": 64.0, "target": { "kind": "node", "nodeId": "other", "param": "active_count" }, "convert": { "type": "IntRound" } },
-      { "id": "width", "label": "Width", "defaultValue": 8.0, "target": { "kind": "node", "nodeId": "other", "param": "extent_x" } },
-      { "id": "height", "label": "Height", "defaultValue": 4.0, "target": { "kind": "node", "nodeId": "other", "param": "extent_y" } },
-      { "id": "depth", "label": "Depth", "defaultValue": 8.0, "target": { "kind": "node", "nodeId": "other", "param": "extent_z" } },
-      { "id": "size", "label": "Copy Size", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "other", "param": "base_scale" } },
-      { "id": "seed", "label": "Seed", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "other", "param": "seed" }, "convert": { "type": "IntRound" } }
+      { "id": "layout", "label": "Layout", "defaultValue": 3.0, "target": { "kind": "node", "nodeId": "other", "param": "layout" }, "convert": { "type": "EnumRound" } },
+      { "id": "size", "label": "Copy Size", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "other", "param": "base_scale" } }
     ],
     "sceneModifier": {
       "schemaVersion": 1,
@@ -39,9 +29,11 @@
           "scope": "eachObject",
           "inputs": [
             { "port": "instances", "source": { "previous": { "endpoint": "instances" } } },
-            { "port": "originX", "source": { "context": { "value": "sourceOffsetX" } } },
-            { "port": "originY", "source": { "context": { "value": "sourceOffsetY" } } },
-            { "port": "originZ", "source": { "context": { "value": "sourceOffsetZ" } } }
+            { "port": "copy_frame", "source": { "context": { "value": "copies" } } },
+            { "port": "copy_box", "source": { "context": { "value": "copies" } } },
+            { "port": "copy_turn", "source": { "context": { "value": "copies" } } },
+            { "port": "copy_grid", "source": { "context": { "value": "copies" } } },
+            { "port": "active_count", "source": { "context": { "value": "copies" } } }
           ],
           "outputs": [
             { "port": "instances", "endpoint": "instances" }
@@ -60,9 +52,11 @@
         "interface": {
           "inputs": [
             { "name": "instances", "portType": "Array(InstanceTransform)" },
-            { "name": "originX", "portType": "Scalar(F32)" },
-            { "name": "originY", "portType": "Scalar(F32)" },
-            { "name": "originZ", "portType": "Scalar(F32)" }
+            { "name": "copy_frame", "portType": "Transform" },
+            { "name": "copy_box", "portType": "Scalar(Vec3)" },
+            { "name": "copy_turn", "portType": "Scalar(Vec3)" },
+            { "name": "copy_grid", "portType": "Scalar(Vec2)" },
+            { "name": "active_count", "portType": "Scalar(F32)" }
           ],
           "outputs": [
             { "name": "instances", "portType": "Array(InstanceTransform)" }
@@ -71,9 +65,11 @@
         "nodes": [
           { "id": 1, "nodeId": "group_instances", "typeId": "system.group_input", "handle": "instances" },
           { "id": 10, "nodeId": "group_output", "typeId": "system.group_output", "handle": "output" },
-          { "id": 2, "nodeId": "group_origin_x", "typeId": "system.group_input", "handle": "originX" },
-          { "id": 3, "nodeId": "group_origin_y", "typeId": "system.group_input", "handle": "originY" },
-          { "id": 4, "nodeId": "group_origin_z", "typeId": "system.group_input", "handle": "originZ" },
+          { "id": 2, "nodeId": "group_copy_frame", "typeId": "system.group_input", "handle": "copy_frame" },
+          { "id": 3, "nodeId": "group_copy_box", "typeId": "system.group_input", "handle": "copy_box" },
+          { "id": 4, "nodeId": "group_copy_turn", "typeId": "system.group_input", "handle": "copy_turn" },
+          { "id": 5, "nodeId": "group_copy_grid", "typeId": "system.group_input", "handle": "copy_grid" },
+          { "id": 6, "nodeId": "group_active_count", "typeId": "system.group_input", "handle": "active_count" },
           {
             "id": 20,
             "nodeId": "enabled",
@@ -88,16 +84,8 @@
             "handle": "other",
             "params": {
               "max_capacity": { "type": "Float", "value": 65536.0 },
-              "active_count": { "type": "Float", "value": 64.0 },
-              "layout": { "type": "Enum", "value": 1 },
-              "seed": { "type": "Float", "value": 0.0 },
-              "extent_x": { "type": "Float", "value": 8.0 },
-              "extent_y": { "type": "Float", "value": 4.0 },
-              "extent_z": { "type": "Float", "value": 8.0 },
-              "base_scale": { "type": "Float", "value": 1.0 },
-              "rot_x": { "type": "Float", "value": 0.0 },
-              "rot_y": { "type": "Float", "value": 0.0 },
-              "rot_z": { "type": "Float", "value": 0.0 }
+              "layout": { "type": "Enum", "value": 3 },
+              "base_scale": { "type": "Float", "value": 1.0 }
             }
           },
           {
@@ -112,9 +100,11 @@
           { "fromNode": 1, "fromPort": "instances", "toNode": 22, "toPort": "a" },
           { "fromNode": 21, "fromPort": "instances", "toNode": 22, "toPort": "b" },
           { "fromNode": 22, "fromPort": "out", "toNode": 10, "toPort": "instances" },
-          { "fromNode": 2, "fromPort": "originX", "toNode": 21, "toPort": "origin_x" },
-          { "fromNode": 3, "fromPort": "originY", "toNode": 21, "toPort": "origin_y" },
-          { "fromNode": 4, "fromPort": "originZ", "toNode": 21, "toPort": "origin_z" }
+          { "fromNode": 2, "fromPort": "copy_frame", "toNode": 21, "toPort": "copy_frame" },
+          { "fromNode": 3, "fromPort": "copy_box", "toNode": 21, "toPort": "copy_box" },
+          { "fromNode": 4, "fromPort": "copy_turn", "toNode": 21, "toPort": "copy_turn" },
+          { "fromNode": 5, "fromPort": "copy_grid", "toNode": 21, "toPort": "copy_grid" },
+          { "fromNode": 6, "fromPort": "active_count", "toNode": 21, "toPort": "active_count" }
         ]
       }
     }

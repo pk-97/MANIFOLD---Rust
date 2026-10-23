@@ -64,8 +64,15 @@ pub(crate) struct Builder<'d> {
     pub(crate) group_visible: BTreeMap<ItemId, u32>,
     /// The Swarms, in tree order.
     pub(crate) swarms: Vec<ItemId>,
-    /// The swarm copies node that draws each Object or Group a Swarm draws as.
+    /// The swarm copies node that draws each Object or Group a Swarm draws as:
+    /// the first swarm's in tree order.
     pub(crate) swarm_draws: BTreeMap<ItemId, u32>,
+    /// Every later swarm drawing an item the first already draws: (item,
+    /// swarm, its copies node).
+    pub(crate) swarm_extra: Vec<(ItemId, ItemId, u32)>,
+    /// Each scene object a later swarm draws: (the first swarm's object it
+    /// copies, the copy, the swarm).
+    pub(crate) alike: Vec<(u32, u32, ItemId)>,
     /// The emitter transform each swarm copies node is placed in, and the
     /// node whose `out` is the swarm's live Count.
     pub(crate) swarm_frames: BTreeMap<u32, (u32, u32)>,
@@ -79,9 +86,9 @@ pub(crate) struct Builder<'d> {
     frames: BTreeMap<NodeId, FramePlan>,
     /// Every drawn object a modifier can measure, in draw order.
     pub(crate) drawn: Vec<Drawn>,
-    /// The Objects a deforming Modifier that is on reaches: their built-in
+    /// The Objects a smoothly bending Modifier that is on reaches: their built-in
     /// shapes get mesh detail.
-    pub(crate) deformed: BTreeSet<ItemId>,
+    pub(crate) smoothed: BTreeSet<ItemId>,
 }
 
 /// A mesh's rest pose (SCENE_DOCUMENT_DESIGN.md ruling 20): every shape
@@ -91,8 +98,14 @@ pub(crate) struct Rest {
     /// The mesh's bounds about its own origin.
     pub lo: [f32; 3],
     pub hi: [f32; 3],
-    /// Where that origin sits at rest in the frame of what holds the item.
-    pub offset: [f32; 3],
+    /// Its box where it sits at rest in the scene, when the compiler knows
+    /// it (an imported part: where the file puts it); else `lo` and `hi`
+    /// about the scene's origin.
+    pub placed: Option<([f32; 3], [f32; 3])>,
+    /// Whether the mesh draws in its file node's own space, its Transform
+    /// carrying the rotation and scale the file gave it: a frame it shares
+    /// with other parts carries it whole, so it bends as one body with them.
+    pub own_space: bool,
     pub vertices: u32,
 }
 
@@ -140,12 +153,14 @@ impl<'d> Builder<'d> {
             group_visible: BTreeMap::new(),
             swarms: Vec::new(),
             swarm_draws: BTreeMap::new(),
+            swarm_extra: Vec::new(),
+            alike: Vec::new(),
             swarm_frames: BTreeMap::new(),
             nests: BTreeMap::new(),
             modifiers: Vec::new(),
             frames: BTreeMap::new(),
             drawn: Vec::new(),
-            deformed: super::modifiers::deformed_items(doc),
+            smoothed: super::modifiers::smoothed_items(doc),
         };
         b.add(SCENE, "input", "system.generator_input");
         b.add(SCENE, "render", "node.render_scene");
@@ -175,6 +190,52 @@ impl<'d> Builder<'d> {
         let id = self.fresh();
         self.nodes.push(plain_node(id, node_id.as_str(), type_id, node_id.as_str()));
         id
+    }
+
+    /// A copy of node `original` under `node_id`: its params, every wire into
+    /// it but `except`'s port with each source `remap` names swapped, and
+    /// every binding that drives it, so the copy follows the same rows.
+    pub(crate) fn copy_node(&mut self, original: u32, node_id: NodeId, remap: &[(u32, u32)], except: Option<&str>) -> Option<u32> {
+        let mut node = self.node_mut(original)?.clone();
+        let original_id = std::mem::replace(&mut node.node_id, node_id.clone());
+        let id = self.fresh();
+        node.id = id;
+        node.handle = Some(node_id.as_str().to_owned());
+        self.nodes.push(node);
+        self.copy_inputs(original, id, remap, except);
+        let driven: Vec<BindingDef> = self
+            .bindings
+            .iter()
+            .filter(|binding| matches!(&binding.target, BindingTarget::Node { node_id, .. } if *node_id == original_id))
+            .cloned()
+            .collect();
+        for mut binding in driven {
+            if let BindingTarget::Node { node_id: target, .. } = &mut binding.target {
+                target.clone_from(&node_id);
+            }
+            self.bindings.push(binding);
+        }
+        Some(id)
+    }
+
+    /// Wire into `to` what feeds `from`, but `except`'s port, with each
+    /// source `remap` names swapped.
+    pub(crate) fn copy_inputs(&mut self, from: u32, to: u32, remap: &[(u32, u32)], except: Option<&str>) {
+        let inputs: Vec<EffectGraphWire> = self
+            .wires
+            .iter()
+            .filter(|wire| wire.to_node == from && Some(wire.to_port.as_str()) != except)
+            .cloned()
+            .collect();
+        for wire in inputs {
+            let source = remap.iter().find(|(old, _)| *old == wire.from_node).map_or(wire.from_node, |(_, new)| *new);
+            self.wire(source, &wire.from_port, to, &wire.to_port);
+        }
+    }
+
+    /// The copies later swarms draw of scene object `original`.
+    pub(crate) fn alike_of(&self, original: u32) -> impl Iterator<Item = u32> + '_ {
+        self.alike.iter().filter(move |(of, _, _)| *of == original).map(|(_, copy, _)| *copy)
     }
 
     /// Add a node built elsewhere (a group with its body). Its node ids are
@@ -560,12 +621,11 @@ impl<'d> Builder<'d> {
     }
 }
 
-/// The box holding every rest pose in `rests`, each placed at its offset.
+/// The box holding every rest pose in `rests`, each where it is placed.
 pub(crate) fn rest_box<'r>(rests: impl IntoIterator<Item = &'r Rest>) -> Option<([f32; 3], [f32; 3])> {
     let mut found: Option<([f32; 3], [f32; 3])> = None;
     for rest in rests {
-        let lo: [f32; 3] = std::array::from_fn(|axis| rest.offset[axis] + rest.lo[axis]);
-        let hi: [f32; 3] = std::array::from_fn(|axis| rest.offset[axis] + rest.hi[axis]);
+        let (lo, hi) = rest.placed.unwrap_or((rest.lo, rest.hi));
         found = Some(match found {
             None => (lo, hi),
             Some((min, max)) => (std::array::from_fn(|axis| min[axis].min(lo[axis])), std::array::from_fn(|axis| max[axis].max(hi[axis]))),
@@ -620,6 +680,7 @@ pub(crate) fn card_spec(
         limit: facts.limit,
         unit: facts.unit,
         scene: Some(facts.desc(section)),
+        tooltip: facts.tip.map(str::to_owned),
         ..ParamSpecDef::default()
     }
 }

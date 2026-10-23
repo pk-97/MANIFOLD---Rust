@@ -20,6 +20,8 @@ use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneView
 use manifold_node_engine::runtime::ModifierPreviewContext;
 
 mod physics_events;
+mod runaway;
+pub use runaway::LayerNews;
 manifold_core::testkit_visible! { mod state; }
 use state::{ActiveClip, LayerGeneratorState, ThumbGen};
 #[cfg(any(test, feature = "testkit"))]
@@ -147,6 +149,8 @@ pub struct GeneratorRenderer {
     scene_viewport_request: Option<(LayerId, NodeId, SceneViewportConfig)>,
     scene_viewport_modifier: Option<Arc<ModifierPreviewContext>>,
     scene_viewport_error: Option<SceneViewportHostError>,
+    /// Each layer's longest GPU buffer, the runaway cut and the stage's news.
+    watch: runaway::LayerWatch,
 }
 
 /// This generator's profiled-tag scope: `gen:{layer_id}`.
@@ -212,6 +216,7 @@ impl GeneratorRenderer {
             scene_viewport_request: None,
             scene_viewport_modifier: None,
             scene_viewport_error: None,
+            watch: runaway::LayerWatch::new(),
         }
     }
 
@@ -404,8 +409,8 @@ impl GeneratorRenderer {
         &self,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
         not_made: &mut Vec<(NodeId, u32)>,
-        refused: &mut Vec<(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)>,
-        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)]),
+        refused: &mut Vec<(NodeId, manifold_core::physics_members::BodyRefusalRow)>,
+        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, manifold_core::physics_members::BodyRefusalRow)]),
     ) {
         for (layer_id, state) in &self.layer_generators {
             if state.rendered_pass != Some(self.render_pass) {
@@ -851,6 +856,7 @@ impl GeneratorRenderer {
         project_tempo: Option<&ProjectTempo>,
     ) {
         self.render_pass += 1;
+        gpu.render_pass = self.render_pass;
         self.content_clock.0 += f64::from(dt);
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
@@ -887,8 +893,17 @@ impl GeneratorRenderer {
             // frame.
             let alive: ahash::AHashSet<&manifold_core::LayerId> =
                 layers.iter().map(|l| &l.layer_id).collect();
-            self.layer_generators.retain(|id, _| alive.contains(id));
+            let news = &mut self.watch;
+            self.layer_generators.retain(|id, state| {
+                let alive = alive.contains(id);
+                if !alive && state.runaway.stopped() {
+                    news.push(LayerNews::Restored(id.clone()));
+                }
+                alive
+            });
         }
+        self.watch.live = !self.sim_step.export;
+        self.poll_layer_frames();
 
         // Per-frame override-version sweep. `acquire_clip` only
         // rebuilds the generator on clip start, so without this pass
@@ -1031,6 +1046,8 @@ impl GeneratorRenderer {
                 continue;
             }
 
+            // The previous layer's span ends in the buffer this commits.
+            self.watch.end(gpu);
             gpu.checkpoint();
 
             let ctx = PresetContext {
@@ -1069,6 +1086,13 @@ impl GeneratorRenderer {
                 if active.needs_clear {
                     gpu.clear_texture(&active.render_target.texture, 0.0, 0.0, 0.0, 0.0);
                     active.needs_clear = false;
+                }
+                // The last-resort cut watches scene layers only.
+                if runaway::watched(layer) {
+                    if Self::skip_stopped(self.watch.live, &mut layer_state.runaway, gpu, &active.render_target.texture) {
+                        continue;
+                    }
+                    self.watch.begin(gpu, layer_state.span_key, self.render_pass);
                 }
                 // Pass per-clip string params (e.g. text content) to the generator.
                 // If the clip's map is missing keys that other clips on the layer
@@ -1142,6 +1166,7 @@ impl GeneratorRenderer {
                 layer_state.generator.drain_scene_impulse_diagnostics(
                     &mut self.scene_impulse_diagnostics,
                 );
+                Self::note_node_errors(&mut self.watch, &layer.layer_id, layer_state.generator.node_errors_mut());
             }
             if !self.waiting_fires.is_empty()
                 && let Some(layer) = layers.get(layer_index as usize)
@@ -1149,6 +1174,11 @@ impl GeneratorRenderer {
                 let frame = self.sim_step.played_at(manifold_core::Seconds(time));
                 self.land_waiting_fires(layer, project_tempo, frame);
             }
+        }
+        // Commit the last layer's span on its own, so chrome encoded after
+        // the generators never lands in its last buffer.
+        if self.watch.end(gpu) {
+            gpu.checkpoint();
         }
         if !self.waiting_fires.is_empty() {
             self.settle_waiting_fires(render_skip);
@@ -1374,6 +1404,22 @@ impl GeneratorRenderer {
         {
             generator.carry_generator_state_from(&mut prior.generator);
         }
+        // A recompile changes the work, so a stopped layer draws again. A
+        // rebuild of the same graph (the graph editor opening, a ray-tracing
+        // toggle) keeps it stopped.
+        let runaway = match self.layer_generators.get_mut(&layer_id) {
+            Some(prior) if prior.generator_type == gen_type && prior.override_version == override_version => {
+                std::mem::take(&mut prior.runaway)
+            }
+            Some(prior) => {
+                if prior.runaway.stopped() {
+                    self.watch.push(LayerNews::Restored(layer_id.clone()));
+                }
+                Default::default()
+            }
+            None => Default::default(),
+        };
+        let span_key = self.watch.next_key();
         self.layer_generators.insert(
             layer_id.clone(),
             LayerGeneratorState {
@@ -1389,6 +1435,8 @@ impl GeneratorRenderer {
                 string_params_dirty: true,
                 built_watched: is_watched,
                 rendered_pass: None,
+                runaway,
+                span_key,
             },
         );
         // Mark every active clip on this layer for a clear before the

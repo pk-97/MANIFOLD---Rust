@@ -299,6 +299,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "temporal_accumulate.rs",
+        rust_struct: "Uniforms",
+        shader: "shaders/temporal_accumulate.wgsl",
+        shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "affine_transform.rs",
         rust_struct: "AffineTransformUniforms",
         shader: "shaders/affine_transform.wgsl",

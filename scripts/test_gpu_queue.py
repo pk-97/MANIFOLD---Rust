@@ -6,6 +6,7 @@ wait on) the real machine-wide lock.
 """
 
 import contextlib
+import io
 import os
 import signal
 import subprocess
@@ -27,10 +28,12 @@ class GpuQueueTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name)
-        self.env = {**os.environ, "MANIFOLD_GPU_QUEUE_DIR": str(self.dir / "q")}
+        # The queue's own runs never wait for a MANIFOLD app open on this machine.
+        self.env = {**os.environ, "MANIFOLD_GPU_QUEUE_DIR": str(self.dir / "q"), "MANIFOLD_GPU_APP_WAIT": "off"}
         directory = patch.object(gpu_queue, "queue_dir", return_value=self.dir / "q")
         directory.start()
         self.addCleanup(directory.stop)
+        self.enterContext(patch.dict(os.environ, {gpu_queue.APP_WAIT_ENV: "off"}))
         self.procs = []
 
     def tearDown(self):
@@ -65,6 +68,38 @@ class GpuQueueTests(unittest.TestCase):
         self.assertIn("waiting for the GPU: held by pid", second_err)
         self.assertIn("holding for", second_err)
         self.assertIn("acquired after", second_err)
+
+    def test_open_app_holds_a_run_then_reports_it_not_run(self):
+        out = io.StringIO()
+        self.assertFalse(gpu_queue.wait_for_app_to_quit(0.2, out=out, poll=0.05, pids=lambda: [4242]))
+        self.assertIn("waiting for MANIFOLD to quit (pid 4242)", out.getvalue())
+        quits = iter([[4242], [4242], []])
+        self.assertTrue(gpu_queue.wait_for_app_to_quit(5, out=io.StringIO(), poll=0.01,
+                                                       pids=lambda: next(quits)))
+        # The command line and hold() callers follow one rule.
+        with patch.dict(os.environ, {gpu_queue.APP_WAIT_ENV: "0.1"}), \
+                patch.object(gpu_queue, "app_pids", return_value=[4242]), \
+                patch.object(gpu_queue, "acquire") as acquire, \
+                contextlib.redirect_stderr(io.StringIO()) as printed:
+            self.assertEqual(gpu_queue.run_queued(["true"]), gpu_queue.NOT_RUN_EXIT)
+            with self.assertRaises(gpu_queue.AppStillOpen) as raised:
+                with gpu_queue.hold("gate"):
+                    self.fail("nothing runs while MANIFOLD is open")
+        self.assertEqual(raised.exception.code, gpu_queue.NOT_RUN_EXIT)
+        acquire.assert_not_called()
+        self.assertEqual(printed.getvalue().count("NOT RUN"), 2)
+        self.assertEqual(gpu_queue.APP_WAIT_DEFAULT_SECONDS, 8 * 60, "inside a 10-minute foreground call")
+
+    def test_a_run_nested_in_a_holder_never_waits_for_the_app(self):
+        with gpu_queue.hold("outer"):
+            with patch.dict(os.environ, {gpu_queue.APP_WAIT_ENV: "60"}), \
+                    patch.object(gpu_queue, "app_pids", return_value=[4242]), \
+                    patch.object(gpu_queue, "_held_depth", 0), \
+                    patch.object(gpu_queue, "wait_for_app_to_quit") as wait:
+                # A child process of the holder: no in-process depth, the token matches.
+                with gpu_queue.hold("child"):
+                    pass
+        wait.assert_not_called()
 
     def test_exit_code_is_the_commands(self):
         proc = self.spawn("--", "sh", "-c", "exit 7")

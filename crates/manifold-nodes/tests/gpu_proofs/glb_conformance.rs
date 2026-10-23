@@ -31,9 +31,11 @@ use std::sync::Arc;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8};
+use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, non_black_fraction, readback_tonemapped_rgba8};
+use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_core::scene_doc::ImportedModel;
+use manifold_core::scene_doc::{ImportedModel, ImportedTransform};
 use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -417,19 +419,16 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
     // 200 is `node.orbit_camera`'s default far plane, 10000 its range max.
     let far = 200.0f32.max(distance + 1.5 * radius).min(10_000.0);
 
-    // The model at unit scale with the old box centre at the origin. The
-    // drop placement put the file-bounds centre there at `scale`, so its
-    // position over `scale` is the model's own centre less that one.
-    let (new_center, scale, position) = match (model.bounds, model.placement()) {
-        (Some((blo, bhi)), Some(p)) => ([0, 1, 2].map(|a| (blo[a] + bhi[a]) * 0.5), p.scale, p.position),
-        _ => ([0.0; 3], 1.0, [0.0; 3]),
-    };
-    let model_position = [0, 1, 2].map(|a| position[a] / scale + new_center[a] - center[a]);
+    // The model at its true size with the old box centre at the origin. A
+    // single Object keeps its file node's transform (it is drawn about the
+    // node's origin); a Group starts at rest.
+    let own = model.only_part().filter(|_| model.is_single_mesh()).map_or(ImportedTransform::IDENTITY, |part| part.transform);
+    let model_position = [0, 1, 2].map(|a| own.position[a] - center[a]);
 
     let mut setup: Vec<(String, f32)> = vec![
-        ("model.scale_x".into(), 1.0),
-        ("model.scale_y".into(), 1.0),
-        ("model.scale_z".into(), 1.0),
+        ("model.scale_x".into(), own.scale[0]),
+        ("model.scale_y".into(), own.scale[1]),
+        ("model.scale_z".into(), own.scale[2]),
         ("model.pos_x".into(), model_position[0]),
         ("model.pos_y".into(), model_position[1]),
         ("model.pos_z".into(), model_position[2]),
@@ -512,6 +511,7 @@ fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)],
     let manifest = ParamManifest::from_params(params);
 
     let registry = PrimitiveRegistry::with_builtin();
+    let settle_frames = accumulation_frames(&def, &registry);
     let format = GpuTextureFormat::Rgba16Float;
     let mut runtime = PresetRuntime::from_def_with_device(
         def,
@@ -527,24 +527,15 @@ fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)],
     let target = RenderTarget::new(device, WIDTH, HEIGHT, format, "conformance-target");
 
     const DT: f32 = 1.0 / 60.0;
-    const STABLE_STREAK: u32 = 3;
     const MAX_FRAMES: u32 = 300;
-    let mut prev_raw: Option<Vec<u8>> = None;
-    let mut stable_count = 0u32;
+    let mut prev: Option<Vec<u8>> = None;
+    // The first frame rendered with every load done.
+    let mut io_done_at: Option<u32> = None;
     let mut last_fraction = 0.0f64;
 
     for frame in 0..MAX_FRAMES {
-        // BUG-210: `time`/`beat`/`anim_progress` are FROZEN across the
-        // convergence loop. The old advancing clock predates auto-playing
-        // imports (GLTF_ANIMATION A1–A4): an animated asset re-poses every
-        // frame, so byte-stability never occurs, `last_fraction` keeps its
-        // 0.0 initializer, and the error reports a phantom black frame —
-        // every animated Khronos asset (CesiumMan, Fox, BrainStem,
-        // RiggedFigure, RiggedSimple, AnimatedMorphCube) "never converged"
-        // while rendering perfectly. Freezing the clock keeps the loop's
-        // real job intact (byte-stability still detects late texture-decode
-        // swaps — a swap breaks the streak once, then re-stabilizes) while
-        // making animated assets exactly as deterministic as static ones.
+        // BUG-210 (animated imports never converged): the clock is frozen so
+        // an animated asset holds one pose and settles like a static one.
         // `frame_count` still advances: decode/io paths key off it.
         let time = 0.0f64;
         let ctx = PresetContext {
@@ -569,26 +560,32 @@ fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)],
         }
         enc.commit_and_wait_completed();
 
-        let raw = readback_raw_halves(device, &target.texture, WIDTH, HEIGHT);
-        let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
-        prev_raw = Some(raw);
-        stable_count = if byte_stable && !runtime.io_pending() { stable_count + 1 } else { 0 };
-        // NOT cosmetic — see render_import.rs's identical loop for why:
-        // without pacing, `STABLE_STREAK` frames can render faster than a
-        // background texture decode thread can swap even one map in, so a
-        // genuine partial-load state reads as fully converged. Found
-        // empirically on DamagedHelmet.glb this session (a wrong,
-        // reproducible "zebra-striped" partial render, byte-stable and
-        // above the non-black floor, at a different STABLE_STREAK frame
-        // than the correct one). A golden-diffed conformance harness is
-        // exactly the place this bug is most dangerous — a flaky render
-        // would make `check_golden` flip between pass/fail across runs.
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        if stable_count >= STABLE_STREAK {
-            let rgba = readback_tonemapped_rgba8(device, &target.texture, WIDTH, HEIGHT);
-            last_fraction = non_black_fraction(&rgba);
+        let rgba = readback_tonemapped_rgba8(device, &target.texture, WIDTH, HEIGHT);
+        // Live ambient occlusion keeps refining with the clock frozen, so a
+        // settled frame is one no viewer can tell from the last: a mean
+        // change under one 8-bit step, the measure `check_golden` judges by.
+        // A per-pixel max never settles while the accumulated noise jitters.
+        let change = prev.as_deref().map_or(f64::INFINITY, |p| mean_abs_diff(p, &rgba));
+        prev = Some(rgba);
+        // Loading is file IO plus the load-time work the app's own pre-roll
+        // waits for: meshes and animations load on background threads and
+        // report only `warmup_pending`.
+        if runtime.io_pending() || runtime.warmup_pending() {
+            io_done_at = None;
+            // Pace the loop so a background load can land before the frame
+            // is judged; a partial load can otherwise read as settled
+            // (DamagedHelmet rendered zebra-striped that way).
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
+        }
+        let done_at = *io_done_at.get_or_insert(frame);
+        if frame == done_at {
+            continue;
+        }
+        if change < 1.0 {
+            last_fraction = non_black_fraction(prev.as_deref().expect("this frame was read back"));
             if last_fraction > non_black_floor {
+                let rgba = prev.take().expect("this frame was read back");
                 if let Ok(directory) = std::env::var("GLTF_CONFORMANCE_CAPTURE_DIR") {
                     let directory = Path::new(&directory);
                     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
@@ -600,11 +597,48 @@ fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)],
                 return Ok(rgba);
             }
         }
+        if frame - done_at >= settle_frames {
+            return Err(format!(
+                "not settled {settle_frames} frames after loading finished \
+                 (last mean change {change:.3} of 255, last non-black fraction {last_fraction:.4})"
+            ));
+        }
     }
 
     Err(format!(
         "never converged after {MAX_FRAMES} frames (last non-black fraction {last_fraction:.4})"
     ))
+}
+
+/// Frames a render needs after loading to settle: `node.temporal_accumulate`
+/// blends with weight 1/n, n capped at its `frames`, so after `frames` frames
+/// its history is a full average and each later frame moves it by 1/frames of
+/// the noise. With no accumulator the next frame is already final.
+fn accumulation_frames(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> u32 {
+    const TYPE_ID: &str = "node.temporal_accumulate";
+    let default = registry.construct(TYPE_ID).and_then(|node| {
+        node.parameters().iter().find(|p| p.name == "frames").and_then(|p| match p.default {
+            ParamValue::Float(f) => Some(f),
+            _ => None,
+        })
+    });
+    def.nodes
+        .iter()
+        .filter(|node| node.type_id == TYPE_ID)
+        .filter_map(|node| match node.params.get("frames") {
+            Some(SerializedParamValue::Float { value }) => Some(*value),
+            Some(SerializedParamValue::Int { value }) => Some(*value as f32),
+            _ => default,
+        })
+        .map(|frames| frames.max(1.0) as u32)
+        .max()
+        .unwrap_or(1)
+}
+
+/// Mean absolute difference of two RGBA8 frames, in 8-bit steps.
+fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
+    let sum: f64 = a.iter().zip(b).map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs()).sum();
+    sum / a.len() as f64
 }
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 //! Imports (SCENE_DOCUMENT_DESIGN.md section 7.7 (Imports)): a dropped model
 //! is one Add of its whole subtree (or, for one mesh, of its Object and that
-//! Object's Material) plus the writes that place it and start the file's
-//! lights and cameras where the file puts them; a Model File swap is a Set of
-//! the import's file plus the changes that reconcile it with the new file.
+//! Object's Material) at the file's own size and place, plus the writes that
+//! start each part, group, light and camera at the file's transform; a Model
+//! File swap is a Set of the import's file plus the changes that reconcile
+//! it with the new file.
 //! Both are command lists for one `ExecuteBatch`, so each is one undo step.
 
 use manifold_core::scene_doc::{
@@ -15,8 +16,8 @@ use super::commands::{AddSceneItemCommand, RemoveSceneItemCommand, ReparentScene
 use crate::command::Command;
 use crate::commands::effects::ChangeGraphParamCommand;
 
-/// Add the model as `id` under `parent` at `index`, place it so it fills the
-/// view, and start its lights and cameras at the file's values.
+/// Add the model as `id` under `parent` at `index`, at the file's own size
+/// and place, every item starting at the file's values.
 pub fn import_model_commands(
     layer: &LayerId,
     parent: Option<ItemId>,
@@ -31,25 +32,12 @@ pub fn import_model_commands(
         commands.push(Box::new(AddSceneItemCommand::with_subtree(layer.clone(), parent.clone(), at, item)));
     }
     let target = GraphTarget::Generator(layer.clone());
-    if let Some(placement) = model.placement() {
-        let writes = [
-            ("scale_x", 1.0, placement.scale),
-            ("scale_y", 1.0, placement.scale),
-            ("scale_z", 1.0, placement.scale),
-            ("pos_x", 0.0, placement.position[0]),
-            ("pos_y", 0.0, placement.position[1]),
-            ("pos_z", 0.0, placement.position[2]),
-        ];
-        for (property, from, to) in writes {
-            commands.push(Box::new(ChangeGraphParamCommand::new(target.clone(), param_id(&id, property), from, to)));
-        }
-    }
     starting_writes(&target, model.starting_values(&id), &mut commands);
     commands
 }
 
-/// The writes that start new lights and cameras at the file's values. They
-/// are added in the same batch, so undo removes them with their values.
+/// The writes that start new items at the file's values. They are added in
+/// the same batch, so undo removes them with their values.
 fn starting_writes(
     target: &GraphTarget,
     values: impl IntoIterator<Item = (ItemId, &'static str, f32)>,
@@ -171,9 +159,11 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
     let mut wants = Vec::new();
     wanted(group, model.group_children(), group, &mut wants);
     let mut kept: Vec<ItemId> = wants.iter().map(|want| want.id.clone()).collect();
+    let mut starts = Vec::new();
 
     for want in &wants {
         let Some(existing) = doc.find(&want.id) else {
+            starts.extend(want.node.transform.values().map(|(property, value)| (want.id.clone(), property, value)));
             let mut added = node_item(group, want.node, file);
             added.children.clear();
             commands.push(Box::new(AddSceneItemCommand::with_subtree(
@@ -233,7 +223,6 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
         }
     }
     let target = GraphTarget::Generator(layer.clone());
-    let mut starts = Vec::new();
     for light in &model.lights {
         let id = import_child_id(group, &light.key);
         kept.push(id.clone());

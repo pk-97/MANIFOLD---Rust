@@ -71,6 +71,9 @@ struct DiagramUniforms {
     instances_wired: u32,
     instance_history_stride: u32,
     _instances_pad: u32,
+    /// A copy group's per-axis scale inside each copy (`copy_scale`); one
+    /// with no copies or no such scale.
+    copy_inner: [f32; 4],
 }
 
 #[repr(C)]
@@ -94,8 +97,10 @@ manifold_node_engine::primitive! {
         reference: Array(MeshVertex) required,
         incoming: Array(MeshVertex) required,
         instances: Array(InstanceTransform) optional,
+        copy_scale: Transform optional,
         camera: Camera required,
         transform: Transform optional,
+        parent_transform: Transform optional,
         grid: ScalarF32 optional,
         axes: ScalarF32 optional,
         fragments: ScalarF32 optional,
@@ -140,7 +145,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.001, 100.0)), enum_values: &[] },
     ],
     depth_rule: SourceHeight,
-    composition_notes: "Current, reference, and incoming arrays are sampled faces of real meshes. The transparent diagram uses the Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories. Occlusion=1 with Mode=2 tests scene_depth at its own resolution; Mode 1 never occludes. When current_mesh and reference_mesh are both wired and differ in size, reference and incoming read as current (ghosts coincide, arrows hide). Ghosts/trails remain translucent.",
+    composition_notes: "Current, reference, and incoming arrays are sampled faces of real meshes. The transparent diagram uses the Camera and optional object Transform, inside the optional parent_transform (the frame the object draws in: its groups, or its body's pose), as node.scene_object composes them; Motion trails are temporal history, never parameter-sweep trajectories. Occlusion=1 with Mode=2 tests scene_depth at its own resolution; Mode 1 never occludes. When current_mesh and reference_mesh are both wired and differ in size, reference and incoming read as current (ghosts coincide, arrows hide). Ghosts/trails remain translucent. Optional copy_scale (a copies body's copy_scale) scales each copy per axis inside its instance, as the scene draws it; it applies only with instances wired.",
     examples: [], picker: { label: "Mesh Diagram", category: Atom },
     summary: "Draws sparse evaluated mesh samples as a transparent native diagram.",
     category: Geometry3D, role: Filter, aliases: ["mesh diagram", "math view"], boundary_reason: DrawCall,
@@ -285,13 +290,13 @@ impl RenderMeshDiagram {
         }
     }
 
-    fn model_matrix(t: Transform, camera: &Camera) -> [[f32; 4]; 4] {
-        let rot = if t.billboard {
-            t.billboard_rot_euler(camera.pos)
-        } else {
-            t.rot_euler
-        };
-        super::render_scene::model_matrix(t.pos, rot, t.scale)
+    fn model_matrix(t: Transform, parent: Option<Transform>, camera: &Camera) -> [[f32; 4]; 4] {
+        let turn = |t: &Transform| if t.billboard { t.billboard_rot_euler(camera.pos) } else { t.rot_euler };
+        let own = super::render_scene::model_matrix(t.pos, turn(&t), t.scale);
+        match parent {
+            Some(parent) => manifold_node_engine::mesh::pipeline::mat4_mul(parent.world_with_rotation(turn(&parent)), own),
+            None => own,
+        }
     }
 }
 
@@ -336,8 +341,8 @@ impl Primitive for RenderMeshDiagram {
         self.last_frame_count = Some(ctx.time.frame_count);
         let density = ctx.scalar_or_param("density", 4.0).round().clamp(2.0, 8.0) as u32;
         // Copy count comes from the wired InstanceTransform buffer. Producers
-        // collapse inactive slots to an all-zero transform (see
-        // generate_instance_transforms_body.wgsl), so a smaller active_count
+        // collapse inactive slots to an all-zero transform (node.arrange_copies
+        // and the physics world upload zero the tail), so a smaller active_count
         // never draws garbage; the shader skips those sentinels explicitly.
         let input_instances = ctx.inputs.array("instances");
         let copies = input_instances.map_or(1, |buffer| {
@@ -406,10 +411,20 @@ impl Primitive for RenderMeshDiagram {
         let mode = ctx.scalar_or_param("mode", 0.0).round().clamp(0.0, 2.0) as u32;
         // Depth occlusion applies to Overlay only; Math draws on black.
         let occlusion = ctx.scalar_or_param("occlusion", 0.0).round().clamp(0.0, 1.0) as u32;
+        // Copies draw at the group's per-axis scale inside each copy, as the
+        // scene draws them; without copies the scale is exactly one, so the
+        // marks stay byte-identical.
+        let copy_inner = match ctx.inputs.transform("copy_scale") {
+            Some(copy) if input_instances.is_some() && copy.scale.iter().all(|s| s.is_finite()) => {
+                [copy.scale[0], copy.scale[1], copy.scale[2], 0.0]
+            }
+            _ => [1.0, 1.0, 1.0, 0.0],
+        };
         let uniforms = DiagramUniforms {
             view_proj,
             model: Self::model_matrix(
                 ctx.inputs.transform("transform").unwrap_or_default(),
+                ctx.inputs.transform("parent_transform"),
                 &camera,
             ),
             viewport: [width as f32, height as f32, 0.0, 0.0],
@@ -444,6 +459,7 @@ impl Primitive for RenderMeshDiagram {
             instances_wired: u32::from(input_instances.is_some()),
             instance_history_stride: MAX_COPY_INSTANCES,
             _instances_pad: 0,
+            copy_inner,
         };
         let input_scene_depth = ctx.inputs.texture_2d("scene_depth");
         let gpu = ctx.gpu_encoder();
@@ -691,6 +707,17 @@ mod tests {
             node.history_len = 9;
         }
     }
+}
+
+/// `MARK_SIZE` in the shader: a smaller face's mark grows until its farthest
+/// corner is this fraction of the item's own radius from its centre.
+#[cfg(test)]
+const MARK_SIZE: f32 = 0.08;
+
+#[cfg(test)]
+#[test]
+fn the_mark_size_oracle_matches_the_shader() {
+    assert!(SHADER.contains(&format!("const MARK_SIZE: f32 = {MARK_SIZE:?};")));
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]

@@ -184,6 +184,7 @@ pub enum Feature {
     SourceRole,
     /// The World's render mode: 0 Rendered, 1 Solid, 2 Wireframe, 3 Points.
     RenderMode,
+    RayTracing,
 }
 
 impl Feature {
@@ -202,6 +203,7 @@ impl Feature {
             Self::Background => "The background is off",
             Self::SourceRole => "This source role does not use it",
             Self::RenderMode => "This render mode does not use it",
+            Self::RayTracing => "Ray Tracing is off",
         }
     }
 }
@@ -263,6 +265,27 @@ impl Unit {
             Self::PerSecond => " /s",
             Self::SizeMultiple => "× size",
             Self::Radius => " × radius",
+        }
+    }
+
+    /// The unit as a narrow value box shows it, before it drops the unit.
+    /// A unit with no short form a performer would read (radius, beats,
+    /// size) drops straight to the bare number; its full name is on hover.
+    pub fn short_suffix(self) -> &'static str {
+        match self {
+            Self::Metres => "m",
+            Self::MetresPerSecond => "m/s",
+            Self::MetresPerSecondSquared => "m/s²",
+            Self::Kilograms => "kg",
+            Self::Ev => "EV",
+            Self::Pixels => "px",
+            Self::MillionCells => "M",
+            Self::Seconds => "s",
+            Self::Nanometres => "nm",
+            Self::Beats => "",
+            Self::PerSecond => "/s",
+            Self::SizeMultiple => "",
+            Self::Radius => "",
         }
     }
 }
@@ -426,6 +449,17 @@ pub enum SceneShape {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radius: Option<Cow<'static, str>>,
     },
+    /// A force about a centre: `center` moves and `radius` scales as
+    /// [`Self::PointRadius`]; `falloff` and `curve` place its strength
+    /// shells. With an `axis` it swirls round that axis (a vortex).
+    Field {
+        center: ParamTriple,
+        radius: Cow<'static, str>,
+        falloff: Cow<'static, str>,
+        curve: Cow<'static, str>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis: Option<ParamTriple>,
+    },
 }
 
 impl SceneShape {
@@ -439,6 +473,9 @@ impl SceneShape {
             Self::Plane { center, normal } => (vec![center, normal], Vec::new()),
             Self::Axis { origin, direction, radius } => {
                 (origin.iter().chain(std::iter::once(direction)).collect(), radius.iter().collect())
+            }
+            Self::Field { center, radius, falloff, curve, axis } => {
+                (std::iter::once(center).chain(axis).collect(), vec![radius, falloff, curve])
             }
         };
         triples.into_iter().flatten().chain(singles).map(|id| id.as_ref())

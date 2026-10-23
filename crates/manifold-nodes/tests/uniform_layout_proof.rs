@@ -564,6 +564,8 @@ const NON_STANDALONE: &[&str] = &[
     "node.switch_mesh",
     // CPU terminal cells are uploaded directly; there is no GPU uniform ABI.
     "node.terminal_stream",
+    // Copy places computed on the CPU and uploaded as an instance snapshot.
+    "node.arrange_copies",
     "node.track_persist",
     // Custom GPU kernels, reduction/FFI or seed-stage layouts (not codegen Params).
     "node.blob_tracker",

@@ -7,7 +7,7 @@
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::material_inspector::{MATERIAL_FEATURE_MODE_PARAMS, MATERIAL_FEATURES};
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, MaterialType, TextureFeeds, TextureSource};
+use manifold_core::scene_doc::{Item, ItemFields, ItemId, MaterialFields, MaterialType, SceneDoc, TextureFeeds, TextureSource};
 use manifold_core::scene_schema::{CardFacts, MATERIAL_FAMILY};
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardLabel, SurfaceRole, Unit};
@@ -28,6 +28,7 @@ const SURFACE_FACTS: CardFacts = CardFacts {
     limit: HardLimit::Slider,
     toggle: false,
     range: None,
+    tip: None,
 };
 
 /// Emit every Material item, in tree order.
@@ -50,12 +51,8 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     let owner = item.id.as_str();
     let node_type = manifold_core::scene_schema::material_node_type(fields);
     let surface = b.add(owner, MATERIAL_FAMILY.node, node_type);
-    // A layer feeds the surface the Material says; a file always feeds the
-    // base colour.
-    let feeds = match fields.texture_feeds {
-        TextureFeeds::BaseColour => "base_color_map",
-        TextureFeeds::Emission => "emissive_map",
-    };
+    no_fill(b, surface, node_type);
+    let feeds = layer_port(fields);
     // A model material's surface starts at the file's values, so its card
     // rows do too.
     let maps = match &fields.texture {
@@ -83,12 +80,20 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             None => Vec::new(),
         },
     };
+    let fed: Vec<&'static str> = maps.iter().map(|(_, port)| *port).collect();
     b.material_maps.insert(owner.to_owned(), maps);
     for meta in b.type_params(node_type) {
-        if MATERIAL_FAMILY.automatic.contains(&meta.name.as_str()) {
+        let name = meta.name.as_str();
+        if MATERIAL_FAMILY.automatic.contains(&name) || MATERIAL_FAMILY.internal.iter().any(|(param, _)| *param == name) {
             continue;
         }
         let mut facts = SURFACE_FACTS;
+        // A map's placement and sampling rows hide while it has no texture.
+        // They stay declared, so their values, modulators and mappings
+        // survive the texture leaving and coming back.
+        if crate::node_graph::material_inspector::map_port(&meta.name).is_some_and(|port| !fed.contains(&port)) {
+            facts.role = SurfaceRole::Hidden;
+        }
         if matches!(meta.name.as_str(), "iridescence_thickness_min" | "iridescence_thickness_max") {
             facts.unit = Some(Unit::Nanometres);
         }
@@ -107,6 +112,28 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     b.rows(item);
 }
 
+/// The port a layer texture feeds: the one the Material says. A file always
+/// feeds the base colour.
+fn layer_port(fields: &MaterialFields) -> &'static str {
+    match fields.texture_feeds {
+        TextureFeeds::BaseColour => "base_color_map",
+        TextureFeeds::Emission => "emissive_map",
+    }
+}
+
+/// The `node.scene_object` map ports a Material's texture source feeds, as
+/// [`emit`] wires them. A model's maps are known once its facts arrive.
+pub fn fed_map_ports(doc: &SceneDoc, fields: &MaterialFields) -> Vec<&'static str> {
+    match &fields.texture {
+        TextureSource::None => Vec::new(),
+        TextureSource::Layer { .. } => vec![layer_port(fields)],
+        TextureSource::File { .. } => vec!["base_color_map"],
+        TextureSource::Model { file, material } => {
+            model_file(doc, file).map(|model| super::model_material::map_ports(model, *material).collect()).unwrap_or_default()
+        }
+    }
+}
+
 /// The surface node an item draws with, and each texture source and the
 /// `node.scene_object` port it feeds: its effective material's, else the
 /// scene's plain material (made on first use).
@@ -118,9 +145,21 @@ pub(crate) fn surface_for(b: &mut Builder<'_>, item: &ItemId) -> (u32, Vec<(u32,
     }
     let plain = match b.id(SCENE, "default_material") {
         Some(id) => id,
-        None => b.add(SCENE, "default_material", MATERIAL_FAMILY.type_id),
+        None => {
+            let plain = b.add(SCENE, "default_material", MATERIAL_FAMILY.type_id);
+            no_fill(b, plain, MATERIAL_FAMILY.type_id);
+            plain
+        }
     };
     (plain, Vec::new())
+}
+
+/// No flat fill under the lighting (`MATERIAL_FAMILY.internal`), on the
+/// material types that have one.
+fn no_fill(b: &mut Builder<'_>, surface: u32, node_type: &str) {
+    if b.param_meta(node_type, "ambient").is_some() {
+        b.set_number(surface, "ambient", 0.0);
+    }
 }
 
 #[cfg(test)]
@@ -145,6 +184,44 @@ mod tests {
             other => panic!("{name} is {other:?}"),
         };
         assert_eq!((size("width"), size("height")), (64, 32));
+        // Every map's placement and sampling are declared; only the textured
+        // map's show.
+        let rows = &def.preset_metadata.as_ref().unwrap().params;
+        let hidden = |property: &str| {
+            let id = manifold_core::scene_doc::param_id(&ItemId::new(BASE_CUBE_MATERIAL), property);
+            let row = rows.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("{property} is declared"));
+            row.scene.is_some_and(|scene| scene.role == manifold_foundation::scene_surface::SurfaceRole::Hidden)
+        };
+        assert!(!hidden("uv_m00") && !hidden("wrap_u") && !hidden("uv_set"), "the base colour map has a texture");
+        assert!(hidden("nrm_uv_set") && hidden("sheen_color_wrap_u") && hidden("clearcoat_uv_tx"), "maps with no texture hide their rows");
+        let ItemFields::Material(fields) = &doc.find(&ItemId::new(BASE_CUBE_MATERIAL)).unwrap().fields else { unreachable!() };
+        assert_eq!(super::fed_map_ports(&doc, fields), vec!["base_color_map"]);
         std::fs::remove_file(path).unwrap();
+    }
+
+    /// Built-in and plain materials carry no flat fill, as imports never
+    /// did, and no card row brings one back.
+    #[test]
+    fn scene_materials_draw_with_no_flat_fill() {
+        let mut doc = SceneDoc::base();
+        // An object with no material draws with the scene's plain material.
+        doc.items.push(manifold_core::scene_doc::Item::new(
+            ItemId::new("bare"),
+            "Bare",
+            ItemFields::Object(manifold_core::scene_doc::ObjectFields::default()),
+        ));
+        let def = crate::node_graph::scene_compile::compile(&doc).unwrap();
+        let surfaces: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.pbr_material").collect();
+        assert!(surfaces.len() >= 2, "the cube's material and the plain one");
+        for surface in surfaces {
+            assert_eq!(
+                surface.params.get("ambient"),
+                Some(&manifold_core::effect_graph_def::SerializedParamValue::Float { value: 0.0 }),
+                "{}",
+                surface.node_id
+            );
+        }
+        let rows = &def.preset_metadata.as_ref().unwrap().params;
+        assert!(!rows.iter().any(|p| p.id.ends_with(".ambient")), "no row sets a fill");
     }
 }

@@ -188,6 +188,8 @@ pub struct Executor {
     /// — the producing primitive is expected to emit a deterministic
     /// fallback (e.g. magenta clear) alongside the error report.
     error_scratch: Vec<String>,
+    /// The failing nodes: each prints once and reaches the stage once.
+    node_errors: crate::exec::node_errors::NodeErrors,
     /// Persistent resources whose first acquisition has been cleared to
     /// opaque black. Subsequent frames find them in this set and skip
     /// the clear — the buffer's contents are now valid producer writes
@@ -594,6 +596,7 @@ impl Executor {
             live_extent_write_scratch: Vec::new(),
             object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
+            node_errors: Default::default(),
             initialized_persistent: ahash::AHashSet::default(),
             live_steps: Vec::new(),
             wired_scratch: Vec::new(),
@@ -688,6 +691,11 @@ impl Executor {
     /// and brings back per-dispatch GPU signposts.
     pub fn set_encode_replay(&mut self, on: bool) {
         self.encode_replay = on;
+    }
+
+    /// The nodes failing now, and the ones that just started.
+    pub fn node_errors_mut(&mut self) -> &mut crate::exec::node_errors::NodeErrors {
+        &mut self.node_errors
     }
 
     /// What encode replay did, summed over every region this executor runs.
@@ -2320,6 +2328,7 @@ impl Executor {
                     self.live_extent_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
+                    let error_object: Option<u32>;
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
                         let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
@@ -2430,6 +2439,7 @@ impl Executor {
                         // D5: record this step's declaration for the
                         // frame. `idx` indexes `plan.steps()`, which
                         // `node_declared_unchanged` is sized to match.
+                        error_object = ctx.error_object;
                         self.node_declared_unchanged[idx] = ctx.outputs_unchanged;
                         self.node_content_unchanged[idx] |= ctx.output_content_unchanged;
                         // Content availability: rewrite this step's output
@@ -2506,13 +2516,9 @@ impl Executor {
                     for (slot, value) in self.object_write_scratch.drain(..) {
                         self.backend.set_object(slot, value);
                     }
-                    // Structured errors reported via `ctx.error(...)` —
-                    // log once per occurrence. Primitives are expected
-                    // to ALSO emit a deterministic fallback (e.g. magenta
-                    // clear) alongside the error report, so downstream
-                    // consumers don't read garbage.
-                    // An errored node drew a fallback, so the frame is not
-                    // the one the graph describes: fail it.
+                    // A primitive that reports `ctx.error` also draws a
+                    // deterministic fallback (a magenta clear), so the frame
+                    // is not the one the graph describes: fail it.
                     if !self.error_scratch.is_empty()
                         && let Some(g) = gpu.as_deref_mut()
                     {
@@ -2520,7 +2526,8 @@ impl Executor {
                             crate::runtime::frame_status::FrameRenderFailure::NodeError,
                         ));
                     }
-                    for msg in self.error_scratch.drain(..) {
+                    let news = || crate::exec::node_errors::NodeErrorNews { node: inst.node_id.clone(), object: error_object };
+                    if let Some(msg) = self.node_errors.record(step.node, false, news, &mut self.error_scratch, std::time::Instant::now) {
                         eprintln!(
                             "[graph error] node {:?} ({}): {msg}",
                             step.node,
@@ -2824,6 +2831,7 @@ impl Executor {
                 .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(&self.sim_metrics));
                 inst.node.late_capture(&mut ctx);
                 let swap_request = ctx.texture_swap_request.take();
+                let error_object = ctx.error_object;
                 for (slot, value) in self.scalar_write_scratch.drain(..) {
                     self.backend.set_scalar(slot, value);
                 }
@@ -2855,7 +2863,8 @@ impl Executor {
                         crate::runtime::frame_status::FrameRenderFailure::NodeError,
                     ));
                 }
-                for msg in self.error_scratch.drain(..) {
+                let news = || crate::exec::node_errors::NodeErrorNews { node: inst.node_id.clone(), object: error_object };
+                if let Some(msg) = self.node_errors.record(step.node, true, news, &mut self.error_scratch, std::time::Instant::now) {
                     eprintln!(
                         "[graph error] node {:?} ({}) late_capture: {msg}",
                         step.node,

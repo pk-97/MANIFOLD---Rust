@@ -8,10 +8,12 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
-    EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, SceneDoc, Shape, draws_with_material, param_id, split_param_id,
+    DrawAs, EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, PhysicsSetting, SceneDoc, Shape, draws_with_material,
+    param_id, split_param_id,
 };
 use manifold_core::scene_schema::{
-    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, applicable_fields, break_unavailable, choice_disabled, impulse_unavailable, item_disabled,
+    ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, MODIFIER_HEADER_FIELDS, acts_on_copies, applicable_fields, break_unavailable,
+    choice_disabled, copies_refused, has_loop_camera, impulse_unavailable, new_card_targets, is_on, item_disabled, on_off_key, waits_for_loop_camera,
 };
 use manifold_core::types::LayerType;
 use manifold_core::LayerId;
@@ -20,8 +22,15 @@ use manifold_ui::panels::scene_setup_panel::{
     AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, SceneItemVm, SceneSetupState, SceneSetupVm,
 };
 
-/// The panel's state for the selected layer.
-pub(crate) fn scene_state(project: &Project, layer: Option<&Layer>) -> SceneSetupState {
+/// The panel's state for the selected layer. A layer `notices` lists as
+/// stopped offers Draw Again on its World. `selected` is the panel's item
+/// selection, which a new Modifier card aims at.
+pub(crate) fn scene_state(
+    project: &Project,
+    layer: Option<&Layer>,
+    notices: &crate::layer_notices::LayerNotices,
+    selected: &[ItemId],
+) -> SceneSetupState {
     let Some(layer) = layer else {
         return SceneSetupState::NoSelection("Select a layer to set up its scene.".to_owned());
     };
@@ -32,10 +41,15 @@ pub(crate) fn scene_state(project: &Project, layer: Option<&Layer>) -> SceneSetu
     let (Some(inst), Some(doc)) = (layer.gen_params(), project.scene_of(&layer_id)) else {
         return SceneSetupState::NoScene { layer_id };
     };
-    SceneSetupState::Live(Box::new(scene_vm(project, layer_id, doc, inst)))
+    let stopped = notices.is_stopped(&layer_id);
+    let mut vm = scene_vm(project, layer_id, doc, inst, selected);
+    for item in vm.items.iter_mut().filter(|item| item.kind == ItemKind::World) {
+        item.draw_again = stopped;
+    }
+    SceneSetupState::Live(Box::new(vm))
 }
 
-fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetInstance) -> SceneSetupVm {
+fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetInstance, selected: &[ItemId]) -> SceneSetupVm {
     // The manifest ids each item owns, in manifest order.
     let mut owned: ahash::AHashMap<&str, Vec<String>> = ahash::AHashMap::new();
     for param in inst.params.iter() {
@@ -55,6 +69,9 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
     doc.walk(|item, ancestors| {
         items.push(item_vm(doc, inst, item, ancestors, &owned, &layers, &materials));
     });
+    // A copy card aims where a new card would; it is refused there when it
+    // would move nothing.
+    let copy_targets = new_card_targets(doc, selected);
     let add_entries = ADD_ENTRIES
         .iter()
         .map(|entry| AddEntryVm {
@@ -63,7 +80,14 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
             label: entry.label.to_owned(),
             top_level: manifold_core::scene_doc::can_hold(None, entry.kind),
             holders: ItemKind::ALL.into_iter().filter(|holder| manifold_core::scene_doc::can_hold(Some(*holder), entry.kind)).collect(),
-            disabled: entry.fields.and_then(|fields| manifold_core::scene_schema::add_refused(doc, &fields())).map(str::to_owned),
+            disabled: entry
+                .fields
+                .and_then(|fields| {
+                    let fields = fields();
+                    let moves_copies = matches!(&fields, ItemFields::Modifier(card) if acts_on_copies(card.modifier));
+                    manifold_core::scene_schema::add_refused(doc, &fields).or_else(|| copies_refused(doc, &copy_targets).filter(|_| moves_copies))
+                })
+                .map(str::to_owned),
         })
         .collect();
     SceneSetupVm { layer_id, items, add_entries }
@@ -78,7 +102,12 @@ fn item_vm(
     layers: &[(LayerId, String)],
     materials: &Materials,
 ) -> SceneItemVm {
-    let params_of = |id: &ItemId| owned.get(id.as_str()).cloned().unwrap_or_default();
+    // A row only a Loop camera reads stays hidden until a camera rides the loop.
+    let params_of = |id: &ItemId| {
+        let mut ids = owned.get(id.as_str()).cloned().unwrap_or_default();
+        ids.retain(|param| !split_param_id(param).is_some_and(|(_, property)| waits_for_loop_camera(doc, item, property)));
+        ids
+    };
     let fields = field_rows(doc, item, layers);
     let material_item = match item.kind() {
         ItemKind::Material => Some(item.id.clone()),
@@ -101,6 +130,7 @@ fn item_vm(
         },
         _ => (false, None),
     };
+    let row_reasons = row_reasons(doc, inst, item, material.as_ref());
     SceneItemVm {
         id: item.id.clone(),
         kind: item.kind(),
@@ -116,14 +146,43 @@ fn item_vm(
         copy_view: matches!(&item.fields, ItemFields::Camera(_)),
         environment,
         aim_sun_file,
-        row_reasons: row_reasons(doc, item),
+        draw_again: false,
+        add_loop_camera: is_scene_loop(item) && !has_loop_camera(doc),
+        row_reasons,
+        body: item.fields.physics() == PhysicsSetting::Body,
+        look: match &item.fields {
+            ItemFields::Swarm(swarm) => match &swarm.draw_as {
+                DrawAs::Item(id) => doc.find(id).map(|drawn| (id.clone(), drawn.name.clone())),
+                _ => None,
+            },
+            _ => None,
+        },
     }
 }
 
 /// Why rows of `item` cannot be used: a Force whose Impulse has nothing to
-/// push, a Shatter card with no Body to break.
-fn row_reasons(doc: &SceneDoc, item: &Item) -> Vec<(String, String)> {
+/// push, a Shatter card with no Body to break, a metal Material's features
+/// that light passes through.
+fn row_reasons(doc: &SceneDoc, inst: &PresetInstance, item: &Item, material: Option<&MaterialBlockVm>) -> Vec<(String, String)> {
     let mut reasons = Vec::new();
+    if let Some(material) = material.filter(|material| material.pbr)
+        && let Some(metallic) = inst.params.get(&param_id(&material.item, "metallic"))
+        && let Some(ItemFields::Material(fields)) = doc.find(&material.item).map(|found| &found.fields)
+        && crate::scene_edit::full_metal(doc, fields, metallic.base)
+    {
+        use manifold_core::material_inspector::{MaterialGroup, MaterialParamRole};
+        for id in &material.parameter_ids {
+            let passes_light = inst.params.get(id).and_then(|param| param.spec.material_role).is_some_and(|role| match role {
+                MaterialParamRole::Scalar(MaterialGroup::Feature(feature)) | MaterialParamRole::Colour(MaterialGroup::Feature(feature), ..) => {
+                    crate::scene_edit::PASSES_LIGHT.contains(&feature)
+                }
+                _ => false,
+            });
+            if passes_light {
+                reasons.push((id.clone(), "Metal lets no light through".to_owned()));
+            }
+        }
+    }
     if let Some(reason) = impulse_unavailable(doc, item) {
         reasons.push((param_id(&item.id, "fire"), reason.to_owned()));
     }
@@ -152,7 +211,9 @@ fn material_block(
     let pbr = matches!(&material.fields, ItemFields::Material(fields)
         if manifold_core::scene_schema::material_node_type(fields) == MaterialType::Pbr.node_type());
     let features = match &material.fields {
-        ItemFields::Material(fields) if pbr => fields.features.iter().map(|setting| super::material::feature(setting.feature)).collect(),
+        ItemFields::Material(fields) if pbr => {
+            fields.features.iter().filter(|setting| !setting.removed()).map(|setting| super::material::feature(setting.feature)).collect()
+        }
         _ => Vec::new(),
     };
     let parameter_ids = owned.get(material.id.as_str()).cloned().unwrap_or_default();
@@ -174,12 +235,21 @@ fn material_block(
 
 fn field_rows(doc: &SceneDoc, item: &Item, layers: &[(LayerId, String)]) -> Vec<FieldRowVm> {
     applicable_fields(&item.fields)
-        .map(|row| FieldRowVm {
-            id: row.id.to_owned(),
-            label: row.label.to_owned(),
-            section: row.section,
-            control: control(doc, item, row, layers),
-            disabled: (row.disabled)(doc, item).map(str::to_owned),
+        .map(|row| {
+            let control = control(doc, item, row, layers);
+            // A switch whose flip is refused is a disabled row.
+            let refused_flip = match &control {
+                FieldControlVm::Switch { toggle: FieldPick::Choice(key), .. } => choice_disabled(doc, item, row.id, key),
+                _ => None,
+            };
+            FieldRowVm {
+                id: row.id.to_owned(),
+                label: row.label.to_owned(),
+                section: row.section,
+                control,
+                disabled: (row.disabled)(doc, item).or(refused_flip).map(str::to_owned),
+                header: item.kind() == ItemKind::Modifier && MODIFIER_HEADER_FIELDS.contains(&row.id),
+            }
         })
         .collect()
 }
@@ -222,6 +292,10 @@ fn control(doc: &SceneDoc, item: &Item, row: &FieldRow, layers: &[(LayerId, Stri
         FieldControlVm::Pick { current, options }
     };
     match row.control {
+        FieldControl::OnOff => {
+            let on = held == is_on(true);
+            FieldControlVm::Switch { on, toggle: FieldPick::Choice(on_off_key(!on).to_owned()) }
+        }
         FieldControl::Closed(choices) => {
             let mut options = closed(choices, &held);
             for (option, choice) in options.iter_mut().zip(choices) {
@@ -318,6 +392,11 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     }
 }
 
+/// Whether `item` is the scene's Scene Loop card.
+fn is_scene_loop(item: &Item) -> bool {
+    matches!(&item.fields, ItemFields::Modifier(card) if card.modifier == manifold_core::scene_doc::ModifierType::SceneLoop)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,12 +422,55 @@ mod tests {
         let inst = project.timeline.layers[index].gen_params_mut().expect("scene params");
         inst.install_scene_document(doc).expect("the scene compiles");
 
-        let SceneSetupState::Live(vm) = scene_state(&project, Some(&project.timeline.layers[index])) else {
+        let SceneSetupState::Live(vm) = scene_state(&project, Some(&project.timeline.layers[index]), &Default::default(), &[]) else {
             panic!("the scene tab is live");
         };
         let block = vm.items.iter().find(|item| item.id.as_str() == "swarm").and_then(|item| item.material.as_ref());
         let block = block.expect("the Swarm's card shows its Material");
         assert_eq!(block.item, material);
         assert_eq!(block.used_by, 2, "the cube and the Swarm both draw with it");
+    }
+
+    /// The Scene Loop card hides the rows only a Loop camera reads and offers
+    /// Add Loop Camera; the button adds a Loop camera, makes it the World's
+    /// camera, and the rows come back.
+    #[test]
+    fn add_loop_camera_puts_a_camera_on_the_loop_and_shows_its_rows() {
+        let mut project = Project::default();
+        let index = project.timeline.add_layer("A", LayerType::Generator, PresetTypeId::SCENE);
+        let layer = project.timeline.layers[index].layer_id.clone();
+        let mut add = crate::scene_edit::add(&project, &layer, "modifier.scene_loop", None, &[]).expect("Scene Loop adds");
+        add.command.execute(&mut project);
+        let card = add.select.expect("the add selects the card");
+        let loop_card = |project: &Project| {
+            let SceneSetupState::Live(vm) = scene_state(project, Some(&project.timeline.layers[index]), &Default::default(), &[]) else {
+                panic!("the scene tab is live");
+            };
+            vm.items.into_iter().find(|item| item.id == card).expect("the Scene Loop card")
+        };
+        let camera_only = |item: &SceneItemVm| {
+            manifold_core::scene_schema::LOOP_CAMERA_ONLY.into_iter().filter(|property| item.parameter_ids.contains(&param_id(&card, property))).count()
+        };
+
+        let before = loop_card(&project);
+        assert!(before.add_loop_camera, "a Scene Loop with no Loop camera offers one");
+        assert_eq!(camera_only(&before), 0, "rows only a Loop camera reads stay hidden");
+        assert!(before.parameter_ids.contains(&param_id(&card, "spacing")), "the corridor's own rows show");
+
+        let mut edit = crate::scene_edit::add_loop_camera(&project, &layer).expect("the button adds a camera");
+        edit.command.execute(&mut project);
+        let camera = edit.select.expect("the new camera is selected");
+        let doc = project.scene_of(&layer).expect("the scene");
+        let Some(ItemFields::Camera(fields)) = doc.find(&camera).map(|item| item.fields.clone()) else {
+            panic!("the button adds a Camera");
+        };
+        assert_eq!(fields.rig, manifold_core::scene_doc::CameraRig::Loop);
+        let pick = doc.camera_pick_param().expect("the World's Camera row");
+        let inst = project.timeline.layers[index].gen_params().expect("scene params");
+        assert_eq!(doc.picked_camera(inst.get_base_param(&pick)), Some(&camera), "the new camera is the World's camera");
+
+        let after = loop_card(&project);
+        assert!(!after.add_loop_camera, "one Loop camera is enough");
+        assert_eq!(camera_only(&after), manifold_core::scene_schema::LOOP_CAMERA_ONLY.len(), "the Loop camera's rows show");
     }
 }

@@ -25,8 +25,6 @@ fn recipe_of(force: ForceType) -> &'static str {
         ForceType::Uniform => "UniformForce",
         ForceType::Vortex => "VortexForce",
         ForceType::Wind | ForceType::Drag => "Wind",
-        ForceType::Attractor => "Attractor",
-        ForceType::Explosion => "Explosion",
     }
 }
 
@@ -76,11 +74,16 @@ fn swarm_objects(b: &mut Builder<'_>, swarm: &ItemId, items: &[Placed<'_>]) -> V
                 placed.lineage.iter().any(|above| b.swarm_draws.get(above).copied() == copies)
             })
     };
+    // A later swarm's copies of an item's draws are its own, never the first's.
+    let copied_by = |object: u32| b.alike.iter().find(|(_, copy, _)| *copy == object).map(|(_, _, by)| by);
     let drawn: Vec<u32> = b
         .objects
         .iter()
         .zip(&b.object_items)
-        .filter(|(_, owner)| *owner == swarm || drawn_by_swarm(owner))
+        .filter(|&(&object, owner)| match copied_by(object) {
+            Some(by) => by == swarm,
+            None => owner == swarm || drawn_by_swarm(owner),
+        })
         .map(|(&object, _)| object)
         .collect();
     drawn.into_iter().filter_map(|object| b.node_id_of(object)).collect()

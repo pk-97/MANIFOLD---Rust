@@ -35,29 +35,35 @@ mod water;
 mod water_source;
 mod world;
 
-pub use add_menu::{ADD_ENTRIES, AddEntry, add_entry, unique_name};
-pub use camera::{CAMERA_ROWS, FAR_CLIP, NEAR_CLIP};
+pub use add_menu::{ADD_ENTRIES, AddEntry, FORCE_STARTS, add_entry, entry_starts, unique_name};
+pub use camera::{CAMERA_ROWS, CLIP_PLANE, ORBIT_CLOSEST};
 pub use fields::{
     Choice, FieldControl, FieldRow, FieldValue, applicable_fields, choice_disabled, field_for, item_disabled, field_rows, is_material,
-    is_object_or_group, set_field,
+    is_object_or_group, is_on, on_off_key, set_field,
 };
-pub use copies::{COPIES_ROLE, COPIES_ROWS, START_COUNT, SURFACE_ROLE, acts_on_copies, can_copy, copies_unavailable};
+pub use copies::{
+    COPIES_ROLE, COPIES_ROWS, START_COUNT, SURFACE_ROLE, TURN_ON_COPIES, acts_on_copies, can_copy, copies_refused, copies_unavailable,
+    holds_copies,
+};
 pub use curves::{curve_rows, CURVE_AXIS, CURVE_MATH, CURVE_POLYGON, CURVE_RATIO, CURVE_T, CURVE_XY, SOLID, SWEEP, TRIANGLES};
 pub use force::{FORCE_ROWS, impulse_unavailable};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily, node_type as material_node_type};
 pub use modifier::{
-    MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_refuses, modifier_rows, modifier_type, shatter_parts,
+    HEADER_FIELDS as MODIFIER_HEADER_FIELDS, MODIFIER_TYPES, ModifierTypeEntry, break_unavailable, modifier_refuses, modifier_rows, new_card_targets, modifier_type, shatter_parts,
     shatter_refuses,
 };
 pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
 use ocean::OCEAN_TABLES;
 pub use ocean::OCEAN_LOOK;
 pub use physics::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
-pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, SWARM_ROWS};
+pub use swarm::{MAX_COUNT as SWARM_MAX_COUNT, MAX_COUNT_REASON as SWARM_MAX_COUNT_REASON, SWARM_ROWS};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
-pub use scene_wide::{LOOP_CAMERA_ROWS, NO_SCENE_LOOP, add_refused, scene_loop};
+pub use scene_wide::{
+    LOOP_CAMERA_ONLY, LOOP_CAMERA_ROWS, LOOP_GAP_ROW, NO_LOOP_CAMERA, NO_SCENE_LOOP, add_refused, has_loop_camera, scene_loop,
+    waits_for_loop_camera,
+};
 pub use water::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET, WATER_FAMILY_REASON, WATER_MATERIAL_ROLE,
     WATER_OBJECT_ROLE, WATER_ROWS, WHITEWATER_PER_CELL, WORLD_FOLLOWS, water_look,
@@ -121,6 +127,8 @@ pub struct CardFacts {
     pub toggle: bool,
     /// The slider range where the node param's own is not the right one.
     pub range: Option<(f32, f32)>,
+    /// The hover text: why the row stops where it does.
+    pub tip: Option<&'static str>,
 }
 
 /// One (kind, property) row.
@@ -173,6 +181,7 @@ const fn facts(role: SurfaceRole) -> CardFacts {
         limit: HardLimit::Slider,
         toggle: false,
         range: None,
+        tip: None,
     }
 }
 
@@ -258,6 +267,13 @@ impl PropertyRow {
     const fn toggle(mut self) -> Self {
         if let Exposure::Card(f) = &mut self.exposure {
             f.toggle = true;
+        }
+        self
+    }
+
+    const fn tip(mut self, tip: &'static str) -> Self {
+        if let Exposure::Card(f) = &mut self.exposure {
+            f.tip = Some(tip);
         }
         self
     }

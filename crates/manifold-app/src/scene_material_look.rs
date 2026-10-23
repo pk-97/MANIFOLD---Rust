@@ -66,7 +66,7 @@ pub(crate) fn writes(inst: &PresetInstance, ids: &[String], look: MaterialLook) 
 /// The look `material` (whose params are `ids`) matches by its features and
 /// values, if any.
 pub(crate) fn matching(inst: &PresetInstance, material: &ItemId, ids: &[String], fields: &MaterialFields) -> Option<MaterialLook> {
-    let features = || fields.features.iter().map(|setting| setting.feature);
+    let features = || fields.features.iter().filter(|setting| !setting.removed()).map(|setting| setting.feature);
     MaterialLook::ALL.into_iter().find(|&look| {
         recipe(look).features.iter().map(|feature| crate::scene_edit::core_feature(*feature)).eq(features())
             && writes(inst, ids, look).iter().all(|(property, value)| {

@@ -72,6 +72,9 @@ const PARTIAL_SHADERS: &[&str] = &[
 const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
 const PBR_BRDF: &str = include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/pbr_brdf.wgsl");
 const TONEMAP_COMMON: &str = include_str!("../../manifold-compositor/src/effects/shaders/tonemap_common.wgsl");
+const DEPTH_COMMON: &str = include_str!("../../manifold-nodes-image/src/generators/shaders/depth_common.wgsl");
+const VIEW_NORMAL_COMMON: &str =
+    include_str!("../../manifold-nodes-image/src/node_graph/primitives/shaders/view_normal_common.wgsl");
 const SAMPLE_FACE_COMMON: &str =
     include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/sample_face_common.wgsl");
 /// Shaders whose pipeline prepends a shared helper file at creation time.
@@ -92,6 +95,7 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
     ]
     .map(|(name, prefix)| (name, prefix.to_owned()))
     .into();
+    composed.push(("temporal_accumulate.wgsl", [DEPTH_COMMON, VIEW_NORMAL_COMMON].join("\n")));
     // `node.gpu_flip_step`'s prelude, in its `step_source` order.
     composed.push((
         "gpu_flip_step.wgsl",

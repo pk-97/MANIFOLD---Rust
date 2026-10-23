@@ -385,8 +385,13 @@ fn mesh_selector_key(selector: &GltfMeshSelector) -> String {
         }
         GltfMeshSelector::Material { material_index } => format!("material:{material_index}"),
         GltfMeshSelector::DefaultMaterial => "default-material".to_string(),
-        GltfMeshSelector::Node { path, material: -1 } => format!("node:{path}"),
-        GltfMeshSelector::Node { path, material } => format!("node:{path}@material:{material}"),
+        GltfMeshSelector::Node { path, material, own_space } => {
+            let space = if *own_space { "@own" } else { "" };
+            match material {
+                -1 => format!("node:{path}{space}"),
+                material => format!("node:{path}@material:{material}{space}"),
+            }
+        }
     }
 }
 

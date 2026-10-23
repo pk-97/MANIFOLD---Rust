@@ -203,8 +203,9 @@ fn dispatch_tail_census_is_stable() {
     // and swarm_to_copies, buffer atoms. Scene meshes add sphere_mesh and
     // subdivide_mesh; deformers add mesh_texture_weights and
     // drop_hidden_triangles, buffer atoms (smooth_normals is a barriered
-    // reduction).
-    assert_eq!(total, 251, "standalone atom census drifted");
+    // reduction). arrange_copies computes on the CPU (manifold_core::copy_layout),
+    // so its standalone kernel is gone.
+    assert_eq!(total, 250, "standalone atom census drifted");
     assert_eq!(
         qualifying, 94,
         "canonical texture-path population drifted"
