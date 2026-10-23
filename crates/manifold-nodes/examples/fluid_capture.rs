@@ -14,7 +14,9 @@
 //!
 //! Run with one output directory and optional `--preset`, `--width`, `--height`,
 //! `--frames`, `--fps`, `--offline-only`, `--max-seconds`, `--stills-every`,
-//! `--linear`, `--cinematic`, `--supersample` and `--gpu-surface` flags. `--gpu-surface`
+//! `--stills-at`, `--linear`, `--cinematic`, `--supersample`, `--dump-mesh`,
+//! `--dump-field` and `--gpu-surface` flags. `--dump-field` writes, on each
+//! still, the level set the mesher reads and the drawn mesh to `field/`. `--gpu-surface`
 //! is for presets meshed by the Liquid Surface group (e.g. WaterDamBreakGpu): each
 //! offline frame reads back the GPU mesh, fails on a non-finite vertex or an empty
 //! surface, and reports its live vertices as `vertex_count`. A preset with its own
@@ -47,6 +49,7 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8};
 use manifold_core::fluid_domain::domain_layout;
@@ -85,9 +88,14 @@ struct CaptureOptions {
     offline_only: bool,
     max_seconds: f64,
     stills_every: Option<u32>,
+    /// Exact frames to still, in place of `stills_every`.
+    stills_at: Vec<u32>,
     linear: bool,
     cinematic: bool,
     supersample: u32,
+    /// On still frames, write the level set the mesher reads to `field/`, with
+    /// the drawn (indexed) mesh beside it: see `dump_field`.
+    dump_field: bool,
     /// The preset meshes on the GPU (the Liquid Surface group): the fluid node
     /// publishes particle frames and its CPU mesh is off by design.
     gpu_surface: bool,
@@ -851,6 +859,160 @@ fn dump_surface_meshes(
     Ok(())
 }
 
+/// What a field dump needs besides the GPU buffers: the preset's camera and key
+/// light, and the liquid's unpadded domain layout.
+struct FieldView {
+    camera: Camera,
+    aspect: f32,
+    light_direction: [f32; 3],
+    layout: manifold_core::fluid_domain::FluidDomainLayout,
+}
+
+/// The preset's first orbit camera (every param at its preset value, else its
+/// default) and its key light: the first shadow-casting `node.light`.
+fn field_view(json: &str, preset: &PresetSettings, aspect: f32) -> CaptureResult<FieldView> {
+    let document: serde_json::Value = serde_json::from_str(json)?;
+    let registry = PrimitiveRegistry::with_builtin();
+    let built = |node: &serde_json::Value| {
+        node["typeId"]
+            .as_str()
+            .and_then(|type_id| registry.construct(type_id))
+            .ok_or_else(|| io::Error::other(format!("{} is not a registered type", node["typeId"])))
+    };
+    let camera_node = find_preset_node(&document["nodes"], &|node| node["typeId"] == "node.orbit_camera")
+        .ok_or_else(|| io::Error::other("--dump-field needs a node.orbit_camera in the preset"))?;
+    let camera_type = built(camera_node)?;
+    let param = |name: &str| param_or_default(camera_node, camera_type.as_ref(), name).map(|v| v as f32);
+    let camera = Camera::orbit_perspective(
+        param("orbit")?,
+        param("tilt")?,
+        param("distance")?,
+        param("fov_y")?,
+        param("look_y")?,
+        param("roll")?,
+        param("near")?,
+        param("far")?,
+    );
+    let light_node = find_preset_node(&document["nodes"], &|node| {
+        node["typeId"] == "node.light" && node["params"]["cast_shadows"]["value"].as_f64().unwrap_or(0.0) > 0.0
+    })
+    .or_else(|| find_preset_node(&document["nodes"], &|node| node["typeId"] == "node.light"))
+    .ok_or_else(|| io::Error::other("--dump-field needs a node.light in the preset"))?;
+    let light_type = built(light_node)?;
+    let light = |name: &str| param_or_default(light_node, light_type.as_ref(), name).map(|v| v as f32);
+    let toward = [
+        light("pos_x")? - light("aim_x")?,
+        light("pos_y")? - light("aim_y")?,
+        light("pos_z")? - light("aim_z")?,
+    ];
+    let length = toward.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-6);
+    let layout = domain_layout(None, preset.domain_size as f32, preset.resolution).map_err(io::Error::other)?;
+    Ok(FieldView { camera, aspect, light_direction: toward.map(|v| v / length), layout })
+}
+
+/// Writes the level set the mesher reads (`node.clamp_liquid_to_solids`'s
+/// `clamped`) as raw little-endian f32, x fastest, with a JSON header: lattice
+/// dims, origin, cell size, iso value, camera and key light. Beside it, the
+/// drawn mesh (`node.surface_mesh_normals`'s `out` with the mesher's indices):
+/// position then normal for every slot up to the last referenced one, and the
+/// live triangles' indices.
+fn dump_field(runtime: &PresetRuntime, device: &GpuDevice, frame: u32, view: &FieldView, dir: &Path) -> CaptureResult<()> {
+    let arrays = runtime.dump_arrays_all();
+    let find = |type_id: &str, port: &str| {
+        arrays.iter().find(|array| array.type_id == type_id && array.port == port).ok_or_else(|| {
+            let seen: Vec<String> = arrays.iter().map(|array| format!("{}:{}.{}", array.type_id, array.name, array.port)).collect();
+            io::Error::other(format!("--dump-field: no {type_id}.{port} this frame; arrays: {}", seen.join(", ")))
+        })
+    };
+    let field = find("node.clamp_liquid_to_solids", "clamped")?;
+    let (_, outputs) = runtime.preview_scalar_io();
+    let grid = ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].map(|port| {
+        outputs.iter().find_map(|(name, value)| (name == port).then_some(*value as u32)).unwrap_or(0)
+    });
+    if grid.contains(&0) {
+        return Err(io::Error::other("--dump-field: the frame node publishes no grid_nodes_x/y/z").into());
+    }
+    // The surface lattice refines the solver lattice by its Resolution Scale.
+    let floats = field.buffer.size() / 4;
+    let (refine, dims) = (1..=4u32)
+        .map(|r| (r, grid.map(|n| (n - 1) * r + 1)))
+        .find(|(_, dims)| dims.iter().map(|&n| u64::from(n)).product::<u64>() == floats)
+        .ok_or_else(|| io::Error::other(format!("--dump-field: {floats} level-set floats match no refinement of {grid:?}")))?;
+    let layout = &view.layout;
+    let origin: [f32; 3] = std::array::from_fn(|axis| {
+        let pad = (grid[axis] - 1 - layout.cells[axis]) as f32 * 0.5;
+        layout.min[axis] - pad * layout.cell_size as f32
+    });
+    let values: Vec<f32> = read_back(device, field.buffer, floats);
+    fs::write(dir.join(format!("frame_{frame:06}.f32")), bytemuck::cast_slice(&values))?;
+
+    let normals = find("node.surface_mesh_normals", "out")?;
+    let index_array = find("node.volume_surface_mesh", "indices")?;
+    let indices: Vec<u32> = read_back(device, index_array.buffer, index_array.buffer.size() / 4);
+    let live: Vec<u32> = indices
+        .chunks_exact(3)
+        .filter(|tri| !(tri[0] == tri[1] && tri[1] == tri[2]))
+        .flatten()
+        .copied()
+        .collect();
+    let slots = live.iter().max().map_or(0, |&max| u64::from(max) + 1);
+    let vertices: Vec<MeshVertex> = read_back(device, normals.buffer, slots);
+    let mut referenced = vec![false; vertices.len()];
+    for &index in &live {
+        if let Some(slot) = referenced.get_mut(index as usize) {
+            *slot = true;
+        }
+    }
+    let live_vertices = referenced.iter().filter(|&&r| r).count() as u64;
+    let mut out = Vec::with_capacity(vertices.len() * 24);
+    for vertex in &vertices {
+        for value in vertex.position.iter().chain(&vertex.normal) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    fs::write(dir.join(format!("frame_{frame:06}_drawn_vertices.f32")), out)?;
+    fs::write(dir.join(format!("frame_{frame:06}_drawn_indices.u32")), bytemuck::cast_slice(&live))?;
+    // Every vertex copy the surface chain holds, plus its index buffer.
+    let mesh_allocated: u64 = arrays
+        .iter()
+        .filter(|array| {
+            array.item_size == VERTEX_BYTES as u32
+                && matches!(
+                    array.type_id.as_str(),
+                    "node.volume_surface_mesh" | "node.smooth_surface_mesh" | "node.surface_mesh_normals"
+                )
+        })
+        .map(|array| array.buffer.size())
+        .sum::<u64>()
+        + index_array.buffer.size();
+    let camera = &view.camera;
+    let header = serde_json::json!({
+        "dims": dims,
+        "origin": origin,
+        "cell_size": layout.cell_size / f64::from(refine),
+        "resolution_refine": refine,
+        "iso": 0.0,
+        "sign": "negative inside the liquid; solids clamped to >= 0",
+        "index": "x + nx * (y + ny * z), node (i, j, k) at origin + (i, j, k) * cell_size",
+        "field_bytes": floats * 4,
+        "mesh_triangles": live.len() / 3,
+        "mesh_vertices": live_vertices,
+        "mesh_live_bytes": live_vertices * VERTEX_BYTES + live.len() as u64 * 4,
+        "mesh_allocated_bytes": mesh_allocated,
+        "camera": {
+            "pos": camera.pos, "fwd": camera.fwd, "right": camera.right, "up": camera.up,
+            "fov_y": match camera.mode { CameraMode::Perspective { fov_y } => fov_y, CameraMode::Orthographic { .. } => 0.0 },
+            "near": camera.near, "far": camera.far, "aspect": view.aspect,
+            "view": camera.view, "proj": camera.proj(view.aspect),
+        },
+        "light_direction": view.light_direction,
+    });
+    fs::write(dir.join(format!("frame_{frame:06}.json")), serde_json::to_vec_pretty(&header)?)?;
+    Ok(())
+}
+
+const VERTEX_BYTES: u64 = std::mem::size_of::<MeshVertex>() as u64;
+
 fn render_output_frame(
     runtime: &mut PresetRuntime,
     target: &RenderTarget,
@@ -1022,9 +1184,11 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         offline_only: false,
         max_seconds: DEFAULT_MAX_SECONDS,
         stills_every: None,
+        stills_at: Vec::new(),
         linear: false,
         cinematic: false,
         supersample: 1,
+        dump_field: false,
         gpu_surface: false,
         dump_mesh: false,
         look_metrics: false,
@@ -1058,6 +1222,13 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             "--cinematic" => options.cinematic = true,
             "--gpu-surface" => options.gpu_surface = true,
             "--dump-mesh" => options.dump_mesh = true,
+            "--dump-field" => options.dump_field = true,
+            "--stills-at" => {
+                options.stills_at = value("--stills-at")?
+                    .split(',')
+                    .map(|frame| parse_u32(frame.trim(), "--stills-at"))
+                    .collect::<CaptureResult<_>>()?;
+            }
             "--look-metrics" => options.look_metrics = true,
             "--water" => options.water = Some(value("--water")?),
             "--supersample" => {
@@ -1076,7 +1247,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     options.output_dir = output_dir.ok_or_else(|| {
         io::Error::other(
-            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface] [--look-metrics] [--dump-mesh] [--water ID]",
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--stills-at N,N,...] [--gpu-surface] [--look-metrics] [--dump-mesh] [--dump-field] [--water ID]",
         )
     })?;
     if options.width == 0
@@ -1119,6 +1290,9 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     if options.stills_every == Some(0) {
         return Err(io::Error::other("stills-every must be positive").into());
+    }
+    if !options.stills_at.is_empty() && options.stills_every.is_some() {
+        return Err(io::Error::other("--stills-at and --stills-every are exclusive").into());
     }
     Ok(options)
 }
@@ -1172,9 +1346,11 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         linear: options.linear || tone_mapped,
         ..options.clone()
     };
-    if options.solver == Solver::None && (options.gpu_surface || options.look_metrics || options.dump_mesh) {
-        return Err(io::Error::other("--gpu-surface, --look-metrics and --dump-mesh need a liquid in the preset").into());
+    if options.solver == Solver::None && (options.gpu_surface || options.look_metrics || options.dump_mesh || options.dump_field) {
+        return Err(io::Error::other("--gpu-surface, --look-metrics, --dump-mesh and --dump-field need a liquid in the preset").into());
     }
+    let aspect = options.width as f32 / options.height as f32;
+    let field_view = options.dump_field.then(|| field_view(&json, &preset, aspect)).transpose()?;
     let instrumented_json =
         instrument_preset(&json, options.cinematic, options.supersample)?;
     if options.cinematic {
@@ -1198,7 +1374,8 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         render_dimensions(options.width, options.height, options.supersample);
     let mut offline_runtime =
         build_runtime(&instrumented_json, &device, render_width, render_height, &options.frame_node)?;
-    let dump_arrays = options.gpu_surface || options.look_metrics || options.dump_mesh || preset.whitewater;
+    let dump_arrays =
+        options.gpu_surface || options.look_metrics || options.dump_mesh || options.dump_field || preset.whitewater;
     offline_runtime.set_dump_all(options.cinematic || dump_arrays);
     let (initial_timings, initial_fluid) = render_frame(
         &mut offline_runtime,
@@ -1231,17 +1408,20 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
 
     let mut offline_rows = Vec::with_capacity(options.frames as usize);
     let mut offline_csv = CsvWriter::create(&options.output_dir.join("offline.csv"))?;
-    let mut offline_rgba_writer = match options.stills_every {
-        None => Some(BufWriter::new(File::create(
-            options.output_dir.join("offline.rgba"),
-        )?)),
-        Some(_) => None,
+    let stills = options.stills_every.is_some() || !options.stills_at.is_empty();
+    let mut offline_rgba_writer = if stills {
+        None
+    } else {
+        Some(BufWriter::new(File::create(options.output_dir.join("offline.rgba"))?))
     };
-    if options.stills_every.is_some() {
+    if stills {
         fs::create_dir_all(options.output_dir.join("stills"))?;
     }
     if options.dump_mesh {
         fs::create_dir_all(options.output_dir.join("mesh"))?;
+    }
+    if options.dump_field {
+        fs::create_dir_all(options.output_dir.join("field"))?;
     }
     let mut capture_ms = 0.0;
     let mut look = options.look_metrics.then(|| {
@@ -1302,9 +1482,16 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             .into());
         }
         let mut row = metric_row(frame, authored_time, timings, fluid, 0.0)?;
-        let should_capture = options
-            .stills_every
-            .is_none_or(|every| frame % every == 0 || frame == options.frames || frame == 1);
+        let should_capture = if options.stills_at.is_empty() {
+            options
+                .stills_every
+                .is_none_or(|every| frame % every == 0 || frame == options.frames || frame == 1)
+        } else {
+            options.stills_at.contains(&frame)
+        };
+        if let (true, Some(view)) = (should_capture, field_view.as_ref()) {
+            dump_field(&offline_runtime, &device, frame, view, &options.output_dir.join("field"))?;
+        }
         if should_capture && options.dump_mesh {
             dump_surface_meshes(
                 &offline_runtime,
