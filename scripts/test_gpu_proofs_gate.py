@@ -420,7 +420,7 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertEqual(code, 0)
 
     def run_main(self, argv, repo_changed=None, build_exit=0, measured=(), run_exit=0,
-                 run_output="", run_hung=(), passed=None, owned_proofs=True):
+                 run_output="", run_hung=(), passed=None, owned_proofs=True, app_open=False):
         calls = []
         self.events = events = []
 
@@ -451,6 +451,8 @@ class GpuProofsGateTests(unittest.TestCase):
 
         @contextlib.contextmanager
         def recording_hold(label, **kwargs):
+            if app_open:
+                raise gate.gpu_queue.AppStillOpen(label, 480)
             events.append(("hold-enter", label))
             try:
                 yield
@@ -469,6 +471,13 @@ class GpuProofsGateTests(unittest.TestCase):
             stack.enter_context(contextlib.redirect_stdout(out))
             code = gate.main()
         return code, calls, out.getvalue()
+
+    def test_an_open_app_is_not_run_never_red(self):
+        code, calls, text = self.run_main(["--filter", "failed"], app_open=True)
+        self.assertEqual(code, gate.gpu_queue.NOT_RUN_EXIT)
+        self.assertEqual(calls, [], "no proof ran")
+        self.assertIn("GPU-PROOFS GATE: NOT RUN", text)
+        self.assertNotIn("FAIL", text)
 
     def test_child_failure_cannot_return_input_refusal_status(self):
         for stage in ("build", "run"):

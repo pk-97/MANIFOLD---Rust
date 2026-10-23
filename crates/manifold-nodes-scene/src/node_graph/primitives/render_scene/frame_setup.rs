@@ -82,7 +82,7 @@ impl RenderScene {
             }
             let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                Self::fail_frame(ctx, format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "object_{n}: missing required `vertices` input (its scene_object's `vertices` port is unwired); renderer fell back to magenta clear"
                 ));
                 return None;
@@ -97,7 +97,7 @@ impl RenderScene {
             let indices = object.indices.and_then(|slot| ctx.inputs.array_slot(slot));
             if object.indices.is_some() && indices.is_none() {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                Self::fail_frame(ctx, format!("object_{n}: wired index buffer is unavailable"));
+                Self::fail_frame(ctx, Some(n as u32), format!("object_{n}: wired index buffer is unavailable"));
                 return None;
             }
             let indices_content = object.indices.and_then(|slot| ctx.inputs.content_version_of(slot));
@@ -127,7 +127,7 @@ impl RenderScene {
             let weights = weights_slot.and_then(|s| ctx.inputs.array_slot(s));
             if weights_slot.is_some() && weights.is_none() {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                Self::fail_frame(ctx, format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "object_{n}: wired appearance weights input is unavailable; renderer fell back to magenta clear"
                 ));
                 return None;
@@ -137,7 +137,7 @@ impl RenderScene {
                 && ((weights.size / std::mem::size_of::<f32>() as u64) as u32) < vertex_count
             {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                Self::fail_frame(ctx, format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "object_{n}: appearance weights buffer is shorter than the mesh ({}, need {vertex_count}); renderer fell back to magenta clear",
                     weights.size / std::mem::size_of::<f32>() as u64
                 ));
@@ -149,7 +149,7 @@ impl RenderScene {
             // the coverage/brightness behavior against the raster formula.
             let Some(material) = object.material else {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                Self::fail_frame(ctx, format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
                 ));
                 return None;
@@ -177,7 +177,7 @@ impl RenderScene {
             }
             if material.requires_envmap() && envmap_wired.is_none() {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
-                Self::fail_frame(ctx, format!(
+                Self::fail_frame(ctx, Some(n as u32), format!(
                     "{:?} material on `object_{n}` requires `envmap` input but it is unwired; renderer fell back to magenta",
                     material.kind
                 ));
@@ -512,11 +512,15 @@ impl RenderScene {
         Some((draws, has_transmission))
     }
 
-    /// Abort the frame: report why and clear `color` to magenta. The color
-    /// target is a recycled pool texture, so without the clear it would show
-    /// whatever another frame left in it.
-    pub(super) fn fail_frame(ctx: &mut EffectNodeContext<'_, '_>, message: impl Into<String>) {
-        ctx.error(message);
+    /// Abort the frame: report why, naming the render object at fault when
+    /// there is one, and clear `color` to magenta. The color target is a
+    /// recycled pool texture, so without the clear it would show whatever
+    /// another frame left in it.
+    pub(super) fn fail_frame(ctx: &mut EffectNodeContext<'_, '_>, object: Option<u32>, message: impl Into<String>) {
+        match object {
+            Some(object) => ctx.error_on_object(object, message),
+            None => ctx.error(message),
+        }
         if let Some(target) = ctx.outputs.texture_2d("color") {
             ctx.gpu_encoder().native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0);
         }

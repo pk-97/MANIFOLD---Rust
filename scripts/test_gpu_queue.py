@@ -33,6 +33,7 @@ class GpuQueueTests(unittest.TestCase):
         directory = patch.object(gpu_queue, "queue_dir", return_value=self.dir / "q")
         directory.start()
         self.addCleanup(directory.stop)
+        self.enterContext(patch.dict(os.environ, {gpu_queue.APP_WAIT_ENV: "off"}))
         self.procs = []
 
     def tearDown(self):
@@ -75,13 +76,30 @@ class GpuQueueTests(unittest.TestCase):
         quits = iter([[4242], [4242], []])
         self.assertTrue(gpu_queue.wait_for_app_to_quit(5, out=io.StringIO(), poll=0.01,
                                                        pids=lambda: next(quits)))
-        with patch.object(gpu_queue, "app_pids", return_value=[4242]), \
-                patch.object(gpu_queue, "hold") as hold, \
-                contextlib.redirect_stderr(io.StringIO()), \
-                contextlib.redirect_stdout(io.StringIO()) as printed:
-            self.assertEqual(gpu_queue.run_queued(["true"], app_wait=0.1), gpu_queue.NOT_RUN_EXIT)
-        hold.assert_not_called()
-        self.assertIn("NOT RUN", printed.getvalue())
+        # The command line and hold() callers follow one rule.
+        with patch.dict(os.environ, {gpu_queue.APP_WAIT_ENV: "0.1"}), \
+                patch.object(gpu_queue, "app_pids", return_value=[4242]), \
+                patch.object(gpu_queue, "acquire") as acquire, \
+                contextlib.redirect_stderr(io.StringIO()) as printed:
+            self.assertEqual(gpu_queue.run_queued(["true"]), gpu_queue.NOT_RUN_EXIT)
+            with self.assertRaises(gpu_queue.AppStillOpen) as raised:
+                with gpu_queue.hold("gate"):
+                    self.fail("nothing runs while MANIFOLD is open")
+        self.assertEqual(raised.exception.code, gpu_queue.NOT_RUN_EXIT)
+        acquire.assert_not_called()
+        self.assertEqual(printed.getvalue().count("NOT RUN"), 2)
+        self.assertEqual(gpu_queue.APP_WAIT_DEFAULT_SECONDS, 8 * 60, "inside a 10-minute foreground call")
+
+    def test_a_run_nested_in_a_holder_never_waits_for_the_app(self):
+        with gpu_queue.hold("outer"):
+            with patch.dict(os.environ, {gpu_queue.APP_WAIT_ENV: "60"}), \
+                    patch.object(gpu_queue, "app_pids", return_value=[4242]), \
+                    patch.object(gpu_queue, "_held_depth", 0), \
+                    patch.object(gpu_queue, "wait_for_app_to_quit") as wait:
+                # A child process of the holder: no in-process depth, the token matches.
+                with gpu_queue.hold("child"):
+                    pass
+        wait.assert_not_called()
 
     def test_exit_code_is_the_commands(self):
         proc = self.spawn("--", "sh", "-c", "exit 7")

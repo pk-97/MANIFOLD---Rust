@@ -2685,11 +2685,11 @@ impl RenderScene {
         for draw in &mut draws {
             let requested = draw.kind == MaterialKind::Pbr && draw.subsurface.weight > 0.0;
             if requested && draw.points {
-                Self::fail_frame(ctx, "Subsurface scattering requires a triangle surface; point primitives have no volume boundary.");
+                Self::fail_frame(ctx, Some(draw.slot), "Subsurface scattering requires a triangle surface; point primitives have no volume boundary.");
                 return;
             }
             if requested && draw.routes_to_transparent() {
-                Self::fail_frame(ctx, "Subsurface scattering requires an opaque PBR surface; use its scattering colour and radius for translucency instead of alpha Blend or glass transmission.");
+                Self::fail_frame(ctx, Some(draw.slot), "Subsurface scattering requires an opaque PBR surface; use its scattering colour and radius for translucency instead of alpha Blend or glass transmission.");
                 return;
             }
             if !draw.routes_to_transparent() && draw.instance_count > 0 {
@@ -2712,7 +2712,7 @@ impl RenderScene {
                 }
                 Err(failure) => {
                     ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(failure));
-                    Self::fail_frame(ctx, format!("RT current-frame update failed: {failure:?}"));
+                    Self::fail_frame(ctx, None, format!("RT current-frame update failed: {failure:?}"));
                     return;
                 }
             }
@@ -2734,7 +2734,7 @@ impl RenderScene {
         );
         if has_transmission && let Some(error) = &self.transmissive_depth_error {
             ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::SurfaceAllocation));
-            Self::fail_frame(ctx, error.as_str());
+            Self::fail_frame(ctx, None, error.as_str());
             return;
         }
         // ---- Split-sum IBL convolution (BUG-trh7 stage 2,
@@ -2771,7 +2771,7 @@ impl RenderScene {
 
         if has_subsurface {
             let Some((textures, _, _)) = rt_tables.as_ref() else {
-                Self::fail_frame(ctx, "Subsurface scattering has no current-frame geometry acceleration data.");
+                Self::fail_frame(ctx, None, "Subsurface scattering has no current-frame geometry acceleration data.");
                 return;
             };
             if !self.subsurface_trace(ctx, &pre, &opaque_draws, rt_objects, gi_materials_data, textures) {
@@ -2783,7 +2783,7 @@ impl RenderScene {
             if let Err(error) = self.volume_optics.encode(gpu.device, gpu.native_enc, &draws,
                 self.opaque_depth_snapshot.as_ref().expect("transmission depth ensured"),
                 self.identity_instance_stub.as_ref().expect("identity ensured")) {
-                Self::fail_frame(ctx, error);
+                Self::fail_frame(ctx, None, error);
                 return;
             }
         }

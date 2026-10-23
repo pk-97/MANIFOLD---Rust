@@ -27,13 +27,15 @@ and `cargo nextest run` receive `--no-run` before their runtime `--` separator;
 `cargo build` is also completed without taking the lock. Unsupported or
 ambiguous Cargo invocations fail before any lock is taken.
 
-Before a `-- <command>` run, the queue waits for the MANIFOLD app to quit: a
-GPU run beside an open show starves the window server and can freeze
-the Mac. It waits `MANIFOLD_GPU_APP_WAIT` seconds (default 20 minutes; `off`
-skips the wait, for the queue's own tests), then reports the run as NOT RUN
-and exits 75. The app is the `manifold` process, matched by exact name;
-headless tools have their own names and never count. A run nested inside a
-holder does not wait again.
+Every GPU run waits for the MANIFOLD app to quit first, through `-- <command>`
+and `hold()` alike: a GPU run beside an open show starves the window server
+and can freeze the Mac. It waits `MANIFOLD_GPU_APP_WAIT` seconds (default 8
+minutes, inside a 10-minute foreground call; `off` skips the wait, for tests),
+then nothing runs and it reports NOT RUN: the command line exits 75, and
+`hold()` raises `AppStillOpen`, a `SystemExit` with code 75, so a caller that
+does not catch it stops as not run, never as a red. The app is the `manifold`
+process, matched by exact name; headless tools have their own names and never
+count. A run nested inside a holder does not wait again.
 
 Importable: `with gpu_queue.hold("label"): ...` for scripts that take the lock
 for a whole multi-process run. Waiting is poll-based, not first-come
@@ -69,7 +71,7 @@ ADMISSION_LOCK = "gpu.admission"
 RESERVATION = "gpu.reservation"
 APP_PROCESS = "manifold"
 APP_WAIT_ENV = "MANIFOLD_GPU_APP_WAIT"
-APP_WAIT_DEFAULT_SECONDS = 20 * 60
+APP_WAIT_DEFAULT_SECONDS = 8 * 60
 APP_POLL_SECONDS = 5.0
 NOT_RUN_EXIT = 75  # EX_TEMPFAIL: nothing ran, try again later
 
@@ -620,6 +622,8 @@ def hold(label, priority="normal", **kwargs):
         finally:
             _held_depth -= 1
         return
+    if not _token_matches(read_holder(Path(kwargs.get("directory") or queue_dir()))):
+        await_app_quit(label, kwargs.get("out"))
     held = acquire(label, priority=priority, **kwargs)
     _held_depth = 1
     try:
@@ -822,10 +826,29 @@ def wait_for_app_to_quit(seconds, out=None, poll=APP_POLL_SECONDS, report=REPORT
     return True
 
 
-def run_queued(command, label=None, app_wait=None, **kwargs):
+class AppStillOpen(SystemExit):
+    """Nothing ran: MANIFOLD stayed open through the wait. Uncaught, it ends
+    the process with NOT_RUN_EXIT and no traceback."""
+
+    def __init__(self, label, seconds):
+        super().__init__(NOT_RUN_EXIT)
+        self.message = (f"[gpu-queue] NOT RUN: MANIFOLD is still open after {format_age(seconds)}; "
+                        f"rerun once it quits: {label}")
+
+
+def await_app_quit(label, out=None):
+    """Wait for the MANIFOLD app to quit before a GPU run; raise
+    `AppStillOpen` when it outlasts the wait."""
+    seconds = app_wait_seconds()
+    if seconds is not None and not wait_for_app_to_quit(seconds, out=out):
+        error = AppStillOpen(label, seconds)
+        print(error.message, file=out or sys.stderr, flush=True)
+        raise error
+
+
+def run_queued(command, label=None, **kwargs):
     """Build Cargo commands before the lock, then run the GPU phase under it.
-    With `app_wait` seconds, first wait that long for the MANIFOLD app to
-    quit; if it is still open, nothing runs and the result is NOT_RUN_EXIT."""
+    NOT_RUN_EXIT when the MANIFOLD app stays open (`hold`)."""
     label = label or " ".join(command)
     try:
         kind = _cargo_kind(command)
@@ -857,12 +880,11 @@ def run_queued(command, label=None, app_wait=None, **kwargs):
         print("[NO REUSE] gpu-proofs: inputs changed after build planning; "
               "refusing stale GPU admission", flush=True)
         return 2
-    nested = _held_depth or _token_matches(read_holder(Path(kwargs.get("directory") or queue_dir())))
-    if app_wait is not None and not nested and not wait_for_app_to_quit(app_wait):
-        print(f"[gpu-queue] NOT RUN: MANIFOLD is still open after {format_age(app_wait)}; "
-              f"rerun once it quits: {label}", flush=True)
-        return NOT_RUN_EXIT
-    with hold(label, **kwargs):
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(hold(label, **kwargs))
+        except AppStillOpen:
+            return NOT_RUN_EXIT
         if passed and gate_passes.changed_passes([passed]):
             print('[NO REUSE] gpu-proofs: inputs changed while waiting for the GPU', flush=True)
             return 2
@@ -954,7 +976,7 @@ def main(argv=None):
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("give a command after `--`, or `status`")
-    return run_queued(command, label=args.label, app_wait=app_wait_seconds())
+    return run_queued(command, label=args.label)
 
 
 if __name__ == "__main__":

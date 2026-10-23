@@ -79,8 +79,6 @@ pub struct LayerGeneratorState {
     pub(super) runaway: super::runaway::RunawayWatch,
     /// This generator's key in the frame timer.
     pub(super) span_key: u64,
-    /// The node-error sequence already sent to the stage.
-    pub(super) seen_errors: u64,
 }
 
 impl LayerGeneratorState {
