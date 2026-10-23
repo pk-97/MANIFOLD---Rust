@@ -133,7 +133,7 @@ fn push(ui: &mut UIRoot, data: &SceneData, which: Projection) {
 
 fn push_all(ui: &mut UIRoot, data: &SceneData) {
     crate::ui_bridge::intake_overlay_state(ui, &data.content);
-    crate::ui_bridge::drain_events(ui, &data.content);
+    crate::ui_bridge::drain_events(ui, &data.project, &data.content);
     for which in PUSHES {
         push(ui, data, which);
     }

@@ -404,8 +404,8 @@ impl GeneratorRenderer {
         &self,
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
         not_made: &mut Vec<(NodeId, u32)>,
-        refused: &mut Vec<(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)>,
-        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, std::sync::Arc<str>, std::sync::Arc<str>)]),
+        refused: &mut Vec<(NodeId, manifold_core::physics_members::BodyRefusalRow)>,
+        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, manifold_core::physics_members::BodyRefusalRow)]),
     ) {
         for (layer_id, state) in &self.layer_generators {
             if state.rendered_pass != Some(self.render_pass) {

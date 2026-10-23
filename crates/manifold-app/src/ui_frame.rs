@@ -559,7 +559,7 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     // lists it writes.
     let idx = active_idx(project, active_layer);
     let replaced = rebuilt || inspector_sync;
-    crate::ui_bridge::drain_events(ui_root, push.content_state);
+    crate::ui_bridge::drain_events(ui_root, project, push.content_state);
     if replaced || projections.contains(Projection::ChromePush) {
         crate::ui_bridge::push_chrome(
             ui_root,

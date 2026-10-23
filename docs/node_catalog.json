@@ -37608,6 +37608,10 @@
         {
           "name": "active_count",
           "type": "f32"
+        },
+        {
+          "name": "copy_scale",
+          "type": "Transform"
         }
       ],
       "params": [
@@ -39827,6 +39831,11 @@
           "name": "instance_count",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "copy_scale",
+          "required": false,
+          "type": "Transform"
         },
         {
           "name": "visible",

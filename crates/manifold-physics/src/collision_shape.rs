@@ -22,12 +22,12 @@
 //! (BUG-k787p (Box3D tree query assertion)).
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use manifold_foundation::mesh_partition::partition;
 
 use crate::sdf::{DistanceLattice, MAX_LATTICE_NODES, signed_distance_union_within, union_lattice_nodes};
-use crate::{BodyConfig, BodyHandle, PhysicsError, PhysicsWorld, TriangleMesh, closed_triangles, cook_hull, cook_hull_mesh};
+use crate::{BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, TriangleMesh, closed_triangles, cook_hull, cook_hull_mesh};
 
 /// The farthest any position or hull point may sit from the origin, in
 /// metres. Box3D treats bounds past 100 km as corrupt; this keeps every
@@ -450,17 +450,24 @@ impl Solid {
         }
     }
 
-    /// Install this solid at `scale` as one body: the gate into Box3D.
-    /// Refuses a bad scale, pose, hull or mesh before the solver sees it.
-    pub fn install(&self, world: &mut PhysicsWorld, scale: [f32; 3], config: BodyConfig) -> Result<BodyHandle, PhysicsError> {
+    /// Cook this solid at `scale` once, for any number of bodies to share
+    /// ([`PhysicsWorld::add_cooked`]): the gate into Box3D. Refuses a bad
+    /// scale, hull or mesh before the solver sees it.
+    pub fn cook(&self, scale: [f32; 3]) -> Result<Arc<CookedSolid>, PhysicsError> {
         validate_scale(scale)?;
         match self {
-            Self::Hulls(hulls) => world.add_hulls(&scaled_hulls(hulls, scale), config),
-            Self::Mesh(mesh) => {
-                let vertices = scaled(&mesh.vertices, scale);
-                world.add_triangle_mesh(&vertices, &mesh.triangles, config)
+            Self::Hulls(hulls) => {
+                let scaled = scaled_hulls(hulls, scale);
+                let refs: Vec<&[[f32; 3]]> = scaled.iter().map(Vec::as_slice).collect();
+                CookedSolid::hulls(&refs, 128)
             }
+            Self::Mesh(mesh) => CookedSolid::mesh(&scaled(&mesh.vertices, scale), &mesh.triangles),
         }
+    }
+
+    /// Install this solid at `scale` as one body, through [`Self::cook`].
+    pub fn install(&self, world: &mut PhysicsWorld, scale: [f32; 3], config: BodyConfig) -> Result<BodyHandle, PhysicsError> {
+        world.add_cooked(&self.cook(scale)?, config)
     }
 
     /// Swap an installed body's shape for this solid at `scale` in place,
@@ -468,11 +475,7 @@ impl Solid {
     /// stay as they are. The body must already be the same form (hulls or
     /// exact mesh).
     pub fn replace(&self, world: &mut PhysicsWorld, handle: BodyHandle, scale: [f32; 3], config: BodyConfig) -> Result<(), PhysicsError> {
-        validate_scale(scale)?;
-        match self {
-            Self::Hulls(hulls) => world.replace_hulls(handle, &scaled_hulls(hulls, scale), config),
-            Self::Mesh(mesh) => world.replace_triangle_mesh(handle, &scaled(&mesh.vertices, scale), &mesh.triangles, config),
-        }
+        world.replace_cooked(handle, &self.cook(scale)?, config)
     }
 
     /// Whether `self` and `other` install as the same form, so one can

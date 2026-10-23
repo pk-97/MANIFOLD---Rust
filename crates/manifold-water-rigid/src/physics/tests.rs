@@ -631,6 +631,12 @@ fn a_body_joins_the_running_world_when_ready_and_bad_input_stays_out() {
     let refused: Vec<Member> = simulation.refusals().iter().map(|refusal| refusal.member).collect();
     assert_eq!(refused, [Member::Body(2), Member::Body(3)], "a refusal names each bad body; an unready one is not refused");
     assert!(simulation.refusals().iter().all(|refusal| !refusal.reason.to_string().is_empty()));
+    assert!(
+        simulation.refusals().iter().all(|refusal| refusal.reason.param() == Some("scale_x")),
+        "a bad scale and a shape its scale flattens both warn on Scale"
+    );
+    let stand = |slot: usize| simulation.poses[slot].pos == bodies[slot].as_ref().unwrap().transform.pos;
+    assert!(stand(2) && stand(3) && stand(4), "refused and unready bodies draw where they stand, never at the origin");
 
     bodies[0].as_mut().unwrap().enabled = true;
     bodies[4].as_mut().unwrap().collider = Some(default_solid());

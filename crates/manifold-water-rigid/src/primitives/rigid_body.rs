@@ -65,6 +65,14 @@ pub(crate) fn flatten(transform: Transform) -> Transform {
     }
 }
 
+/// What a copy draws inside itself beyond its instance's one uniform scale,
+/// the X axis: the rest of the per-axis `scale`, so a 10 x 0.16 x 10 slab
+/// draws as one, never as 10 x 10 x 10.
+fn copy_scale(scale: [f32; 3]) -> Transform {
+    let uniform = if scale[0].is_finite() && scale[0] != 0.0 { scale[0] } else { 1.0 };
+    Transform { scale: [1.0, scale[1] / uniform, scale[2] / uniform], ..IDENTITY_TRANSFORM }
+}
+
 /// The form the solver takes a body in: a Fixed body is a static collider,
 /// the exact mesh; anything that moves is convex hulls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,7 +230,7 @@ manifold_node_engine::primitive! {
   copy_turn_z: ScalarF32 optional,
   acceleration: VectorField optional,
  },
- outputs: { body: RigidBody, pose: Transform, instances: Array(InstanceTransform), active_count: ScalarF32, },
+ outputs: { body: RigidBody, pose: Transform, instances: Array(InstanceTransform), active_count: ScalarF32, copy_scale: Transform, },
 params: [
 ParamDef { name: Cow::Borrowed("enabled"), label: "Enabled", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("motion"), label: "Body Type", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 2.0)), enum_values: &["Fixed", "Moving", "Animated"] },
@@ -253,7 +261,7 @@ ParamDef { name: Cow::Borrowed("copy_turn_z"), label: "Copy Turn Z", ty: ParamTy
 ParamDef { name: Cow::Borrowed("parts"), label: "Parts", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
  ],
  depth_rule: Terminal,
- composition_notes: "One description per body. All bodies that should collide feed the same Physics World. The shape comes from the mesh: wire the object's mesh source into source (one mesh, placed by source_transform) or mesh_k with part_k (a compound body of several meshes, each placed by its part transform, parent frames included); an unwired body reads its mesh file (path and selection), as a shatter piece does. A Fixed body is static and collides as the exact mesh; changing its authored transform teleports it. Moving and Animated bodies collide as convex hulls, detail chosen from size and triangle count, open surfaces given a 0.1% shell. While a new shape is prepared the body keeps its old one; a body with no shape yet stays out of the world until it has one, and the world keeps stepping. The transform's parent frame is folded into the body's world pose. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group with uniform scale. An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
+ composition_notes: "One description per body. All bodies that should collide feed the same Physics World. The shape comes from the mesh: wire the object's mesh source into source (one mesh, placed by source_transform) or mesh_k with part_k (a compound body of several meshes, each placed by its part transform, parent frames included); an unwired body reads its mesh file (path and selection), as a shatter piece does. A Fixed body is static and collides as the exact mesh; changing its authored transform teleports it. Moving and Animated bodies collide as convex hulls, detail chosen from size and triangle count, open surfaces given a 0.1% shell. While a new shape is prepared the body keeps its old one; a body with no shape yet stays out of the world until it has one, and the world keeps stepping. The transform's parent frame is folded into the body's world pose. Wired into a Physics World copy-group input copies_k, the body is the prototype of a copy group: copy_count, copy_layout (Grid, Scatter, Line or Ring, centred on the body), copy_size_spacing (a multiple of the copy's box width, 1.0 touching), copy_columns and copy_turn_x/y/z (each copy's own turn) set its copies, which the body's transform places as one group. The world's instances carry each copy's pose and the X scale; copy_scale carries the rest of the per-axis scale for the draw (node.scene_object copy_scale, Group space). An edit lays the copies out at rest at the next tick start; Reset returns them to the layout; Enabled off draws them at rest with no physics. Port-shadowed; any other body ignores them. The pose, instances, active_count and acceleration ports are aliases: at graph build they become the world slot the body's membership wire names, and a body with no world passes its authored transform through pose.",
  examples: ["PhysicsSolids", "PhysicsBoxes"],
  picker: { label: "Rigid Body", category: Atom },
  summary: "Give an object a mass in kg, friction and bounce, then connect it to a Physics World.",
@@ -496,6 +504,7 @@ impl Primitive for RigidBodyNode {
             identity: self.identity,
             spawn: read_spawn(ctx),
         };
+        ctx.outputs.set_transform("copy_scale", copy_scale(transform.scale));
         ctx.outputs.set_cpu_value("body", body);
     }
 }
@@ -598,6 +607,14 @@ mod tests {
             }
             panic!("the collision shape build did not settle");
         }
+    }
+
+    /// A copy draws its instance's X scale times `copy_scale`: the slab
+    /// keeps its shape, and a uniform scale draws as it always did.
+    #[test]
+    fn copy_scale_is_the_scale_beyond_the_x_axis() {
+        assert_eq!(copy_scale([10.0, 0.16, 10.0]).scale, [1.0, 0.16 / 10.0, 1.0]);
+        assert_eq!(copy_scale([2.0; 3]).scale, [1.0; 3]);
     }
 
     #[test]

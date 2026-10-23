@@ -796,6 +796,24 @@ fn moving_an_item_between_groups_keeps_it_in_place() {
     assert!(same(world(&project), start), "grouping keeps the cube in place");
 }
 
+/// A copied Object draws at its prototype's per-axis scale: the copies
+/// body's `copy_scale` goes into the draw, applied inside each copy (Group
+/// space), so a 10 x 0.16 x 10 slab draws as one.
+#[test]
+fn a_copied_object_draws_its_per_axis_scale_inside_each_copy() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    let mut doc = SceneDoc::base();
+    if let Some(Item { fields: ItemFields::Object(object), .. }) = doc.find_mut(&ItemId::new("cube")) {
+        object.copies = true;
+    }
+    let def = flat(scene_layer(doc).gen_params().unwrap());
+    let object = def.nodes.iter().find(|n| n.node_id.as_str().ends_with("cube:object")).expect("the cube draws");
+    let wire = def.wires.iter().find(|w| w.to_node == object.id && w.to_port == "copy_scale").expect("the draw takes the copies' scale");
+    let body = def.nodes.iter().find(|n| n.id == wire.from_node).unwrap();
+    assert_eq!((body.type_id.as_str(), wire.from_port.as_str()), ("node.rigid_body", "copy_scale"));
+    assert_eq!(object.params.get("instances_space"), Some(&SerializedParamValue::Enum { value: 1 }), "inside each copy");
+}
+
 /// A swarm drawing a group with Copies on nests the layout at its live
 /// particles only: Count drives how many carry it, not the seed's capacity.
 #[test]

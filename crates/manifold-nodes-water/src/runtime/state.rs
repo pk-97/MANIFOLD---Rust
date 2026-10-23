@@ -98,13 +98,13 @@ impl RuntimeExtension for WaterRuntimeState {
         &self,
         graph: &Graph,
         slot: manifold_node_engine::runtime::extensions::RuntimeSlot<'_>,
-        output: &mut Vec<(manifold_core::NodeId, std::sync::Arc<str>, std::sync::Arc<str>)>,
+        output: &mut Vec<(manifold_core::NodeId, manifold_core::physics_members::BodyRefusalRow)>,
     ) {
         for (node_id, instance) in slot.node_map {
             let Some(node) = graph.get_node(*instance).and_then(|node| manifold_water_rigid::node::get(node.node.as_ref())) else {
                 continue;
             };
-            output.extend(node.body_refusals().iter().map(|(input, reason)| (node_id.clone(), input.clone(), reason.clone())));
+            output.extend(node.body_refusals().iter().map(|row| (node_id.clone(), row.clone())));
         }
     }
 

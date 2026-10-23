@@ -15,7 +15,21 @@
 //! This table is the only place that knows the port grammar. Every authored
 //! reader asks [`world_member`] or [`member_input`].
 
+use std::sync::Arc;
+
 use crate::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
+
+/// One body or copy group a world left out: the world input it is wired to
+/// (`body_k`, `copies_k`), the param the refusal concerns (a body param, or
+/// `pos_x`, `rot_x` or `scale_x` on the transform feeding the body; `None`
+/// when none does), and why. Shared strings, so reading a standing refusal
+/// every frame allocates nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BodyRefusalRow {
+    pub input: Arc<str>,
+    pub param: Option<&'static str>,
+    pub reason: Arc<str>,
+}
 
 pub const WORLD_TYPE_ID: &str = "node.physics_world";
 pub const BODY_TYPE_ID: &str = "node.rigid_body";
