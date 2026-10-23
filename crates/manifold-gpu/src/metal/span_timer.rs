@@ -2,8 +2,10 @@
 //! content thread. A span may cross command buffers (trace tiles, substep
 //! syncs commit mid-span). The window server gets the GPU between buffers, so
 //! one long buffer is what freezes the Mac; many short ones that add up to a
-//! slow frame do not, and CPU work between buffers never counts. Polled like the trace timer: no
-//! completion callbacks, no shared state, no per-frame allocation.
+//! slow frame do not, and CPU work between buffers never counts. A buffer that
+//! ends in error, such as a watchdog kill, counts as infinitely long. Polled
+//! like the trace timer: no completion callbacks, no shared state, no
+//! per-frame allocation.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -19,6 +21,7 @@ type CommandBuffer = Retained<ProtocolObject<dyn MTLCommandBuffer>>;
 
 struct Pending {
     key: u64,
+    frame: u64,
     buffer: CommandBuffer,
     /// The span's last buffer: its completion completes the span.
     last: bool,
@@ -26,6 +29,7 @@ struct Pending {
 
 pub struct GpuSpanTimer {
     key: u64,
+    frame: u64,
     /// Lent to the encoder while a span is open.
     scratch: Vec<CommandBuffer>,
     /// Ring of committed buffers in submission order.
@@ -46,6 +50,7 @@ impl Default for GpuSpanTimer {
     fn default() -> Self {
         Self {
             key: 0,
+            frame: 0,
             scratch: Vec::new(),
             pending: std::array::from_fn(|_| None),
             oldest: 0,
@@ -57,9 +62,10 @@ impl Default for GpuSpanTimer {
 }
 
 impl GpuSpanTimer {
-    /// Start span `key` in the encoder's current command buffer.
-    pub fn begin(&mut self, encoder: &mut GpuEncoder, key: u64) {
+    /// Start span `key` of `frame` in the encoder's current command buffer.
+    pub fn begin(&mut self, encoder: &mut GpuEncoder, key: u64, frame: u64) {
         self.key = key;
+        self.frame = frame;
         let mut buffers = std::mem::take(&mut self.scratch);
         buffers.clear();
         encoder.span_buffers = Some(buffers);
@@ -72,7 +78,7 @@ impl GpuSpanTimer {
         buffers.push(encoder.cmd_buf.clone());
         let count = buffers.len();
         for (index, buffer) in buffers.drain(..).enumerate() {
-            self.push(Pending { key: self.key, buffer, last: index + 1 == count });
+            self.push(Pending { key: self.key, frame: self.frame, buffer, last: index + 1 == count });
         }
         self.scratch = buffers;
     }
@@ -88,10 +94,10 @@ impl GpuSpanTimer {
         self.len += 1;
     }
 
-    /// Hand `each` the key and longest buffer's GPU seconds of every
+    /// Hand `each` the key, frame and longest buffer's GPU seconds of every
     /// finished span, oldest first. One queue runs its buffers in order, so
     /// reading stops at the first unfinished one.
-    pub fn poll(&mut self, mut each: impl FnMut(u64, f64)) {
+    pub fn poll(&mut self, mut each: impl FnMut(u64, u64, f64)) {
         while self.len > 0 {
             let Some(pending) = &self.pending[self.oldest] else { break };
             let status = unsafe { pending.buffer.status() };
@@ -101,19 +107,29 @@ impl GpuSpanTimer {
             let pending = self.pending[self.oldest].take().expect("checked above");
             self.oldest = (self.oldest + 1) % PENDING_CAPACITY;
             self.len -= 1;
-            // A buffer that never ran reports zero times.
-            let (start, end) = unsafe { (pending.buffer.GPUStartTime(), pending.buffer.GPUEndTime()) };
-            if start > 0.0 && end >= start && (end - start).is_finite() {
-                self.longest = self.longest.max(end - start);
+            if status == MTLCommandBufferStatus::Error {
+                self.longest = f64::INFINITY;
+            } else {
+                // A buffer that never ran reports zero times.
+                let (start, end) = unsafe { (pending.buffer.GPUStartTime(), pending.buffer.GPUEndTime()) };
+                if start > 0.0 && end >= start && (end - start).is_finite() {
+                    self.longest = self.longest.max(end - start);
+                }
             }
             if pending.last {
-                if !self.lost && self.longest > 0.0 {
-                    each(pending.key, self.longest);
+                if self.longest.is_infinite() || (!self.lost && self.longest > 0.0) {
+                    each(pending.key, pending.frame, self.longest);
                 }
                 self.longest = 0.0;
                 self.lost = false;
             }
         }
+    }
+
+    /// The frame of the oldest span still on the GPU. Every span of an
+    /// earlier frame has been handed out by [`Self::poll`].
+    pub fn in_flight_frame(&self) -> Option<u64> {
+        self.pending[self.oldest].as_ref().filter(|_| self.len > 0).map(|pending| pending.frame)
     }
 }
 
@@ -154,7 +170,7 @@ mod tests {
         let mut timer = GpuSpanTimer::default();
         let mut encoder = device.create_encoder("span timer proof");
         let mut committed = Vec::new();
-        timer.begin(&mut encoder, 7);
+        timer.begin(&mut encoder, 7, 3);
         for loops in [200, 20_000, 200, 2_000] {
             dispatch(&mut encoder, loops);
             committed.push(encoder.cmd_buf.clone());
@@ -164,19 +180,21 @@ mod tests {
         dispatch(&mut encoder, 200);
         committed.push(encoder.cmd_buf.clone());
         timer.end(&mut encoder);
+        assert_eq!(timer.in_flight_frame(), Some(3), "the span's buffers are still pending");
         encoder.commit_and_wait_completed();
 
         let each: Vec<f64> = committed.iter().map(|b| unsafe { b.GPUEndTime() - b.GPUStartTime() }).collect();
         let mut spans = Vec::new();
-        timer.poll(|key, seconds| spans.push((key, seconds)));
+        timer.poll(|key, frame, seconds| spans.push((key, frame, seconds)));
         assert_eq!(spans.len(), 1, "one finished span: {spans:?}");
-        assert_eq!(spans[0].0, 7);
+        assert_eq!((spans[0].0, spans[0].1), (7, 3));
         let longest = each.iter().copied().fold(0.0, f64::max);
-        assert_eq!(spans[0].1, longest, "the span is its longest buffer: {each:?}");
-        assert!(spans[0].1 < each.iter().sum::<f64>(), "never the sum: {each:?}");
-        assert!(spans[0].1 < 0.25, "the 400 ms of CPU pauses never count: {spans:?}");
+        assert_eq!(spans[0].2, longest, "the span is its longest buffer: {each:?}");
+        assert!(spans[0].2 < each.iter().sum::<f64>(), "never the sum: {each:?}");
+        assert!(spans[0].2 < 0.25, "the 400 ms of CPU pauses never count: {spans:?}");
+        assert_eq!(timer.in_flight_frame(), None);
         let mut again = 0;
-        timer.poll(|_, _| again += 1);
+        timer.poll(|_, _, _| again += 1);
         assert_eq!(again, 0, "a span is read once");
     }
 }

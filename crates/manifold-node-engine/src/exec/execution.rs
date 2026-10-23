@@ -188,7 +188,7 @@ pub struct Executor {
     /// — the producing primitive is expected to emit a deterministic
     /// fallback (e.g. magenta clear) alongside the error report.
     error_scratch: Vec<String>,
-    /// The newest error per node: each prints once and reaches the stage.
+    /// The failing nodes: each prints once and reaches the stage once.
     node_errors: crate::exec::node_errors::NodeErrors,
     /// Persistent resources whose first acquisition has been cleared to
     /// opaque black. Subsequent frames find them in this set and skip
@@ -693,9 +693,9 @@ impl Executor {
         self.encode_replay = on;
     }
 
-    /// The newest error each node reported, for the stage to show once.
-    pub fn node_errors(&self) -> &crate::exec::node_errors::NodeErrors {
-        &self.node_errors
+    /// The nodes failing now, and the ones that just started.
+    pub fn node_errors_mut(&mut self) -> &mut crate::exec::node_errors::NodeErrors {
+        &mut self.node_errors
     }
 
     /// What encode replay did, summed over every region this executor runs.
@@ -2328,6 +2328,7 @@ impl Executor {
                     self.live_extent_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
+                    let error_object: Option<u32>;
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
                         let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
@@ -2438,6 +2439,7 @@ impl Executor {
                         // D5: record this step's declaration for the
                         // frame. `idx` indexes `plan.steps()`, which
                         // `node_declared_unchanged` is sized to match.
+                        error_object = ctx.error_object;
                         self.node_declared_unchanged[idx] = ctx.outputs_unchanged;
                         self.node_content_unchanged[idx] |= ctx.output_content_unchanged;
                         // Content availability: rewrite this step's output
@@ -2524,7 +2526,8 @@ impl Executor {
                             crate::runtime::frame_status::FrameRenderFailure::NodeError,
                         ));
                     }
-                    if let Some(msg) = self.node_errors.record(step.node, false, &mut self.error_scratch) {
+                    let news = || crate::exec::node_errors::NodeErrorNews { node: inst.node_id.clone(), object: error_object };
+                    if let Some(msg) = self.node_errors.record(step.node, false, news, &mut self.error_scratch, std::time::Instant::now) {
                         eprintln!(
                             "[graph error] node {:?} ({}): {msg}",
                             step.node,
@@ -2828,6 +2831,7 @@ impl Executor {
                 .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(&self.sim_metrics));
                 inst.node.late_capture(&mut ctx);
                 let swap_request = ctx.texture_swap_request.take();
+                let error_object = ctx.error_object;
                 for (slot, value) in self.scalar_write_scratch.drain(..) {
                     self.backend.set_scalar(slot, value);
                 }
@@ -2859,7 +2863,8 @@ impl Executor {
                         crate::runtime::frame_status::FrameRenderFailure::NodeError,
                     ));
                 }
-                if let Some(msg) = self.node_errors.record(step.node, true, &mut self.error_scratch) {
+                let news = || crate::exec::node_errors::NodeErrorNews { node: inst.node_id.clone(), object: error_object };
+                if let Some(msg) = self.node_errors.record(step.node, true, news, &mut self.error_scratch, std::time::Instant::now) {
                     eprintln!(
                         "[graph error] node {:?} ({}) late_capture: {msg}",
                         step.node,

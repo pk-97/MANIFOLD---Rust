@@ -328,9 +328,9 @@ impl PresetRuntime {
         into.merge(&self.executor.take_sim_metrics());
     }
 
-    /// The newest error each node of this runtime reported.
-    pub fn node_errors(&self) -> &crate::exec::node_errors::NodeErrors {
-        self.executor.node_errors()
+    /// The nodes of this runtime failing now, and the ones that just started.
+    pub fn node_errors_mut(&mut self) -> &mut crate::exec::node_errors::NodeErrors {
+        self.executor.node_errors_mut()
     }
 
     /// Drain this chain's per-step CPU profiles recorded on the last profiled

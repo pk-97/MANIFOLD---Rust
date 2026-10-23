@@ -272,7 +272,7 @@ class RunnerTests(unittest.TestCase):
             sys.argv = ["run_ui_flows.py", "--all"]
             sys.exit(run_ui_flows.main())
             """)
-        env = dict(os.environ, MANIFOLD_GPU_QUEUE_DIR=str(self.tmp / "queue"),
+        env = dict(os.environ, MANIFOLD_GPU_QUEUE_DIR=str(self.tmp / "queue"), MANIFOLD_GPU_APP_WAIT="off",
                    FAKE_FLOWS=str(self.tmp / "behaviour.json"), FAKE_LOG=str(self.log),
                    FAKE_RELEASE=str(release))
         proc = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE,

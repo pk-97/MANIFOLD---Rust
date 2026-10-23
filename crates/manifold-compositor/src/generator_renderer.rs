@@ -902,7 +902,7 @@ impl GeneratorRenderer {
             });
         }
         self.watch.live = !self.sim_step.export;
-        self.poll_layer_frames(layers);
+        self.poll_layer_frames();
 
         // Per-frame override-version sweep. `acquire_clip` only
         // rebuilds the generator on clip start, so without this pass
@@ -965,10 +965,6 @@ impl GeneratorRenderer {
                             .apply_manifest_reshape(&gp.params, layer.generator_graph());
                     }
                     ls.applied_param_version = current_param_version;
-                    // An edit or undo on a stopped layer draws it again.
-                    if ls.runaway.restore() {
-                        self.watch.push(LayerNews::Restored(layer_id.clone()));
-                    }
                 }
                 continue;
             }
@@ -1090,10 +1086,13 @@ impl GeneratorRenderer {
                     gpu.clear_texture(&active.render_target.texture, 0.0, 0.0, 0.0, 0.0);
                     active.needs_clear = false;
                 }
-                if Self::skip_stopped(&mut self.watch, layer, &mut layer_state.runaway, gpu, &active.render_target.texture) {
-                    continue;
+                // The last-resort cut watches scene layers only.
+                if runaway::watched(layer) {
+                    if Self::skip_stopped(self.watch.live, &mut layer_state.runaway, gpu, &active.render_target.texture) {
+                        continue;
+                    }
+                    self.watch.begin(gpu, layer_state.span_key, self.render_pass);
                 }
-                self.watch.begin(gpu, layer_state.span_key);
                 // Pass per-clip string params (e.g. text content) to the generator.
                 // If the clip's map is missing keys that other clips on the layer
                 // have set (e.g. fontFamily), fill them from the layer-level cache.
@@ -1166,7 +1165,7 @@ impl GeneratorRenderer {
                 layer_state.generator.drain_scene_impulse_diagnostics(
                     &mut self.scene_impulse_diagnostics,
                 );
-                Self::note_node_errors(&mut self.watch, &layer.layer_id, &mut layer_state.seen_errors, layer_state.generator.node_errors());
+                Self::note_node_errors(&mut self.watch, &layer.layer_id, layer_state.generator.node_errors_mut());
             }
             if !self.waiting_fires.is_empty()
                 && let Some(layer) = layers.get(layer_index as usize)
@@ -1404,10 +1403,21 @@ impl GeneratorRenderer {
         {
             generator.carry_generator_state_from(&mut prior.generator);
         }
-        // A rebuild is an edit on the layer: a stopped layer draws again.
-        if self.layer_generators.get(&layer_id).is_some_and(|prior| prior.runaway.stopped()) {
-            self.watch.push(LayerNews::Restored(layer_id.clone()));
-        }
+        // A recompile changes the work, so a stopped layer draws again. A
+        // rebuild of the same graph (the graph editor opening, a ray-tracing
+        // toggle) keeps it stopped.
+        let runaway = match self.layer_generators.get_mut(&layer_id) {
+            Some(prior) if prior.generator_type == gen_type && prior.override_version == override_version => {
+                std::mem::take(&mut prior.runaway)
+            }
+            Some(prior) => {
+                if prior.runaway.stopped() {
+                    self.watch.push(LayerNews::Restored(layer_id.clone()));
+                }
+                Default::default()
+            }
+            None => Default::default(),
+        };
         let span_key = self.watch.next_key();
         self.layer_generators.insert(
             layer_id.clone(),
@@ -1424,9 +1434,8 @@ impl GeneratorRenderer {
                 string_params_dirty: true,
                 built_watched: is_watched,
                 rendered_pass: None,
-                runaway: Default::default(),
+                runaway,
                 span_key,
-                seen_errors: 0,
             },
         );
         // Mark every active clip on this layer for a clear before the

@@ -420,6 +420,9 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// don't thread an error scratch — the `error` method is a silent
     /// no-op in that case (test-construction shortcut).
     pub errors: Option<&'ctx mut Vec<String>>,
+    /// The render object the first error is about, when it names one
+    /// ([`Self::error_on_object`]); read by the executor with the errors.
+    pub error_object: Option<u32>,
     /// Zero-copy feedback ping-pong: a `late_capture` implementation
     /// sets this (via [`Self::request_texture_swap`]) to ask the
     /// executor to swap the textures bound at one of its OUTPUT ports
@@ -503,6 +506,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             owner_key: 0,
             gpu_accessed: false,
             errors: None,
+            error_object: None,
             texture_swap_request: None,
             outputs_unchanged: false,
             output_content_unchanged: false,
@@ -543,6 +547,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             owner_key,
             gpu_accessed: false,
             errors: None,
+            error_object: None,
             texture_swap_request: None,
             outputs_unchanged: false,
             output_content_unchanged: false,
@@ -683,6 +688,15 @@ manifold_core::testkit_visible! {
         if let Some(buf) = self.errors.as_deref_mut() {
             buf.push(message);
         }
+    }
+
+    /// [`Self::error`] about one render object (`object_{object}`), so the
+    /// stage can name the item drawn there.
+    pub fn error_on_object(&mut self, object: u32, message: impl Into<String>) {
+        if self.errors.as_deref().is_none_or(Vec::is_empty) {
+            self.error_object = Some(object);
+        }
+        self.error(message);
     }
 
     /// Borrow the [`GpuEncoder`], panicking if absent.
