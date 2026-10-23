@@ -67,8 +67,9 @@ pub struct ImportedCamera {
     pub values: Vec<(&'static str, f32)>,
 }
 
-/// A parsed model file: its parts, materials, lights and cameras, its
-/// animation clips, and where it sits in space.
+/// A parsed model file: its parts, materials, lights and cameras, and its
+/// animation clips. It imports at the file's own size and place, in metres
+/// (glTF's unit): nothing rescales or recentres it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportedModel {
     /// The file's name without its extension.
@@ -79,8 +80,6 @@ pub struct ImportedModel {
     pub cameras: Vec<ImportedCamera>,
     /// The file's animation clips by name, in file order.
     pub clips: Vec<String>,
-    /// The world-space box around every mesh, when the file has geometry.
-    pub bounds: Option<([f32; 3], [f32; 3])>,
 }
 
 /// The id of the import child with file key `key` under import `group`.
@@ -98,14 +97,6 @@ pub fn import_child_id(group: &ItemId, key: &str) -> ItemId {
 /// Whether `id` was derived from import `group` by [`import_child_id`].
 pub fn is_import_child(group: &ItemId, id: &ItemId) -> bool {
     id.as_str().strip_prefix(group.as_str()).is_some_and(|rest| rest.starts_with('-'))
-}
-
-/// Where an import sits so the whole model is in view: scaled to span two
-/// metres along its longest side, centred on the origin.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ImportPlacement {
-    pub scale: f32,
-    pub position: [f32; 3],
 }
 
 impl ImportedModel {
@@ -198,21 +189,6 @@ impl ImportedModel {
                 values.iter().map(move |(property, value)| (item.clone(), *property, *value))
             })
             .collect()
-    }
-
-    /// Scale and position that bring the model into view, none for a model
-    /// with no geometry or a degenerate box. A single Object is drawn about
-    /// its own centre, so its position carries that centre, scaled.
-    pub fn placement(&self) -> Option<ImportPlacement> {
-        let (lo, hi) = self.bounds?;
-        let longest = (0..3).map(|axis| hi[axis] - lo[axis]).fold(0.0_f32, f32::max);
-        if !longest.is_finite() || longest <= 1e-6 {
-            return None;
-        }
-        let scale = 2.0 / longest;
-        let own = self.is_single_mesh().then(|| self.only_part().map(|part| part.center)).flatten().unwrap_or_default();
-        let position = [0, 1, 2].map(|axis| (own[axis] - (lo[axis] + hi[axis]) * 0.5) * scale);
-        position.iter().all(|v| v.is_finite()).then_some(ImportPlacement { scale, position })
     }
 }
 

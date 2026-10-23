@@ -417,14 +417,11 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
     // 200 is `node.orbit_camera`'s default far plane, 10000 its range max.
     let far = 200.0f32.max(distance + 1.5 * radius).min(10_000.0);
 
-    // The model at unit scale with the old box centre at the origin. The
-    // drop placement put the file-bounds centre there at `scale`, so its
-    // position over `scale` is the model's own centre less that one.
-    let (new_center, scale, position) = match (model.bounds, model.placement()) {
-        (Some((blo, bhi)), Some(p)) => ([0, 1, 2].map(|a| (blo[a] + bhi[a]) * 0.5), p.scale, p.position),
-        _ => ([0.0; 3], 1.0, [0.0; 3]),
-    };
-    let model_position = [0, 1, 2].map(|a| position[a] / scale + new_center[a] - center[a]);
+    // The model at its true size with the old box centre at the origin. A
+    // single Object's position carries its own centre (it is drawn about
+    // it); a Group's starts at zero.
+    let own = model.only_part().filter(|_| model.is_single_mesh()).map_or([0.0; 3], |part| part.center);
+    let model_position = [0, 1, 2].map(|a| own[a] - center[a]);
 
     let mut setup: Vec<(String, f32)> = vec![
         ("model.scale_x".into(), 1.0),

@@ -412,7 +412,20 @@ fn model(paths: &[&str]) -> manifold_core::scene_doc::ImportedModel {
         lights: Vec::new(),
         cameras: Vec::new(),
         clips: Vec::new(),
-        bounds: None,
+    }
+}
+
+/// An import keeps the file's size and place: it is only the Add of its
+/// items, with no write that rescales or moves it, for one mesh 20 m from
+/// the origin and for a Group alike.
+#[test]
+fn an_import_keeps_the_files_size_and_place() {
+    let (_, layer) = project();
+    for paths in [&["rig/a"][..], &["rig/a", "rig/b"]] {
+        let mut far = model(paths);
+        far.roots[0].children[0].center = [20.0, 0.0, 0.0];
+        let commands = import_model_commands(&layer, None, 0, id("model"), "a.glb", &far);
+        assert_eq!(commands.len(), 1, "{paths:?}: one Add and no placement writes");
     }
 }
 

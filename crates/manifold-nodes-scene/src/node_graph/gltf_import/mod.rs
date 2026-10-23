@@ -67,8 +67,7 @@ fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Dat
         .map(|stem| stem.to_string_lossy().into_owned())
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| "Model".to_owned());
-    let bounds = gltf_load::file_bounds(document, buffers);
-    let radius = bounds.map_or(1.0, |(lo, hi)| {
+    let radius = gltf_load::file_bounds(document, buffers).map_or(1.0, |(lo, hi)| {
         ((0..3).map(|axis| (hi[axis] - lo[axis]).powi(2)).sum::<f32>().sqrt() * 0.5).max(1e-3)
     });
     let materials = used
@@ -116,7 +115,7 @@ fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Dat
         .animations()
         .map(|clip| clip.name().map_or_else(|| format!("Clip {}", clip.index() + 1), str::to_owned))
         .collect();
-    Ok(ImportedModel { name, roots, materials, lights, cameras, clips, bounds })
+    Ok(ImportedModel { name, roots, materials, lights, cameras, clips })
 }
 
 /// A `KHR_lights_punctual` light as the old importer placed it: at its
@@ -179,9 +178,9 @@ fn material_name(material: Option<u32>, names: &[String]) -> String {
 }
 
 /// The model at `path` in the base scene (minus its cube), compiled: the scene
-/// a drop makes, placed to fill the view, its lights and cameras where the
-/// file puts them. For the
-/// render and soak tools, which draw a file without a project around it.
+/// a drop makes, at the file's own size and place, its lights and cameras
+/// where the file puts them. For the render and soak tools, which draw a file
+/// without a project around it.
 pub fn compile_model_scene(path: &Path) -> Result<(EffectGraphDef, ImportedModel), String> {
     let ReadModel { model, facts, .. } = read_model(path)?;
     let id = ItemId::new("model");
@@ -189,18 +188,6 @@ pub fn compile_model_scene(path: &Path) -> Result<(EffectGraphDef, ImportedModel
     let mut doc = model.scene_doc(&file, id.clone());
     doc.models.insert(file.into_owned(), facts);
     let mut def = manifold_core::scene_doc::compile(&doc)?;
-    if let Some(placement) = model.placement() {
-        for (property, value) in [
-            ("scale_x", placement.scale),
-            ("scale_y", placement.scale),
-            ("scale_z", placement.scale),
-            ("pos_x", placement.position[0]),
-            ("pos_y", placement.position[1]),
-            ("pos_z", placement.position[2]),
-        ] {
-            start_at(&mut def, &format!("{id}.{property}"), value);
-        }
-    }
     for (item, property, value) in model.starting_values(&id) {
         start_at(&mut def, &format!("{item}.{property}"), value);
     }

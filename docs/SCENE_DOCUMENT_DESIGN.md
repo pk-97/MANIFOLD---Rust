@@ -201,7 +201,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 ### 7.7 Imports
 
 - Add → Mesh from file opens the file picker at once and runs the same importer as a drop (ruling 5). A file with several meshes becomes a Group whose Source is the file; a file with one mesh becomes one Object. Children follow the file's node tree: one Object per mesh-bearing node, empty pass-through nodes collapsed, nested as groups where the file nests.
-- An import lands centred at the origin and sized to span 2 m, whatever the file's units.
+- An import lands at its true size and where the file puts it, in metres, as in Blender and Unity: glTF is metres; FBX and COLLADA convert their stated units to metres; OBJ, which has no units, is read as metres. Nothing rescales or recentres it.
 - An import looks as it does in the file: each part's Material reads the file's factors, maps and extensions (texture source Model); skins, morphs and animation play (the Group's Clip field; Rate, Loop Mode and Retrigger rows); the file's lights and cameras become Light and Camera items under the Group.
 - A model file is read once, on the import worker: the parts and the facts the compiler reads (materials, rig, morphs, size) come from one parse. The facts travel on the document and are never saved; no compile on the UI or content thread opens a file. A load, paste, undo or relink that names a file without its facts reads it on the worker, and until they arrive its parts draw as plain meshes. What a file's materials hold that the surface cannot draw goes to the import warnings.
 - Child ids derive from the file node path, so a Model File swap keeps every child whose path still exists. The rest are removed, with a toast naming the count.
@@ -379,7 +379,7 @@ Short statements a performer can check, one by one. Each names the one lane that
 **Imports**
 - Add → Mesh from file opens the file picker at once. [F1]
 - A file with several meshes arrives as a Group with one child per mesh; a file with one mesh as one Object. [F1]
-- An import lands centred and sized to span 2 m, whatever the file's units. [F1]
+- An import lands at its true size, in metres, where the file puts it. [F1]
 - An imported model looks as it does in the file: materials and textures [F1]; skinned geometry and animation [L14]; ambient occlusion [L13]; the importer's material handling of main [L14].
 - The file's lights and cameras arrive as items under the Group. [L11]
 - Model File shows on the import Group and on a single imported Object. A swap keeps the parts that still exist, with their edits, and toasts how many went. [F1]
