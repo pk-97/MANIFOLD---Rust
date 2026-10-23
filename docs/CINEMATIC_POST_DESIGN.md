@@ -266,6 +266,8 @@ beats SSAO's look *"without hitting the performance harder than the current
 SSAO"* — the committed budget below is deliberately the same sample class as
 D3's (16 occlusion taps + 4 normal taps).
 
+Superseded for sampling and history by SCENE_REFINEMENT_DESIGN.md ruling 8 (ambient occlusion): the slice angles, step radii and range check below are now XeGTAO's falloff and Hilbert/R2 noise (`ssao_gtao.rs` module doc), and scenes move that noise every frame and average it with `node.temporal_accumulate`. The tap budget stands.
+
 (a) **Deterministic single-frame sampling, committed:** 2 slices per pixel,
 slice angles `φ_i = ssao_hash_angle(px) · 0.5 + i · (π/2)`, `i ∈ {0,1}` (the
 D2 hash, halved into [0,π) so two slices spread the semicircle); per slice,
