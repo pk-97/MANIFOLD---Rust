@@ -21,6 +21,11 @@ pub struct GpuEncoder<'a> {
     pub chunking_enabled: bool,
     /// Candidate warmup may prepare RT resources even when its saved toggle is off.
     pub preparing: bool,
+    /// The generator renderer's render pass, one per content tick, which
+    /// moves while the transport is stopped; 0 from a host that keeps none.
+    /// Rendering the same pass again (a warmup pump) is the same frame to a
+    /// node whose noise moves per frame.
+    pub render_pass: u64,
     /// Operations actually encoded by the shared dynamic RT path this frame.
     pub rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
     pub rt_history_resets: u32,
@@ -58,6 +63,7 @@ impl<'a> GpuEncoder<'a> {
             uniform_arena: None,
             chunking_enabled: false,
             preparing: false,
+            render_pass: 0,
             rt_updates: Default::default(),
             rt_history_resets: 0,
             rt_dispatches: 0,
@@ -85,6 +91,7 @@ impl<'a> GpuEncoder<'a> {
             uniform_arena: None,
             chunking_enabled: false,
             preparing: false,
+            render_pass: 0,
             rt_updates: Default::default(),
             rt_history_resets: 0,
             rt_dispatches: 0,

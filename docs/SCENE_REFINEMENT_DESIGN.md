@@ -89,7 +89,7 @@ Each lane: its own slot and `lane/refine-<name>` branch, one commit, then stop a
 
 ### Phase 3: polish
 
-**P3a Ambient occlusion** (Opus, high). A falloff at its radius and a per-frame rotation first; the lines must be gone before the next step. Then history: last frame's AO reprojected by the render's velocity output, rejected per pixel where depth disagrees, reset on a camera shot change and a seek, never on a geometry change.
+**P3a Ambient occlusion** (Opus, high). A falloff at its radius and a per-frame rotation first; the lines must be gone before the next step. Then history: last frame's AO reprojected by the render's velocity output, rejected per pixel where depth disagrees, reset on a camera shot change, a resize and a state clear, never on a seek, a loop point or a geometry change.
 
 **P3b Scene Loop** (Opus, medium). Ruling 7. Rows only a Loop camera reads are hidden until one exists. The cell is measured from the rest layout, the copies' layout box included, never from moving bodies.
 
@@ -137,5 +137,5 @@ Those of the base doc, plus:
 
 ## 7. Costs
 
-- A scene saved with an Attractor or an Explosion does not load that scene layer after P2c; the closed format has no fallback (D-119, no old-show compatibility). Peter's clifTesting project holds an Attractor.
+- A project saved with an Attractor or an Explosion does not open at all after P2c: the loader reads the whole project file in one pass, so one unknown force fails the project, not only its scene layer. The closed format has no fallback (D-119, no old-show compatibility). Peter's clifTesting project holds an Attractor.
 - Dragging Layout, Spacing, Columns or Turn on Body copies re-lays that pile each frame, as today.

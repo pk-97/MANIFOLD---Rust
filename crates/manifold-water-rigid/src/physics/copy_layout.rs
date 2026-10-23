@@ -77,12 +77,13 @@ fn copy_bounds(prototype: &RigidBody) -> ([f32; 3], [f32; 3]) {
 /// A box as its lowest and highest corner, metres.
 type Corners = ([f32; 3], [f32; 3]);
 
-/// One copy's box width and the world-aligned box the whole group rests in:
-/// every copy's box turned and placed at its rest pose, never where physics
-/// has moved it. The Scene Loop sizes its cell by the group box; Copy Blend
-/// lays its target out with the copy's. The copy's box is measured again
-/// only when the shape or scale changes, the group box when the layout
-/// does, so a still group costs two compares a frame.
+/// One copy's box width and the box the whole group rests in, in the
+/// group's own frame (about its origin, unturned): every copy's box turned
+/// and placed at its rest pose, never where physics has moved it. The Scene
+/// Loop sizes its cell by the group box placed by the group's frame; Copy
+/// Blend lays its target out with the copy's. The copy's box is measured
+/// again only when the shape or scale changes, the group box when the
+/// layout does, so a group that moves or turns costs two compares a frame.
 #[derive(Default)]
 pub(crate) struct RestBox {
     shape: Option<Arc<Solid>>,
@@ -90,11 +91,13 @@ pub(crate) struct RestBox {
     bounds: Corners,
     measured: Option<Arrangement>,
     value: Option<Corners>,
+    #[cfg(test)]
+    pub(crate) measures: usize,
 }
 
 impl RestBox {
-    /// `prototype`'s copy box width, and the box its copies rest in (`None`
-    /// with no copies).
+    /// `prototype`'s copy box width, and the box its copies rest in, in the
+    /// group's own frame (`None` with no copies).
     pub fn of(&mut self, prototype: &RigidBody) -> ([f32; 3], Option<Corners>) {
         let scale = prototype.transform.scale.map(f32::to_bits);
         let same_shape = match (&self.shape, &prototype.collider) {
@@ -108,10 +111,18 @@ impl RestBox {
             self.shape.clone_from(&prototype.collider);
             self.measured = None;
         }
-        let arrangement = arrangement_of(prototype, requested_count(prototype.spawn));
+        let arrangement = Arrangement {
+            origin: [0.0; 3],
+            rotation: [0.0; 3],
+            ..arrangement_of(prototype, requested_count(prototype.spawn))
+        };
         if self.measured != Some(arrangement) {
             self.value = arrangement.rest_box(self.bounds);
             self.measured = Some(arrangement);
+            #[cfg(test)]
+            {
+                self.measures += 1;
+            }
         }
         let (lo, hi) = self.bounds;
         (std::array::from_fn(|axis| hi[axis] - lo[axis]), self.value)

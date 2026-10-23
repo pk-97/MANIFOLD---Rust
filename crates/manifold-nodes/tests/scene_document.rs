@@ -1364,6 +1364,13 @@ fn the_loop_cell_follows_live_rows_and_never_a_moving_body() {
     // Spacing 2 sets the rows 2 m apart: copies to 4.5.
     write(fx, &mut runtime, "cube.spacing", 2.0);
     close(step(&mut runtime).0, 8.0 + 1.0, "Copies Spacing");
+    // The group's box rides its frame: across the corridor it changes
+    // nothing, a metre along it carries the copies to 5.5.
+    write(fx, &mut runtime, "cube.pos_x", 4.0);
+    close(step(&mut runtime).0, 8.0 + 1.0, "the group moved across");
+    write(fx, &mut runtime, "cube.pos_z", 1.0);
+    close(step(&mut runtime).0, 9.0 + 1.0, "the group moved along");
+    write(fx, &mut runtime, "cube.pos_z", 0.0);
     // The ball three times as deep: from -4.5 to -1.5.
     write(fx, &mut runtime, "ball.scale_z", 3.0);
     let (scaled, start) = step(&mut runtime);

@@ -242,12 +242,15 @@ impl RenderScene {
                                 .ok_or(FrameRenderFailure::RtAllocation)?;
                         }
                     }
-                    manifold_node_engine::load::expand::admit_candidate_bytes(
+                    // A refusal persists while the scene stays too big, so it
+                    // is told through the node error, which logs once per run
+                    // of failing frames.
+                    if let Err(error) = manifold_node_engine::load::expand::admit_candidate_bytes(
                         gpu.device.modifier_memory_snapshot(), additional_bytes,
-                    ).map_err(|error| {
-                        log::error!("node.render_scene: RT candidate admission failed: {error}");
-                        FrameRenderFailure::RtAllocation
-                    })?;
+                    ) {
+                        ctx.error(format!("{} {error}", rt_paused_reason(FrameRenderFailure::RtAllocation)));
+                        return Err(FrameRenderFailure::RtAllocation);
+                    }
                     let materials = prepare_rt_table::<manifold_gpu::raytrace::GiMaterial>(
                         gpu.device, self.rt_gi_materials_capacity, rt_gi_slot_count, false)?;
                     let motion = prepare_rt_table::<[[f32; 4]; 4]>(
