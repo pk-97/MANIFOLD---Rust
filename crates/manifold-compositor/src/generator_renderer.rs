@@ -856,6 +856,7 @@ impl GeneratorRenderer {
         project_tempo: Option<&ProjectTempo>,
     ) {
         self.render_pass += 1;
+        gpu.render_pass = self.render_pass;
         self.content_clock.0 += f64::from(dt);
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();

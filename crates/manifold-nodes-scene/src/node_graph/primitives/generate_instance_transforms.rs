@@ -3,13 +3,17 @@
 //! The rest places come from `manifold_core::copy_layout`, the formula the
 //! physics world rests a copies body's copies by, so Copy Blend moves copy
 //! `i` to the slot copy `i` would take if the copies' own Layout were
-//! switched, and no two blend paths cross. Computed on the CPU only when an
-//! input changes, then uploaded as an immutable snapshot.
+//! switched, and no two blend paths cross. The copies are laid out in the
+//! group's own frame on the CPU and uploaded only when a layout input
+//! changes; the GPU places them by the group's frame each time it moves (the
+//! nest kernel, the frame as the one outer copy), so a moving group never
+//! lays out or uploads its copies again.
 
 use std::borrow::Cow;
 
 use manifold_core::copies_body::{COPY_LAYOUT_LABELS, SIZE_SPACING_DEFAULT, SIZE_SPACING_RANGE};
 use manifold_core::copy_layout::{Arrangement, CopyLayout};
+use manifold_gpu::GpuBuffer;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::exec::instance_upload::InstanceSnapshotUpload;
 use manifold_node_engine::mesh::InstanceTransform;
@@ -77,7 +81,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire a copies body's copy_frame, copy_box, copy_turn, copy_grid and active_count (node.rigid_body outputs; Copy Blend's stage takes them from the copies context) to lay a second arrangement of the same copies, then node.blend_copies between the two. Each wired input replaces its params: copy_box the box_x/y/z copy width, copy_turn turn_x/y/z, copy_grid (Columns, Spacing) columns and spacing, active_count its param. An unwired copy_frame is the identity, so one copy sits on the origin. max_capacity is the allocation ceiling (max_capacity × 32 bytes). The places are recomputed only when an input changes.",
+    composition_notes: "Wire a copies body's copy_frame, copy_box, copy_turn, copy_grid and active_count (node.rigid_body outputs; Copy Blend's stage takes them from the copies context) to lay a second arrangement of the same copies, then node.blend_copies between the two. Each wired input replaces its params: copy_box the box_x/y/z copy width, copy_turn turn_x/y/z, copy_grid (Columns, Spacing) columns and spacing, active_count its param. An unwired copy_frame is the identity, so one copy sits on the origin. max_capacity is the allocation ceiling (max_capacity × 32 bytes). The places are laid out in the group's frame and recomputed only when a layout input changes; moving or turning copy_frame only places them again on the GPU.",
     examples: [],
     picker: { label: "Arrange Copies", category: Atom },
     summary: "Lays copies out the way a copies body does, in a grid, line, ring, spiral, pile or random spread, giving each one a position to render at.",
@@ -86,11 +90,18 @@ manifold_node_engine::primitive! {
     aliases: ["arrange copies", "generate instance transforms", "instance layout", "scatter", "place"],
     boundary_reason: IoBridge,
     extra_fields: {
-        // The places last computed, and what they were computed from.
+        // The places last computed in the group's frame, and what they were
+        // computed from.
         places: Vec<InstanceTransform> = Vec::new(),
         laid: Option<(Arrangement, [u32; 3], u32)> = None,
         version: u64 = 0,
         upload: InstanceSnapshotUpload = InstanceSnapshotUpload::default(),
+        laid_buffer: Option<GpuBuffer> = None,
+        // The group's place and turn as one copy (scale 1), and its upload.
+        group: Option<[u32; 6]> = None,
+        group_version: u64 = 0,
+        group_upload: InstanceSnapshotUpload = InstanceSnapshotUpload::default(),
+        group_buffer: Option<GpuBuffer> = None,
     },
 }
 
@@ -103,6 +114,10 @@ fn vector<const N: usize>(value: Option<ParamValue>, default: [f32; N]) -> [f32;
 }
 
 impl Primitive for GenerateInstanceTransforms {
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        self.pipeline.get_or_insert_with(|| super::nest_copies::nest_pipeline(device));
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(out) = ctx.outputs.array("instances") else {
             return;
@@ -121,14 +136,15 @@ impl Primitive for GenerateInstanceTransforms {
             ctx.inputs.scalar("copy_grid"),
             [ctx.param_f32("columns", COLUMNS_DEFAULT), ctx.param_f32("spacing", SIZE_SPACING_DEFAULT)],
         );
+        // In the group's own frame: the frame is applied on the GPU below.
         let arrangement = Arrangement {
             layout: CopyLayout::from_value(layout),
             count,
             columns: columns.round().clamp(1.0, 64.0) as usize,
             spacing,
             turn,
-            origin: frame.pos,
-            rotation: frame.rot_euler,
+            origin: [0.0; 3],
+            rotation: [0.0; 3],
         };
         let scale = frame.scale[0] * ctx.param_f32("base_scale", 1.0);
         let key = (arrangement, width.map(f32::to_bits), scale.to_bits());
@@ -138,17 +154,49 @@ impl Primitive for GenerateInstanceTransforms {
             self.laid = Some(key);
             self.version = self.version.wrapping_add(1);
         }
+        let group = InstanceTransform {
+            pos_scale: [frame.pos[0], frame.pos[1], frame.pos[2], 1.0],
+            rot_pad: [frame.rot_euler[0], frame.rot_euler[1], frame.rot_euler[2], 0.0],
+        };
+        let group_key: [u32; 6] = std::array::from_fn(|i| if i < 3 { frame.pos[i] } else { frame.rot_euler[i - 3] }.to_bits());
+        if self.group != Some(group_key) {
+            self.group = Some(group_key);
+            self.group_version = self.group_version.wrapping_add(1);
+        }
         let retained = ctx.outputs_retained();
         let Some(gpu) = ctx.gpu.as_deref_mut() else {
             return;
         };
-        match self.upload.upload(gpu, out, &self.places, self.version, retained) {
-            Ok(true) => {}
-            Ok(false) => ctx.mark_output_content_unchanged(),
+        for (buffer, size) in [(&mut self.laid_buffer, out.size), (&mut self.group_buffer, COPY_BYTES)] {
+            if buffer.as_ref().is_none_or(|held| held.size != size) {
+                match gpu.device.try_create_buffer(size) {
+                    Ok(created) => *buffer = Some(created),
+                    Err(error) => {
+                        ctx.error(format!("Arrange Copies: {error}"));
+                        return;
+                    }
+                }
+            }
+        }
+        let (Some(laid), Some(placed_by)) = (self.laid_buffer.as_ref(), self.group_buffer.as_ref()) else {
+            return;
+        };
+        let uploads = self.upload.upload(gpu, laid, &self.places, self.version, true).and_then(|relaid| {
+            let moved = self.group_upload.upload(gpu, placed_by, std::slice::from_ref(&group), self.group_version, true)?;
+            Ok(relaid || moved)
+        });
+        match uploads {
+            Ok(changed) if changed || !retained => {
+                let copies = (out.size / COPY_BYTES).min(u64::from(u32::MAX)) as u32;
+                super::nest_copies::nest(gpu, &mut self.pipeline, [placed_by, laid, out], copies, copies);
+            }
+            Ok(_) => ctx.mark_output_content_unchanged(),
             Err(error) => ctx.error(error),
         }
     }
 }
+
+const COPY_BYTES: u64 = std::mem::size_of::<InstanceTransform>() as u64;
 
 /// Copy `index`'s instance: its rest place, as the physics world publishes
 /// a resting copy.

@@ -21,12 +21,14 @@
 //! each pixel offsets its taps by its own fraction of a step; and slice angle
 //! and step offset come from XeGTAO's spatio-temporal noise (Hilbert index
 //! walked by the R2 sequence). With `noise_per_frame` on the pattern moves
-//! on every run of the node, for `node.temporal_accumulate` to average; off,
-//! it holds still. The step is the node's own count of runs, not the frame
-//! time, so the pattern keeps moving while the transport is stopped (the
-//! history would otherwise settle on one pattern's grain). `clear_state`
-//! restarts the count, and export clears state before its first frame, so
-//! two exports draw the same noise.
+//! one step on each new frame, for `node.temporal_accumulate` to average;
+//! off, it holds still. A new frame is a new render pass of the host (one per
+//! content tick, so the pattern keeps moving while the transport is stopped
+//! and the history never settles on one pattern's grain) or a new host frame
+//! count; rendering the same frame again draws the same pattern, so a frame
+//! pumped until it holds still comes out byte for byte the same.
+//! `clear_state` restarts the count, and export clears state before its
+//! first frame, so two exports draw the same noise.
 //!
 //! The Hilbert index, the R2 noise, the falloff and the normal are ported
 //! from XeGTAO (Intel, MIT license; see THIRD_PARTY_NOTICES.md).
@@ -76,7 +78,7 @@ struct SsaoGtaoUniforms {
 manifold_node_engine::primitive! {
     name: SsaoGtao,
     type_id: "node.ssao_gtao",
-    purpose: "Ground Truth Ambient Occlusion from scene depth and a Camera, sampled as XeGTAO does. Per pixel: view-space position from depth, normal from XeGTAO's edge-aware reconstruction (each corner of the four neighbours weighted by how well they follow the local depth slope, so silhouette pixels keep their own surface's normal); `slices` screen directions, `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius multiplier; world units projected at the pixel's depth); each tap's horizon fades to the open horizon over the outer 61.5% of that reach (no hard cut), so occlusion is about half faded at `radius`; per-pixel step offsets and slice angles from XeGTAO's Hilbert/R2 spatio-temporal noise; the visible arc integrated against the normal and divided by the slice's fully-open arc. out.r = clamp(1 - intensity*(1-visibility), 0, 1), broadcast to RGB, alpha 1. `noise_per_frame` moves the noise on every run of the node, whether or not frame time moves (for a temporal filter); clear_state restarts the sequence; off, the pattern holds still. The camera is read only through derived uniforms.",
+    purpose: "Ground Truth Ambient Occlusion from scene depth and a Camera, sampled as XeGTAO does. Per pixel: view-space position from depth, normal from XeGTAO's edge-aware reconstruction (each corner of the four neighbours weighted by how well they follow the local depth slope, so silhouette pixels keep their own surface's normal); `slices` screen directions, `steps` taps per side out to 1.457 x `radius` (XeGTAO's radius multiplier; world units projected at the pixel's depth); each tap's horizon fades to the open horizon over the outer 61.5% of that reach (no hard cut), so occlusion is about half faded at `radius`; per-pixel step offsets and slice angles from XeGTAO's Hilbert/R2 spatio-temporal noise; the visible arc integrated against the normal and divided by the slice's fully-open arc. out.r = clamp(1 - intensity*(1-visibility), 0, 1), broadcast to RGB, alpha 1. `noise_per_frame` moves the noise one step on each new frame (a new host render pass, which moves while the transport is stopped, or a new frame count), for a temporal filter; the same frame rendered again keeps its noise; clear_state restarts the sequence; off, the pattern holds still. The camera is read only through derived uniforms.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -163,8 +165,10 @@ manifold_node_engine::primitive! {
     derived_uniforms: ["fov_y", "near", "far", "noise_frame:u32"],
     wgsl_includes: [DEPTH_COMMON, VIEW_NORMAL_COMMON],
     extra_fields: {
-        // Runs since the last `clear_state`, modulo `NOISE_CYCLE`.
+        // New frames since the last `clear_state`, modulo `NOISE_CYCLE`.
         noise_step: u32 = 0,
+        // The frame the step was taken for: the host's render pass and frame count.
+        noise_seen: Option<(u64, i64)> = None,
     },
 }
 
@@ -178,17 +182,22 @@ pub(super) fn derive_view_scalars(cam: &Camera) -> [f32; 3] {
 }
 
 impl SsaoGtao {
-    /// This run's offset into the noise sequence; each call moves one step.
-    fn next_noise_frame(&mut self) -> u32 {
-        let step = self.noise_step;
-        self.noise_step = (step + 1) % NOISE_CYCLE;
-        step * NOISE_FRAME_STRIDE
+    /// The offset into the noise sequence for `frame` (the host's render pass
+    /// and frame count): one step on from the frame before, the same step
+    /// again for the same frame.
+    fn noise_frame_for(&mut self, frame: (u64, i64)) -> u32 {
+        if self.noise_seen.is_some_and(|seen| seen != frame) {
+            self.noise_step = (self.noise_step + 1) % NOISE_CYCLE;
+        }
+        self.noise_seen = Some(frame);
+        self.noise_step * NOISE_FRAME_STRIDE
     }
 }
 
 impl Primitive for SsaoGtao {
     fn clear_state(&mut self) {
         self.noise_step = 0;
+        self.noise_seen = None;
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -211,7 +220,8 @@ impl Primitive for SsaoGtao {
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far] = derive_view_scalars(&cam);
-        let noise_frame = self.next_noise_frame();
+        let pass = ctx.gpu.as_ref().map_or(0, |gpu| gpu.render_pass);
+        let noise_frame = self.noise_frame_for((pass, ctx.time.frame_count));
 
         let Some(depth_tex) = ctx.inputs.texture_2d("depth") else {
             return;
@@ -284,22 +294,29 @@ mod tests {
         assert_eq!(fov_y, std::f32::consts::FRAC_PI_3);
     }
 
-    /// The noise moves on every run whatever the frame time does (a stopped
-    /// transport still averages), cycles, and `clear_state` restarts it, so
-    /// two exports from a cleared state draw the same sequence.
+    /// The noise moves on each new render pass whatever the frame time does
+    /// (a stopped transport still averages) and on each new host frame
+    /// count; the same frame rendered again draws the same pattern. It
+    /// cycles, and `clear_state` restarts it, so two exports from a cleared
+    /// state draw the same sequence.
     #[test]
-    fn noise_moves_every_run_and_restarts_on_clear() {
+    fn noise_moves_once_per_new_frame_and_restarts_on_clear() {
         let mut node = SsaoGtao::new();
-        let first: Vec<u32> = (0..NOISE_CYCLE + 1).map(|_| node.next_noise_frame()).collect();
+        let ticks = |node: &mut SsaoGtao| -> Vec<u32> {
+            (0..=u64::from(NOISE_CYCLE)).map(|pass| node.noise_frame_for((pass + 1, 0))).collect()
+        };
+        let first = ticks(&mut node);
         assert_eq!(first[0], 0);
         assert_eq!(first[1], NOISE_FRAME_STRIDE);
-        assert!(first.windows(2).all(|w| w[0] != w[1]), "consecutive runs must move the pattern");
+        assert!(first.windows(2).all(|w| w[0] != w[1]), "each content tick moves the pattern");
         assert_eq!(first[NOISE_CYCLE as usize], 0, "the pattern cycles");
 
-        node.next_noise_frame();
+        let held = node.noise_frame_for((7, 3));
+        assert!((0..5).all(|_| node.noise_frame_for((7, 3)) == held), "the same frame rendered again keeps its pattern");
+        assert_ne!(node.noise_frame_for((7, 4)), held, "a new host frame count moves it");
+
         Primitive::clear_state(&mut node);
-        let again: Vec<u32> = (0..NOISE_CYCLE + 1).map(|_| node.next_noise_frame()).collect();
-        assert_eq!(first, again, "a cleared node repeats the sequence");
+        assert_eq!(first, ticks(&mut node), "a cleared node repeats the sequence");
     }
 }
 

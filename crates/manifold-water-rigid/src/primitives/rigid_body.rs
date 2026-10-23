@@ -83,15 +83,18 @@ fn copy_scale(scale: [f32; 3]) -> Transform {
 }
 
 /// A box as a transform, as `node.loop_cell` reads one: the unit cube
-/// placed at the box's centre and scaled to its size. No copies is a box of
-/// no size, which measures nothing.
-fn rest_box(bounds: Option<([f32; 3], [f32; 3])>) -> Transform {
+/// placed at the box's centre and scaled to its size, inside the place and
+/// turn of `group`, the frame the box was measured in. The group's scale is
+/// already in the box. No copies is a box of no size, which measures
+/// nothing.
+fn rest_box(bounds: Option<([f32; 3], [f32; 3])>, group: &Transform) -> Transform {
     let Some((lo, hi)) = bounds else {
         return Transform { scale: [0.0; 3], ..IDENTITY_TRANSFORM };
     };
     Transform {
         pos: std::array::from_fn(|axis| 0.5 * (lo[axis] + hi[axis])),
         scale: std::array::from_fn(|axis| hi[axis] - lo[axis]),
+        parent: Transform { pos: group.pos, rot_euler: group.rot_euler, ..IDENTITY_TRANSFORM }.world(),
         ..IDENTITY_TRANSFORM
     }
 }
@@ -533,7 +536,7 @@ impl Primitive for RigidBodyNode {
         };
         ctx.outputs.set_transform("copy_scale", copy_scale(transform.scale));
         let (copy_box, group_box) = self.rest.of(&body);
-        ctx.outputs.set_transform("rest_box", rest_box(group_box));
+        ctx.outputs.set_transform("rest_box", rest_box(group_box, &transform));
         // Everything the copies' layout reads, so Copy Blend lays its target
         // out by the same rows (`manifold_core::copy_layout`).
         let arrangement = arrangement_of(&body, requested_count(body.spawn));
@@ -651,6 +654,22 @@ mod tests {
     fn copy_scale_is_the_scale_beyond_the_x_axis() {
         assert_eq!(copy_scale([10.0, 0.16, 10.0]).scale, [1.0, 0.16 / 10.0, 1.0]);
         assert_eq!(copy_scale([2.0; 3]).scale, [1.0; 3]);
+    }
+
+    /// The box measured in the group's frame lands where the group is and
+    /// turns with it; the group's scale, already in the box, is not applied
+    /// again.
+    #[test]
+    fn the_rest_box_is_placed_by_the_group_frame() {
+        let bounds = Some(([0.0, -0.5, -0.5], [4.0, 0.5, 0.5]));
+        let group = Transform { pos: [3.0, 1.0, -2.0], scale: [2.0; 3], ..IDENTITY_TRANSFORM };
+        let m = rest_box(bounds, &group).world();
+        assert_eq!([m[3][0], m[3][1], m[3][2]], [5.0, 1.0, -2.0], "the box centre, carried by the group's place");
+        assert_eq!([m[0][0], m[1][1], m[2][2]], [4.0, 1.0, 1.0], "the box's own size");
+        let turned = Transform { rot_euler: [0.0, std::f32::consts::FRAC_PI_2, 0.0], ..group };
+        let m = rest_box(bounds, &turned).world();
+        assert!((m[3][2] - (-4.0)).abs() < 1e-5 && (m[3][0] - 3.0).abs() < 1e-5, "a quarter turn swings the row round: {:?}", m[3]);
+        assert_eq!(rest_box(None, &group).scale, [0.0; 3], "no copies measures nothing");
     }
 
     /// A body inside a mirrored group keeps the mirror in its scale, so the

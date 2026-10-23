@@ -17,10 +17,11 @@
 //! `frames`.
 //!
 //! History starts over on the first frame, a camera cut (`Camera.shot`
-//! changes), a seek or a different clip driving the node (the shared
-//! `TemporalResetDetector`), a size change and `clear_state`. Geometry
-//! changes never reset it: the per-pixel depth test already drops history a
-//! moved surface no longer matches.
+//! changes), a size change and `clear_state`, as a game engine resets its
+//! temporal history on a camera cut only. A seek, a clip's loop point and a
+//! geometry change never reset it: the per-pixel depth and normal tests
+//! already drop history a surface no longer matches, so a looping clip
+//! carries no burst of raw noise at its loop point.
 //!
 //! In export the frames arrive in order from a cleared state, so the same
 //! export gives the same frames.
@@ -28,12 +29,10 @@
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime};
-use manifold_node_engine::exec::temporal_reset::TemporalResetDetector;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::state_store::OwnerKey;
 
 use super::ssao_gtao::derive_view_scalars;
 
@@ -48,7 +47,7 @@ fn shader_source() -> String {
 manifold_node_engine::primitive! {
     name: TemporalAccumulate,
     type_id: "node.temporal_accumulate",
-    purpose: "Reprojected temporal accumulation (Jimenez et al. 2016, GTAO section 5). Fetches last frame's result at uv + (-velocity.x, velocity.y)/2 (`velocity` is the render's NDC motion, now minus previous) with four bilinear taps; a tap is kept only when its stored view depth is within 2% plus the local depth slope of the depth this pixel's surface had from last frame's camera, and its stored world normal (reconstructed from depth, XeGTAO's edge-aware normal) is within cos 0.9 of this pixel's. Kept history is clipped to the current 3x3 neighbourhood's mean ± 1.25 standard deviations, then out = mix(history, in, 1/n) with n = min(history n + 1, `frames`). No usable history gives out = in. Resets on the first frame, a camera cut (Camera.shot), a seek or owner change, a size change and clear_state; never on a geometry change. `depth` is the render's raw reversed-Z depth.",
+    purpose: "Reprojected temporal accumulation (Jimenez et al. 2016, GTAO section 5). Fetches last frame's result at uv + (-velocity.x, velocity.y)/2 (`velocity` is the render's NDC motion, now minus previous) with four bilinear taps; a tap is kept only when its stored view depth is within 2% plus the local depth slope of the depth this pixel's surface had from last frame's camera, and its stored world normal (reconstructed from depth, XeGTAO's edge-aware normal) is within cos 0.9 of this pixel's. Kept history is clipped to the current 3x3 neighbourhood's mean ± 1.25 standard deviations, then out = mix(history, in, 1/n) with n = min(history n + 1, `frames`). No usable history gives out = in. Resets on the first frame, a camera cut (Camera.shot), a size change and clear_state; never on a seek, a loop point or a geometry change, where the depth and normal tests drop what no longer matches. `depth` is the render's raw reversed-Z depth.",
     inputs: {
         in: Texture2D required,
         depth: Texture2D required,
@@ -114,7 +113,6 @@ struct HistoryTextures {
 /// points. CPU-only, so the reset rules are tested without a GPU.
 #[derive(Default)]
 struct History {
-    detector: TemporalResetDetector,
     prev_camera: Option<Camera>,
     dims: (u32, u32),
     cleared: bool,
@@ -125,13 +123,12 @@ struct History {
 impl History {
     /// Advances one frame. Returns whether the history is unusable this
     /// frame and the `prev_depth` row for the shader.
-    fn begin_frame(&mut self, owner: OwnerKey, time: &FrameTime, camera: &Camera, dims: (u32, u32)) -> (bool, [f32; 4]) {
+    fn begin_frame(&mut self, camera: &Camera, dims: (u32, u32)) -> (bool, [f32; 4]) {
         // Every check updates its own record, so all of them run every frame.
-        let seek_or_owner = self.detector.detect_reset(owner, time);
         let cleared = std::mem::take(&mut self.cleared);
         let resized = std::mem::replace(&mut self.dims, dims) != dims;
         let prev = self.prev_camera.replace(*camera);
-        let cold = seek_or_owner || cleared || resized || prev.is_none_or(|prev| prev.shot != camera.shot);
+        let cold = cleared || resized || prev.is_none_or(|prev| prev.shot != camera.shot);
         let row = match prev {
             Some(prev) if !cold => prev_depth_row(&prev, camera),
             _ => [0.0, 0.0, 1.0, 0.0],
@@ -196,7 +193,7 @@ impl Primitive for TemporalAccumulate {
         }
         let camera = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far] = derive_view_scalars(&camera);
-        let (cold, prev_depth) = self.history.begin_frame(ctx.owner_key, &ctx.time, &camera, (w, h));
+        let (cold, prev_depth) = self.history.begin_frame(&camera, (w, h));
         let basis = |v: [f32; 3]| [v[0], v[1], v[2], 0.0];
         let uniforms = Uniforms {
             prev_depth,
@@ -250,46 +247,36 @@ impl Primitive for TemporalAccumulate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::{Beats, Seconds};
-
-    const DT: f64 = 1.0 / 60.0;
-
-    fn at(frame: u32) -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(frame as f64 * DT), delta: Seconds(DT), frame_count: 0 }
-    }
 
     fn orbit(orbit: f32, distance: f32) -> Camera {
         Camera::orbit_perspective(orbit, 0.3, distance, 0.9, 0.0, 0.0, 0.05, 200.0)
     }
 
-    /// Steady frames keep history; a cut, a seek, a resize and clear_state
-    /// each start it over for exactly one frame.
+    /// Steady frames keep history; a camera cut, a resize and clear_state
+    /// each start it over for exactly one frame. Time is no input, so a seek
+    /// or a clip's loop point, where the camera jumps back to where the clip
+    /// began on the same shot, keeps it.
     #[test]
-    fn history_resets_on_cut_seek_resize_and_clear_only() {
+    fn history_resets_on_cut_resize_and_clear_only() {
         let mut history = History::default();
-        let cam = orbit(0.0, 10.0);
+        let start = orbit(0.0, 10.0);
         let dims = (64, 32);
-        let mut frame = 0;
-        let mut step = |history: &mut History, cam: &Camera, dims, jump: u32| {
-            frame += 1 + jump;
-            history.begin_frame(1, &at(frame), cam, dims).0
-        };
-        assert!(step(&mut history, &cam, dims, 0), "first frame has no history");
-        assert!(!step(&mut history, &cam, dims, 0));
+        let step = |history: &mut History, cam: &Camera, dims| history.begin_frame(cam, dims).0;
+        assert!(step(&mut history, &start, dims), "first frame has no history");
+        assert!(!step(&mut history, &start, dims));
         let moved = orbit(0.2, 9.0);
-        assert!(!step(&mut history, &moved, dims, 0), "camera motion keeps history");
+        assert!(!step(&mut history, &moved, dims), "camera motion keeps history");
+        assert!(!step(&mut history, &start, dims), "a loop point keeps history");
 
         let mut cut = moved;
         cut.shot = 7;
-        assert!(step(&mut history, &cut, dims, 0), "a camera cut starts over");
-        assert!(!step(&mut history, &cut, dims, 0));
-        assert!(step(&mut history, &cut, dims, 30), "a seek starts over");
-        assert!(!step(&mut history, &cut, dims, 0));
-        assert!(step(&mut history, &cut, (128, 64), 0), "a resize starts over");
-        assert!(!step(&mut history, &cut, (128, 64), 0));
+        assert!(step(&mut history, &cut, dims), "a camera cut starts over");
+        assert!(!step(&mut history, &cut, dims));
+        assert!(step(&mut history, &cut, (128, 64)), "a resize starts over");
+        assert!(!step(&mut history, &cut, (128, 64)));
         history.cleared = true;
-        assert!(step(&mut history, &cut, (128, 64), 0), "clear_state starts over");
-        assert!(!step(&mut history, &cut, (128, 64), 0));
+        assert!(step(&mut history, &cut, (128, 64)), "clear_state starts over");
+        assert!(!step(&mut history, &cut, (128, 64)));
     }
 
     /// The row maps a point seen by this frame's camera to the view depth

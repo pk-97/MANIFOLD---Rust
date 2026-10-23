@@ -75,6 +75,32 @@ fn the_platonic_widths_are_the_installed_hulls_bit_for_bit() {
     }
 }
 
+/// The rest box is measured in the group's own frame, so a group an LFO or
+/// a parent moves or turns every frame never measures it again; a Spacing
+/// drag does, on the frame it lands, and the box follows it.
+#[test]
+fn a_moving_group_never_measures_its_rest_box_again_but_a_spacing_drag_does() {
+    let mut body = cube([0.0; 3], 1.0);
+    body.spawn = CopySpawn { count: 12.0, columns: 4.0, layout: 1.0, ..CopySpawn::default() };
+    let mut rest = RestBox::default();
+    let (_, still) = rest.of(&body);
+    for frame in 0..100 {
+        let t = frame as f32 / 60.0;
+        body.transform.pos = [3.0 * t.sin(), 2.0 * t, -t];
+        body.transform.rot_euler = [0.1 * t, 0.7 * t, 0.0];
+        assert_eq!(rest.of(&body).1, still, "frame {frame}: the box in the group's frame stays put");
+    }
+    assert_eq!(rest.measures, 1, "100 frames of motion measured nothing");
+    let length = |corners: Option<([f32; 3], [f32; 3])>| corners.map_or(0.0, |(lo, hi)| hi[2] - lo[2]);
+    for spacing in [1.5, 2.0, 2.5] {
+        body.spawn.spacing = spacing;
+        let before = length(rest.of(&body).1);
+        body.spawn.spacing = spacing + 0.25;
+        assert!(length(rest.of(&body).1) > before, "Spacing {spacing}: the box grows on the frame it changes");
+    }
+    assert_eq!(rest.measures, 1 + 6, "one measure per Spacing value");
+}
+
 /// Line and Grid grow one way from the first copy, which sits on the group's
 /// origin, as Blender's Array does: no fill from the centre, and a Count
 /// change never moves the copies already there.

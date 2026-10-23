@@ -22,9 +22,12 @@
 //!
 //! **THE SHARED PATH.** P4's temporal-upscaler history reset
 //! (`metalfx_temporal_upscaler.rs`) and P2's temporal accumulation reset
-//! (soft-shadow/AO/GI, when P2 lands) both wire onto this SAME
+//! (soft-shadow/GI, when P2 lands) both wire onto this SAME
 //! [`TemporalResetDetector`] — do not build a second reset-detection path.
 //! The negative-`rg` gate in both P4's and P2's briefs enforces exactly one.
+//! The ambient-occlusion accumulator (`node.temporal_accumulate`) does not
+//! use it: it resets on a camera cut, a resize and `clear_state` only, and
+//! its per-pixel depth and normal tests drop what a seek or a loop changed.
 
 use crate::exec::effect_node::FrameTime;
 use crate::state_store::OwnerKey;
