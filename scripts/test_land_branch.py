@@ -116,6 +116,12 @@ class CarryOverTests(unittest.TestCase):
         self.assertFalse(allowed(named, 1, named), 'gate did not run every check')
         self.assertFalse(allowed(frozenset(), CHECKS_RED, frozenset()), 'no named red')
 
+    def test_a_named_red_without_a_reason_is_refused_before_the_gate(self):
+        argv = ['lane/x', '--worktree', '/tmp/wt', '--message', 'm', '--named-red', 'BUG-red=t']
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            land_branch.parse_args(argv)
+        self.assertEqual(land_branch.parse_args(argv + ['--reason', 'red on main']).reason, 'red on main')
+
     def test_labels_and_gpu_wait_parse_from_the_gate_summary(self):
         text = gate_text('clippy/a', 'flow-gate', wait=12) + gate_text(wait=3)
         self.assertEqual(land_branch.red_labels(text), {'clippy/a', 'flow-gate'})

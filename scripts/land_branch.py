@@ -304,7 +304,7 @@ def parse_args(argv):
     p.add_argument("--message", required=True)
     p.add_argument("--named-red", action="append", default=[], metavar="BUG-ID=TEST",
                    help="land over a red whose failing tests all contain TEST (repeatable)")
-    p.add_argument("--reason")
+    p.add_argument("--reason", help="why landing over the named reds is safe; required with --named-red")
     p.add_argument("--skip-gpu", metavar="REASON",
                    help="defer GPU proofs with a recorded reason; all other gates must pass")
     p.add_argument("--close-bead", action="append", default=[])
@@ -316,6 +316,9 @@ def parse_args(argv):
         if not (bug and sep and test):
             p.error(f"--named-red needs BUG-ID=TEST (a failing test name or substring), got {spec!r}; "
                     "for example --named-red 'BUG-pl747=whitewater_tick_state_matches_golden'")
+    # Refused here, not after the gate: a missing reason used to stop the landing only once the whole gate had run.
+    if a.named_red and not a.reason:
+        p.error("--named-red needs --reason '<why landing over it is safe>'")
     return a
 
 def main():
