@@ -254,6 +254,14 @@ use manifold_node_engine::freeze::classify::FusionKind;
                 "parts",
                 manifold_core::effects::RangeReason::Count,
             ),
+            // node.loop_cell (loop_cell.rs) - hand-`impl EffectNode`:
+            // `reconfigure` rounds `boxes` to at least 1 before `rebuild_ports`
+            // sizes the box/within family; no upper bound.
+            (
+                "node.loop_cell",
+                "boxes",
+                manifold_core::effects::RangeReason::Count,
+            ),
         ];
 
         let registry = PrimitiveRegistry::with_builtin();

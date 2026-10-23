@@ -339,7 +339,7 @@ impl ScenePanel {
             (None, Some(last)) => last.y + last.height,
             (None, None) => return,
         };
-        let style = UIStyle { bg_color: color::SELECTED_LAYER_RING, corner_radius: 1.0, ..UIStyle::default() };
+        let style = UIStyle { bg_color: color::SELECTED_LAYER_RING, corner_radius: color::HAIRLINE_RADIUS, ..UIStyle::default() };
         // From the cards' icons to the right edge, clear of the + column.
         let line = tree.add_panel(Some(self.content_parent), inner_x + STEP_W * 2.0, y - 1.0, (inner_w - STEP_W * 3.0).max(0.0), 2.0, style);
         tree.set_name(line, "scene_tree.drop_line");
