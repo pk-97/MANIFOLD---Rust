@@ -88,9 +88,6 @@ fn write_surface(b: &mut Builder<'_>, surface: u32, m: &GltfMaterialInfo) {
     b.set_number(surface, "color_a", m.base_color_factor[3].clamp(0.0, 1.0));
     // A gloss map's conversion already applies the authored gloss factor.
     b.set_number(surface, "roughness", if m.mr_texture_is_gloss_alpha { 1.0 } else { m.roughness.max(0.01) });
-    // No flat fill floor: the shadow side of a matte model goes to black
-    // under the scene's lights.
-    b.set_number(surface, "ambient", 0.0);
     // KHR_materials_emissive_strength folds into the emission multiplier;
     // a material with no emissive colour stays dark.
     let emissive_lit = m.emissive.iter().any(|&c| c > 0.0);

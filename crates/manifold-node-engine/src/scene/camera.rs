@@ -130,6 +130,13 @@ impl Camera {
         period.map(|component| component * copies)
     }
 
+    /// The clip planes a camera draws with. Near and Far are independent rows,
+    /// as in Blender; the projection divides by their gap, so a Far at or
+    /// before Near is held just past it and the camera draws nothing.
+    pub fn clip_planes(near: f32, far: f32) -> (f32, f32) {
+        (near, far.max(near.next_up()))
+    }
+
     /// Identity-ish default — origin position looking down +Z, FOV 60°, sensible
     /// near/far. Provided so consumers can have a sane fallback when nothing is
     /// wired (though wiring is required in practice).
@@ -185,6 +192,7 @@ impl Camera {
         near: f32,
         far: f32,
     ) -> Self {
+        let (near, far) = Self::clip_planes(near, far);
         let target = [0.0, look_y, 0.0];
         let pos = [
             distance * orbit.cos() * tilt.cos(),
@@ -249,6 +257,7 @@ impl Camera {
         near: f32,
         far: f32,
     ) -> Self {
+        let (near, far) = Self::clip_planes(near, far);
         // Yaw rotates -Z around Y; pitch tilts that up/down around the
         // resulting right axis. Standard spherical-to-Cartesian derivation.
         let fwd = normalize3([
@@ -306,6 +315,7 @@ impl Camera {
         near: f32,
         far: f32,
     ) -> Self {
+        let (near, far) = Self::clip_planes(near, far);
         let fwd = normalize3(sub3(target, pos));
         let right = normalize3(cross3(fwd, up));
         let up_corrected = normalize3(cross3(right, fwd));
@@ -607,6 +617,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Near and Far are independent: a Far before Near keeps Near and a
+    /// finite projection, on every rig.
+    #[test]
+    fn a_far_before_near_keeps_the_projection_finite() {
+        for cam in [
+            Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 20.0, 6.0),
+            Camera::from_pos_euler([0.0; 3], 0.0, 0.0, 0.0, 0.9, 20.0, 20.0),
+            Camera::look_at([0.0, 0.0, 5.0], [0.0; 3], [0.0, 1.0, 0.0], 0.9, 1e-6, 0.5),
+        ] {
+            assert!(cam.near > 0.0 && cam.far > cam.near, "near {} far {}", cam.near, cam.far);
+            assert!(cam.proj(1.5).iter().flatten().all(|v| v.is_finite()));
+        }
+        assert_eq!(Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 20.0, 6.0).near, 20.0);
     }
 
     #[test]

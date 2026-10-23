@@ -17,7 +17,7 @@ use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, SerializedP
 use manifold_core::scene_doc::{
     ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, ItemId, LightType, MeshPrimitives, ModelFacts,
 };
-use manifold_core::scene_schema::{FAR_CLIP, NEAR_CLIP};
+use manifold_core::scene_schema::CLIP_PLANE;
 
 use super::gltf_load::{self, FileNode, GltfLightKind};
 
@@ -105,10 +105,9 @@ fn describe(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Dat
                 ("pitch", camera.pitch),
                 ("roll", camera.roll),
                 ("fov_y", camera.fov_y),
-                // Held to the card's limits, so an imported camera never starts
-                // with a clip a row could not reach.
-                ("near", NEAR_CLIP.clamp(camera.near, (0.0, 0.0))),
-                ("far", FAR_CLIP.clamp(camera.far, (0.0, 0.0))),
+                // The file's own clip planes, held only above 0 as the rows are.
+                ("near", CLIP_PLANE.clamp(camera.near, (0.0, 0.0))),
+                ("far", CLIP_PLANE.clamp(camera.far, (0.0, 0.0))),
             ],
         })
         .collect();

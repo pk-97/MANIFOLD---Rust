@@ -599,10 +599,12 @@ impl Primitive for GltfMeshSource {
                         });
                     }
                 }
+                // A file that cannot be read is a node error: the stage
+                // names the layer and the part once, the log the cause.
                 Ok(Err(e)) => {
-                    log::error!("node.gltf_mesh_source: {e}");
                     if key == self.last_key {
                         self.load_error = Some(e.clone());
+                        ctx.error(e.clone());
                     }
                     if source_trace_enabled() {
                         log::warn!("[RT-SOURCE] load-failed frame={} path={} error={e}", ctx.time.frame_count, self.last_key.0);
@@ -613,9 +615,9 @@ impl Primitive for GltfMeshSource {
                     self.pending_load = Some(rx);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::error!("node.gltf_mesh_source: background load channel disconnected");
                     if key == self.last_key {
                         self.load_error = Some("Background loader disconnected".to_owned());
+                        ctx.error("background load channel disconnected");
                     }
                     if source_trace_enabled() {
                         log::warn!("[RT-SOURCE] load-failed frame={} path={} error=channel-disconnected", ctx.time.frame_count, self.last_key.0);
@@ -941,6 +943,17 @@ mod tests {
         source_slot: Slot,
         params: &ParamValues,
     ) -> bool {
+        run_cpu_only_reporting(primitive, backend, source_slot, params, &mut Vec::new())
+    }
+
+    /// [`run_cpu_only_once`], keeping the node errors the run reported.
+    fn run_cpu_only_reporting(
+        primitive: &mut GltfMeshSource,
+        backend: &mut MockBackend,
+        source_slot: Slot,
+        params: &ParamValues,
+        errors: &mut Vec<String>,
+    ) -> bool {
         let input_bindings: &[(&'static str, Slot)] = &[];
         let output_bindings: &[(&'static str, Slot)] = &[("source", source_slot)];
         let mut scalar_scratch = Vec::new();
@@ -969,7 +982,7 @@ mod tests {
         .with_mesh_source_writes(&mut mesh_source_scratch);
         let pending;
         {
-            let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None);
+            let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None).with_errors(errors);
             primitive.run(&mut ctx);
             pending = ctx.outputs_pending;
         }
@@ -977,6 +990,30 @@ mod tests {
             backend.set_mesh_source(slot, value);
         }
         pending
+    }
+
+    /// A model file that cannot be read reports a node error, which the
+    /// stage turns into one toast naming the layer and the part.
+    #[test]
+    fn an_unreadable_model_file_is_a_node_error() {
+        let path = std::env::temp_dir().join(format!("manifold-missing-{}.glb", manifold_core::short_id()));
+        let params = cpu_params(&path.to_string_lossy(), -1.0);
+        let mut backend = MockBackend::new();
+        let source_slot = backend.acquire(ResourceId(0), PortType::MeshSource, None, (0, 0));
+        let mut primitive = GltfMeshSource::new();
+        let mut errors = Vec::new();
+        for _ in 0..200 {
+            assert!(run_cpu_only_reporting(&mut primitive, &mut backend, source_slot, &params, &mut errors), "nothing draws");
+            if !errors.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(errors.len(), 1, "the failed read is reported once: {errors:?}");
+        assert!(primitive.load_error.is_some());
+        errors.clear();
+        run_cpu_only_reporting(&mut primitive, &mut backend, source_slot, &params, &mut errors);
+        assert!(errors.is_empty(), "and not again every frame");
     }
 
     #[test]

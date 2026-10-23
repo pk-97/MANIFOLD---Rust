@@ -51,6 +51,7 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
     let owner = item.id.as_str();
     let node_type = manifold_core::scene_schema::material_node_type(fields);
     let surface = b.add(owner, MATERIAL_FAMILY.node, node_type);
+    no_fill(b, surface, node_type);
     let feeds = layer_port(fields);
     // A model material's surface starts at the file's values, so its card
     // rows do too.
@@ -87,9 +88,6 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
             continue;
         }
         let mut facts = SURFACE_FACTS;
-        if MATERIAL_FAMILY.hidden.iter().any(|(param, _)| *param == name) {
-            facts.role = SurfaceRole::Hidden;
-        }
         // A map's placement and sampling rows hide while it has no texture.
         // They stay declared, so their values, modulators and mappings
         // survive the texture leaving and coming back.
@@ -147,9 +145,21 @@ pub(crate) fn surface_for(b: &mut Builder<'_>, item: &ItemId) -> (u32, Vec<(u32,
     }
     let plain = match b.id(SCENE, "default_material") {
         Some(id) => id,
-        None => b.add(SCENE, "default_material", MATERIAL_FAMILY.type_id),
+        None => {
+            let plain = b.add(SCENE, "default_material", MATERIAL_FAMILY.type_id);
+            no_fill(b, plain, MATERIAL_FAMILY.type_id);
+            plain
+        }
     };
     (plain, Vec::new())
+}
+
+/// No flat fill under the lighting (`MATERIAL_FAMILY.internal`), on the
+/// material types that have one.
+fn no_fill(b: &mut Builder<'_>, surface: u32, node_type: &str) {
+    if b.param_meta(node_type, "ambient").is_some() {
+        b.set_number(surface, "ambient", 0.0);
+    }
 }
 
 #[cfg(test)]
@@ -187,5 +197,31 @@ mod tests {
         let ItemFields::Material(fields) = &doc.find(&ItemId::new(BASE_CUBE_MATERIAL)).unwrap().fields else { unreachable!() };
         assert_eq!(super::fed_map_ports(&doc, fields), vec!["base_color_map"]);
         std::fs::remove_file(path).unwrap();
+    }
+
+    /// Built-in and plain materials carry no flat fill, as imports never
+    /// did, and no card row brings one back.
+    #[test]
+    fn scene_materials_draw_with_no_flat_fill() {
+        let mut doc = SceneDoc::base();
+        // An object with no material draws with the scene's plain material.
+        doc.items.push(manifold_core::scene_doc::Item::new(
+            ItemId::new("bare"),
+            "Bare",
+            ItemFields::Object(manifold_core::scene_doc::ObjectFields::default()),
+        ));
+        let def = crate::node_graph::scene_compile::compile(&doc).unwrap();
+        let surfaces: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.pbr_material").collect();
+        assert!(surfaces.len() >= 2, "the cube's material and the plain one");
+        for surface in surfaces {
+            assert_eq!(
+                surface.params.get("ambient"),
+                Some(&manifold_core::effect_graph_def::SerializedParamValue::Float { value: 0.0 }),
+                "{}",
+                surface.node_id
+            );
+        }
+        let rows = &def.preset_metadata.as_ref().unwrap().params;
+        assert!(!rows.iter().any(|p| p.id.ends_with(".ambient")), "no row sets a fill");
     }
 }

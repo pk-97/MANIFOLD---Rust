@@ -900,6 +900,60 @@ fn a_swarm_nests_a_copied_group_at_its_live_count() {
     );
 }
 
+/// Two swarms draw one item, each with its own particles: the item draws
+/// once per swarm, and a group with Copies on nests its one layout under
+/// each swarm's particles.
+#[test]
+fn two_swarms_draw_one_item() {
+    use manifold_core::scene_doc::DrawAs;
+    let swarm = |id: &str, draw: &str| {
+        let mut fields = ItemFields::default_for(ItemKind::Swarm);
+        if let ItemFields::Swarm(s) = &mut fields {
+            s.draw_as = DrawAs::Item(ItemId::new(draw));
+        }
+        Item::new(ItemId::new(id), id, fields)
+    };
+    let source = |def: &EffectGraphDef, to: u32, port: &str| {
+        let from = def.wires.iter().find(|w| w.to_node == to && w.to_port == port)?.from_node;
+        def.nodes.iter().find(|n| n.id == from).map(|n| n.node_id.as_str().to_owned())
+    };
+
+    let mut doc = SceneDoc::base();
+    let end = doc.items.len();
+    doc.insert(None, end, swarm("bees", "cube")).unwrap();
+    doc.insert(None, end + 1, swarm("wasps", "cube")).unwrap();
+    let def = flat(scene_layer(doc).gen_params().unwrap());
+    let mut drawn_by: Vec<String> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.scene_object" && n.node_id.as_str().contains("cube:object"))
+        .map(|n| source(&def, n.id, "instances").expect("drawn at particles"))
+        .collect();
+    drawn_by.sort();
+    assert_eq!(drawn_by.len(), 2, "{drawn_by:?}");
+    assert!(drawn_by[0].ends_with("bees:copies") && drawn_by[1].ends_with("wasps:copies"), "{drawn_by:?}");
+
+    let mut doc = SceneDoc::base();
+    let mut group = ItemFields::default_for(ItemKind::Group);
+    if let ItemFields::Group(fields) = &mut group {
+        fields.copies = true;
+    }
+    let end = doc.items.len();
+    doc.insert(None, end, Item::new(ItemId::new("rack"), "Rack", group)).unwrap();
+    doc.reparent(&ItemId::new("cube"), Some(&ItemId::new("rack")), 0).unwrap();
+    doc.insert(None, end + 1, swarm("bees", "rack")).unwrap();
+    doc.insert(None, end + 2, swarm("wasps", "rack")).unwrap();
+    let def = flat(scene_layer(doc).gen_params().unwrap());
+    let nests: Vec<&EffectGraphNode> = def.nodes.iter().filter(|n| n.type_id == "node.nest_copies").collect();
+    assert_eq!(nests.len(), 2);
+    let layouts: Vec<Option<String>> = nests.iter().map(|nest| source(&def, nest.id, "inner")).collect();
+    assert!(layouts[0].is_some() && layouts[0] == layouts[1], "both nest the rack's one layout: {layouts:?}");
+    let objects = def.nodes.iter().filter(|n| n.type_id == "node.scene_object" && n.node_id.as_str().contains("cube:object"));
+    let mut drawn_by: Vec<String> = objects.map(|n| source(&def, n.id, "instances").expect("drawn at particles")).collect();
+    drawn_by.sort();
+    assert!(drawn_by.len() == 2 && drawn_by[0].ends_with("bees:nest") && drawn_by[1].ends_with("wasps:nest"), "{drawn_by:?}");
+}
+
 /// Shatter breaks a built-in shape, not only an imported mesh: the load
 /// pass cuts each piece from the shape the body collided with
 /// (node.mesh_fragment), draws it and gives its body the same piece.

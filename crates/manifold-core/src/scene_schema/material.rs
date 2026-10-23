@@ -28,11 +28,8 @@ pub struct MaterialFamily {
     /// Params the compiler sets from the features field.
     pub automatic: &'static [&'static str],
     pub automatic_reason: &'static str,
-    /// Params left at the node's default, never on the card, each with why.
+    /// Params never on the card, each with why; the compiler sets them.
     pub internal: &'static [(&'static str, &'static str)],
-    /// Params kept off the card that the looks, the water and imports still
-    /// set, each with why.
-    pub hidden: &'static [(&'static str, &'static str)],
 }
 
 pub const MATERIAL_FAMILY: MaterialFamily = MaterialFamily {
@@ -41,8 +38,10 @@ pub const MATERIAL_FAMILY: MaterialFamily = MaterialFamily {
     section: ControlGroup::Material,
     automatic: crate::material_inspector::MATERIAL_FEATURE_MODE_PARAMS,
     automatic_reason: "the Material's features field",
-    internal: &[("baked_look", "Type Unlit draws a material without lighting")],
-    hidden: &[("ambient", "a flat fill under the lighting; the Environment light lifts the dark side")],
+    internal: &[
+        ("baked_look", "Type Unlit draws a material without lighting"),
+        ("ambient", "a flat fill under the lighting; world lighting alone fills the shadows, so every scene material has none"),
+    ],
 };
 
 fn layer(fields: &ItemFields) -> bool {
