@@ -1,21 +1,22 @@
 //! The Scene tab's clipboard (SCENE_DOCUMENT_DESIGN.md section 7.2): Cmd+C
 //! captures the selected items with everything under them, the Materials
-//! they draw with and every param value, so Cmd+V pastes a working copy into
-//! the same scene or another scene layer, as Blender copies objects between
-//! files. A paste is Add with a captured source, one undo step.
+//! they draw with and every row with its value, LFOs, envelopes, automation
+//! and mappings, so Cmd+V pastes a working copy into the same scene or
+//! another scene layer, as Blender copies objects between files. A paste is
+//! Add with a captured source, one undo step.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use manifold_core::LayerId;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, SceneDoc, param_id, split_param_id};
+use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, SceneDoc};
 use manifold_editing::command::{Command, CompositeCommand};
-use manifold_editing::commands::scene_doc::AddSceneItemCommand;
+use manifold_editing::commands::scene_doc::{AddSceneItemCommand, ParamSlice};
 
 use crate::scene_edit::SceneEdit;
 
 /// What Cmd+C captured.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct SceneItemClipboard {
     /// The layer the items were copied from: only there do their ids name
     /// the same items.
@@ -27,9 +28,8 @@ pub(crate) struct SceneItemClipboard {
     /// gone, so the copy shares it, as Duplicate does; a paste into another
     /// layer always brings it, under a fresh id.
     materials: Vec<Item>,
-    /// Every param of the copied items and those Materials:
-    /// `(item, property, value, base)`.
-    values: Vec<(ItemId, String, f32, f32)>,
+    /// Every row of the copied items and those Materials, with its modulators.
+    rows: ParamSlice,
 }
 
 /// Capture `ids` (and everything under them) from `layer`'s scene. An item
@@ -78,16 +78,8 @@ pub(crate) fn copy(project: &Project, layer: &LayerId, ids: &[ItemId]) -> Option
         copied.insert(material.id.clone());
     }
     let instance = project.timeline.find_layer_by_id(layer.as_str())?.1.gen_params()?;
-    let values = instance
-        .params
-        .iter()
-        .filter_map(|p| {
-            let (item, property) = split_param_id(p.id())?;
-            let item = ItemId::new(item);
-            copied.contains(&item).then(|| (item, property.to_owned(), p.value, p.base))
-        })
-        .collect();
-    Some(SceneItemClipboard { source: layer.clone(), items, materials, values })
+    let rows = ParamSlice::of_items(instance, |item| copied.contains(item));
+    Some(SceneItemClipboard { source: layer.clone(), items, materials, rows })
 }
 
 /// Paste `clipboard` at the top of `layer`'s scene with fresh ids: the
@@ -107,11 +99,6 @@ pub(crate) fn paste(project: &Project, layer: &LayerId, clipboard: &SceneItemCli
     for root in clipboard.items.iter().chain(materials.iter().copied()) {
         fresh_ids(root, &mut map);
     }
-    let values: Vec<(String, f32, f32)> = clipboard
-        .values
-        .iter()
-        .filter_map(|(item, property, value, base)| Some((param_id(map.get(item)?, property), *value, *base)))
-        .collect();
     let mut pasted = SceneDoc { items: materials.into_iter().chain(&clipboard.items).map(|item| item.remapped(&map)).collect(), ..SceneDoc::default() };
     let fresh: BTreeSet<&ItemId> = map.values().collect();
     pasted.retain_references(|id| fresh.contains(id) || (home && doc.find(id).is_some()));
@@ -123,8 +110,8 @@ pub(crate) fn paste(project: &Project, layer: &LayerId, clipboard: &SceneItemCli
         .enumerate()
         .map(|(k, item)| {
             let add = AddSceneItemCommand::with_subtree(layer.clone(), None, doc.items.len() + k, item);
-            // Every pasted item is in by the last add, so it writes the values.
-            Box::new(if k == last { add.with_values(values.clone()) } else { add }) as Box<dyn Command>
+            // Every pasted item is in by the last add, so it puts the rows on.
+            Box::new(if k == last { add.with_rows(clipboard.rows.clone(), map.clone()) } else { add }) as Box<dyn Command>
         })
         .collect();
     if commands.is_empty() {
@@ -173,7 +160,7 @@ fn bind(fields: &mut ItemFields, material: ItemId) {
 mod tests {
     use super::*;
     use manifold_core::PresetTypeId;
-    use manifold_core::scene_doc::{BASE_CUBE, BASE_CUBE_MATERIAL, CameraFields, CameraRig};
+    use manifold_core::scene_doc::{BASE_CUBE, BASE_CUBE_MATERIAL, CameraFields, CameraRig, param_id, split_param_id};
     use manifold_core::types::LayerType;
     use manifold_editing::undo::UndoRedoManager;
 
@@ -251,5 +238,78 @@ mod tests {
         let target = target_of(&project, &pasted).expect("the camera keeps a target");
         assert_ne!(target.as_str(), BASE_CUBE, "the camera aims at the destination's own cube");
         assert!(project.scene_of(&b).unwrap().find(&target).is_some());
+    }
+
+    /// Gives `row` an LFO, an automation lane and an Ableton mapping.
+    fn modulate(project: &mut Project, layer: &LayerId, row: &str) {
+        use manifold_core::ableton_mapping::{AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping};
+        use manifold_core::effects::{AutomationLane, AutomationPoint, ParameterDriver, SegmentShape};
+        use manifold_core::types::{BeatDivision, DriverWaveform};
+        let fx = instance(project, layer);
+        fx.drivers = Some(vec![ParameterDriver::new(row.to_owned(), BeatDivision::Quarter, DriverWaveform::Sine)]);
+        let point = AutomationPoint { beat: manifold_core::Beats(4.0), value: 0.25, shape: SegmentShape::Linear };
+        fx.automation_lanes = Some(vec![AutomationLane { param_id: row.to_owned().into(), enabled: true, points: vec![point] }]);
+        let address = AbletonMacroAddress {
+            track_id: 1,
+            device_id: 2,
+            param_id: 3,
+            device_identity: AbletonDeviceIdentity { device_class_name: "InstrumentGroupDevice".into() },
+            track_name: "Bass".into(),
+            device_name: "Rack".into(),
+            macro_name: "Filter".into(),
+        };
+        fx.ableton_mappings = Some(vec![AbletonParamMapping {
+            param_id: row.to_owned().into(),
+            address,
+            range_min: 0.0,
+            range_max: 1.0,
+            inverted: false,
+            legacy_param_index: None,
+            last_value: 0.0,
+            status: AbletonMappingStatus::Active,
+        }]);
+    }
+
+    /// Which rows carry an LFO, an automation lane and an Ableton mapping.
+    fn modulated_rows(project: &mut Project, layer: &LayerId) -> [Vec<String>; 3] {
+        let fx = instance(project, layer);
+        let ids = |ids: Vec<&str>| ids.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        [
+            ids(fx.drivers.iter().flatten().map(|d| &*d.param_id).collect()),
+            ids(fx.automation_lanes.iter().flatten().map(|l| &*l.param_id).collect()),
+            ids(fx.ableton_mappings.iter().flatten().map(|m| &*m.param_id).collect()),
+        ]
+    }
+
+    /// A pasted cube carries everything on its rows, in its own layer and in
+    /// another: its own LFO, automation lane and Ableton mapping, while the
+    /// original keeps its own. One undo removes the paste and everything on it.
+    #[test]
+    fn a_paste_carries_its_rows_modulators() {
+        let (mut project, a, b) = two_scenes();
+        let row = instance(&mut project, &a)
+            .params
+            .iter()
+            .map(|p| p.id().to_owned())
+            .find(|id| split_param_id(id).is_some_and(|(item, _)| item == BASE_CUBE))
+            .expect("the cube has a row");
+        modulate(&mut project, &a, &row);
+        let (_, property) = split_param_id(&row).unwrap();
+        let clipboard = copy(&project, &a, &[ItemId::new(BASE_CUBE)]).expect("the cube copies");
+        for layer in [&a, &b] {
+            let before = modulated_rows(&mut project, layer);
+            let edit = paste(&project, layer, &clipboard).unwrap();
+            let pasted = param_id(&edit.select.clone().expect("the paste selects its cube"), property);
+            let mut undo = UndoRedoManager::new();
+            assert!(undo.execute(edit.command, &mut project), "the paste applies");
+            let kinds = ["LFO", "automation lane", "Ableton mapping"];
+            for ((kind, mut expected), rows) in kinds.into_iter().zip(before.clone()).zip(modulated_rows(&mut project, layer)) {
+                expected.push(pasted.clone());
+                assert_eq!(rows, expected, "the paste has its own {kind} and the original keeps its");
+            }
+            assert!(undo.undo(&mut project));
+            assert_eq!(modulated_rows(&mut project, layer), before, "one undo removes the paste cleanly");
+        }
+        assert_eq!(modulated_rows(&mut project, &a), [vec![row.clone()], vec![row.clone()], vec![row]], "the source is untouched");
     }
 }

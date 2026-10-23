@@ -27,7 +27,9 @@ mod tests;
 use manifold_core::effects::PresetInstance;
 use manifold_core::params::Param;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::{ItemFields, ItemId, SceneDoc, SceneEditError, split_param_id};
+use std::collections::BTreeMap;
+
+use manifold_core::scene_doc::{ItemFields, ItemId, SceneDoc, SceneEditError, param_id, split_param_id};
 use manifold_core::LayerId;
 
 use crate::commands::graph::prune_instance_params;
@@ -51,9 +53,11 @@ impl Before {
     }
 }
 
-/// Some params of an instance and every modulator aimed at them.
-#[derive(Debug, Default)]
-struct ParamSlice {
+/// Some params of an instance and every modulator aimed at them: LFOs,
+/// envelopes, Ableton mappings, audio mods and automation lanes. Undo puts a
+/// slice back; Duplicate and paste carry one onto the copies' rows.
+#[derive(Clone, Debug, Default)]
+pub struct ParamSlice {
     params: Vec<Param>,
     drivers: Vec<manifold_core::effects::ParameterDriver>,
     envelopes: Vec<manifold_core::effects::ParamEnvelope>,
@@ -100,6 +104,65 @@ impl ParamSlice {
         extended(&mut instance.audio_mods, self.audio_mods);
         extended(&mut instance.automation_lanes, self.automation_lanes);
     }
+
+    /// The rows of the items `keep` picks, with their modulators.
+    pub fn of_items(instance: &PresetInstance, keep: impl Fn(&str) -> bool) -> Self {
+        let ids: Vec<String> = instance
+            .params
+            .iter()
+            .map(|p| p.id())
+            .filter(|id| split_param_id(id).is_some_and(|(item, _)| keep(item)))
+            .map(str::to_owned)
+            .collect();
+        Self::capture(instance, &ids)
+    }
+
+    /// Put these rows onto the copies `map` names, as Ableton and Blender
+    /// copy everything on a duplicate: each copy row takes its source's value
+    /// and base, and a modulator of its own for each one on the source. The
+    /// source rows keep theirs. A row the copy lacks stays behind.
+    pub(crate) fn paste_onto(&self, instance: &mut PresetInstance, map: &BTreeMap<ItemId, ItemId>) {
+        let to = |id: &str| -> Option<String> {
+            let (item, property) = split_param_id(id)?;
+            let copy = param_id(map.get(item)?, property);
+            instance.params.contains(&copy).then_some(copy)
+        };
+        let values: Vec<(String, f32, f32)> =
+            self.params.iter().filter_map(|p| Some((to(p.id())?, p.value, p.base))).collect();
+        let drivers = repointed(&self.drivers, &to, |d| &mut d.param_id);
+        let envelopes = repointed(&self.envelopes, &to, |e| &mut e.param_id);
+        let ableton_mappings = repointed(&self.ableton_mappings, &to, |m| &mut m.param_id);
+        let audio_mods = repointed(&self.audio_mods, &to, |a| &mut a.param_id);
+        let automation_lanes = repointed(&self.automation_lanes, &to, |l| &mut l.param_id);
+        for (id, value, base) in values {
+            if let Some(p) = instance.params.get_mut(&id) {
+                p.value = value;
+                p.base = base;
+            }
+        }
+        extended(&mut instance.drivers, drivers);
+        extended(&mut instance.envelopes, envelopes);
+        extended(&mut instance.ableton_mappings, ableton_mappings);
+        extended(&mut instance.audio_mods, audio_mods);
+        extended(&mut instance.automation_lanes, automation_lanes);
+    }
+}
+
+/// Clones of `values` aimed at the rows `to` names; one aimed elsewhere drops.
+fn repointed<T: Clone>(
+    values: &[T],
+    to: &impl Fn(&str) -> Option<String>,
+    target: impl Fn(&mut T) -> &mut manifold_core::effects::ParamId,
+) -> Vec<T> {
+    values
+        .iter()
+        .filter_map(|value| {
+            let mut value = value.clone();
+            let id = to(target(&mut value))?;
+            *target(&mut value) = id.into();
+            Some(value)
+        })
+        .collect()
 }
 
 /// The scene layer's generator instance.
