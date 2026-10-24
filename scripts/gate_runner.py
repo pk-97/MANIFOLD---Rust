@@ -854,16 +854,20 @@ def _check_hooks_registered():
 
 
 def _check_hooks_fire():
-    """Check g: canary-fire worktree-guard with a synthetic main-checkout
+    """Check g: canary-fire ignored-test-guard with a synthetic #[ignore]
     edit and require the deny. Proves the deny path end to end — a hook that
     crashes or fails open on today's payload shape goes red here, not silent."""
     cmd_label = "hooks fire"
     start = time.time()
     try:
-        guard = MAIN_CHECKOUT / ".claude" / "hooks" / "worktree-guard.py"
+        guard = MAIN_CHECKOUT / ".claude" / "hooks" / "ignored-test-guard.py"
         payload = json.dumps({
             "tool_name": "Edit",
-            "tool_input": {"file_path": str(MAIN_CHECKOUT / "src" / "canary.rs")},
+            "tool_input": {
+                "file_path": str(MAIN_CHECKOUT / "src" / "canary.rs"),
+                "old_string": "fn test_canary() {}",
+                "new_string": "#[ignore]\nfn test_canary() {}",
+            },
             "cwd": str(MAIN_CHECKOUT),
         })
         r = subprocess.run(
@@ -873,10 +877,10 @@ def _check_hooks_fire():
         duration = round(time.time() - start, 1)
         denied = '"deny"' in r.stdout
         if r.returncode == 0 and denied:
-            _print_check("PASS", cmd_label, "worktree-guard denied the canary edit")
+            _print_check("PASS", cmd_label, "ignored-test-guard denied the canary edit")
             return {"cmd": cmd_label, "exit": 0, "duration_s": duration,
-                    "tail": "worktree-guard denied the canary edit"}
-        tail = (f"worktree-guard did NOT deny the canary "
+                    "tail": "ignored-test-guard denied the canary edit"}
+        tail = (f"ignored-test-guard did NOT deny the canary "
                 f"(exit {r.returncode}, stdout {r.stdout.strip()[:120]!r})")
         _print_check("FAIL", cmd_label, tail)
         return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": tail}

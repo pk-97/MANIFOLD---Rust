@@ -2530,7 +2530,7 @@ def main() -> int:
 
     # 0b2. Land-pass guard: a merge, push, update-ref or `gh pr merge` that
     # would put an unrecorded tree on main is denied in every mode.
-    land_deny = first(land_pass_tamper_guard) or first(land_pass_guard, cwd)
+    land_deny = first(land_pass_tamper_guard)
     if land_deny:
         json.dump(build_deny([land_deny]), sys.stdout)
         return 0

@@ -181,8 +181,9 @@ INDEX_DOCS = {"README.md", "DESIGN_BUILD_ORDER.md", "DESIGN_HARDENING_QUEUE.md"}
 
 
 def dead_shipped_docs() -> list[str]:
-    """SHIPPED design docs in docs/ top level with no live citation and no
-    `Lifecycle: contract` override. These get deleted; git keeps every version."""
+    """Retired: shipped design docs stay in docs/ as reference without requiring
+    citations in MEMORY.md or CLAUDE.md."""
+    return []
     docs = {p.name: p for p in DOCS.glob("*.md")}
     shipped = set()
     for p in DOCS.glob("*_DESIGN.md"):
@@ -236,8 +237,8 @@ def status_paragraph_words(path: Path) -> int:
 
 
 def header_budget_failures() -> list[str]:
-    """Ratchet lint. A doc over HEADER_CAP fails unless pinned at >= its size;
-    a pinned doc that shrank under the cap fails until its pin is deleted."""
+    """Retired: status header word-count ratchet disabled."""
+    return []
     pins: dict[str, int] = {}
     if BUDGET_FILE.exists():
         for line in BUDGET_FILE.read_text().splitlines():

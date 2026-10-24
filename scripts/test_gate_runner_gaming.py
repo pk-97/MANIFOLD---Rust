@@ -179,7 +179,7 @@ entry = gate_runner._check_hooks_registered()
 check("hooks registered in settings.json", entry["exit"] == 0, entry["tail"])
 
 entry = gate_runner._check_hooks_fire()
-check("worktree-guard denies the canary", entry["exit"] == 0, entry["tail"])
+check("ignored-test-guard denies the canary", entry["exit"] == 0, entry["tail"])
 
 # --- phase-ordering: _check_predecessors against the trail ---
 
