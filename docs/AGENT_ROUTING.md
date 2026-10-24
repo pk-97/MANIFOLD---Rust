@@ -4,7 +4,7 @@ Authoritative guide for splitting work between the lead session and worker subag
 
 ## Core Principles
 
-1. **Work in the warm tree by default:** Edit directly in the main checkout so incremental `cargo nextest` and `cargo build --bin manifold` runs complete in seconds against the warm `target/` directory. Reserve `scripts/agent-worktree.py` slots for multi-branch parallel waves.
+1. **Work in the main checkout (no worktrees unless asked):** Edit directly in the main checkout so incremental `cargo nextest` and `cargo build --bin manifold` runs complete in seconds against the single warm `target/` directory. Never acquire a git worktree unless Peter explicitly asks for one; parallel subagents share the main checkout on disjoint file sets.
 2. **Don't spawn subagents for small work:** Subagent spawns carry context startup overhead and lose conversational nuance. If a fix is under ~100 lines across 1–3 files, or requires a 30-second `rg` + `Read` lookup, the lead does it directly.
 3. **Use workers for mechanical bulk and parallel tasks:** Once the lead has diagnosed the exact `file:line` seam and decided the fix shape, delegate mechanical multi-file edits, boilerplate wiring, and scoped test runs to cheaper workers (`sonnet` in Claude Code; free/flash models in OpenCode). When running workers in parallel in the warm tree, assign strictly disjoint file sets.
 4. **Verify substance, not just exit codes:** The lead reviews `git diff` and verifies that tests check real state and behavior (never placeholder tests or identity-only defaults) and that the five engineering sanity checks in `CLAUDE.md` hold.
