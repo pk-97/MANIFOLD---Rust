@@ -28,8 +28,6 @@
       "Bash(cargo test)",
       "Bash(cargo test *)",
       "Bash(scripts/gpu_queue.py -- cargo test *)",
-      "Bash(scripts/gpu_queue.py -- scripts/gpu_proofs_gate.py *)",
-      "Bash(scripts/gpu_queue.py -- scripts/landing_gate.py *)",
       "Bash(cargo run -p manifold-nodes --bin check-presets)",
       "Bash(cargo run -p manifold-nodes --bin check-presets *)",
       "Bash(unzip -p *)",
