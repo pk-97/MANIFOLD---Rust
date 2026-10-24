@@ -202,6 +202,9 @@ pub struct Executor {
     /// dispatches for pruned branches. Cleared (`.fill(false)`) before
     /// each rebuild; capacity grows on demand.
     live_steps: Vec<bool>,
+    /// Per-frame liveness bitset over resources, sized to
+    /// `plan.resource_count()`. Populated by [`compute_live_steps`].
+    live_resources: Vec<bool>,
     /// Per-frame scratch for `selected_input_branch`'s `wired_inputs`
     /// argument. Reused across nodes; cleared before each call.
     wired_scratch: Vec<&'static str>,
@@ -599,6 +602,7 @@ impl Executor {
             node_errors: Default::default(),
             initialized_persistent: ahash::AHashSet::default(),
             live_steps: Vec::new(),
+            live_resources: Vec::new(),
             wired_scratch: Vec::new(),
             preview_target: None,
             scene_viewport: None,
@@ -778,6 +782,11 @@ impl Executor {
     /// Whether any array is held this frame.
     pub(super) fn dumps_arrays(&self) -> bool {
         self.dump_all || self.dump_array_set.is_some()
+    }
+
+    /// Whether resources are being dumped this frame (textures recorded).
+    fn dumps_resources(&self) -> bool {
+        self.dump_all || self.dump_set.is_some()
     }
 
     fn dumps_array_of(&self, node: NodeInstanceId) -> bool {
@@ -1199,12 +1208,15 @@ impl Executor {
         let steps = plan.steps();
         self.live_steps.clear();
         self.live_steps.resize(steps.len(), false);
+        self.live_resources.clear();
+        self.live_resources.resize(plan.resource_count(), false);
 
         // Profiling override: run every step, skipping liveness/mux pruning.
         // A plan prefix has no FinalOutput to seed liveness, so without this it
         // would prune to whatever the prefix's stateful roots happen to reach.
         if self.profile_force_all_live {
             self.live_steps.fill(true);
+            self.live_resources.fill(true);
             return;
         }
 
@@ -1221,6 +1233,12 @@ impl Executor {
         for (idx, step) in steps.iter().enumerate() {
             for &(_, res_id) in &step.outputs {
                 producer.insert(res_id, idx);
+            }
+        }
+
+        for &res_id in plan.persistent_resources() {
+            if (res_id.0 as usize) < self.live_resources.len() {
+                self.live_resources[res_id.0 as usize] = true;
             }
         }
 
@@ -1286,6 +1304,30 @@ impl Executor {
                 inst.node.inputs().iter().find(|p| p.name == chosen).map(|p| p.ty)
             });
 
+            // Prune disabled skip_passthrough inputs: when a node aliases
+            // in_port -> out_port, it never reads its other input ports.
+            let passthrough =
+                inst.node.skip_passthrough(&inst.params, &self.wired_scratch);
+            let passthrough_in = passthrough.and_then(|(in_port, out_port)| {
+                let r_in = step
+                    .inputs
+                    .iter()
+                    .find(|&&(n, _)| n == in_port)
+                    .map(|&(_, r)| r)?;
+                let r_out = step
+                    .outputs
+                    .iter()
+                    .find(|&&(n, _)| n == out_port)
+                    .map(|&(_, r)| r)?;
+                if plan.resource_dims(r_in) == plan.resource_dims(r_out)
+                    && plan.resource_format(r_in) == plan.resource_format(r_out)
+                {
+                    Some(in_port)
+                } else {
+                    None
+                }
+            });
+
             for &(port_name, res_id) in &step.inputs {
                 if let Some(chosen) = selected
                     && port_name != chosen
@@ -1299,6 +1341,12 @@ impl Executor {
                     })
                 {
                     continue;
+                }
+                if passthrough_in.is_some_and(|pt_in| port_name != pt_in) {
+                    continue;
+                }
+                if (res_id.0 as usize) < self.live_resources.len() {
+                    self.live_resources[res_id.0 as usize] = true;
                 }
                 if let Some(&prod_step) = producer.get(&res_id)
                     && !self.live_steps[prod_step]
@@ -1321,6 +1369,7 @@ impl Executor {
         // regress. Detect by checking whether anything got seeded.
         if !self.live_steps.iter().any(|&b| b) {
             self.live_steps.fill(true);
+            self.live_resources.fill(true);
         }
     }
 
@@ -2016,7 +2065,38 @@ impl Executor {
 
             // 1. Acquire output slots.
             self.output_scratch.clear();
+            let is_render_scene = graph
+                .get_node(step.node)
+                .map(|n| n.node.type_id().as_str() == "node.render_scene")
+                .unwrap_or(false);
+            let temporal_upscale = graph
+                .get_node(step.node)
+                .and_then(|n| n.params.get("temporal_upscale"))
+                .cloned();
             for &(port_name, res_id) in &step.outputs {
+                if is_render_scene
+                    && matches!(port_name, "depth" | "velocity")
+                    && !force_dirty
+                    && !self.dumps_resources()
+                    && !self
+                        .live_resources
+                        .get(res_id.0 as usize)
+                        .copied()
+                        .unwrap_or(true)
+                    && !matches!(
+                        temporal_upscale,
+                        Some(crate::parameters::ParamValue::Bool(true))
+                    )
+                    && resolve_dims(plan, res_id, canvas_dims) == canvas_dims
+                {
+                    let ty = plan
+                        .resource_type(res_id)
+                        .expect("resource type known from compile()");
+                    let fmt = plan.resource_format(res_id);
+                    let dims = resolve_dims(plan, res_id, canvas_dims);
+                    self.backend.release(res_id, ty, fmt, dims);
+                    continue;
+                }
                 let ty = plan
                     .resource_type(res_id)
                     .expect("resource type known from compile()");
@@ -5215,6 +5295,68 @@ mod tests {
 
     }
 
+    struct SkipPassthroughPruneNode {
+        type_id: EffectNodeType,
+        evals: Arc<Mutex<u32>>,
+    }
+    impl EffectNode for SkipPassthroughPruneNode {
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 2] = [
+                NodePort { name: std::borrow::Cow::Borrowed("in"), ty: PortType::Texture2D, kind: PortKind::Input, required: false },
+                NodePort { name: std::borrow::Cow::Borrowed("extra"), ty: PortType::Texture2D, kind: PortKind::Input, required: false },
+            ];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort { name: std::borrow::Cow::Borrowed("out"), ty: PortType::Texture2D, kind: PortKind::Output, required: false }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
+            *self.evals.lock().unwrap() += 1;
+        }
+        fn skip_passthrough(&self, _: &crate::exec::effect_node::ParamValues, _: &[&str]) -> Option<(&'static str, &'static str)> {
+            Some(("in", "out"))
+        }
+    }
+
+    #[test]
+    fn compute_live_steps_prunes_non_in_input_producers_for_skip_passthrough() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let evals = Arc::new(Mutex::new(0u32));
+        let mut g = Graph::new();
+        let src_prod = g.add_node(Box::new(RecordingNode::new(
+            "src_prod",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        let extra_prod = g.add_node(Box::new(RecordingNode::new(
+            "extra_prod",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        let node = g.add_node(Box::new(SkipPassthroughPruneNode {
+            type_id: EffectNodeType::new("test.skip_passthrough_prune"),
+            evals: evals.clone(),
+        }));
+        let fout = g.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
+        g.connect((src_prod, "out"), (node, "in")).unwrap();
+        g.connect((extra_prod, "out"), (node, "extra")).unwrap();
+        g.connect((node, "out"), (fout, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        exec.execute_frame(&mut g, &plan, frame_time());
+        let names: Vec<String> = log.lock().unwrap().iter().map(|r| r.type_name.clone()).collect();
+        assert!(names.contains(&"src_prod".to_string()), "in-producer must run, got {names:?}");
+        assert!(!names.contains(&"extra_prod".to_string()), "non-in producer must be pruned, got {names:?}");
+    }
 }
 
 /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — the alias-path

@@ -232,8 +232,11 @@ impl RenderScene {
             };
             // In Group space the part's place inside one copy is its whole
             // chain: the groups between it and the copied group.
-            let in_copy = object.instances_space == manifold_node_engine::scene::scene_object::InstanceSpace::Group
-                && object.instances.is_some();
+            let in_copy = matches!(
+                object.instances_space,
+                manifold_node_engine::scene::scene_object::InstanceSpace::Group
+                    | manifold_node_engine::scene::scene_object::InstanceSpace::World
+            ) && object.instances.is_some();
             let local_model =
                 if in_copy { t.world_with_rotation(rot_euler) } else { model_matrix(t.pos, rot_euler, t.scale) };
             let parent_model = object.parent_transform.map(|parent| {
@@ -561,6 +564,7 @@ impl RenderScene {
     /// restarting the jitter sequence during a transient empty scene.
     pub(super) fn invalidate_temporal_history(&mut self) {
         self.subsurface_pass.reset();
+        self.selection.reset();
         self.rt_history_ping = 0;
         self.rt_irr_needs_reset = true;
         self.rt_moments_valid = false;

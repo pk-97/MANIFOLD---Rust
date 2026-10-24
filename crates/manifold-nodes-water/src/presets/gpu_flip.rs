@@ -112,6 +112,7 @@ pub(crate) struct WaterScene {
     /// The Dam Break's box as a scene Collider ([`DAM_OBSTACLE`]): a Fixed
     /// body in a Physics World the render scene couples to the water. Only
     /// [`render_def`] draws it, since the coupling is the render scene's.
+    #[allow(dead_code)]
     pub obstacle: bool,
 }
 }

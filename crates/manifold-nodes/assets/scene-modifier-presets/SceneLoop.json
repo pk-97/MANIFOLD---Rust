@@ -13,7 +13,7 @@
         "name": "Pattern",
         "min": 1.0,
         "max": 8.0,
-        "defaultValue": 1.0,
+        "defaultValue": 4.0,
         "wholeNumbers": true
       },
       {
@@ -22,6 +22,28 @@
         "min": 0.0,
         "max": 1.0,
         "defaultValue": 0.0
+      },
+      {
+        "id": "twist",
+        "name": "Twist",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "spiral_radius",
+        "name": "Tunnel Radius",
+        "min": 0.0,
+        "max": 20.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "alternate",
+        "name": "Alternate Flip",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "isToggle": true
       },
       {
         "id": "enabled",
@@ -36,7 +58,7 @@
       {
         "id": "pattern_length",
         "label": "Pattern",
-        "defaultValue": 1.0,
+        "defaultValue": 4.0,
         "target": {
           "kind": "node",
           "nodeId": "scene_array",
@@ -51,6 +73,39 @@
           "kind": "node",
           "nodeId": "scene_array",
           "param": "jitter_amount"
+        }
+      },
+      {
+        "id": "twist",
+        "label": "Twist",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "twist"
+        }
+      },
+      {
+        "id": "spiral_radius",
+        "label": "Tunnel Radius",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "spiral_radius"
+        }
+      },
+      {
+        "id": "alternate",
+        "label": "Alternate Flip",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "alternate"
+        },
+        "convert": {
+          "type": "BoolThreshold"
         }
       },
       {
@@ -165,7 +220,7 @@
             "params": {
               "pattern_length": {
                 "type": "Int",
-                "value": 1
+                "value": 4
               },
               "axis": {
                 "type": "Enum",
@@ -182,6 +237,18 @@
               "jitter_amount": {
                 "type": "Float",
                 "value": 0.0
+              },
+              "twist": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "spiral_radius": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "alternate": {
+                "type": "Bool",
+                "value": false
               }
             }
           },

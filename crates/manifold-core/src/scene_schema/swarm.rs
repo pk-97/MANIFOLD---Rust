@@ -88,7 +88,7 @@ pub static SWARM_ROWS: [PropertyRow; 77] = [
         .default(20_000.0)
         .limit(HardLimit::Between(0.0, MAX_COUNT))
         .tip(MAX_COUNT_REASON),
-    row("size", COPIES, Simulation, perform(CardBand::Scene, 1)).limit(AT_LEAST_ZERO),
+    row("size", COPIES, Simulation, perform(CardBand::Scene, 1)).range(0.002, 0.5).limit(AT_LEAST_ZERO),
     row("air_drag", FORCES, Simulation, perform(CardBand::Scene, 2)).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
     row("visible", DRAW, Look, setup()).toggle().when(draws_solid),
     row("cast_shadows", DRAW, Look, setup()).when(draws_solid),

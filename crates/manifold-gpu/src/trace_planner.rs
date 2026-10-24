@@ -24,11 +24,11 @@ pub const TRACE_BUFFER_CEILING_SECONDS: f64 = 0.1;
 /// between buffers, so one buffer this long stalls the whole Mac; a slow frame
 /// of many short buffers does not. Far above any buffer a show plays at speed
 /// and under the watchdog.
-pub const RUNAWAY_LAYER_FRAME_SECONDS: f64 = 0.25;
+pub const RUNAWAY_LAYER_FRAME_SECONDS: f64 = 1.0;
 
 /// Runaway frames in a row before the layer stops drawing, so one slow frame
 /// (a first upload, a pipeline build) never stops it.
-pub const RUNAWAY_LAYER_FRAMES: u32 = 3;
+pub const RUNAWAY_LAYER_FRAMES: u32 = 5;
 
 /// GPU time each trace tile is sized to. Half a 60 fps frame keeps one buffer
 /// from starving presentation, and leaves room for the cost per pixel to jump

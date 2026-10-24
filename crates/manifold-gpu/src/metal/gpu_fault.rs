@@ -67,7 +67,8 @@ fn is_blacklist_desc(desc: &str) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FaultKind {
     /// The GPU watchdog killed the buffer (kIOGPUCommandBufferCallbackErrorHang,
-    /// or Metal's own Timeout). The device is healthy; resubmitting can work.
+    /// kIOGPUCommandBufferCallbackErrorImpactingInteractivity, or Metal's own
+    /// Timeout). The device is healthy; resubmitting can work.
     Hang,
     /// Bad address. GPU memory can no longer be trusted.
     PageFault,
@@ -115,7 +116,7 @@ impl FaultKind {
 pub(crate) fn classify_fault(code: i64, desc: &str) -> FaultKind {
     if is_blacklist_desc(desc) {
         FaultKind::SubmissionsIgnored
-    } else if desc.contains("ErrorHang") {
+    } else if desc.contains("ErrorHang") || desc.contains("ErrorImpactingInteractivity") {
         FaultKind::Hang
     } else if desc.contains("ErrorPageFault") {
         FaultKind::PageFault
@@ -330,11 +331,14 @@ mod tests {
         let page = "Caused GPU Address Fault Error (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)";
         let victim = "Discarded (victim of GPU error/recovery) (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)";
         let ignored = "Ignored (for causing prior/excessive GPU errors) (00000004:kIOGPUCommandBufferCallbackErrorSubmissionsIgnored)";
+        let interactivity = "Impacting Interactivity (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)";
         // NSError::code is deliberately wrong here: the token decides.
         assert_eq!(classify_fault(1, hang), FaultKind::Hang);
         assert_eq!(classify_fault(1, page), FaultKind::PageFault);
         assert_eq!(classify_fault(1, victim), FaultKind::InnocentVictim);
         assert_eq!(classify_fault(1, ignored), FaultKind::SubmissionsIgnored);
+        assert_eq!(classify_fault(1, interactivity), FaultKind::Hang);
+        assert!(FaultKinds::default().with(classify_fault(1, interactivity)).is_recoverable_hang());
         assert_eq!(classify_fault(8, "Insufficient Memory"), FaultKind::Other);
         assert_eq!(classify_fault(2, "Execution timed out"), FaultKind::Hang);
         assert_eq!(classify_fault(11, "Device removed"), FaultKind::DeviceLost);

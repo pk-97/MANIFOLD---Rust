@@ -128,7 +128,7 @@ pub struct SceneObject {
 /// composed on the CPU, so the renderer sees one parent matrix per draw.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InstanceSpace {
-    /// world = parent · local · instance. Echoes, scatter, scene loop and
+    /// world = parent · local · instance. Echoes, scatter and
     /// swarms: the copies live in the object's own space.
     #[default]
     Object,
@@ -136,12 +136,20 @@ pub enum InstanceSpace {
     /// places the whole group and the object's transform puts the part
     /// inside every copy.
     Group,
+    /// world = instance · parent · local. Scene-wide corridor tiling and
+    /// planar reflection (`Scene Loop`, `Scene Mirror`): each instance places
+    /// the whole assembled world-space object along the world axis.
+    World,
 }
 
 impl InstanceSpace {
-    /// The `instances_space` enum param index (Object 0, Group 1).
+    /// The `instances_space` enum param index (Object 0, Group 1, World 2).
     pub fn from_index(index: u32) -> Self {
-        if index == 1 { Self::Group } else { Self::Object }
+        match index {
+            1 => Self::Group,
+            2 => Self::World,
+            _ => Self::Object,
+        }
     }
 }
 

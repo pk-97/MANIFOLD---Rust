@@ -31,14 +31,21 @@ impl CapturedTriggerPulse {
                 ),
                 *beat,
             ),
-            TriggerSourceStamp::Audio { time, .. } => (
-                *time,
-                TempoMapConverter::seconds_to_beat_immut(
-                    &project.tempo_map,
-                    *time,
-                    project.settings.bpm,
-                ),
-            ),
+            TriggerSourceStamp::Audio { time, .. } => {
+                // Offline audio analysis stamps hops at the FFT window end,
+                // which can sit slightly ahead of the frame transport `accepted_time`.
+                // Clamp to `accepted_time` so a pre-render impulse observation
+                // never advances physics ahead of the frame about to render (BUG-3ncxr).
+                let clamped = (*time).min(self.accepted_time);
+                (
+                    clamped,
+                    TempoMapConverter::seconds_to_beat_immut(
+                        &project.tempo_map,
+                        clamped,
+                        project.settings.bpm,
+                    ),
+                )
+            }
             TriggerSourceStamp::Snapshot => (self.accepted_time, self.accepted_beat),
         }
     }
@@ -481,6 +488,33 @@ mod tests {
         let (time, beat) = queue.as_slice()[0].source_clock(&project);
         assert_eq!(time, Seconds(3.0));
         assert_eq!(beat, Beats(6.0));
+    }
+
+    #[test]
+    fn audio_source_clock_clamps_hop_ahead_of_accepted_frame_time() {
+        let mut project = Project::default();
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        let mut pulse = pulse(1);
+        pulse.source_stamp = TriggerSourceStamp::Audio {
+            stamp: manifold_core::audio_features::AudioHopStamp {
+                epoch: 1,
+                end_sample: 48_000,
+                sample_rate: 48_000,
+                source_time: None,
+                timeline_time: Some(Seconds(1.02)),
+            },
+            time: Seconds(1.02),
+        };
+        let mut queue = TriggerDeliveryQueue::with_capacity(1);
+        queue.reset().unwrap();
+        queue
+            .append_batch(&mut vec![pulse], Seconds(1.0), Beats(2.0))
+            .unwrap();
+        let (time, beat) = queue.as_slice()[0].source_clock(&project);
+        assert_eq!(time, Seconds(1.0));
+        assert_eq!(beat, Beats(2.0));
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub(super) struct HeaderButtons {
     aim_sun: Option<(NodeId, String)>,
     draw_again: Option<NodeId>,
     add_loop_camera: Option<NodeId>,
+    make_active_camera: Option<(NodeId, f32)>,
     /// A Modifier's Type and On: each control and the field row it sets.
     fields: Vec<(NodeId, ParamRow)>,
     /// A Swarm's look link and the item it selects.
@@ -40,6 +41,7 @@ impl HeaderButtons {
         self.aim_sun = None;
         self.draw_again = None;
         self.add_loop_camera = None;
+        self.make_active_camera = None;
         self.fields.clear();
         self.look = None;
     }
@@ -160,6 +162,11 @@ impl ScenePanel {
             self.header_buttons.add_loop_camera = Some(self.action_button(tree, (inner_x, inner_w), cy, item, "Add Loop Camera", "scene_setup.properties.add_loop_camera"));
             cy += ROW_H + ROW_GAP;
         }
+        if let Some(cut) = item.make_active_camera {
+            let id = self.action_button(tree, (inner_x, inner_w), cy, item, "Use as Active Camera", "scene_setup.properties.make_active_camera");
+            self.header_buttons.make_active_camera = Some((id, cut));
+            cy += ROW_H + ROW_GAP;
+        }
         cy
     }
 
@@ -260,6 +267,14 @@ impl ScenePanel {
         }
         if self.header_buttons.add_loop_camera == Some(node_id) {
             return Some(PanelAction::Project(ProjectAction::SceneAddLoopCamera(layer())));
+        }
+        if let Some((button, cut)) = self.header_buttons.make_active_camera
+            && button == node_id
+            && let Some(world) = vm.items.iter().find(|i| i.kind == ItemKind::World)
+        {
+            let target = GraphParamTarget::GeneratorOf(layer());
+            let param = manifold_foundation::ParamId::from(format!("{}.camera", world.id));
+            return Some(PanelAction::Params(ParamsAction::ParamEnumSet(target, param, cut)));
         }
         if let Some((_, file)) = self.header_buttons.aim_sun.as_ref().filter(|(button, _)| *button == node_id) {
             return Some(PanelAction::Project(ProjectAction::SceneSetupAimSunAtHdri(layer(), file.clone())));

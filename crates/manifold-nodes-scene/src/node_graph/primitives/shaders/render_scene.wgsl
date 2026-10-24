@@ -1753,27 +1753,26 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // `resolve_normal` uses otherwise — anisotropy's T and the normal
     // map's T must be the SAME frame or the stretch axis drifts off the
     // mapped surface detail.
-    let tangent_uv = select(in.uv.xy, material_uv(in.uv, 1u), u.texture_flags.x > 0.5);
-    let tbn = tbn_for(N, in.world_pos, tangent_uv, in.world_tangent);
-    let anisotropy = resolve_anisotropy(in.uv);
-    let anisotropy_strength = clamp(anisotropy.x, 0.0, 1.0);
-    let anisotropy_rotation = anisotropy.y;
-    // In-plane rotation of an orthonormal 2-frame stays orthonormal
-    // exactly (no renormalization needed) — spec convention: tangent
-    // rotated toward bitangent by `anisotropyRotation` (+ the texture's
-    // per-texel rotation, folded in by `resolve_anisotropy`).
-    let cos_ar = cos(anisotropy_rotation);
-    let sin_ar = sin(anisotropy_rotation);
-    let tangent_axis = normalize(tbn[0]);
-    let bitangent_axis = normalize(cross(N, tangent_axis))
-        * select(1.0, -1.0, dot(cross(N, tangent_axis), tbn[1]) < 0.0);
-    let aniso_t = tangent_axis * cos_ar + bitangent_axis * sin_ar;
-    let aniso_b = bitangent_axis * cos_ar - tangent_axis * sin_ar;
-    // glTF KHR_materials_anisotropy: alphaT widens toward 1 with the square
-    // of strength while alphaB remains the authored alpha. At zero strength
-    // both widths are exactly alpha, preserving isotropic continuity.
-    let at = mix(a, 1.0, anisotropy_strength * anisotropy_strength);
+    var anisotropy_strength = 0.0;
+    var aniso_t = vec3<f32>(1.0, 0.0, 0.0);
+    var aniso_b = vec3<f32>(0.0, 1.0, 0.0);
+    var at = a;
     let ab = a;
+    if u.anisotropy_dispersion_params.x > 0.0 {
+        let tangent_uv = select(in.uv.xy, material_uv(in.uv, 1u), u.texture_flags.x > 0.5);
+        let tbn = tbn_for(N, in.world_pos, tangent_uv, in.world_tangent);
+        let anisotropy = resolve_anisotropy(in.uv);
+        anisotropy_strength = clamp(anisotropy.x, 0.0, 1.0);
+        let anisotropy_rotation = anisotropy.y;
+        let cos_ar = cos(anisotropy_rotation);
+        let sin_ar = sin(anisotropy_rotation);
+        let tangent_axis = normalize(tbn[0]);
+        let bitangent_axis = normalize(cross(N, tangent_axis))
+            * select(1.0, -1.0, dot(cross(N, tangent_axis), tbn[1]) < 0.0);
+        aniso_t = tangent_axis * cos_ar + bitangent_axis * sin_ar;
+        aniso_b = bitangent_axis * cos_ar - tangent_axis * sin_ar;
+        at = mix(a, 1.0, anisotropy_strength * anisotropy_strength);
+    }
 
     // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat — a
     // second, always-dielectric GGX lobe layered on top of the base BRDF.
@@ -1788,17 +1787,27 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // — unwired falls back to the oriented geometric normal, as required by
     // the Khronos clearcoat normal fallback.
     const CLEARCOAT_F0: f32 = 0.04;
-    let clearcoat_resolved = resolve_clearcoat(in.uv);
-    let clearcoat = clearcoat_resolved.x;
-    let clearcoat_roughness = clearcoat_resolved.y;
-    let Nc = resolve_clearcoat_normal(in.uv, geometric_N, in.world_pos, in.world_tangent);
-    let cc_n_dot_v = max(dot(Nc, V), 0.001);
-    let cc_a = clearcoat_roughness * clearcoat_roughness;
-    let cc_a2 = cc_a * cc_a;
-    let cc_r = clearcoat_roughness + 1.0;
-    let cc_k = (cc_r * cc_r) / 8.0;
-    let cc_g_v = cc_n_dot_v / (cc_n_dot_v * (1.0 - cc_k) + cc_k);
+    var clearcoat = 0.0;
+    var clearcoat_roughness = 0.01;
+    var Nc = geometric_N;
+    var cc_n_dot_v = max(dot(geometric_N, V), 0.001);
+    var cc_a2 = 0.00000001;
+    var cc_k = 0.125;
+    var cc_g_v = 1.0;
+    if u.alpha_params.z > 0.0 {
+        let clearcoat_resolved = resolve_clearcoat(in.uv);
+        clearcoat = clearcoat_resolved.x;
+        clearcoat_roughness = clearcoat_resolved.y;
+        Nc = resolve_clearcoat_normal(in.uv, geometric_N, in.world_pos, in.world_tangent);
+        cc_n_dot_v = max(dot(Nc, V), 0.001);
+        let cc_a = clearcoat_roughness * clearcoat_roughness;
+        cc_a2 = cc_a * cc_a;
+        let cc_r = clearcoat_roughness + 1.0;
+        cc_k = (cc_r * cc_r) / 8.0;
+        cc_g_v = cc_n_dot_v / (cc_n_dot_v * (1.0 - cc_k) + cc_k);
+    }
 
+    let has_sheen = any(sheen_color > vec3<f32>(0.0));
     var direct = vec3<f32>(0.0);
     var direct_coat = vec3<f32>(0.0);
     // E2b: accumulated in PARALLEL with `direct` below using the exact same
@@ -1842,8 +1851,11 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let visibility = 0.5 / max(lambda_v_iso + lambda_l_iso, 0.0000001);
 
         let plain_f = schlick_fresnel(base_f0, base_f90, v_dot_h);
-        let film_f = eval_iridescence(1.0, iridescence.y, v_dot_h, iridescence.z, base_f0);
-        let F = mix(plain_f, film_f, iridescence_factor);
+        var F = plain_f;
+        if iridescence_factor > 0.0 {
+            let film_f = eval_iridescence(1.0, iridescence.y, v_dot_h, iridescence.z, base_f0);
+            F = mix(plain_f, film_f, iridescence_factor);
+        }
         // Map samples and derivative frame construction precede this branch.
         // Only the directional widths differ from the isotropic limit.
         var specular = vec3<f32>(0.0);
@@ -1910,15 +1922,17 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         // E3: Charlie NDF × Ashikhmin visibility, tinted by sheenColor —
         // no Fresnel term (the spec's sheen lobe is grazing-independent),
         // no diffuse term (a fabric/velvet fuzz has none of its own).
-        let D_sheen = D_Charlie(sheen_roughness, n_dot_h);
-        let V_sheen = V_Ashikhmin(n_dot_v, n_dot_l);
-        let specular_sheen = sheen_color * D_sheen * V_sheen;
-        direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis3;
-        // Thin diffuse transmission redirects the diffuse lobe to the
-        // opposite hemisphere; its colour is independent of base colour.
-        let back_l = max(dot(-N, L), 0.0);
-        direct_translucent += translucency.a * kd * translucency.rgb / PI
-            * l_col.rgb * back_l * l_dir.w * vis3;
+        if has_sheen {
+            let D_sheen = D_Charlie(sheen_roughness, n_dot_h);
+            let V_sheen = V_Ashikhmin(n_dot_v, n_dot_l);
+            let specular_sheen = sheen_color * D_sheen * V_sheen;
+            direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis3;
+        }
+        if translucency.a > 0.0 {
+            let back_l = max(dot(-N, L), 0.0);
+            direct_translucent += translucency.a * kd * translucency.rgb / PI
+                * l_col.rgb * back_l * l_dir.w * vis3;
+        }
     }
 
     // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered
@@ -1984,8 +1998,11 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
     let env_brdf = textureSampleLevel(brdf_lut, opaque_scene_color_sampler, vec2<f32>(n_dot_v, roughness), 0.0).rg;
     let view_plain_f = schlick_fresnel(base_f0, base_f90, n_dot_v);
-    let view_film_f = eval_iridescence(1.0, iridescence.y, n_dot_v, iridescence.z, base_f0);
-    let f_view = mix(view_plain_f, view_film_f, iridescence_factor);
+    var f_view = view_plain_f;
+    if iridescence_factor > 0.0 {
+        let view_film_f = eval_iridescence(1.0, iridescence.y, n_dot_v, iridescence.z, base_f0);
+        f_view = mix(view_plain_f, view_film_f, iridescence_factor);
+    }
     let ibl_f0 = schlick_equivalent_f0(f_view, base_f90, n_dot_v);
     var specular_ibl = prefiltered * (ibl_f0 * env_brdf.x + base_f90 * env_brdf.y);
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: anisotropic IBL via the
@@ -2028,20 +2045,27 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // E6: reflection vector and view-angle term now use `Nc` — byte-
     // identical to the pre-E6 `N`-based resample when `Nc == N` (no
     // clearcoatNormalTexture).
-    let r_coat = reflect(-V, Nc);
-    let r_coat_uv = env_lookup_uv(r_coat);
-    let coat_prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_coat_uv, clearcoat_roughness * PREFILTER_MAX_MIP).rgb;
-    let coat_env_brdf = textureSampleLevel(brdf_lut, opaque_scene_color_sampler, vec2<f32>(cc_n_dot_v, clearcoat_roughness), 0.0).rg;
-    let coat_ibl = coat_prefiltered * (CLEARCOAT_F0 * coat_env_brdf.x + coat_env_brdf.y);
+    var coat_ibl = vec3<f32>(0.0);
+    if clearcoat > 0.0 {
+        let r_coat = reflect(-V, Nc);
+        let r_coat_uv = env_lookup_uv(r_coat);
+        let coat_prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_coat_uv, clearcoat_roughness * PREFILTER_MAX_MIP).rgb;
+        let coat_env_brdf = textureSampleLevel(brdf_lut, opaque_scene_color_sampler, vec2<f32>(cc_n_dot_v, clearcoat_roughness), 0.0).rg;
+        coat_ibl = coat_prefiltered * (CLEARCOAT_F0 * coat_env_brdf.x + coat_env_brdf.y);
+    }
 
     // Charlie directional albedo is integrated independently of GGX in
     // LUT.b. Its environment chain uses the same Charlie distribution.
-    let sheen_energy = clamp(textureSampleLevel(brdf_lut, opaque_scene_color_sampler,
-        vec2<f32>(n_dot_v, sheen_roughness), 0.0).b, 0.0, 1.0);
-    let sheen_env = textureSampleLevel(prefiltered_sheen, envmap_sampler,
-        r_uv, sheen_roughness * PREFILTER_MAX_MIP).rgb;
-    let sheen_ibl = sheen_color * sheen_env * sheen_energy;
-    let sheen_base_scale = 1.0 - max(sheen_color.r, max(sheen_color.g, sheen_color.b)) * sheen_energy;
+    var sheen_ibl = vec3<f32>(0.0);
+    var sheen_base_scale = 1.0;
+    if has_sheen {
+        let sheen_energy = clamp(textureSampleLevel(brdf_lut, opaque_scene_color_sampler,
+            vec2<f32>(n_dot_v, sheen_roughness), 0.0).b, 0.0, 1.0);
+        let sheen_env = textureSampleLevel(prefiltered_sheen, envmap_sampler,
+            r_uv, sheen_roughness * PREFILTER_MAX_MIP).rgb;
+        sheen_ibl = sheen_color * sheen_env * sheen_energy;
+        sheen_base_scale = 1.0 - max(sheen_color.r, max(sheen_color.g, sheen_color.b)) * sheen_energy;
+    }
 
     // Use the measured view reflectance for the diffuse energy split. A
     // scalar max-channel reduction keeps coloured Fresnel from creating

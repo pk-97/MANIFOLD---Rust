@@ -1083,6 +1083,7 @@ impl ContentThread {
                 generator.reset_all_generator_state();
             }
         }
+        manifold_gpu::raytrace::request_conservative_trace_tiles();
         //    Each iteration is wrapped in an autoreleasepool to drain Metal's
         //    autoreleased ObjC objects per-frame.
         let mut cancelled = false;

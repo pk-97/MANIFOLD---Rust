@@ -64,6 +64,7 @@ impl LayerNotices {
         self.notices.iter().filter(move |notice| notice.sequence > shown)
     }
 
+    #[allow(dead_code)]
     pub fn is_stopped(&self, layer_id: &LayerId) -> bool {
         self.stopped.contains(layer_id)
     }
@@ -74,7 +75,7 @@ impl LayerNotices {
 fn toast(layer: &str, item: Option<&str>, news: &LayerNews) -> String {
     match (news, item) {
         (LayerNews::Stopped(_), _) => {
-            format!("{layer} was too heavy for the GPU and stopped; Draw Again on its World card restarts it.")
+            format!("{layer} paused after heavy GPU frames; adjust the scene to resume drawing.")
         }
         (_, Some(item)) => format!("{layer}: {item} can't be drawn."),
         _ => format!("{layer} can't be drawn."),
@@ -168,7 +169,7 @@ mod tests {
         assert_eq!(fresh.len(), 1);
         assert_eq!(
             &*fresh[0].message,
-            "Cliff was too heavy for the GPU and stopped; Draw Again on its World card restarts it."
+            "Cliff paused after heavy GPU frames; adjust the scene to resume drawing."
         );
         let restored = stopped.with_news([LayerNews::Restored(a.clone())], words);
         assert!(!restored.is_stopped(&a));

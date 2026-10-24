@@ -1776,6 +1776,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             &self.content_state.automation_latched_params,
             self.content_state.led_preview.as_ref(),
         );
+        self.ws.ui_root.scene_setup_panel.set_preview_navigating(self.ws.preview_navigation.active());
         crate::ui_bridge::sync_audio_dock(&mut self.ws.ui_root, &self.local_project);
 
         // `--resume` boot fast path (GIG_RESILIENCE_DESIGN section 5.2): content

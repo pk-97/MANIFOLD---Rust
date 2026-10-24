@@ -415,17 +415,16 @@ fn model(paths: &[&str]) -> manifold_core::scene_doc::ImportedModel {
     }
 }
 
-/// An import keeps the file's size and place: it is the Add of its items
-/// and the writes that start each at its file node's transform, nothing
-/// that rescales or recentres it, for one mesh 20 m from the origin and for
-/// a Group alike.
+/// Without a measured bounds centre, an import writes no placement offset:
+/// its file nodes still start at their authored transforms and nothing is
+/// rescaled, for one mesh 20 m from the origin and for a Group alike.
 #[test]
-fn an_import_keeps_the_files_size_and_place() {
+fn an_import_without_a_bounds_centre_keeps_the_authored_node_values() {
     let (_, layer) = project();
     for paths in [&["rig/a"][..], &["rig/a", "rig/b"]] {
         let mut far = model(paths);
         far.roots[0].children[0].transform.position = [20.0, 0.0, 0.0];
-        let commands = import_model_commands(&layer, None, 0, id("model"), "a.glb", &far);
+        let commands = import_model_commands(&layer, None, 0, id("model"), "a.glb", &far, None);
         assert_eq!(commands.len(), 2, "{paths:?}: one Add and the part's one moved row");
     }
 }
@@ -440,7 +439,7 @@ fn a_model_file_swap_keeps_edits_on_surviving_parts() {
     let group = id("model");
     let mut undo = UndoRedoManager::new();
     let first = model(&["rig/a", "rig/b"]);
-    let add = import_model_commands(&layer, None, 0, group.clone(), "a.glb", &first);
+    let add = import_model_commands(&layer, None, 0, group.clone(), "a.glb", &first, None);
     assert!(undo.execute(Box::new(CompositeCommand::new(add, "Import".into())), &mut project));
     let a = import_child_id(&group, "rig/a#mesh");
     let b = import_child_id(&group, "rig/b#mesh");

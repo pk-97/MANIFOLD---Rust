@@ -364,7 +364,7 @@ fn radial_and_vortex_forces_draw_their_reach() {
 
     let mut lines = Vec::new();
     inverse.outline_lines([255, 0, 0, 200], &mut lines);
-    assert_eq!(lines.len(), 9 * OUTLINE_SEGMENTS, "three balls of three circles");
+    assert_eq!(lines.len(), 9 * OUTLINE_SEGMENTS + 18, "three balls of three circles plus six 3-line radial arrows");
     let alphas: Vec<u8> = [0, 1, 2].map(|ball| lines[ball * 3 * OUTLINE_SEGMENTS].color[3]).to_vec();
     assert_eq!(alphas, [200, 120, 70], "the shells draw fainter, the tenth faintest");
     let mut picked = 0;
@@ -376,7 +376,7 @@ fn radial_and_vortex_forces_draw_their_reach() {
         &[("center_z", -5.0), ("axis_y", 3.0), ("radius", 2.0), ("falloff", 1.0)],
         [0.0; 3],
     ));
-    assert_eq!(vortex.outline, ShapeOutline::Vortex { center: [0.0, 0.0, -5.0], axis: [0.0, 1.0, 0.0], radius: 2.0 });
+    assert_eq!(vortex.outline, ShapeOutline::Vortex { center: [0.0, 0.0, -5.0], axis: [0.0, 1.0, 0.0], radius: 2.0, sign: 1.0 });
     let (mut rim, mut on_axis) = (0, 0);
     vortex.outline.for_each_edge(|a, b| {
         let from_axis = [a, b].map(|p| (p[0] * p[0] + (p[2] + 5.0) * (p[2] + 5.0)).sqrt());
@@ -390,6 +390,25 @@ fn radial_and_vortex_forces_draw_their_reach() {
         }
     });
     assert_eq!((rim, on_axis), (2 * OUTLINE_SEGMENTS + 4, 1), "two rings and four sides round the axis, and the axis");
+
+    // Push vs Pull arrows flip direction, and unselected forces skip falloff shells.
+    let push = radial(&[("center_z", -5.0), ("radius", 2.0), ("falloff", 1.0), ("curve", 0.0), ("strength", 10.0)]);
+    let pull = radial(&[("center_z", -5.0), ("radius", 2.0), ("falloff", 1.0), ("curve", 0.0), ("strength", -10.0)]);
+    let mut push_arrows = Vec::new();
+    push.outline.for_each_arrow(|a, b| push_arrows.push((a, b)));
+    let mut pull_arrows = Vec::new();
+    pull.outline.for_each_arrow(|a, b| pull_arrows.push((a, b)));
+    assert_eq!(push_arrows.len(), 18);
+    assert_eq!(pull_arrows.len(), 18);
+    // First shaft is along +X: push goes from inner to outer, pull goes from outer to inner.
+    assert!(push_arrows[0].1[0] > push_arrows[0].0[0], "push arrow points outward");
+    assert!(pull_arrows[0].1[0] < pull_arrows[0].0[0], "pull arrow points inward");
+    let mut unselected_lines = Vec::new();
+    push.outline_lines_with_shells([230, 90, 220, UNSELECTED_ALPHA], false, &mut unselected_lines);
+    let mut selected_lines = Vec::new();
+    push.outline_lines_with_shells([230, 90, 220, 255], true, &mut selected_lines);
+    assert_eq!(unselected_lines.len(), 3 * OUTLINE_SEGMENTS + 18, "unselected force skips falloff shells");
+    assert_eq!(selected_lines.len(), 9 * OUTLINE_SEGMENTS + 18, "selected force includes falloff shells");
 }
 
 #[test]

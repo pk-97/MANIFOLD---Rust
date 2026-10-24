@@ -28,12 +28,10 @@ const ON_IS_THE_TOGGLE: &str = "The card's On toggle turns the modifier on and o
 
 /// The Scene Loop rows that reach the cameras on the Loop rig, by the node
 /// role on the camera and the node param.
-pub const LOOP_CAMERA_ROWS: [(&str, &str); 6] = [
+pub const LOOP_CAMERA_ROWS: [(&str, &str); 4] = [
     ("bars", "phase"),
     ("patterns_per_loop", "rig"),
     ("home", "rig"),
-    ("near", "rig"),
-    ("far", "rig"),
     ("pattern_length", "rig"),
 ];
 
@@ -41,15 +39,16 @@ pub const LOOP_CAMERA_ROWS: [(&str, &str); 6] = [
 /// on top of what it measures: (row property, node param).
 pub const LOOP_GAP_ROW: (&str, &str) = ("spacing", "gap");
 
-pub static SCENE_LOOP_ROWS: [PropertyRow; 9] = [
-    live("bars", 0).name("Beats"),
-    live("pattern_length", 1),
-    live("patterns_per_loop", 2).name("Stride"),
-    live("spacing", 3).name("Spacing").unit(Unit::Metres),
-    live("jitter_amount", 4),
-    live("home", 5).name("Home").unit(Unit::Metres),
-    live("near", 6).name("Near").unit(Unit::Metres),
-    live("far", 7).name("Far").unit(Unit::Metres),
+pub static SCENE_LOOP_ROWS: [PropertyRow; 10] = [
+    live("bars", 0).name("Beats").tip("Beats per full loop cycle"),
+    live("pattern_length", 1).default(4.0).tip("Number of cells in each repeating pattern"),
+    live("patterns_per_loop", 2).name("Stride").tip("Patterns travelled per loop cycle"),
+    live("spacing", 3).name("Spacing").unit(Unit::Metres).tip("Extra gap between repeating cells along the corridor"),
+    live("twist", 4).name("Twist").tip("Spiral rotation per pattern around the tunnel axis"),
+    live("spiral_radius", 5).name("Tunnel Radius").unit(Unit::Metres).tip("Radial offset around the tunnel axis for helical/ring tunnels"),
+    live("alternate", 6).name("Alternate Flip").toggle().tip("Flip every odd cell in the pattern by 180 degrees"),
+    live("jitter_amount", 7).tip("Random rotation and scale variation across pattern cells"),
+    live("home", 8).name("Home").unit(Unit::Metres).tip("Starting camera offset along the corridor"),
     row("enabled", Reach::Modifier, M, Exposure::Internal(ON_IS_THE_TOGGLE)),
 ];
 
@@ -93,7 +92,9 @@ pub fn scene_loop(doc: &SceneDoc) -> Option<&Item> {
 
 /// The Scene Loop rows only a Loop camera reads: the corridor recipe has no
 /// Beats, Stride, Home, Near or Far of its own.
-pub const LOOP_CAMERA_ONLY: [&str; 5] = ["bars", "patterns_per_loop", "home", "near", "far"];
+pub const LOOP_CAMERA_ONLY: [&str; 3] = [
+    "bars", "patterns_per_loop", "home",
+];
 
 /// Whether some camera in `doc` rides the Loop rig.
 pub fn has_loop_camera(doc: &SceneDoc) -> bool {

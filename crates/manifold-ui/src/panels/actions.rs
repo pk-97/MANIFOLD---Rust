@@ -781,6 +781,7 @@ pub enum RootAction {
     /// editor viewport's view into this camera item. The app owns the
     /// viewport camera, so it resolves the pose and builds the command.
     SceneSetupCopyViewportCamera(LayerId, ItemId),
+    SceneResetPreviewView,
     /// The World header's Draw Again: the layer stopped by runaway GPU
     /// frames draws again. Not an edit, so it never enters undo.
     SceneDrawAgain(LayerId),

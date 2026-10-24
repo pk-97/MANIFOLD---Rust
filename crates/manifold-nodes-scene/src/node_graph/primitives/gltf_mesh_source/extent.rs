@@ -9,6 +9,9 @@ fn gltf_mesh_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if let Some(bytes) = x.bytes("vertices") {
         x.hold(bytes.max(1));
     }
+    if let Some(bytes) = x.bytes("indices") {
+        x.hold(bytes.max(1));
+    }
     size_bounded(x)
 }
 inventory::submit! {

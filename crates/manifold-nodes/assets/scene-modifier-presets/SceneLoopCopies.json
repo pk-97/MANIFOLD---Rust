@@ -8,15 +8,126 @@
     "oscPrefix": "scene_loop_copies",
     "available": false,
     "params": [
-      { "id": "pattern_length", "name": "Pattern", "min": 1.0, "max": 8.0, "defaultValue": 1.0, "wholeNumbers": true },
-      { "id": "jitter_amount", "name": "Jitter", "min": 0.0, "max": 1.0, "defaultValue": 0.0 },
-      { "id": "enabled", "name": "Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "isToggle": true }
+      {
+        "id": "pattern_length",
+        "name": "Pattern",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 4.0,
+        "wholeNumbers": true
+      },
+      {
+        "id": "jitter_amount",
+        "name": "Jitter",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "twist",
+        "name": "Twist",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "spiral_radius",
+        "name": "Tunnel Radius",
+        "min": 0.0,
+        "max": 20.0,
+        "defaultValue": 0.0
+      },
+      {
+        "id": "alternate",
+        "name": "Alternate Flip",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "isToggle": true
+      },
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      }
     ],
     "bindings": [
-      { "id": "pattern_length", "label": "Pattern", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "scene_array", "param": "pattern_length" } },
-      { "id": "jitter_amount", "label": "Jitter", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "scene_array", "param": "jitter_amount" } },
-      { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "loop_switch", "param": "selector" } },
-      { "id": "enabled", "label": "Enabled", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "loop_count_switch", "param": "selector" } }
+      {
+        "id": "pattern_length",
+        "label": "Pattern",
+        "defaultValue": 4.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "pattern_length"
+        }
+      },
+      {
+        "id": "jitter_amount",
+        "label": "Jitter",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "jitter_amount"
+        }
+      },
+      {
+        "id": "twist",
+        "label": "Twist",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "twist"
+        }
+      },
+      {
+        "id": "spiral_radius",
+        "label": "Tunnel Radius",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "spiral_radius"
+        }
+      },
+      {
+        "id": "alternate",
+        "label": "Alternate Flip",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scene_array",
+          "param": "alternate"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_switch",
+          "param": "selector"
+        }
+      },
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "loop_count_switch",
+          "param": "selector"
+        }
+      }
     ],
     "sceneModifier": {
       "schemaVersion": 1,
@@ -28,8 +139,22 @@
           "group": "loop_corridor_stage",
           "scope": "scene",
           "inputs": [
-            { "port": "camera", "source": { "previous": { "endpoint": "camera" } } },
-            { "port": "cell_size", "source": { "context": { "value": "loopCell" } } }
+            {
+              "port": "camera",
+              "source": {
+                "previous": {
+                  "endpoint": "camera"
+                }
+              }
+            },
+            {
+              "port": "cell_size",
+              "source": {
+                "context": {
+                  "value": "loopCell"
+                }
+              }
+            }
           ],
           "outputs": []
         },
@@ -37,13 +162,41 @@
           "group": "loop_copies_stage",
           "scope": "eachObject",
           "inputs": [
-            { "port": "cells", "source": { "stageOutput": { "stage": "loop_corridor_stage", "port": "instances" } } },
-            { "port": "previous", "source": { "previous": { "endpoint": "instances" } } },
-            { "port": "previousCount", "source": { "previous": { "endpoint": "instanceCount" } } }
+            {
+              "port": "cells",
+              "source": {
+                "stageOutput": {
+                  "stage": "loop_corridor_stage",
+                  "port": "instances"
+                }
+              }
+            },
+            {
+              "port": "previous",
+              "source": {
+                "previous": {
+                  "endpoint": "instances"
+                }
+              }
+            },
+            {
+              "port": "previousCount",
+              "source": {
+                "previous": {
+                  "endpoint": "instanceCount"
+                }
+              }
+            }
           ],
           "outputs": [
-            { "port": "instances", "endpoint": "instances" },
-            { "port": "instanceCount", "endpoint": "instanceCount" }
+            {
+              "port": "instances",
+              "endpoint": "instances"
+            },
+            {
+              "port": "instanceCount",
+              "endpoint": "instanceCount"
+            }
           ]
         }
       ]
@@ -57,31 +210,102 @@
       "handle": "SceneLoopCorridorStage",
       "group": {
         "interface": {
-          "inputs": [ { "name": "camera", "portType": "Camera" }, { "name": "cell_size", "portType": "Scalar(F32)" } ],
-          "outputs": [ { "name": "instances", "portType": "Array(InstanceTransform)" } ]
+          "inputs": [
+            {
+              "name": "camera",
+              "portType": "Camera"
+            },
+            {
+              "name": "cell_size",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            }
+          ]
         },
         "nodes": [
-          { "id": 1, "nodeId": "group_camera", "typeId": "system.group_input", "handle": "camera" },
+          {
+            "id": 1,
+            "nodeId": "group_camera",
+            "typeId": "system.group_input",
+            "handle": "camera"
+          },
           {
             "id": 2,
             "nodeId": "scene_array",
             "typeId": "node.scene_array",
             "handle": "scene_array",
             "params": {
-              "pattern_length": { "type": "Int", "value": 1 },
-              "axis": { "type": "Enum", "value": 4 },
-              "cell_size": { "type": "Float", "value": 10.0 },
-              "jitter_seed": { "type": "Int", "value": 0 },
-              "jitter_amount": { "type": "Float", "value": 0.0 }
+              "pattern_length": {
+                "type": "Int",
+                "value": 4
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 4
+              },
+              "cell_size": {
+                "type": "Float",
+                "value": 10.0
+              },
+              "jitter_seed": {
+                "type": "Int",
+                "value": 0
+              },
+              "jitter_amount": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "twist": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "spiral_radius": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "alternate": {
+                "type": "Bool",
+                "value": false
+              }
             }
           },
-          { "id": 3, "nodeId": "loop_corridor_output", "typeId": "system.group_output", "handle": "output" },
-          { "id": 4, "nodeId": "group_cell_size", "typeId": "system.group_input", "handle": "cell_size" }
+          {
+            "id": 3,
+            "nodeId": "loop_corridor_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          },
+          {
+            "id": 4,
+            "nodeId": "group_cell_size",
+            "typeId": "system.group_input",
+            "handle": "cell_size"
+          }
         ],
         "wires": [
-          { "fromNode": 1, "fromPort": "camera", "toNode": 2, "toPort": "camera" },
-          { "fromNode": 4, "fromPort": "cell_size", "toNode": 2, "toPort": "cell_size" },
-          { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "instances" }
+          {
+            "fromNode": 1,
+            "fromPort": "camera",
+            "toNode": 2,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "cell_size",
+            "toNode": 2,
+            "toPort": "cell_size"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "instances"
+          }
         ]
       }
     },
@@ -93,46 +317,141 @@
       "group": {
         "interface": {
           "inputs": [
-            { "name": "cells", "portType": "Array(InstanceTransform)" },
-            { "name": "previous", "portType": "Array(InstanceTransform)" },
-            { "name": "previousCount", "portType": "Scalar(F32)" }
+            {
+              "name": "cells",
+              "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "previous",
+              "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "previousCount",
+              "portType": "Scalar(F32)"
+            }
           ],
           "outputs": [
-            { "name": "instances", "portType": "Array(InstanceTransform)" },
-            { "name": "instanceCount", "portType": "Scalar(F32)" }
+            {
+              "name": "instances",
+              "portType": "Array(InstanceTransform)"
+            },
+            {
+              "name": "instanceCount",
+              "portType": "Scalar(F32)"
+            }
           ]
         },
         "nodes": [
-          { "id": 1, "nodeId": "group_cells", "typeId": "system.group_input", "handle": "cells" },
-          { "id": 2, "nodeId": "group_previous", "typeId": "system.group_input", "handle": "previous" },
-          { "id": 3, "nodeId": "group_previous_count", "typeId": "system.group_input", "handle": "previousCount" },
-          { "id": 4, "nodeId": "loop_nest", "typeId": "node.nest_copies", "handle": "loop_nest" },
+          {
+            "id": 1,
+            "nodeId": "group_cells",
+            "typeId": "system.group_input",
+            "handle": "cells"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_previous",
+            "typeId": "system.group_input",
+            "handle": "previous"
+          },
+          {
+            "id": 3,
+            "nodeId": "group_previous_count",
+            "typeId": "system.group_input",
+            "handle": "previousCount"
+          },
+          {
+            "id": 4,
+            "nodeId": "loop_nest",
+            "typeId": "node.nest_copies",
+            "handle": "loop_nest"
+          },
           {
             "id": 5,
             "nodeId": "loop_switch",
             "typeId": "node.switch_instances",
             "handle": "loop_switch",
-            "params": { "selector": { "type": "Float", "value": 1.0 } }
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
           },
           {
             "id": 6,
             "nodeId": "loop_count_switch",
             "typeId": "node.switch_value",
             "handle": "loop_count_switch",
-            "params": { "selector": { "type": "Float", "value": 1.0 } }
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
           },
-          { "id": 7, "nodeId": "loop_copies_output", "typeId": "system.group_output", "handle": "output" }
+          {
+            "id": 7,
+            "nodeId": "loop_copies_output",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
         ],
         "wires": [
-          { "fromNode": 1, "fromPort": "cells", "toNode": 4, "toPort": "outer" },
-          { "fromNode": 2, "fromPort": "previous", "toNode": 4, "toPort": "inner" },
-          { "fromNode": 3, "fromPort": "previousCount", "toNode": 4, "toPort": "inner_count" },
-          { "fromNode": 2, "fromPort": "previous", "toNode": 5, "toPort": "in_0" },
-          { "fromNode": 4, "fromPort": "copies", "toNode": 5, "toPort": "in_1" },
-          { "fromNode": 3, "fromPort": "previousCount", "toNode": 6, "toPort": "in_0" },
-          { "fromNode": 4, "fromPort": "count", "toNode": 6, "toPort": "in_1" },
-          { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "instances" },
-          { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "instanceCount" }
+          {
+            "fromNode": 1,
+            "fromPort": "cells",
+            "toNode": 4,
+            "toPort": "outer"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "previous",
+            "toNode": 4,
+            "toPort": "inner"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "previousCount",
+            "toNode": 4,
+            "toPort": "inner_count"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "previous",
+            "toNode": 5,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "copies",
+            "toNode": 5,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "previousCount",
+            "toNode": 6,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "count",
+            "toNode": 6,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "instances"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "instanceCount"
+          }
         ]
       }
     }

@@ -866,6 +866,36 @@ fn math_view_marks_follow_each_item_and_its_copies_scale() {
     assert!(feed(object("cube"), "copy_scale").is_some(), "the cube's copies carry a scale");
     assert_eq!(feed(diagram("cube").id, "copy_scale"), feed(object("cube"), "copy_scale"), "the diagram reads the copies' scale");
     assert_eq!(feed(diagram("plane").id, "copy_scale"), None, "an item without copies has none");
+
+    // Placing Math View BEFORE a deformer in the modifier chain still captures the deformed mesh.
+    let mut doc_before = SceneDoc::base();
+    let mut mv = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut mv {
+        *fields = ModifierFields { modifier: ModifierType::MathView, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+    }
+    let mut deform = ItemFields::default_for(ItemKind::Modifier);
+    if let ItemFields::Modifier(fields) = &mut deform {
+        *fields = ModifierFields { modifier: ModifierType::ElasticSculpture, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+    }
+    for (id, fields) in [("mv_first", mv), ("deform_after", deform)] {
+        let end = doc_before.items.len();
+        doc_before.insert(None, end, Item::new(ItemId::new(id), id, fields)).unwrap();
+    }
+    let def_before = scene_layer(doc_before).gen_params().unwrap().graph.clone().unwrap();
+    let prep_before = prepare_scene_modifiers(&def_before, &PrimitiveRegistry::with_builtin()).unwrap().def;
+    let feed_before = |to: u32, port: &str| prep_before.wires.iter().find(|w| w.to_node == to && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()));
+    let cube_obj = prep_before.nodes.iter().find(|n| n.type_id == "node.scene_object" && n.node_id.as_str() == "cube:object").unwrap().id;
+    let diag = prep_before.nodes.iter().find(|n| n.type_id == "node.render_mesh_diagram").unwrap().id;
+    assert_eq!(
+        feed_before(diag, "current_mesh"),
+        feed_before(cube_obj, "vertices"),
+        "Math View placed before a deformer still reads the final deformed mesh"
+    );
+    assert_ne!(
+        feed_before(diag, "current_mesh"),
+        feed_before(diag, "reference_mesh"),
+        "current_mesh differs from the undeformed reference_mesh"
+    );
 }
 
 /// Copy Blend on copies placed On Surface lays its second arrangement out in

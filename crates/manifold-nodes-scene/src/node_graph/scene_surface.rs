@@ -70,7 +70,7 @@ pub static LAMP_SHAPES: [SceneShapeDecl; 1] = [point(POS, "range")];
 const CENTRE: ParamTriple = [id("center_x"), id("center_y"), id("center_z")];
 
 const fn field(axis: Option<ParamTriple>) -> SceneShapeDecl {
-    let shape = SceneShape::Field { center: CENTRE, radius: id("radius"), falloff: id("falloff"), curve: id("curve"), axis };
+    let shape = SceneShape::Field { center: CENTRE, radius: id("radius"), falloff: id("falloff"), curve: id("curve"), axis, strength: Some(id("strength")) };
     SceneShapeDecl { shape, via: None, extent_limit: None, uniform_scale: false }
 }
 
