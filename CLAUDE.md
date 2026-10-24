@@ -17,6 +17,7 @@ When Peter asks a question ("can I see…?", "how does X work?"), answer it with
 3. **Keep actions local and predictable:** Changing, importing, or toggling one thing must only touch the state it owns — never silently mutate unrelated user state, settings, playback, or view state as a side effect.
 4. **Reuse the single source of truth:** Before writing a calculation, constant, layout offset, or lookup, find where the codebase already defines it and share that path instead of duplicating logic or magic numbers.
 5. **Write the smallest direct solution:** Solve the actual problem in front of you without inventing new traits, modes, config flags, or multi-phase frameworks unless existing code genuinely cannot express it.
+6. **Replace, don't layer (no parallel paths, shims, or silent fallbacks):** MANIFOLD is pre-release. When changing how something works, cut over completely in one change and delete the old code, fields, and helpers immediately. Never keep a legacy path alive beside a new one, never add backwards-compatibility shims or migration layers unless asked, and never hide broken wiring behind silent `unwrap_or` fallbacks.
 
 ## Workflow & Tooling
 
@@ -24,7 +25,6 @@ When Peter asks a question ("can I see…?", "how does X work?"), answer it with
 - **Lead vs workers:** Handle small and medium changes directly. Delegate mechanical multi-file edits, broad refactors, or parallel independent tasks to cheaper workers (`sonnet` in Claude Code; free/flash models in OpenCode) with exact `file:line` instructions and disjoint file sets. Roster: `docs/AGENT_ROUTING.md`.
 - **Scoped verification:** Run `cargo nextest run -p <touched_crate> <filter>` during iteration. Before landing a batch to `main`, run `cargo clippy -p <touched_crate> --tests -- -D warnings` and regenerate stale indexes (`scripts/dev.py node-catalog`, `scripts/dev.py docs-index`) if ports/params or docs changed.
 - **Shell & Git discipline:**
-  - Never run `cargo fmt` or `rustfmt`.
   - Never launch the full `manifold` GUI window from an agent (it blocks in the event loop); use headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`, and let Peter launch the live app.
   - Stage and commit with explicit file paths (`git add -- <paths>`, `git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`, so pre-existing untracked/dirty files stay untouched.
   - Use `rg` (not `grep`), `fd` (not `find`), and `ast-grep` for code shape queries. Never start `rust-analyzer`.

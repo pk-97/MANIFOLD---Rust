@@ -37,7 +37,7 @@ GIB = 2 ** 30
 # The one free-space reserve every build, health check and preflight reads.
 # Measured against raw free space, never macOS "available" (see disk_free).
 MAINTENANCE_GOAL_BYTES = 30 * GIB
-DEFAULT_SLOT_CAP_BYTES = 160 * GIB
+DEFAULT_SLOT_CAP_BYTES = 25 * GIB
 STALE_CACHE_SECONDS = 60 * 60
 DEFAULT_TMP_ROOT = Path("/private/tmp")
 PROFILE_NAMES = ("debug", "release")

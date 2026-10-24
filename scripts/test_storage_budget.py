@@ -531,7 +531,7 @@ def test_whole_profile_eviction():
 
 def test_cap_configuration():
     with patch.dict(os.environ, {}, clear=True):
-        check("default cap is 160 GiB", sb.slot_cap_bytes() == 160 * sb.GIB)
+        check("default cap is 25 GiB", sb.slot_cap_bytes() == 25 * sb.GIB)
     with patch.dict(os.environ, {"MANIFOLD_SLOT_TARGET_CAP_GIB": "31"}):
         check("slot cap configurable", sb.slot_cap_bytes() == 31 * sb.GIB)
     for value in ("0", "-1", "nan", "inf", "bad"):
