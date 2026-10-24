@@ -6,17 +6,6 @@
     under the merge-based trunk model. See `landing_protocol_guard`; protocol is
     GIT_TREE_DISCIPLINE.md section 2.
 
-0b2. Land-pass guard (BUG-3srqb). Any checkout: a merge into main, a push naming
-    main, `update-ref refs/heads/main` or `gh pr merge` is DENIED unless the
-    resulting tree has a gate pass recorded by scripts/land_branch.py in
-    <git-common-dir>/land-passes-v1/<tree>.json, the commits are already on
-    origin/main, or the diff versus origin/main touches only .beads/, docs/ and .claude/hooks/
-    (beads: commits and docs edits land directly; they carry no code to gate).
-    land_branch.py's own git calls are subprocesses the hook never sees, so no
-    allowlist exists. Any Bash command that could write into land-passes-v1
-    is denied too (`land_pass_tamper_guard`; the Edit/Write twin is in
-    worktree-guard.py). Spec: `land_pass_guard`. Peter's terminal is ungoverned.
-
 1.  ALLOW pre-approved commands outright, including compounds the static
     `permissions.allow` matcher cannot express — pipes, `;` chains, for/while
     loops, `$(...)`. That matcher only matches a command that STARTS with an
@@ -705,29 +694,14 @@ def _branch_force_targets_main(rest_toks):
     return bool(positional) and positional[0] == "main"
 
 
-LANDING_PROTOCOL_REMINDER = (
-    "Landing on main. Code lands through `scripts/land_branch.py <branch> "
-    "--worktree <path> --message '...'` (.claude/GIT_TREE_DISCIPLINE.md "
-    "section 2): it merges origin/main in, gates, merges --no-ff, pushes and "
-    "closes beads, and retries when main moved. Only .beads/, docs/ and "
-    ".claude/hooks/ changes go to main directly. Never cherry-pick or "
-    "re-commit content that already exists as commits on a live branch "
-    "(merge it, so SHAs stay shared); never delete a branch until `git "
-    "merge-base --is-ancestor <tip> origin/main` passes."
-)
-
 _TRUNK_SOURCES = {"main", "origin/main", "refs/heads/main", "refs/remotes/origin/main"}
 
 
 def landing_protocol_guard(cmd, cwd):
     """Return (ask_reason, allow_context) for a git command in `cmd`.
     `ask_reason` is set — unconditionally, for a force-rewrite of main
-    (branch -f main,
-    or a force-push landing on main): wrong under the merge-trunk model
-    regardless of concurrency. `allow_context` is a landing-protocol
-    reminder for an otherwise-normal non-force push/merge that lands on
-    main. At most one of the two is ever set. Never raises; any failure
-    yields (None, None)."""
+    (branch -f main, or a force-push landing on main). Never raises; any
+    failure yields (None, None)."""
     try:
         for toks in _shlex_segments(cmd):
             toks = _strip_leading_keywords(toks)
@@ -739,236 +713,20 @@ def landing_protocol_guard(cmd, cwd):
 
             if sub == "branch" and _branch_force_targets_main(rest):
                 return (
-                    "`git branch -f main ...` force-moves the main pointer. "
-                    "Main is a merge-based trunk "
-                    "(.claude/GIT_TREE_DISCIPLINE.md section 2) — this "
-                    "can drop commits that aren't ancestors of <tip>. Land "
-                    "with scripts/land_branch.py instead.",
+                    "Force-rewriting main can drop commits; confirm with Peter first.",
                     None,
                 )
 
             if sub == "push":
                 if _push_has_force_flag(rest) and _push_targets_main(rest, target_dir):
                     return (
-                        "Force-push targeting main. Main is a merge-based "
-                        "trunk (.claude/GIT_TREE_DISCIPLINE.md section 2) — "
-                        "a force-push can drop commits another session "
-                        "landed. Land with scripts/land_branch.py instead.",
+                        "Force-rewriting main can drop commits; confirm with Peter first.",
                         None,
                     )
-                if _push_targets_main(rest, target_dir):
-                    return None, LANDING_PROTOCOL_REMINDER
-
-            if sub == "merge" and _current_branch(target_dir) == "main":
-                sources = _positionals(rest, _MERGE_VALUE_FLAGS)
-                if sources and all(s in _TRUNK_SOURCES for s in sources):
-                    continue  # syncing main with itself ships nothing
-                return None, LANDING_PROTOCOL_REMINDER
 
         return None, None
     except Exception:
         return None, None
-
-
-# ---------------------------------------------------------------------------
-# Land-pass guard (BUG-3srqb, hook-enforced landing)
-#
-# Code reaches main only through scripts/land_branch.py. It runs landing_gate
-# and, before it pushes, writes <git-common-dir>/land-passes-v1/<tree>.json for
-# the exact tree it lands. Its own git calls are subprocesses of that script,
-# never Bash tool calls, so this hook cannot see them and needs no allowlist.
-# Every agent Bash call that would put a tree on main is DENIED unless the
-# tree has such a record, the commits are already on origin/main, or the change
-# versus origin/main touches only .beads/, docs/ and .claude/hooks/ (the `beads:` commits and
-# docs edits go straight to main; they carry no code for the gate to prove).
-# Shapes: `git merge` while on main (or after `checkout/switch main`), `git push`
-# naming main (bare push on main, `HEAD:main`, `<br>:main`, --all, globs), any
-# `-C <path>` form, `update-ref refs/heads/main`, and `gh pr merge`. The record
-# is a speed bump against skipping the gate, not a defence against forging it.
-# ---------------------------------------------------------------------------
-
-LAND_PASS_DIR = "land-passes-v1"  # writer: scripts/land_branch.py record_land_pass
-_BEADS_DOCS_PREFIXES = (".beads/", "docs/", ".claude/hooks/")
-_MERGE_VALUE_FLAGS = {"-m", "-F", "-s", "-X", "--message", "--file", "--strategy",
-                      "--strategy-option", "--into-name"}
-_PUSH_VALUE_FLAGS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
-_LAND_HOW = ("Land through scripts/land_branch.py (it gates the merged tree and records "
-             "the pass). Only changes confined to .beads/, docs/ and .claude/hooks/ may go to main directly.")
-
-
-def _git_run(target_dir, *args):
-    out = subprocess.run(["git", "-C", str(target_dir), *args],
-                         capture_output=True, text=True, timeout=30)
-    return out.returncode, out.stdout.strip()
-
-
-def _land_pass_recorded(target_dir, tree):
-    rc, common = _git_run(target_dir, "rev-parse", "--git-common-dir")
-    if rc:
-        return False
-    return (Path(target_dir) / common).resolve().joinpath(LAND_PASS_DIR, f"{tree}.json").is_file()
-
-
-def _tree_may_land(target_dir, tree):
-    """None when `tree` may become main's tree, else the deny reason."""
-    if _land_pass_recorded(target_dir, tree):
-        return None
-    rc, names = _git_run(target_dir, "diff", "--name-only", "--no-renames", "origin/main", tree)
-    if rc:
-        return f"cannot compare tree {tree[:9]} with origin/main (fetch first?). {_LAND_HOW}"
-    files = [n for n in names.splitlines() if n]
-    if all(n.startswith(_BEADS_DOCS_PREFIXES) for n in files):
-        return None
-    return (f"tree {tree[:9]} has no recorded land_branch gate pass and changes code outside "
-            f".beads/, docs/ and .claude/hooks/ versus origin/main (e.g. {files[0]}). {_LAND_HOW}")
-
-
-def _rev_may_land(target_dir, rev):
-    rc, _ = _git_run(target_dir, "merge-base", "--is-ancestor", rev, "origin/main")
-    if rc == 0:
-        return None  # already on main; nothing new lands
-    rc, tree = _git_run(target_dir, "rev-parse", "--verify", f"{rev}^{{tree}}")
-    if rc:
-        return f"cannot resolve '{rev}' to verify it for main. {_LAND_HOW}"
-    return _tree_may_land(target_dir, tree)
-
-
-def _positionals(rest, value_flags):
-    out, skip = [], False
-    for t in rest:
-        if skip:
-            skip = False
-        elif t in value_flags:
-            skip = True
-        elif t == "--":
-            continue
-        elif not t.startswith("-"):
-            out.append(t)
-    return out
-
-
-def _is_main_name(name):
-    return name.lstrip("+") in _MAIN_REF_TOKENS
-
-
-def _check_merge(target_dir, rest, assumed_main):
-    if any(f in rest for f in ("--abort", "--quit")):
-        return None
-    on_main = _current_branch(target_dir) == "main"
-    if not (on_main or assumed_main):
-        return None
-    if "--continue" in rest:
-        rc, tree = _git_run(target_dir, "write-tree")
-        return _tree_may_land(target_dir, tree) if not rc else f"cannot read index tree. {_LAND_HOW}"
-    sources = _positionals(rest, _MERGE_VALUE_FLAGS)
-    if all(_rev_may_land(target_dir, s) is None for s in sources):
-        return None  # includes a bare `git merge` (upstream = origin/main)
-    if len(sources) != 1:
-        return f"cannot verify a merge of {len(sources)} sources into main. {_LAND_HOW}"
-    rc, tree = _git_run(target_dir, "merge-tree", "--write-tree",
-                        "HEAD" if on_main else "main", sources[0])
-    if rc:
-        return f"cannot compute the merge result of {sources[0]} into main (conflict?). {_LAND_HOW}"
-    return _tree_may_land(target_dir, tree.splitlines()[0])
-
-
-def _check_push(target_dir, rest):
-    flags = set(rest)
-    positional = _positionals(rest, _PUSH_VALUE_FLAGS)
-    on_main = _current_branch(target_dir) == "main"
-    srcs = []
-    if flags & {"--all", "--mirror"}:
-        srcs.append("main")
-    refspecs = positional[1:]
-    if not refspecs and not (flags & {"--all", "--mirror", "--tags"}) and on_main:
-        srcs.append("HEAD")
-    for spec in refspecs:
-        src, _, dst = spec.lstrip("+").partition(":")
-        dst = dst or src
-        if not src:
-            continue  # deletion; destructive_outward_guard owns it
-        if _is_main_name(dst) or "*" in dst:
-            srcs.append("main" if "*" in src else src)
-    for src in srcs:
-        reason = _rev_may_land(target_dir, src)
-        if reason:
-            return f"push of '{src}' to main: {reason}"
-    return None
-
-
-def _check_update_ref(target_dir, rest):
-    positional = _positionals(rest, {"-m"})
-    if not positional or positional[0] not in ("refs/heads/main",):
-        return None
-    if "-d" in rest or len(positional) < 2:
-        return f"deleting refs/heads/main is not allowed. {_LAND_HOW}"
-    reason = _rev_may_land(target_dir, positional[1])
-    return f"update-ref refs/heads/main: {reason}" if reason else None
-
-
-_PASS_DIR_READERS = {"ls", "cat", "rg", "fd", "stat", "head", "tail", "wc", "file", "test", "["}
-
-
-def land_pass_tamper_guard(cmd):
-    """Deny reason for a Bash command that could write into land-passes-v1
-    (any redirect, cp, mv, tee, touch, mkdir, interpreter or sed naming the
-    directory); only scripts/land_branch.py writes it. Reads are fine."""
-    if LAND_PASS_DIR not in cmd:
-        return None
-    try:
-        segments = _shlex_segments(cmd)
-    except Exception:
-        segments = []
-    readonly = bool(segments) and ">" not in cmd
-    for toks in segments:
-        toks = _strip_leading_keywords(toks)
-        if any(LAND_PASS_DIR in t for t in toks) and (not toks or toks[0] not in _PASS_DIR_READERS):
-            readonly = False
-    if readonly:
-        return None
-    return (f"{LAND_PASS_DIR} holds the gate-pass records; only scripts/land_branch.py writes "
-            "them (run it by path). Reading them with ls/cat/rg is fine.")
-
-
-def land_pass_guard(cmd, cwd):
-    """Deny reason for a Bash command that would land an unrecorded tree on
-    main (see the block comment above); else None. Never raises."""
-    try:
-        segments = _shlex_segments(cmd)
-    except Exception:
-        return None
-    assumed_main = {}
-    for toks in segments:
-        try:
-            toks = _strip_leading_keywords(toks)
-            if not toks:
-                continue
-            if toks[0] == "gh" and toks[1:3] == ["pr", "merge"]:
-                return "`gh pr merge` lands on origin outside the land_branch gate. " + _LAND_HOW
-            if toks[0] != "git":
-                continue
-            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
-            if target_dir is None:
-                continue
-            key = str(target_dir)
-            if sub in ("checkout", "switch"):
-                pos = _positionals(rest, {"-b", "-B", "-c", "-C"})
-                creating = any(f in rest for f in ("-b", "-B", "-c", "-C"))
-                assumed_main[key] = bool(pos) and pos[-1] == "main" and not creating
-                continue
-            if sub == "merge":
-                reason = _check_merge(target_dir, rest, assumed_main.get(key, False))
-            elif sub == "push":
-                reason = _check_push(target_dir, rest)
-            elif sub == "update-ref":
-                reason = _check_update_ref(target_dir, rest)
-            else:
-                continue
-            if reason:
-                return "Landing on main refused: " + reason
-        except Exception as error:
-            return f"Landing guard could not verify this git command ({error}). " + _LAND_HOW
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -990,11 +748,7 @@ def land_pass_guard(cmd, cwd):
 # ---------------------------------------------------------------------------
 
 WORKTREE_ADD_REASON = (
-    "`git worktree add` is denied — worktrees come ONLY from the slot ring: "
-    "`scripts/agent-worktree.py acquire <task-label> <branch> "
-    "[--tip REF]`. The ring caps the pool at 10 slots because hand-rolled "
-    "worktrees filled the disk once (455 GB, 2026-07-15). If acquire says "
-    "POOL FULL, surface that to Peter instead of working around it."
+    "git worktree add is denied — work directly in the main checkout so builds stay fast against the shared warm target/ directory (CLAUDE.md)."
 )
 
 WORKTREE_REMOVE_REASON = (
@@ -1371,11 +1125,7 @@ def inline_python_guard(cmd):
 # blocks the session for the whole wait and shows nothing while it runs. The
 # same command with run_in_background passes; `main` checks that flag.
 WAIT_LOOP_REASON = (
-    "Foreground wait ({what}) polls instead of waiting on the work. In a lane, "
-    "run the command itself in the foreground (Bash timeout up to 600000), or "
-    "follow a longer background run with scripts/watch_land.py in the "
-    "foreground. In the lead, run it with run_in_background: true and follow "
-    "it with scripts/watch_land.py or the Monitor tool."
+    "Foreground wait ({what}) polls instead of waiting on the work. Run the command itself in the foreground or with run_in_background: true."
 )
 # A sleep up to this long is settle time or a timeout window (let a server
 # bind, `cmd & sleep 6; kill $!`). Longer is waiting on work whose end is a
@@ -2522,17 +2272,10 @@ def main() -> int:
 
     # 0b. Landing-protocol guard: a force-rewrite of main asks unconditionally;
     # a normal push/merge landing on main gets an allow + reminder below.
-    landing_ask, landing_context = landing_protocol_guard(cmd, cwd)
+    landing_ask, _landing_context = landing_protocol_guard(cmd, cwd)
     landing_ask = landing_ask or first(lambda t: landing_protocol_guard(t, cwd)[0])
     if landing_ask:
         json.dump(build_ask(landing_ask), sys.stdout)
-        return 0
-
-    # 0b2. Land-pass guard: a merge, push, update-ref or `gh pr merge` that
-    # would put an unrecorded tree on main is denied in every mode.
-    land_deny = first(land_pass_tamper_guard)
-    if land_deny:
-        json.dump(build_deny([land_deny]), sys.stdout)
         return 0
 
     # 0d. Worktree-ring guard: `git worktree add` is denied in every mode —
@@ -2629,7 +2372,6 @@ def main() -> int:
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
         combined = "\n\n".join(c for c in (
-            landing_context,
             rg_warning, masked_exit_warning, comment_swallow_warning,
             workspace_sweep_warning,
         ) if c) or None

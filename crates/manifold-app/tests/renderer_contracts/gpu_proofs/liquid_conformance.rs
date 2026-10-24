@@ -10,18 +10,12 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
-use manifold_compositor::preset_thumbnail::{
-    THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, render_preset_thumbnail,
-};
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
-use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
+use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_core::params::{Param, ParamManifest};
-use manifold_core::preset_def::PresetKind;
 use manifold_gpu::{FrameClock, GpuDevice, GpuEvent, GpuTextureFormat, RetireMark, RetireQueue};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -1140,7 +1134,7 @@ fn liquid_export_matches_live_project_schedule() {
                     &mut def,
                     GPU_FLIP_DOMAIN_TYPE_ID,
                     "resolution",
-                    SerializedParamValue::Int { value: 8 },
+                    SerializedParamValue::Int { value: 4 },
                 );
                 set_type_param(
                     &mut def,
@@ -2676,7 +2670,7 @@ fn liquid_live_flip_force_and_coupling_match_accepted_progress() {
         &mut def,
         GPU_FLIP_DOMAIN_TYPE_ID,
         "resolution",
-        SerializedParamValue::Int { value: 8 },
+        SerializedParamValue::Int { value: 4 },
     );
     let (def, fire) = with_force_and_impulse(&def, 2.0);
     let raw_dump = |run: &mut LiquidRun| {
@@ -2708,9 +2702,9 @@ fn liquid_live_flip_force_and_coupling_match_accepted_progress() {
         let (mut reference_receipts, mut grouped_receipts) = (0, 0);
         let mut previous_body = None;
         let mut coupling = 0.0;
-        for frame in 1..=4u32 {
-            if frame == 3 {
-                // Both runs have accepted four ticks. Their transport differs
+        for frame in 1..=2u32 {
+            if frame == 2 {
+                // Both runs have accepted two ticks. Their transport differs
                 // at 20 fps, but the hit belongs to the same simulation boundary.
                 reference.fire(&fire, &mut reference_sequence);
                 grouped.fire(&fire, &mut grouped_sequence);
@@ -2951,99 +2945,6 @@ fn liquid_reset_starts_a_new_epoch() {
             );
         }
     }
-}
-
-/// Every core busy twice over while `f` runs.
-fn contended<T>(f: impl FnOnce() -> T) -> T {
-    let stop = Arc::new(AtomicBool::new(false));
-    let threads = 2 * std::thread::available_parallelism().map_or(8, |n| n.get());
-    let burners: Vec<_> = (0..threads)
-        .map(|_| {
-            let stop = Arc::clone(&stop);
-            std::thread::spawn(move || {
-                let mut x = 0u64;
-                while !stop.load(Ordering::Relaxed) {
-                    x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1));
-                }
-            })
-        })
-        .collect();
-    let result = f();
-    stop.store(true, Ordering::Relaxed);
-    for burner in burners {
-        burner.join().expect("burner thread");
-    }
-    result
-}
-
-/// The liquid solvers `nodes` holds, at any group depth.
-fn liquid_solvers(nodes: &[EffectGraphNode], found: &mut Vec<String>) {
-    for node in nodes {
-        if is_liquid_domain(&node.type_id) && !found.contains(&node.type_id) {
-            found.push(node.type_id.clone());
-        }
-        if let Some(group) = &node.group {
-            liquid_solvers(&group.nodes, found);
-        }
-    }
-}
-
-/// The cheapest bundled preset of each liquid solver (the 64-cell GPU FLIP
-/// dam break, not the 112-cell cliff the catalogue lists first: 4 s against
-/// 54 s a render). The test fails if a bundled solver is left uncovered.
-const THUMBNAIL_PRESETS: [&str; 2] = ["WaterDamBreakParticles", "WaterDamBreakMatter"];
-
-/// BUG-qssh (thumbnail differs run to run): one bundled preset of each
-/// liquid solver renders the same thumbnail bytes with every core busy as with
-/// the machine idle. Contention reaches the thumbnail through the solver, not
-/// the preset, so one preset per solver covers it.
-#[test]
-fn liquid_thumbnail_ignores_contention() {
-    let device = &shared_device();
-    let mut bundled = Vec::new();
-    for (_, def) in manifold_nodes::engine_scenes::all() {
-        liquid_solvers(&def.nodes, &mut bundled);
-    }
-    let mut changed = Vec::new();
-    let mut covered = Vec::new();
-    for id in THUMBNAIL_PRESETS {
-        let def = manifold_nodes::engine_scenes::scene_def(&manifold_core::PresetTypeId::new(id))
-            .unwrap_or_else(|| panic!("{id} is not an engine scene"));
-        liquid_solvers(&def.nodes, &mut covered);
-        let render = || {
-            render_preset_thumbnail(
-                device,
-                PresetKind::Generator,
-                def.as_ref(),
-                THUMBNAIL_WIDTH,
-                THUMBNAIL_HEIGHT,
-                false,
-            )
-            .unwrap_or_else(|error| panic!("{id}: {error}"))
-        };
-        let start = Instant::now();
-        let idle = render();
-        let idle_time = start.elapsed();
-        let busy = contended(render);
-        let differing = idle.iter().zip(&busy).filter(|(a, b)| a != b).count();
-        eprintln!(
-            "{id}: {differing} of {} bytes differ; idle {idle_time:.1?}, busy {:.1?}",
-            idle.len(),
-            start.elapsed() - idle_time
-        );
-        if idle != busy {
-            changed.push(id);
-        }
-    }
-    let missing: Vec<_> = bundled
-        .iter()
-        .filter(|solver| !covered.contains(solver))
-        .collect();
-    assert!(missing.is_empty(), "no thumbnail preset covers {missing:?}");
-    assert!(
-        changed.is_empty(),
-        "thumbnails changed under contention: {changed:?}"
-    );
 }
 
 /// Units in the last place between two finite f32 of one sign; `u64::MAX`

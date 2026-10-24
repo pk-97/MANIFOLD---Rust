@@ -341,58 +341,6 @@ mod tests {
     use super::*;
     use manifold_core::change::Part;
 
-    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.file_name().is_some_and(|n| n != "target") {
-                    rust_files(&path, out);
-                }
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                out.push(path);
-            }
-        }
-    }
-
-    /// Every command runs through the audited `execute` and `undo`: no impl
-    /// overrides them and nothing outside this file calls the `do_` bodies.
-    #[test]
-    fn command_runs_only_through_the_audit() {
-        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let mut files = Vec::new();
-        rust_files(&crates, &mut files);
-        assert!(
-            files.len() > 100,
-            "the scan found no sources under {}",
-            crates.display()
-        );
-        let this = std::path::Path::new(file!()).file_name().unwrap();
-        let mut escapes = Vec::new();
-        for path in files
-            .iter()
-            .filter(|p| !p.ends_with(std::path::Path::new("manifold-editing/src").join(this)))
-        {
-            let Ok(text) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            for (n, line) in text.lines().enumerate() {
-                let code = line.trim_start();
-                let overrides = (code.starts_with("fn execute(&mut self,")
-                    || code.starts_with("fn undo(&mut self,"))
-                    && code.contains("&mut Project)");
-                let bypasses = code.contains(".do_execute(") || code.contains(".do_undo(");
-                if overrides || bypasses {
-                    escapes.push(format!("{}:{}: {}", path.display(), n + 1, code));
-                }
-            }
-        }
-        assert!(
-            escapes.is_empty(),
-            "commands escaping the change audit:\n{}",
-            escapes.join("\n")
-        );
-    }
-
     #[derive(Debug)]
     struct TargetCommand(GraphTarget);
 

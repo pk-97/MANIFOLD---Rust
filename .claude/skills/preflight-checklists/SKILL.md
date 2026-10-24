@@ -31,4 +31,3 @@ Run these checks before committing changes:
 - [ ] Run scoped tests: `cargo nextest run -p <touched_crate> <filter>`
 - [ ] Run scoped clippy: `cargo clippy -p <touched_crate> --tests -- -D warnings`
 - [ ] If node ports/params changed: `./scripts/dev.py node-catalog`
-- [ ] If docs were added/renamed: `./scripts/dev.py docs-index`

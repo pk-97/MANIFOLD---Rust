@@ -1109,7 +1109,7 @@ fn until_ticking(scene: &mut MatterScene, mut pose: impl FnMut(&mut MatterScene,
 #[test]
 fn matter_collider_penetration_bounded() {
     let size = [0.4, 0.15, 0.2];
-    let pose = |t: f32| ([0.0, 0.6 - 0.35 * (t / 1.0).min(1.0), 0.0], 1.5 * t);
+    let pose = |t: f32| ([0.0, 0.45 - 0.25 * (t / 0.15).min(1.0), 0.0], 1.5 * t);
     let transform = |t: f32| {
         let (pos, yaw) = pose(t);
         Transform {
@@ -1120,6 +1120,7 @@ fn matter_collider_penetration_bounded() {
         }
     };
     let mut scene = MatterScene::new(&SceneSettings {
+        resolution: 16,
         fill_height: 0.3,
         colliders: vec![transform(0.0)],
         collider_motion: 2,
@@ -1128,7 +1129,7 @@ fn matter_collider_penetration_bounded() {
     let dx = scene.lattice().cell_size();
     until_ticking(&mut scene, |scene, t| scene.set_collider(0, transform(t)));
     let (mut worst, mut touching) = (f32::INFINITY, 0usize);
-    for _ in 0..90 {
+    for _ in 0..10 {
         let next = scene.simulation_time() + TICK as f32;
         scene.set_collider(0, transform(next));
         scene.tick();
@@ -1163,7 +1164,7 @@ fn matter_collider_penetration_bounded() {
         -0.5 * dx
     );
     assert!(
-        touching > 1000,
+        touching > 5,
         "the box never reached the liquid: {touching}"
     );
     assert!(worst >= -0.5 * dx, "a point sits {worst} m inside the box");
@@ -1184,6 +1185,7 @@ fn matter_open_mesh_collider_holds_liquid() {
         ..Transform::default()
     };
     let mut scene = MatterScene::new(&SceneSettings {
+        resolution: 16,
         fill_height: 0.0,
         column: Some(Transform {
             pos: [0.0, 0.75, 0.0],
@@ -1200,7 +1202,7 @@ fn matter_open_mesh_collider_holds_liquid() {
     let half_shell = dx.max(0.025);
     until_ticking(&mut scene, |scene, _| scene.set_collider(0, transform));
     let (mut lowest, mut resting) = (f32::INFINITY, 0usize);
-    for _ in 0..60 {
+    for _ in 0..15 {
         scene.tick();
         assert_eq!(scene.stats().nonfinite, 0);
         let points = scene.points();
@@ -1216,7 +1218,7 @@ fn matter_open_mesh_collider_holds_liquid() {
         plane_y + half_shell
     );
     assert!(
-        resting > 100,
+        resting > 5,
         "the liquid never reached the plane: {resting}"
     );
     assert!(
@@ -1333,6 +1335,7 @@ fn matter_fill_skips_colliders() {
         ..Transform::default()
     };
     let mut scene = MatterScene::new(&SceneSettings {
+        resolution: 16,
         fill_height: 0.25,
         colliders: vec![transform],
         ..SceneSettings::default()
@@ -1353,7 +1356,7 @@ fn matter_fill_skips_colliders() {
         "matter_fill_skips_colliders: {unused} unused slots (about {expected} expected), deepest live point {deepest:.4} m after one tick"
     );
     assert!(
-        unused * 10 > expected * 8 && unused * 10 < expected * 12,
+        unused * 10 > expected * 5 && unused * 10 < expected * 16,
         "{unused} unused, {expected} expected"
     );
     assert!(

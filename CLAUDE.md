@@ -23,7 +23,7 @@ When Peter asks a question ("can I see…?", "how does X work?"), answer it with
 
 - **Work directly in the main checkout (no worktrees by default):** Always work in the main working tree so incremental `cargo nextest` and `cargo build --bin manifold` runs stay fast and share the single warm `target/` directory. Never acquire a git worktree unless Peter asks for one or there is a high risk of collision with large parallel sessions — even parallel subagents within a session work in the main checkout on disjoint file sets.
 - **Lead vs workers (pre-chew, then delegate down):** Handle small direct edits yourself, or do a 60-second `rg` + `Read` to pin down the exact `file:line`, structs, and formulas, then delegate to fast/cheap workers (`haiku` or `sonnet` in Claude Code; `opencode-go/beam-free` in OpenCode) on disjoint file sets in the warm tree. Never invent process rituals (worktree slots, planted-fault theatre, audit swarms, or "Opus-only" file bans) — solve ambiguity in the prompt spec and verify with `git diff` + `cargo nextest`. Roster: `docs/AGENT_ROUTING.md`.
-- **Scoped verification:** Run `cargo nextest run -p <touched_crate> <filter>` during iteration. Before landing a batch to `main`, run `cargo clippy -p <touched_crate> --tests -- -D warnings` and regenerate stale indexes (`scripts/dev.py node-catalog`, `scripts/dev.py docs-index`) if ports/params or docs changed.
+- **Scoped verification:** Run `cargo nextest run -p <touched_crate> <filter>` during iteration. Before landing a batch to `main`, run `cargo clippy -p <touched_crate> --tests -- -D warnings` and regenerate stale indexes (`scripts/dev.py node-catalog`) if ports/params or docs changed.
 - **Shell & Git discipline:**
   - Never launch the full `manifold` GUI window from an agent (it blocks in the event loop); use headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`, and let Peter launch the live app.
   - Stage and commit with explicit file paths (`git add -- <paths>`, `git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`, so pre-existing untracked/dirty files stay untouched.
@@ -38,6 +38,8 @@ When Peter asks a question ("can I see…?", "how does X work?"), answer it with
 - **Time & playback invariants:** Primary time model is **beats** (`Beats`/`Seconds`/`Bpm` newtypes, never raw floats). `sync_clips_to_time()` is the sole authority for playback state. Layer clip non-overlap (`enforce_non_overlap()`) is a write-time invariant. Reading the past never mutates simulated state.
 - **UI invalidation:** UI work is decided by the frame planner (`docs/UI_INVALIDATION_DESIGN.md`); never add ad-hoc invalidation flags, and never build bespoke row/slider infrastructure for manifest-backed param surfaces (`docs/WIDGET_TREE_DESIGN.md` section 5b).
 - **Code & test hygiene:** Comments explain current behavior and *why*, never changelog history, dates, bead IDs (`BUG-...`), or quotes from chat (git log owns history). Tests must check real behavior or math invariants on small, fast inputs (<2s) — never write regex source-file scanners, line-count ratchets, or multi-minute preset soaks as unit tests. No `#[ignore]` on tests (fix or delete).
+- **Git is the archive:** Delete design/wave docs once shipped, and never create one-off audit, investigation, or landing-report markdown files in `docs/`.
+- **Beads (`bd`):** Keep issues high-level (epics and real user-visible bugs/features); never file verification-debt (`VD:`) tickets or micro-task process beads.
 
 ## Reference Docs (Read On Demand)
 

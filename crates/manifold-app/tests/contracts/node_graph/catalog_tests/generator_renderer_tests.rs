@@ -190,7 +190,7 @@ fn generator_type_swap_marks_active_clips_for_clear_at_host_canvas_dims() {
 fn effective_trigger_count_sums_clip_and_audio_and_respects_clip_edge_mode() {
     let device = manifold_gpu::testkit::test_device();
     let mut renderer =
-        GeneratorRenderer::new_unwarmed(device.arc(), 256, 256, GpuTextureFormat::Rgba16Float, 0);
+        GeneratorRenderer::new_unwarmed(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float, 0);
     let layer_id = LayerId::new("trigger-count-layer");
     // TrivialPassthrough moved to test fixtures (PRESET_BROWSER_AUDITION
     // P1, D8) — Plasma is the bundled stand-in for mechanics tests.

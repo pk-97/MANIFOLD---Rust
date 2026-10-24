@@ -482,8 +482,8 @@ fn edit_time_generator_assignment_warms_when_stopped() {
     let device = manifold_gpu::testkit::test_device();
     let mut renderer = GeneratorRenderer::new_unwarmed(
         device.arc(),
-        CANVAS_W,
-        CANVAS_H,
+        64,
+        64,
         GpuTextureFormat::Rgba16Float,
         0,
     );
