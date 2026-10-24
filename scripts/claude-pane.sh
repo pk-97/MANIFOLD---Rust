@@ -44,7 +44,8 @@ else
   [ -n "$PROMPT" ] || { echo "error: need a prompt or -f file" >&2; exit 2; }
 fi
 
-CMD="claude --model $(printf '%q' "$MODEL") --effort $(printf '%q' "$EFFORT") $(printf '%q' "$PROMPT")"
+SYS_PROMPT="/Users/peterkiemann/MANIFOLD - Rust/.claude/hooks/system-prompt/minimal.md"
+CMD="claude --system-prompt-file $(printf '%q' "$SYS_PROMPT") --no-chrome --strict-mcp-config --model $(printf '%q' "$MODEL") --effort $(printf '%q' "$EFFORT") $(printf '%q' "$PROMPT")"
 
 # -d on both forms: create WITHOUT switching focus — the entire point.
 if [ "$MODE" = "window" ]; then
