@@ -181,6 +181,29 @@ pub(crate) fn apply_update(
     true
 }
 
+/// Select an import root on the spot, when the UI thread already knows the
+/// edit landed — a drop that made its own layer executes that layer locally,
+/// so there is no content-thread receipt to wait for (SCENE_DOCUMENT_DESIGN.md
+/// section 7.7 (Imports)). The same appearance as a receipt.
+pub(crate) fn select_import_root(
+    ui: &mut crate::ui_root::UIRoot,
+    doc: &manifold_core::scene_doc::SceneDoc,
+    selection: &mut crate::app::SelectionState,
+    active_layer: &mut Option<LayerId>,
+    layer_id: &LayerId,
+    item: &ItemId,
+) {
+    if doc.find(item).is_none() {
+        return;
+    }
+    focus_scene_tab(selection, active_layer, layer_id);
+    reveal(ui, doc, layer_id, item);
+    ui.scene_setup_panel.set_selection(
+        layer_id.clone(),
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Item(item.clone()),
+    );
+}
+
 /// Unfold every group above `item`, so its row shows in the tree.
 fn reveal(ui: &mut crate::ui_root::UIRoot, doc: &manifold_core::scene_doc::SceneDoc, layer_id: &LayerId, item: &ItemId) {
     let mut parents = Vec::new();

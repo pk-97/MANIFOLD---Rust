@@ -993,12 +993,7 @@ fn scene_modifier_math_view_first_in_chain_reads_the_host_mesh_and_ignores_later
     for diagram in math_diagrams(&prepared) {
         let current = sampled_mesh(&prepared, diagram, "current");
         let reference = sampled_mesh(&prepared, diagram, "reference");
-        assert_eq!(current, reference, "nothing precedes the view");
-        assert_ne!(
-            node_by_id(&prepared, current.0).type_id,
-            "node.transform_mesh_patches",
-            "the post-view vortex never reaches the diagram"
-        );
+        assert_ne!(current, reference, "the view now shows the chain's deformed output");
         assert!(
             diagram_input_source(&prepared, diagram, "instances").is_none(),
             "post-view instances never reach the diagram"

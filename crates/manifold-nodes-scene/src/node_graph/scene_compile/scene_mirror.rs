@@ -61,5 +61,10 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, card: &ModifierFields) -> R
 /// Every scene object the render draws.
 fn mirrored_objects(b: &mut Builder<'_>) -> Vec<NodeId> {
     let objects: Vec<u32> = b.objects.iter().copied().filter(|&object| b.node_type(object) == Some("node.scene_object")).collect();
+    for &object in &objects {
+        if b.input(object, "instances").is_none() {
+            b.set(object, "instances_space", manifold_core::effect_graph_def::SerializedParamValue::Enum { value: 2 });
+        }
+    }
     objects.into_iter().filter_map(|object| b.node_id_of(object)).collect()
 }

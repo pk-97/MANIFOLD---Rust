@@ -12865,6 +12865,11 @@
           "type": "Array"
         },
         {
+          "capacity": "param:max_capacity=200000",
+          "name": "indices",
+          "type": "Array"
+        },
+        {
           "name": "source",
           "type": "MeshSource"
         }
@@ -39826,6 +39831,32 @@
             "1"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Twist",
+          "name": "twist",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Tunnel Radius",
+          "name": "spiral_radius",
+          "range": [
+            "0",
+            "20"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "false",
+          "label": "Alternate Flip",
+          "name": "alternate",
+          "type": "bool"
         }
       ],
       "purpose": "Camera-windowed Array<InstanceTransform> for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md). Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), and the window spans every cell the camera's view reaches up to its far plane, ahead, behind and across (whichever way it looks), plus a margin, keeping a few cells on the side it faces away from for the shadow maps; past the buffer the side seen further is cut first. Every cell that can render exists in the buffer, so no edge hole opens. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
@@ -40086,13 +40117,14 @@
           "default": "0",
           "enum_values": [
             "Object",
-            "Group"
+            "Group",
+            "World"
           ],
           "label": "Instances Space",
           "name": "instances_space",
           "range": [
             "0",
-            "1"
+            "2"
           ],
           "type": "enum"
         }

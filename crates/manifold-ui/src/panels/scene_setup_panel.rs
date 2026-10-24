@@ -122,9 +122,7 @@ impl SceneCardState {
         self.last_pushed_values.resize_with(n, || f32::NAN);
         self.row_value_synced.resize(n, false);
         self.osc_addresses.resize(n, None);
-        while self.mod_active_tab.len() < n {
-            self.mod_active_tab.push(ModTab::Driver);
-        }
+        self.mod_active_tab.resize(n, ModTab::Driver);
         self.row_host.resize(n);
         self.row_host.row_index.clear();
         self.row_id_index.retain(|_, row| *row < n);
@@ -146,6 +144,7 @@ impl SceneCardState {
         let n = retained.len();
         let prev_index = std::mem::take(&mut self.row_id_index);
         let prev_pushed = std::mem::take(&mut self.last_pushed_values);
+        let prev_tabs = std::mem::take(&mut self.mod_active_tab);
         self.resize(n);
         self.rows = retained.iter().map(|&i| config.rows[i].clone()).collect();
         self.row_host.index_swatches(&self.rows);
@@ -154,6 +153,11 @@ impl SceneCardState {
             .rows
             .iter()
             .map(|row| prev_index.get(row.id.as_ref()).map(|&j| prev_pushed[j]).unwrap_or(f32::NAN))
+            .collect();
+        self.mod_active_tab = self
+            .rows
+            .iter()
+            .map(|row| prev_index.get(row.id.as_ref()).and_then(|&j| prev_tabs.get(j).copied()).unwrap_or(ModTab::Driver))
             .collect();
 
         self.row_id_index.clear();
@@ -258,6 +262,8 @@ pub struct ScenePanel {
     show_gizmos_id: Option<NodeId>,
     gizmo_mode_id: Option<NodeId>,
     render_mode_id: Option<NodeId>,
+    preview_navigating: bool,
+    reset_view_id: Option<NodeId>,
     /// The tree's + buttons this frame, each with the section it adds to.
     add_buttons: Vec<(NodeId, outliner::TreeSection)>,
     /// How gizmos meet scene depth, for the preview, the viewport and an
@@ -349,6 +355,8 @@ impl Default for ScenePanel {
             show_gizmos_id: None,
             gizmo_mode_id: None,
             render_mode_id: None,
+            preview_navigating: false,
+            reset_view_id: None,
             add_buttons: Vec::new(),
             gizmo_draw_mode: GizmoDrawMode::default(),
             show_gizmos: false,
@@ -540,6 +548,13 @@ impl ScenePanel {
             .key(KEY_BG)
     }
 
+    pub fn set_preview_navigating(&mut self, active: bool) {
+        if self.preview_navigating != active {
+            self.preview_navigating = active;
+            self.view_version += 1;
+        }
+    }
+
     fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32, panel_h: f32) {
         let chrome = self.chrome_view();
         self.host.build(tree, &chrome, Rect::new(x, y, self.panel_w, panel_h));
@@ -551,6 +566,7 @@ impl ScenePanel {
         self.show_gizmos_id = None;
         self.gizmo_mode_id = None;
         self.render_mode_id = None;
+        self.reset_view_id = None;
         self.add_buttons.clear();
         self.header_buttons.clear();
         self.outliner_row_ids.clear();
@@ -844,13 +860,38 @@ impl ScenePanel {
                 if self.render_mode_id == Some(*node_id) {
                     return (true, self.render_mode_pick_list(*node_id).into_iter().collect());
                 }
+                if self.reset_view_id == Some(*node_id) {
+                    return (true, vec![PanelAction::Root(RootAction::SceneResetPreviewView)]);
+                }
                 if let Some((_, group)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id).cloned() {
                     let Some(vm) = self.state.as_live() else {
                         return (true, Vec::new());
                     };
                     let collapsed = self.collapsed_groups.entry(vm.layer_id.clone()).or_default();
-                    if !collapsed.insert(group.clone()) {
+                    let collapsing = collapsed.insert(group.clone());
+                    if !collapsing {
                         collapsed.remove(&group);
+                    } else {
+                        let layer_id = vm.layer_id.clone();
+                        // If the selection is a descendant of the collapsed group,
+                        // move it onto the group so the user never keeps a hidden
+                        // selected item.
+                        if let Some(SceneSelection::Item(sel_id)) = self.selection.get(&layer_id).cloned() {
+                            let mut cur = Some(sel_id.clone());
+                            let mut is_descendant = false;
+                            while let Some(id) = cur {
+                                if id == group {
+                                    is_descendant = true;
+                                    break;
+                                }
+                                cur = vm.item(&id).and_then(|it| it.parent.clone());
+                            }
+                            if is_descendant && sel_id != group {
+                                self.selection.insert(layer_id.clone(), SceneSelection::Item(group.clone()));
+                                self.selected.remove(&layer_id);
+                                self.note_selection(&layer_id);
+                            }
+                        }
                     }
                     return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
                 }

@@ -122,19 +122,19 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         && frame.and_then(|frame| frame.copies).is_none()
         && group_copies.is_some_and(|nest| b.nests.contains_key(&nest));
     let rest;
-    let (mesh, vertices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
+    let (mesh, vertices, indices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
         let part = super::mesh::emit_part(b, item, file, node_path, *vertex_count, *primitives);
         rest = part.rest;
-        (part.source, part.vertices)
+        (part.source, part.vertices, part.indices)
     } else if ocean {
         let Some(triangles) = ocean::emit_surface(b, item) else {
             return;
         };
         rest = None;
-        (triangles, (triangles, "out"))
+        (triangles, (triangles, "out"), None)
     } else if let Some(curve) = super::curves::emit(b, item, &fields.shape) {
         rest = curve.rest;
-        (curve.solid, curve.vertices)
+        (curve.solid, curve.vertices, None)
     } else {
         let Some((mesh_type, solid)) = mesh_type(&fields.shape) else {
             return;
@@ -149,9 +149,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
             let detail = b.add(owner, "detail", "node.subdivide_mesh");
             b.set(detail, "level", SerializedParamValue::Int { value: level as i32 });
             b.wire(mesh, "vertices", detail, "in");
-            (mesh, (detail, "out"))
+            (mesh, (detail, "out"), None)
         } else {
-            (mesh, (mesh, "vertices"))
+            (mesh, (mesh, "vertices"), None)
         }
     };
     let transform = b.add(owner, "transform", "node.transform_3d");
@@ -178,6 +178,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
             continue;
         }
         b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
+    }
+    if let Some(indices) = indices {
+        b.wire(indices.0, indices.1, object, "indices");
     }
     for (source, port) in maps {
         b.wire(source, "out", object, port);

@@ -272,6 +272,22 @@
         assert!((0..3).any(|axis| (object[axis] - group[axis]).abs() > 0.1), "the two spaces differ for a turned object");
     }
 
+    /// World space places `T_instance` outside `parent · local`: a 0.05-scaled,
+    /// 180°-rotated parent group still steps by the full unscaled world +Z
+    /// translation of the instance.
+    #[test]
+    fn world_space_places_instance_outside_parent_local() {
+        use manifold_node_engine::scene::scene_object::InstanceSpace;
+        let parent = model_matrix([0.0, 0.0, 0.0], [0.0, std::f32::consts::PI, 0.0], [0.05, 0.05, 0.05]);
+        let local = model_matrix([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        let instance = model_matrix([0.0, 0.0, 2.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        let pair = instance_space_pair(Some(parent), local, InstanceSpace::World, true);
+        let world = instance_space_world(pair, instance, [0.0, 0.0, 0.0]);
+        assert!((world[0]).abs() < 1e-5, "world x = {}", world[0]);
+        assert!((world[1]).abs() < 1e-5, "world y = {}", world[1]);
+        assert!((world[2] - 2.0).abs() < 1e-5, "world z = {} (expected 2.0, full unscaled +Z step)", world[2]);
+    }
+
     /// BUG-wfxe: the scene kernel must naga-parse — a WGSL syntax break
     /// here is otherwise only caught by GPU pipeline creation. Also pins
     /// the tangent seam: the Vertex struct carries it, the vertex shader

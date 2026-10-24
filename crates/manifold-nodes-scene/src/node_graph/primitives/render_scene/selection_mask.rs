@@ -16,15 +16,24 @@ pub(super) struct SelectionMask {
     pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// This frame drew the mask; cleared at the start of every evaluate.
     pub(super) drawn: bool,
+    /// Dirty-cache key for the last drawn mask.
+    cache_key: Option<u64>,
 }
 
 impl SelectionMask {
     pub(super) fn set(&mut self, slots: &[u32]) {
+        if self.slots != slots {
+            self.cache_key = None;
+        }
         self.slots.clear();
         self.slots.extend_from_slice(slots);
         if slots.is_empty() {
             self.texture = None;
         }
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.cache_key = None;
     }
 
     /// The mask this frame drew, if it drew one.
@@ -47,8 +56,10 @@ impl RenderScene {
             return;
         }
         let (width, height) = (pre.native_width.max(1), pre.native_height.max(1));
+        let rebuild_epoch = ctx.rebuild_epoch;
         let gpu = ctx.gpu_encoder();
-        if self.selection.texture.as_ref().is_none_or(|mask| mask.width != width || mask.height != height) {
+        let recreated = self.selection.texture.as_ref().is_none_or(|mask| mask.width != width || mask.height != height);
+        if recreated {
             self.selection.texture = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width,
                 height,
@@ -59,6 +70,7 @@ impl RenderScene {
                 label: "node.render_scene selection mask",
                 mip_levels: 1,
             }));
+            self.selection.cache_key = None;
         }
         let pipeline = self
             .selection
@@ -79,8 +91,46 @@ impl RenderScene {
         let dummy = self.dummy_texture.as_ref().expect("ensured");
         // Unjittered: the editor projects through the same camera.
         let view_proj = pre.cam.view_proj(pre.aspect);
+        let selected_draws: Vec<&ObjectDraw<'ctx>> = draws
+            .iter()
+            .filter(|d| d.instance_count > 0 && self.selection.slots.contains(&d.slot))
+            .collect();
+        use std::hash::{Hash, Hasher};
+        let mut hasher = ahash::AHasher::default();
+        hasher.write_u32(width);
+        hasher.write_u32(height);
+        hasher.write_u64(rebuild_epoch);
+        hasher.write(bytemuck::bytes_of(&view_proj));
+        self.selection.slots.hash(&mut hasher);
+        hasher.write_usize(selected_draws.len());
+        for d in &selected_draws {
+            hasher.write_u32(d.slot);
+            hasher.write(bytemuck::bytes_of(&ShadowUniforms::for_draw(view_proj, d)));
+            d.vertices_content.hash(&mut hasher);
+            d.indices_content.hash(&mut hasher);
+            d.instances_content.hash(&mut hasher);
+            d.weights_content.hash(&mut hasher);
+            d.rt_texture_content[0].hash(&mut hasher);
+            hasher.write_u32(Self::sampler_cache_key(d.sampler_descs[0]));
+            hasher.write_u32(d.vertex_count);
+            hasher.write_u32(d.instance_count);
+            hasher.write_u8(u8::from(d.live_args.is_some()));
+        }
+        let selection_key = hasher.finish();
+        let cacheable = selected_draws.iter().all(|d| {
+            d.geometry_content_known
+                && d.appearance_content_known
+                && d.live_args.is_none()
+                && (d.base_color_map.is_none() || d.rt_texture_content[0].is_some())
+        });
+        if cacheable && self.selection.cache_key == Some(selection_key) {
+            self.selection.drawn = true;
+            return;
+        }
+        self.selection.cache_key = cacheable.then_some(selection_key);
+
         let mut load = manifold_gpu::GpuLoadAction::Clear;
-        for d in draws.iter().filter(|d| d.instance_count > 0 && self.selection.slots.contains(&d.slot)) {
+        for d in selected_draws {
             let uniforms = ShadowUniforms::for_draw(view_proj, d);
             let bindings = [
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },

@@ -208,9 +208,10 @@ pub fn compile_model_scene_with(
         group.combine_meshes = combine;
     }
     edit(&mut doc, &id);
+    let center = model_file::world_bounds(&facts).map(|(c, _)| c);
     doc.models.insert(file.into_owned(), facts);
     let mut def = manifold_core::scene_doc::compile(&doc)?;
-    for (item, property, value) in model.starting_values(&id) {
+    for (item, property, value) in model.starting_values(&id, center) {
         start_at(&mut def, &format!("{item}.{property}"), value);
     }
     Ok((def, model))
@@ -332,7 +333,7 @@ fn folded(m: transform::Mat4) -> Option<ImportedTransform> {
 }
 
 pub(crate) mod model_file;
-pub use model_file::{read_facts, read_file_facts};
+pub use model_file::{read_facts, read_file_facts, world_bounds};
 
 #[cfg(test)]
 mod tests;

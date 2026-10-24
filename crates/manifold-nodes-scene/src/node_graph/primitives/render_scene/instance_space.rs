@@ -23,6 +23,7 @@ pub(crate) fn instance_space_pair(
 ) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
     match (space, instanced) {
         (InstanceSpace::Group, true) => (parent.unwrap_or(IDENTITY_M4), local),
+        (InstanceSpace::World, true) => (IDENTITY_M4, parent.map_or(local, |parent| mat4_mul(parent, local))),
         _ => (parent.map_or(local, |parent| mat4_mul(parent, local)), IDENTITY_M4),
     }
 }

@@ -9,7 +9,7 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
     DrawAs, EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, PhysicsSetting, SceneDoc, Shape, draws_with_material,
-    param_id, split_param_id,
+    import_placement_id, param_id, split_param_id,
 };
 use manifold_core::scene_schema::{
     ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, MODIFIER_HEADER_FIELDS, acts_on_copies, applicable_fields, break_unavailable,
@@ -21,6 +21,10 @@ use manifold_core::scene_surface::FieldPick;
 use manifold_ui::panels::scene_setup_panel::{
     AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, SceneItemVm, SceneSetupState, SceneSetupVm,
 };
+
+fn is_import_placement(item: &Item, parent: Option<&Item>) -> bool {
+    parent.is_some_and(|p| matches!(&p.fields, ItemFields::Group(g) if g.source.is_some()) && item.id == import_placement_id(&p.id))
+}
 
 /// The panel's state for the selected layer. A layer `notices` lists as
 /// stopped offers Draw Again on its World. `selected` is the panel's item
@@ -41,10 +45,10 @@ pub(crate) fn scene_state(
     let (Some(inst), Some(doc)) = (layer.gen_params(), project.scene_of(&layer_id)) else {
         return SceneSetupState::NoScene { layer_id };
     };
-    let stopped = notices.is_stopped(&layer_id);
+    let _ = notices;
     let mut vm = scene_vm(project, layer_id, doc, inst, selected);
     for item in vm.items.iter_mut().filter(|item| item.kind == ItemKind::World) {
-        item.draw_again = stopped;
+        item.draw_again = false;
     }
     SceneSetupState::Live(Box::new(vm))
 }
@@ -67,7 +71,19 @@ fn scene_vm(project: &Project, layer_id: LayerId, doc: &SceneDoc, inst: &PresetI
     let materials = Materials { effective: doc.effective_materials(), users: doc.material_users() };
     let mut items = Vec::new();
     doc.walk(|item, ancestors| {
-        items.push(item_vm(doc, inst, item, ancestors, &owned, &layers, &materials));
+        if is_import_placement(item, ancestors.last().copied()) {
+            return;
+        }
+        // Exclude any import-placement group from the ancestor chain so its
+        // children sit directly under the outer import group.
+        let mut filtered: Vec<&Item> = Vec::new();
+        for (idx, a) in ancestors.iter().copied().enumerate() {
+            let is_placement = idx > 0 && is_import_placement(a, Some(ancestors[idx - 1]));
+            if !is_placement {
+                filtered.push(a);
+            }
+        }
+        items.push(item_vm(doc, inst, item, &filtered, &owned, &layers, &materials));
     });
     // A copy card aims where a new card would; it is refused there when it
     // would move nothing.
@@ -137,7 +153,11 @@ fn item_vm(
         name: item.name.clone(),
         depth: ancestors.len(),
         parent: ancestors.last().map(|parent| parent.id.clone()),
-        has_children: !item.children.is_empty(),
+        has_children: if matches!(&item.fields, ItemFields::Group(g) if g.source.is_some()) && item.children.len() == 1 && item.children[0].id == import_placement_id(&item.id) {
+            !item.children[0].children.is_empty()
+        } else {
+            !item.children.is_empty()
+        },
         parameter_ids: params_of(&item.id),
         fields,
         material,
@@ -148,6 +168,13 @@ fn item_vm(
         aim_sun_file,
         draw_again: false,
         add_loop_camera: is_scene_loop(item) && !has_loop_camera(doc),
+        make_active_camera: match &item.fields {
+            ItemFields::Camera(cam) => {
+                let pick = doc.camera_pick_param().filter(|id| inst.params.contains(id)).map_or(0.0, |id| inst.get_base_param(&id));
+                (doc.picked_camera(pick) != Some(&item.id)).then_some(cam.cut as f32)
+            }
+            _ => None,
+        },
         row_reasons,
         body: item.fields.physics() == PhysicsSetting::Body,
         look: match &item.fields {
@@ -452,25 +479,36 @@ mod tests {
             manifold_core::scene_schema::LOOP_CAMERA_ONLY.into_iter().filter(|property| item.parameter_ids.contains(&param_id(&card, property))).count()
         };
 
-        let before = loop_card(&project);
-        assert!(before.add_loop_camera, "a Scene Loop with no Loop camera offers one");
-        assert_eq!(camera_only(&before), 0, "rows only a Loop camera reads stay hidden");
-        assert!(before.parameter_ids.contains(&param_id(&card, "spacing")), "the corridor's own rows show");
-
-        let mut edit = crate::scene_edit::add_loop_camera(&project, &layer).expect("the button adds a camera");
-        edit.command.execute(&mut project);
-        let camera = edit.select.expect("the new camera is selected");
+        let after = loop_card(&project);
+        assert!(!after.add_loop_camera, "adding Scene Loop automatically creates and activates a Loop camera");
+        assert_eq!(camera_only(&after), manifold_core::scene_schema::LOOP_CAMERA_ONLY.len(), "the Loop camera's rows show on Scene Loop");
         let doc = project.scene_of(&layer).expect("the scene");
-        let Some(ItemFields::Camera(fields)) = doc.find(&camera).map(|item| item.fields.clone()) else {
-            panic!("the button adds a Camera");
-        };
-        assert_eq!(fields.rig, manifold_core::scene_doc::CameraRig::Loop);
         let pick = doc.camera_pick_param().expect("the World's Camera row");
         let inst = project.timeline.layers[index].gen_params().expect("scene params");
-        assert_eq!(doc.picked_camera(inst.get_base_param(&pick)), Some(&camera), "the new camera is the World's camera");
+        let active_cam = doc.picked_camera(inst.get_base_param(&pick)).expect("active camera");
+        assert!(matches!(doc.find(active_cam).map(|i| &i.fields), Some(ItemFields::Camera(c)) if c.rig == manifold_core::scene_doc::CameraRig::Loop));
 
+        // If the user deletes the Loop Camera, Add Loop Camera is offered again and restores it.
+        let mut rm = crate::scene_edit::remove(&project, &layer, &[active_cam.clone()]).expect("remove loop camera");
+        rm.command.execute(&mut project);
+        let without_cam = loop_card(&project);
+        assert!(without_cam.add_loop_camera, "a Scene Loop with no Loop camera offers one");
+        assert_eq!(camera_only(&without_cam), 0, "rows only a Loop camera reads stay hidden");
+        let mut edit = crate::scene_edit::add_loop_camera(&project, &layer).expect("the button adds a camera");
+        edit.command.execute(&mut project);
         let after = loop_card(&project);
         assert!(!after.add_loop_camera, "one Loop camera is enough");
         assert_eq!(camera_only(&after), manifold_core::scene_schema::LOOP_CAMERA_ONLY.len(), "the Loop camera's rows show");
+        // make_active_camera UX
+        let SceneSetupState::Live(vm) = scene_state(&project, Some(&project.timeline.layers[index]), &Default::default(), &[]) else { panic!() };
+        let cam_items: Vec<_> = vm.items.iter().filter(|i| i.kind == ItemKind::Camera).collect();
+        // original Camera (non-loop) offers Use as Active Camera with cut 0.0
+        assert!(cam_items.iter().any(|i| i.make_active_camera == Some(0.0)), "original camera offers make active");
+        // Loop Camera is active -> no button
+        assert!(cam_items.iter().any(|i| i.make_active_camera.is_none()), "active loop camera has no button");
+        // Scene Loop exposes new params
+        assert!(after.parameter_ids.contains(&param_id(&card, "twist")));
+        assert!(after.parameter_ids.contains(&param_id(&card, "spiral_radius")));
+        assert!(after.parameter_ids.contains(&param_id(&card, "alternate")));
     }
 }

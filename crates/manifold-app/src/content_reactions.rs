@@ -145,6 +145,12 @@ impl ContentThread {
                 }
             }
         }
+        // Restore any layers stopped by runaway GPU frames so an edit retries.
+        for renderer in self.engine.renderers_mut() {
+            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>() {
+                gen_renderer.restore_stopped_layers();
+            }
+        }
         // Refresh the compositor even while paused: a blend-mode change,
         // effect edit or value write must show without playback advancing.
         self.engine.mark_compositor_dirty_now();

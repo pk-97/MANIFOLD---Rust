@@ -46,6 +46,12 @@ impl PreviewNavigation {
         self.session.is_some()
     }
 
+    /// The navigated camera when `PreviewNavigation` is active on `layer_id`.
+    pub fn camera_for(&self, layer_id: &LayerId) -> Option<ViewportCamera> {
+        let (GraphTarget::Generator(layer), _) = self.target.as_ref()? else { return None };
+        (layer == layer_id).then(|| self.session.as_ref().map(|s| s.config.camera)).flatten()
+    }
+
     /// A left or middle press inside the picture `fit` with `pickable`
     /// gizmos on: arm a drag. Only when there is a view to navigate (an
     /// output frame `shown`, or navigation running); otherwise the press

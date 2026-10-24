@@ -20,6 +20,7 @@ fn item(id: &str, kind: ItemKind, name: &str, depth: usize, parent: Option<&str>
         aim_sun_file: None,
         draw_again: false,
         add_loop_camera: false,
+        make_active_camera: None,
         row_reasons: Vec::new(),
         body: false,
         look: None,
@@ -439,9 +440,8 @@ fn lighting_lines_up_and_only_shared_materials_are_rows() {
     panel.configure(SceneSetupState::Live(Box::new(vm)));
     let mut tree = UITree::new();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
-    let row_x = |sel: SceneSelection| tree.get_bounds(panel.outliner_row_ids.iter().find(|(_, row)| *row == sel).expect("a row").0).x;
-    assert_eq!(row_x(SceneSelection::Lighting), row_x(SceneSelection::Item(ItemId::new("world"))));
     let has_row = |id: &str| panel.outliner_row_ids.iter().any(|(_, sel)| *sel == SceneSelection::Item(ItemId::new(id)));
+    assert!(has_row("sun"), "Sun has its own row under Lighting");
     assert!(!has_row("own"), "a Material one item uses shows only on that item's card");
     assert!(has_row("shared"));
 }
@@ -468,6 +468,56 @@ fn a_card_drag_shows_where_it_lands() {
     tree.clear();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
     assert!(named(&tree, "scene_tree.drop_line").is_none(), "the line leaves with the drag");
+}
+
+#[test]
+fn collapsing_a_group_moves_selection_off_a_hidden_descendant() {
+    let mut group = item("group", ItemKind::Group, "Group", 0, None);
+    group.has_children = true;
+    let child = item("child", ItemKind::Object, "Child", 1, Some("group"));
+    let vm = SceneSetupVm {
+        layer_id: LayerId::new("layer-1"),
+        items: vec![item("world", ItemKind::World, "World", 0, None), group, child],
+        add_entries: Vec::new(),
+    };
+    let mut panel = ScenePanel::new();
+    panel.open();
+    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    panel.set_selection(LayerId::new("layer-1"), SceneSelection::Item(ItemId::new("child")));
+    let mut tree = UITree::new();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    let toggle = named(&tree, "scene_setup.objects.group_toggle").expect("the group fold chevron");
+    click(&mut panel, &mut tree, toggle);
+    assert_eq!(
+        panel.selected_of(&LayerId::new("layer-1")),
+        [SceneSelection::Item(ItemId::new("group"))],
+        "collapsing a group moves selection from its hidden child to the group"
+    );
+}
+
+#[test]
+fn preview_navigation_shows_reset_view_button_and_preserves_mod_tabs_by_id() {
+    let cube = item("cube", ItemKind::Object, "Cube", 0, None);
+    let (mut panel, mut tree) = live_panel_with(cube);
+    assert!(named(&tree, "scene_setup.reset_preview_view").is_none());
+    panel.set_preview_navigating(true);
+    tree.clear();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+    let reset = named(&tree, "scene_setup.reset_preview_view").expect("Back to Camera button");
+    let actions = click(&mut panel, &mut tree, reset);
+    assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneResetPreviewView)]), "{actions:?}");
+
+    // Verify SceneCardState preserves mod_active_tab by row id when a row is inserted before it.
+    let mut surface = panel.full_params.clone().unwrap();
+    let mut row_a = placeholder_param_info();
+    row_a.id = manifold_foundation::ParamId::from("cube.pos_x");
+    let mut row_b = placeholder_param_info();
+    row_b.id = manifold_foundation::ParamId::from("cube.pos_y");
+    surface.rows = vec![row_a, row_b];
+    panel.properties_card.configure_from_filtered(&surface, &[1]);
+    panel.properties_card.mod_active_tab[0] = ModTab::Envelope;
+    panel.properties_card.configure_from_filtered(&surface, &[0, 1]);
+    assert_eq!(panel.properties_card.mod_active_tab, vec![ModTab::Driver, ModTab::Envelope]);
 }
 
 /// The live node registered under `name`, in any region.

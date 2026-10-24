@@ -29,6 +29,9 @@ fn body(
     cell_size: f32,
     jitter_seed: i32,
     jitter_amount: f32,
+    twist: f32,
+    spiral_radius: f32,
+    alternate: u32,
     base_cell: i32,
     behind: u32,
     ahead: u32,
@@ -52,6 +55,25 @@ fn body(
     else if axis == 4u { pos.z = t; }
     else { pos.z = -t; }
 
+    // Tunnel angle: p-periodic in c so wrap purity holds for all p.
+    let p = max(pattern_length, 1);
+    let m = ((c % p) + p) % p;
+    var angle = twist * 6.28318530718 * (f32(m) / f32(p));
+    let odd_flip = select(0.0, 3.14159265359, alternate != 0u && (m & 1) == 1);
+    if spiral_radius > 0.0 {
+        let ring_angle = angle + odd_flip;
+        if axis == 0u || axis == 1u {
+            pos.y += -cos(ring_angle) * spiral_radius;
+            pos.z += sin(ring_angle) * spiral_radius;
+        } else if axis == 2u || axis == 3u {
+            pos.x += sin(ring_angle) * spiral_radius;
+            pos.z += -cos(ring_angle) * spiral_radius;
+        } else {
+            pos.x += sin(ring_angle) * spiral_radius;
+            pos.y += -cos(ring_angle) * spiral_radius;
+        }
+    }
+
     // Per-instance jitter: rotation (radians, ±jitter_amount per axis) and
     // scale (1 ± jitter_amount/2) from hash_u32 keyed by (c mod pattern_length)
     // mixed with the seed. The mod MUST be Euclidean on the signed cell index:
@@ -74,6 +96,16 @@ fn body(
             0.0,
         );
         scl = 1.0 + (hash_u32(k + 3u) - 0.5) * jitter_amount;
+    }
+    if axis == 0u || axis == 1u {
+        rot.x += angle;
+        rot.y += odd_flip;
+    } else if axis == 2u || axis == 3u {
+        rot.y += angle;
+        rot.z += odd_flip;
+    } else {
+        rot.z += angle;
+        rot.y += odd_flip;
     }
     return Element(vec4<f32>(pos, scl), rot);
 }

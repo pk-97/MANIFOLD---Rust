@@ -100,6 +100,16 @@ fn outliner_row_style(selected: bool) -> UIStyle {
     }
 }
 
+fn section_header_style() -> UIStyle {
+    UIStyle {
+        text_color: color::TEXT_DIMMED_C32,
+        font_weight: crate::node::FontWeight::Bold,
+        font_size: color::FONT_LABEL,
+        text_align: TextAlign::Left,
+        ..UIStyle::default()
+    }
+}
+
 fn icon_style(selected: bool) -> UIStyle {
     UIStyle {
         text_color: if selected { color::SELECTED_LAYER_RING } else { color::TEXT_DIMMED_C32 },
@@ -155,11 +165,12 @@ impl ScenePanel {
         for item in vm.items.iter().filter(|item| item.depth == 0 && item.kind == ItemKind::Camera) {
             cy = self.build_item_row(tree, child, cy, vm, item, selected);
         }
-        cy = if vm.items.iter().any(|item| item.kind == ItemKind::Light) {
-            self.build_lighting_row(tree, (inner_x, inner_w), cy, selected)
-        } else {
-            self.build_section_row(tree, (inner_x, inner_w), cy, TreeSection::Lighting)
-        };
+        cy = self.build_section_row(tree, (inner_x, inner_w), cy, TreeSection::Lighting);
+        let mut lights: Vec<&SceneItemVm> = vm.items.iter().filter(|item| item.kind == ItemKind::Light).collect();
+        lights.sort_by_key(|item| !item.environment);
+        for item in lights {
+            cy = self.build_item_row(tree, child, cy, vm, item, selected);
+        }
 
         cy = self.build_section_row(tree, (inner_x, inner_w), cy, TreeSection::Objects);
         let collapsed = self.collapsed_groups.get(&vm.layer_id).cloned().unwrap_or_default();
@@ -204,16 +215,16 @@ impl ScenePanel {
     /// World row.
     fn build_section_row(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, section: TreeSection) -> f32 {
         let icon = scene_item_icon(section.kind(), false).text();
-        tree.add_label(Some(self.content_parent), inner_x + STEP_W, cy, STEP_W, ROW_H, &icon, icon_style(false));
+        tree.add_label(Some(self.content_parent), inner_x, cy, STEP_W, ROW_H, &icon, section_header_style());
         let title = section.title();
         let label = tree.add_label(
             Some(self.content_parent),
-            inner_x + STEP_W * 2.0,
+            inner_x + STEP_W,
             cy,
-            (inner_w - STEP_W * 3.0).max(0.0),
+            (inner_w - STEP_W * 2.0).max(0.0),
             ROW_H,
             title,
-            outliner_row_style(false),
+            section_header_style(),
         );
         tree.set_name(label, format!("scene_tree.section.{}", title.to_lowercase()));
         self.build_add_button(tree, inner_x + inner_w - STEP_W, cy, section);
@@ -227,29 +238,6 @@ impl ScenePanel {
             node.tooltip = Some(format!("Add to {}", section.title()));
         }
         self.add_buttons.push((add, section));
-    }
-
-    /// The Lighting row: one row for every light, selectable like an item.
-    fn build_lighting_row(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, selected: &[SceneSelection]) -> f32 {
-        let is_selected = selected.contains(&SceneSelection::Lighting);
-        // The chevron column stays empty, so Lighting lines up with every
-        // other top-level row.
-        let x = inner_x + STEP_W;
-        tree.add_label(Some(self.content_parent), x, cy, STEP_W, ROW_H, &scene_item_icon(ItemKind::Light, false).text(), icon_style(is_selected));
-        let row = tree.add_button_keyed(
-            Some(self.content_parent),
-            x + STEP_W,
-            cy,
-            (inner_w - STEP_W * 3.0).max(0.0),
-            ROW_H,
-            outliner_row_style(is_selected),
-            "Lighting",
-            KEY_LIGHTING,
-        );
-        tree.set_name(row, "scene_tree.item");
-        self.outliner_row_ids.push((row, SceneSelection::Lighting));
-        self.build_add_button(tree, inner_x + inner_w - STEP_W, cy, TreeSection::Lighting);
-        cy + ROW_H
     }
 
     /// One selectable row: `[chevron | icon | name | mark | eye]`,
@@ -266,12 +254,11 @@ impl ScenePanel {
     ) -> f32 {
         let selection = SceneSelection::Item(item.id.clone());
         let is_selected = selected.contains(&selection);
-        let mut x = inner_x + indent;
         if item.kind == ItemKind::Group && item.has_children {
             let open = !self.collapsed_groups.get(&vm.layer_id).is_some_and(|collapsed| collapsed.contains(&item.id));
             let toggle = tree.add_button_keyed(
                 Some(self.content_parent),
-                x,
+                inner_x + indent - STEP_W,
                 cy,
                 STEP_W,
                 ROW_H,
@@ -282,10 +269,10 @@ impl ScenePanel {
             tree.set_name(toggle, "scene_setup.objects.group_toggle");
             self.group_toggle_ids.push((toggle, item.id.clone()));
         }
-        x += STEP_W;
+        let icon_x = inner_x + indent;
         let icon = tree.add_label(
             Some(self.content_parent),
-            x,
+            icon_x,
             cy,
             STEP_W,
             ROW_H,
@@ -303,11 +290,12 @@ impl ScenePanel {
             0.0
         };
         let right = inner_x + inner_w - eye_w;
+        let name_x = icon_x + STEP_W;
         let row = tree.add_button_keyed(
             Some(self.content_parent),
-            x + STEP_W,
+            name_x,
             cy,
-            (right - (x + STEP_W)).max(0.0),
+            (right - name_x).max(0.0),
             ROW_H,
             outliner_row_style(is_selected),
             &item.name,

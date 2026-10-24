@@ -459,6 +459,8 @@ pub enum SceneShape {
         curve: Cow<'static, str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         axis: Option<ParamTriple>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strength: Option<Cow<'static, str>>,
     },
 }
 
@@ -474,8 +476,8 @@ impl SceneShape {
             Self::Axis { origin, direction, radius } => {
                 (origin.iter().chain(std::iter::once(direction)).collect(), radius.iter().collect())
             }
-            Self::Field { center, radius, falloff, curve, axis } => {
-                (std::iter::once(center).chain(axis).collect(), vec![radius, falloff, curve])
+            Self::Field { center, radius, falloff, curve, axis, strength } => {
+                (std::iter::once(center).chain(axis).collect(), [radius, falloff, curve].into_iter().chain(strength).collect())
             }
         };
         triples.into_iter().flatten().chain(singles).map(|id| id.as_ref())

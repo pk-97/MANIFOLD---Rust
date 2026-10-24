@@ -39,6 +39,10 @@ fn vertices_of(parts: &[FilePart]) -> u32 {
     parts.iter().fold(0u32, |total, part| total.saturating_add(part.vertex_count))
 }
 
+fn unique_vertices_of(parts: &[FilePart]) -> u32 {
+    parts.iter().fold(0u32, |total, part| total.saturating_add(part.unique_vertex_count))
+}
+
 /// The mesh node for `file`'s node `node_path` (the whole file when empty),
 /// sized for `vertex_count` vertices.
 pub(crate) fn emit_source(b: &mut Builder<'_>, owner: &str, file: &str, node_path: &str, vertex_count: u32) -> u32 {
@@ -66,6 +70,7 @@ pub(crate) struct Part {
     pub source: u32,
     /// The node and port the draw reads its vertices from.
     pub vertices: (u32, &'static str),
+    pub indices: Option<(u32, &'static str)>,
     /// Its rest pose: posed parts rest at their bind pose.
     pub rest: Option<Rest>,
 }
@@ -103,6 +108,10 @@ fn emit_part_in(
         Some(material) => facts.part(Some(material)).map_or(vertex_count, |part| part.vertex_count),
         None => vertices_of(&facts.parts),
     });
+    let unique_vertex_count = facts.map_or(vertex_count, |(_, facts)| match primitives.material() {
+        Some(material) => facts.part(Some(material)).map_or(vertex_count, |part| part.unique_vertex_count),
+        None => unique_vertices_of(&facts.parts),
+    });
     // The glTF material the part's primitives use (`None` the default), when
     // one is known: the selection's, else the node's only material.
     let part = facts.and_then(|(_, facts)| facts.part(primitives.material()));
@@ -123,13 +132,18 @@ fn emit_part_in(
         if let Some((model, _)) = facts {
             b.set(source, "source_bbox_radius", SerializedParamValue::Float { value: model.radius });
         }
+        let use_indexed = morph.is_none() && !b.mesh_modified.contains(&item.id) && unique_vertex_count > 0 && unique_vertex_count < vertex_count;
+        if use_indexed {
+            b.set(source, "max_capacity", SerializedParamValue::Int { value: capacity_for(unique_vertex_count).min(i32::MAX as u32) as i32 });
+        }
         // A morphing part rests at its base shape.
         let rest = part.map(|part| rest_of(part, own_space, vertex_count));
         let vertices = match morph {
             Some(morph) => emit_morph(b, item, file, node_path, known, vertex_count, morph, (source, "vertices"), own_space),
             None => (source, "vertices"),
         };
-        return Part { source, vertices, rest };
+        let indices = if use_indexed { Some((source, "indices")) } else { None };
+        return Part { source, vertices, indices, rest };
     };
     // A skinned or animated part: the pose places its vertices, seen from
     // its node at rest when it draws in the node's own space.
@@ -169,7 +183,7 @@ fn emit_part_in(
     b.wire(deformed.0, deformed.1, skin, "in");
     // The part rests at its bind pose; a modifier bends the posed result.
     let rest = part.map(|part| rest_of(part, own_space, vertex_count));
-    Part { source, vertices: (skin, "out"), rest }
+    Part { source, vertices: (skin, "out"), indices: None, rest }
 }
 
 /// A file part's rest pose: its box in the node's own space when it draws
@@ -276,6 +290,19 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
         }),
     };
     let owner = group.id.as_str();
+    let placement_id = manifold_core::scene_doc::import_placement_id(&group.id);
+    // If the import has a persistent File Placement child group, emit its
+    // transform so its `-center` translation is applied inside the outer group.
+    let mut frame = Frame { transform: frame.transform, visible: frame.visible, copies: frame.copies };
+    if let Some(placement_item) = group.children.iter().find(|child| child.id == placement_id) {
+        let pt = b.add(placement_item.id.as_str(), "transform", "node.transform_3d");
+        if let Some(parent) = frame.transform {
+            b.wire(parent, "transform", pt, "parent");
+        }
+        b.rows(placement_item);
+        b.group_frames.insert(placement_item.id.clone(), pt);
+        frame.transform = Some(pt);
+    }
     // Nothing draws the shape, so it loads only when a body or copies read it.
     let shape = emit_source(b, owner, file, "", vertices);
     if let Some(model) = model_file(b.doc, file) {
@@ -310,6 +337,9 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
             } else {
                 b.wire(w.from_node, &w.from_port, w.to_node, &w.to_port);
             }
+        }
+        if let Some(indices) = drawn.indices {
+            b.wire(indices.0, indices.1, object, "indices");
         }
         for (source, port) in maps {
             b.wire(source, "out", object, port);

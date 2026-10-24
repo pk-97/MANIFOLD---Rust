@@ -147,7 +147,17 @@ impl ScenePanel {
             tree.set_name(render, "scene_setup.render_mode");
             self.render_mode_id = Some(render);
         }
-        cy + ROW_H + ROW_GAP
+        let mut next_y = cy + ROW_H + ROW_GAP;
+        if self.preview_navigating {
+            let reset = tree.add_button_keyed(
+                Some(self.content_parent), inner_x, next_y, inner_w, ROW_H,
+                toggle_btn_style(true), "Back to Camera (Esc)", crate::param_surface::stable_key("scene.reset_preview_view"),
+            );
+            tree.set_name(reset, "scene_setup.reset_preview_view");
+            self.reset_view_id = Some(reset);
+            next_y += ROW_H + ROW_GAP;
+        }
+        next_y
     }
 
     /// The Render Mode row's pick list, anchored under its header button: the

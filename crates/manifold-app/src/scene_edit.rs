@@ -79,7 +79,25 @@ pub(crate) fn add(project: &Project, layer: &LayerId, key: &str, parent: Option<
             return Err(reason.to_owned());
         }
         item.name = name;
-        return Ok(batch(vec![Box::new(add_modifier(layer, doc, item))], &format!("Add {}", entry.label), Some(id)));
+        let mut commands: Vec<Box<dyn Command>> = vec![Box::new(add_modifier(layer, doc, item))];
+        if key == "modifier.scene_loop" && !scene_schema::has_loop_camera(doc)
+            && let Some(world) = doc.world().map(|world| world.id.clone())
+            && let Some(inst) = instance(project, layer)
+        {
+                let cam_id = new_id();
+                let cam_index = doc.items.iter().rposition(|item| item.kind() == ItemKind::Camera).map_or(doc.items.len(), |last| last + 1);
+                let cut = doc.upcoming_cut();
+                let pick = base(inst, &world, manifold_core::scene_doc::CAMERA_PICK).unwrap_or(0.0);
+                commands.push(Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Camera, None, cam_index, None, cam_id.clone())));
+                commands.push(Box::new(SetSceneItemFieldsCommand::new(
+                    layer.clone(),
+                    cam_id.clone(),
+                    ItemFields::Camera(CameraFields { rig: CameraRig::Loop, ..CameraFields::default() }),
+                )));
+                commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), cam_id.clone(), unique_name(LOOP_CAMERA_NAME, &names))));
+                commands.push(write(layer, &world, manifold_core::scene_doc::CAMERA_PICK, pick, cut as f32));
+        }
+        return Ok(batch(commands, &format!("Add {}", entry.label), Some(id)));
     }
     // An Object comes with its own Material, so its colour is on its card
     // at once.
@@ -631,9 +649,10 @@ pub(crate) fn aim_sun_at_hdri(project: &Project, layer: &LayerId, file: &str) ->
 /// The World's Camera row cuts back to any other camera.
 pub(crate) fn add_loop_camera(project: &Project, layer: &LayerId) -> Result<SceneEdit, String> {
     let doc = doc(project, layer)?;
-    if scene_schema::scene_loop(doc).is_none() {
+    let Some(loop_item) = scene_schema::scene_loop(doc) else {
         return Err(scene_schema::NO_SCENE_LOOP.to_owned());
-    }
+    };
+    let loop_id = loop_item.id.clone();
     let world = doc.world().map(|world| world.id.clone()).ok_or("This scene has no World to pick the camera")?;
     let inst = instance(project, layer).ok_or("There is no scene to add a camera to")?;
     let id = new_id();
@@ -650,7 +669,7 @@ pub(crate) fn add_loop_camera(project: &Project, layer: &LayerId) -> Result<Scen
         Box::new(RenameSceneItemCommand::new(layer.clone(), id.clone(), unique_name(LOOP_CAMERA_NAME, &names(doc)))),
         write(layer, &world, manifold_core::scene_doc::CAMERA_PICK, pick, cut as f32),
     ];
-    Ok(batch(commands, "Add Loop Camera", Some(id)))
+    Ok(batch(commands, "Add Loop Camera", Some(loop_id)))
 }
 
 const LOOP_CAMERA_NAME: &str = "Loop Camera";

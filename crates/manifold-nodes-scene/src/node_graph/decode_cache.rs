@@ -532,6 +532,18 @@ pub(crate) fn cached_load_gltf_mesh(
     cached_load_gltf_mesh_with_root(path, selector, cache_root())
 }
 
+pub(crate) fn cached_load_gltf_mesh_indexed(
+    path: &Path,
+    selector: GltfMeshSelector,
+) -> Result<(Vec<MeshVertex>, Vec<u32>), String> {
+    let snapshot = parse_buffer_snapshot(path)?;
+    crate::node_graph::gltf_load::load_gltf_mesh_indexed_from_buffers(
+        &snapshot.document,
+        &snapshot.buffers,
+        selector,
+    )
+}
+
 fn cached_load_gltf_mesh_with_root(
     path: &Path,
     selector: GltfMeshSelector,

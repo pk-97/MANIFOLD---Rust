@@ -158,25 +158,25 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     // Loop: the flight through the corridor; the corridor itself (its
     // spacing, pattern, stride, start and clipping) and the loop length are
     // the Scene Loop card's.
-    row("height", RIG, Camera, perform(CardBand::Camera, 0)).unit(Unit::Metres).limit(HardLimit::Unlimited).default(0.0).when(loop_rig),
-    row("lateral", RIG, Camera, perform(CardBand::Camera, 1)).unit(Unit::Metres).limit(HardLimit::Unlimited).when(loop_rig),
-    row("fov_y", RIG, Camera, perform(CardBand::Camera, 2)).limit(FIELD_OF_VIEW).when(loop_rig),
-    row("yaw", RIG, Camera, perform(CardBand::Camera, 3)).when(loop_rig),
-    row("pitch", RIG, Camera, perform(CardBand::Camera, 4)).when(loop_rig),
-    row("roll", RIG, Camera, perform(CardBand::Camera, 5)).when(loop_rig),
-    row("flow", RIG, Camera, perform(CardBand::Camera, 6)).when(loop_rig),
-    row("sway_amp", RIG, Camera, perform(CardBand::Camera, 7)).name("Sway").when(loop_rig),
-    row("sway_cycles", RIG, Camera, perform(CardBand::Camera, 8)).name("Sway Rate").when(loop_rig),
-    row("look_sweep_amp", RIG, Camera, perform(CardBand::Camera, 9)).name("Look Sway").when(loop_rig),
-    row("zoom_pulse_amp", RIG, Camera, perform(CardBand::Camera, 10)).name("Zoom Pulse").when(loop_rig),
+    row("height", RIG, Camera, perform(CardBand::Camera, 0)).unit(Unit::Metres).limit(HardLimit::Unlimited).default(0.0).tip("Camera height inside the tunnel").when(loop_rig),
+    row("lateral", RIG, Camera, perform(CardBand::Camera, 1)).unit(Unit::Metres).limit(HardLimit::Unlimited).tip("Camera lateral offset inside the tunnel").when(loop_rig),
+    row("fov_y", RIG, Camera, perform(CardBand::Camera, 2)).limit(FIELD_OF_VIEW).tip("Vertical field of view").when(loop_rig),
+    row("yaw", RIG, Camera, perform(CardBand::Camera, 3)).tip("Camera yaw").when(loop_rig),
+    row("pitch", RIG, Camera, perform(CardBand::Camera, 4)).tip("Camera pitch").when(loop_rig),
+    row("roll", RIG, Camera, perform(CardBand::Camera, 5)).tip("Camera roll angle inside the tunnel").when(loop_rig),
+    row("flow", RIG, Camera, perform(CardBand::Camera, 6)).tip("Ease camera speed within each loop").when(loop_rig),
+    row("sway_amp", RIG, Camera, perform(CardBand::Camera, 7)).name("Sway").tip("Camera drift across the tunnel cross-section").when(loop_rig),
+    row("sway_cycles", RIG, Camera, perform(CardBand::Camera, 8)).name("Sway Rate").tip("Sway cycles per loop").when(loop_rig),
+    row("look_sweep_amp", RIG, Camera, perform(CardBand::Camera, 9)).name("Look Sway").tip("Side-to-side camera aim sweep").when(loop_rig),
+    row("zoom_pulse_amp", RIG, Camera, perform(CardBand::Camera, 10)).name("Zoom Pulse").tip("Field-of-view pulse per loop").when(loop_rig),
     row("look_sweep_cycles", RIG, Camera, Exposure::Internal("the look sway turns once a loop")).when(loop_rig),
     row("axis", RIG, Camera, Exposure::Internal("the corridor runs along Z")).when(loop_rig),
     row("cell_size", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
     row("pattern_length", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
     row("patterns_per_loop", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
     row("home", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
-    row("near", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
-    row("far", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    clip("near").when(loop_rig),
+    clip("far").default(HORIZON_FAR).when(loop_rig),
     // The loop's clock: one even ramp from 0 to 1 per loop of Beats.
     row("bars", PHASE, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
     row("rate", PHASE, Camera, Exposure::Internal("Beats sets the loop's rate")).when(loop_rig),
@@ -272,7 +272,7 @@ mod tests {
             assert!(limit.clamp(0.0, (0.0, 0.0)) > 0.0);
         }
         let clips: Vec<HardLimit> = limits("near").into_iter().chain(limits("far")).collect();
-        assert_eq!(clips.len(), 6, "Near and Far on the Orbit, Free and Look At rigs");
+        assert_eq!(clips.len(), 8, "Near and Far on the Orbit, Free, Look At and Loop rigs");
         for limit in clips {
             for metres in [0.01, 6.0, 30.0, 50_000.0] {
                 assert_eq!(limit.clamp(metres, (0.0, 0.0)), metres);

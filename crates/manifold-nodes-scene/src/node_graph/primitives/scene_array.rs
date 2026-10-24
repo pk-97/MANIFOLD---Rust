@@ -144,6 +144,9 @@ struct SceneArrayUniforms {
     cell_size: f32,
     jitter_seed: i32,
     jitter_amount: f32,
+    twist: f32,
+    spiral_radius: f32,
+    alternate: u32,
     base_cell: i32,
     behind: u32,
     ahead: u32,
@@ -151,6 +154,7 @@ struct SceneArrayUniforms {
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 /// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
@@ -173,6 +177,9 @@ pub struct SceneArrayStasisKey {
     pub cell_size: f32,
     pub jitter_seed: u32,
     pub jitter_amount: f32,
+    pub twist: f32,
+    pub spiral_radius: f32,
+    pub alternate: bool,
     pub rebuild_epoch: u64,
 }
 
@@ -236,6 +243,30 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("twist"),
+            label: "Twist",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-1.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("spiral_radius"),
+            label: "Tunnel Radius",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 20.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("alternate"),
+            label: "Alternate Flip",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "Optional camera: Camera port drives the window (D2) — wire node.loop_camera.out here for the corridor; the atom resolves the axis component itself so axis and position cannot desync. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32, never a param: the buffer is fixed at plan pre-allocation (BUG-757c), and the live window span derives from what the wired camera sees, every way it looks — the body masks slots at or beyond behind+ahead+1 to zero-scale. cell_size is port-shadowed: wire node.loop_cell.cell_size here and into every node.loop_camera, so camera travel per loop equals the tile spacing by construction and both follow the live scene. pattern_length is both the pattern period and the jitter period (D4); the loop camera's travel (patterns_per_loop * pattern_length cells) is an integer multiple of it, so the wrap is pure for any integers. jitter_seed stays an internal re-roll knob the plan stamps at 0.",
@@ -292,6 +323,9 @@ impl Primitive for SceneArray {
 
         let jitter_seed = ctx.params.get("jitter_seed").and_then(|v| v.as_u32_clamped(0)).unwrap_or(0);
         let jitter_amount = ctx.scalar_or_param("jitter_amount", 0.0).clamp(0.0, 1.0);
+        let twist = ctx.scalar_or_param("twist", 0.0).clamp(-1.0, 1.0);
+        let spiral_radius = ctx.scalar_or_param("spiral_radius", 0.0).max(0.0);
+        let alternate = matches!(ctx.params.get("alternate"), Some(ParamValue::Bool(true)));
 
         // D2/D5: the wired camera drives the window. The atom picks the axis
         // component from its own axis param, so axis and position cannot
@@ -325,6 +359,9 @@ impl Primitive for SceneArray {
             cell_size,
             jitter_seed,
             jitter_amount,
+            twist,
+            spiral_radius,
+            alternate,
             rebuild_epoch: ctx.rebuild_epoch,
         };
         let content_unchanged = self.stasis_key == Some(stasis);
@@ -342,6 +379,9 @@ impl Primitive for SceneArray {
             cell_size,
             jitter_seed: jitter_seed as i32,
             jitter_amount,
+            twist,
+            spiral_radius,
+            alternate: alternate as u32,
             base_cell,
             behind,
             ahead,
@@ -349,6 +389,7 @@ impl Primitive for SceneArray {
             dispatch_count: capacity,
             _pad0: 0,
             _pad1: 0,
+            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -530,6 +571,9 @@ mod gpu_tests {
             cell_size,
             jitter_seed: jitter_seed as i32,
             jitter_amount,
+            twist: 0.0,
+            spiral_radius: 0.0,
+            alternate: 0,
             base_cell,
             behind,
             ahead,
@@ -537,6 +581,7 @@ mod gpu_tests {
             dispatch_count: capacity,
             _pad0: 0,
             _pad1: 0,
+            _pad2: 0,
         };
         enc.dispatch_compute(
             pipeline,

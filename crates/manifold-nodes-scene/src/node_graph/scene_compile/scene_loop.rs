@@ -30,6 +30,7 @@
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef};
+use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::param_lookup::NodeParamMetadata;
 use manifold_core::scene_doc::{CameraRig, ItemFields, ItemId, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
@@ -49,6 +50,9 @@ const COPIES_RECIPE: &str = "SceneLoopCopies";
 /// Spacing with nothing drawn to measure: the corridor's own cell.
 const UNMEASURED_CELL: f32 = 10.0;
 
+/// `InstanceSpace::World` param index.
+const WORLD_SPACE: u32 = 2;
+
 /// The corridor's starting scale, from the scene's rest-pose box as the
 /// compiler sees it: Spacing starts at the scene's depth along the travel
 /// axis (Z), so a cell starts at twice it, one depth of scene and one of open
@@ -64,7 +68,8 @@ struct Corridor {
 impl Corridor {
     fn measure(b: &Builder<'_>) -> Self {
         let swarms = b.swarms.iter().map(|_| &super::swarm::SPREAD);
-        let depth = rest_box(b.drawn.iter().map(|drawn| &drawn.rest).chain(swarms)).map(|(lo, hi)| hi[2] - lo[2]);
+        let bounds = rest_box(b.drawn.iter().map(|drawn| &drawn.rest).chain(swarms));
+        let depth = bounds.map(|(lo, hi)| hi[2] - lo[2]);
         match depth.filter(|depth| *depth > 0.0) {
             Some(depth) => Self { cell: 2.0 * depth, gap: depth },
             None => Self { cell: UNMEASURED_CELL, gap: UNMEASURED_CELL },
@@ -79,8 +84,6 @@ impl Corridor {
             "spacing" => (self.gap, (0.0, 4.0 * c)),
             // The corridor entry: the camera starts half a cell back, in the gap.
             "home" => (-0.5 * c, (-2.0 * c, 2.0 * c)),
-            "near" => ((0.002 * c).max(0.001), (0.001, 2.0 * c)),
-            "far" => ((4.0 * c).max(1.0), (c.max(1.0), (20.0 * c).max(1.0))),
             _ => return None,
         })
     }
@@ -303,6 +306,9 @@ fn tiled_objects(b: &mut Builder<'_>, copies: bool) -> Vec<NodeId> {
         // Without a live count the stage would nest the whole buffer.
         if copies && (water || b.input(object, "instance_count").is_none()) {
             continue;
+        }
+        if !copies {
+            b.set(object, "instances_space", SerializedParamValue::Enum { value: WORLD_SPACE });
         }
         if let Some(id) = b.node_id_of(object) {
             tiled.push(id);

@@ -794,15 +794,20 @@ impl Application {
                     continue;
                 }
                 PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(layer_id, camera)) => {
-                    let view = self.graph_editor.as_ref().and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id));
+                    let preview_view = self.ws.preview_navigation.camera_for(layer_id);
+                    let view = self.graph_editor.as_ref().and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id)).or(preview_view);
                     if let Some(content_tx) = self.content_tx.as_ref() {
                         crate::scene_view_copy::run(
                             &mut self.local_project.edit(&mut self.ui_edits, content_tx),
                             &mut self.ws.ui_root, layer_id, camera, view.as_ref(),
                         );
                     }
+                    if preview_view.is_some() {
+                        self.end_preview_navigation();
+                    }
                     continue;
                 }
+                PanelAction::Root(RootAction::SceneResetPreviewView) => { self.end_preview_navigation(); continue; }
                 PanelAction::Root(RootAction::SceneDrawAgain(layer_id)) => {
                     if let Some(content_tx) = self.content_tx.as_ref() {
                         crate::content_command::ContentCommand::send(content_tx, crate::content_command::ContentCommand::DrawLayerAgain(layer_id.clone()));

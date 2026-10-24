@@ -114,6 +114,9 @@ pub struct SceneItemVm {
     /// A Scene Loop card in a scene with no Loop camera: it offers Add Loop
     /// Camera.
     pub add_loop_camera: bool,
+    /// A Camera that is not the World's picked camera: it offers "Use as
+    /// Active Camera" (its cut value).
+    pub make_active_camera: Option<f32>,
     /// Why a manifest row cannot be used right now, by param id: drawn
     /// dimmed with the reason on hover.
     pub row_reasons: Vec<(String, String)>,
@@ -149,13 +152,8 @@ pub enum SceneSelection {
 
 impl SceneSelection {
     /// What the tab shows for this selection: a light shows as Lighting.
-    pub fn shown(self, vm: &SceneSetupVm) -> Self {
-        match self {
-            SceneSelection::Item(id) if vm.item(&id).is_some_and(|item| item.kind == ItemKind::Light) => {
-                SceneSelection::Lighting
-            }
-            other => other,
-        }
+    pub fn shown(self, _vm: &SceneSetupVm) -> Self {
+        self
     }
 
     /// The item this selection names, if it is one.

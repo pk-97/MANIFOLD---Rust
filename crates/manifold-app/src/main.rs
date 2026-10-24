@@ -107,6 +107,7 @@ mod import_responsiveness_verify;
 mod import_worker;
 mod scene_import;
 mod import_worker_drain_verify;
+mod import_placement_verify;
 mod input_handler;
 mod input_host;
 #[cfg(target_os = "macos")]

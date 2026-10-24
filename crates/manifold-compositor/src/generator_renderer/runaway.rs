@@ -155,6 +155,15 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Restore every stopped layer so an edit, undo or transport action retries drawing automatically.
+    pub fn restore_stopped_layers(&mut self) {
+        for (layer_id, state) in &mut self.layer_generators {
+            if state.runaway.restore() {
+                self.watch.push(LayerNews::Restored(layer_id.clone()));
+            }
+        }
+    }
+
     /// Hand the news since the last call to `each`, oldest first.
     pub fn drain_layer_news(&mut self, mut each: impl FnMut(LayerNews)) {
         for news in self.watch.news.drain(..) {
@@ -235,56 +244,59 @@ mod tests {
     #[test]
     fn many_short_buffers_never_stop_a_layer_and_one_long_buffer_does() {
         let mut watch = RunawayWatch::default();
-        // A heavy ray-traced frame: twenty tiles of 50 ms is a full second,
+        // A heavy ray-traced frame: twenty tiles of 100 ms is 2.0 seconds,
         // and the timer reports its longest tile.
-        let tiled = [0.05; 20];
+        let tiled = [0.1; 20];
         assert!(tiled.iter().sum::<f64>() > RUNAWAY_LAYER_FRAME_SECONDS);
         assert_eq!(frames(&mut watch, 0, &[0.05; 10]), [false; 10], "a slow tiled frame renders slowly, never stops");
-        // One huge instanced draw in a single buffer, three frames in a row.
-        assert_eq!(frames(&mut watch, 10, &[SLOW; 3]), [false, false, true], "the third long frame stops it");
+        // One huge instanced draw in a single buffer, five frames in a row.
+        assert_eq!(frames(&mut watch, 10, &[SLOW; 5]), [false, false, false, false, true], "the fifth long frame stops it");
         assert!(watch.stopped());
     }
 
     #[test]
     fn a_buffer_killed_by_the_gpu_counts_as_over_the_limit() {
         let mut watch = RunawayWatch::default();
-        assert_eq!(frames(&mut watch, 0, &[f64::INFINITY; 3]), [false, false, true]);
+        assert_eq!(frames(&mut watch, 0, &[f64::INFINITY; 5]), [false, false, false, false, true]);
     }
 
     #[test]
-    fn three_runaway_frames_in_a_row_stop_the_layer_and_only_draw_again_restores_it() {
-        assert_eq!(RUNAWAY_LAYER_FRAMES, 3);
+    fn five_runaway_frames_in_a_row_stop_the_layer_and_only_draw_again_restores_it() {
+        assert_eq!(RUNAWAY_LAYER_FRAMES, 5);
         let mut watch = RunawayWatch::default();
-        // A fast frame between slow ones starts the count again.
-        assert_eq!(frames(&mut watch, 0, &[SLOW, SLOW, FAST, SLOW, SLOW]), [false; 5]);
+        // A fast frame between slow ones starts the count again: 4 slow, fast, 4 slow never stop.
+        assert_eq!(frames(&mut watch, 0, &[SLOW, SLOW, SLOW, SLOW, FAST, SLOW, SLOW, SLOW, SLOW]), [false; 9]);
         assert!(!watch.stopped());
-        assert_eq!(frames(&mut watch, 5, &[SLOW]), [true], "the third slow frame in a row stops the layer");
+        // The 5th slow frame in a row stops the layer.
+        assert_eq!(frames(&mut watch, 9, &[SLOW]), [true], "the fifth slow frame stops it");
         // Frames still in flight when it stopped report no second stop.
-        assert_eq!(frames(&mut watch, 6, &[SLOW, FAST, SLOW]), [false; 3]);
+        assert_eq!(frames(&mut watch, 10, &[SLOW, FAST, SLOW, SLOW, SLOW, SLOW]), [false; 6]);
         assert!(watch.stopped());
         // A frame exactly at the limit is not runaway.
         assert!(watch.restore());
-        assert_eq!(frames(&mut watch, 9, &[RUNAWAY_LAYER_FRAME_SECONDS; 10]), [false; 10]);
+        assert_eq!(frames(&mut watch, 16, &[RUNAWAY_LAYER_FRAME_SECONDS; 10]), [false; 10]);
+        // Heavy scene buffers under the 1.0s ceiling never stop the layer.
+        assert_eq!(frames(&mut watch, 26, &[0.5; 10]), [false; 10]);
         // Draw Again restores from a clean count.
-        frames(&mut watch, 19, &[SLOW; 3]);
+        frames(&mut watch, 36, &[SLOW; 5]);
         assert!(watch.restore());
-        assert_eq!(frames(&mut watch, 22, &[SLOW; 2]), [false; 2]);
-        assert!(!watch.restore(), "two slow frames after Draw Again do not stop it");
+        assert_eq!(frames(&mut watch, 41, &[SLOW; 4]), [false; 4]);
+        assert!(!watch.restore(), "four slow frames after Draw Again do not stop it");
     }
 
     #[test]
     fn a_crossfade_counts_once_per_frame_by_its_longest_clip() {
         let mut watch = RunawayWatch::default();
-        for frame in 0..2 {
+        for frame in 0..4 {
             // Two clips of one layer: two spans of one frame.
             assert!(!watch.span(frame, SLOW));
             assert!(!watch.span(frame, FAST));
             // The second clip's span is still on the GPU: nothing closes.
             assert!(!watch.settle(Some(frame)));
         }
-        // Two slow frames so far, however many spans they had.
+        // Four slow frames so far, however many spans they had.
         assert!(!watch.settle(None));
         assert!(!watch.stopped());
-        assert!(watch.span(2, FAST) | watch.span(2, SLOW) | watch.settle(None), "the third slow frame stops it");
+        assert!(watch.span(4, FAST) | watch.span(4, SLOW) | watch.settle(None), "the fifth slow frame stops it");
     }
 }

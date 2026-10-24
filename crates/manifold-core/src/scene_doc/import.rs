@@ -91,8 +91,8 @@ pub struct ImportedCamera {
 }
 
 /// A parsed model file: its parts, materials, lights and cameras, and its
-/// animation clips. It imports at the file's own size and place, in metres
-/// (glTF's unit): nothing rescales or recentres it.
+/// animation clips. It keeps the file's scale and internal transforms; one
+/// persistent placement translation centres the content without rescaling it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportedModel {
     /// The file's name without its extension.
@@ -122,6 +122,13 @@ pub fn is_import_child(group: &ItemId, id: &ItemId) -> bool {
     id.as_str().strip_prefix(group.as_str()).is_some_and(|rest| rest.starts_with('-'))
 }
 
+/// The id of the persistent placement Group under import `group`: it carries
+/// the single `-mesh_bounds_center` translation that centres the import, so
+/// the outer root stays a clean handle at origin.
+pub fn import_placement_id(group: &ItemId) -> ItemId {
+    ItemId::new(format!("{group}-placement"))
+}
+
 impl ImportedModel {
     fn mesh_nodes(&self) -> Vec<&ImportedNode> {
         fn visit<'a>(nodes: &'a [ImportedNode], out: &mut Vec<&'a ImportedNode>) {
@@ -137,27 +144,21 @@ impl ImportedModel {
         out
     }
 
-    /// The model as items `id` and what sits beside it: a Group whose
-    /// Source is `file`, holding one Object per mesh part (nested where the
-    /// file nests), one Material per glTF material, and the file's lights
-    /// and cameras; or, for a file with one mesh part and no lights, cameras
-    /// or animation, that Object and its Material beside it. Each starts at
-    /// its file node's transform ([`Self::starting_values`]).
+    /// The model as one outer Group whose Source is `file`, with a clean
+    /// transform for the user and one persistent File Placement child. The
+    /// placement holds the file-node tree, materials, lights and cameras;
+    /// every file node starts at its authored transform
+    /// ([`Self::starting_values`]).
     pub fn into_items(&self, file: &str, id: ItemId) -> Vec<Item> {
-        if self.is_single_mesh() {
-            let only = self.mesh_nodes()[0];
-            let mut object = node_item(&id, only, file);
-            object.id = id.clone();
-            object.name = self.name.clone();
-            let materials = self.materials.iter().filter(|m| only.material.as_ref() == Some(&m.key));
-            return std::iter::once(object).chain(materials.map(|m| material_item(&id, m, file))).collect();
-        }
         let fields = ItemFields::Group(GroupFields { source: Some(file.to_owned()), clip_names: self.clips.clone(), ..GroupFields::default() });
         let mut group = Item::new(id.clone(), self.name.clone(), fields);
-        group.children = self.group_children().iter().map(|node| node_item(&id, node, file)).collect();
-        group.children.extend(self.materials.iter().map(|m| material_item(&id, m, file)));
-        group.children.extend(self.lights.iter().map(|l| light_item(&id, l)));
-        group.children.extend(self.cameras.iter().map(|c| camera_item(&id, c)));
+        let placement_id = import_placement_id(&id);
+        let mut placement = Item::new(placement_id, "File Placement".to_owned(), ItemFields::Group(GroupFields::default()));
+        placement.children = self.group_children().iter().map(|node| node_item(&id, node, file)).collect();
+        placement.children.extend(self.materials.iter().map(|m| material_item(&id, m, file)));
+        placement.children.extend(self.lights.iter().map(|l| light_item(&id, l)));
+        placement.children.extend(self.cameras.iter().map(|c| camera_item(&id, c)));
+        group.children = vec![placement];
         vec![group]
     }
 
@@ -212,18 +213,19 @@ impl ImportedModel {
         self.mesh_nodes().iter().map(|node| node.vertex_count).fold(0, u32::saturating_add)
     }
 
-    /// The card values the import `id` starts at: each part's and group's
-    /// file node transform, and the file's lights and cameras.
-    /// `(item, property, value)`.
-    pub fn starting_values(&self, id: &ItemId) -> Vec<(ItemId, &'static str, f32)> {
+    /// The card values the import `id` starts at: the placement's optional
+    /// `-center` translation, each file node's authored transform, and the
+    /// file's lights and cameras. `(item, property, value)`.
+    pub fn starting_values(&self, id: &ItemId, center: Option<[f32; 3]>) -> Vec<(ItemId, &'static str, f32)> {
         let mut out = Vec::new();
-        if self.is_single_mesh() {
-            let only = self.mesh_nodes()[0];
-            out.extend(only.transform.values().map(|(property, value)| (id.clone(), property, value)));
-        } else {
-            for node in self.group_children() {
-                node.starting_values(id, &mut out);
-            }
+        let placement = import_placement_id(id);
+        if let Some(center) = center {
+            out.push((placement.clone(), "pos_x", -center[0]));
+            out.push((placement.clone(), "pos_y", -center[1]));
+            out.push((placement.clone(), "pos_z", -center[2]));
+        }
+        for node in self.group_children() {
+            node.starting_values(id, &mut out);
         }
         let lights = self.lights.iter().map(|l| (&l.key, &l.values));
         let cameras = self.cameras.iter().map(|c| (&c.key, &c.values));

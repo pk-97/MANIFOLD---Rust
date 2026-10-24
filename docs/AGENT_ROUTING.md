@@ -25,6 +25,16 @@ Never to Sonnet lanes: graph semantics, GPU and kernel work, undo and lifecycle,
 
 There is no dispatcher seat. The clerical loop (pop queue, run gates, park failures) belongs to workflow scripts, exit-code gates and hooks.
 
+## Interactive mode vs wave mode
+
+- **Interactive mode (default when iterating live):**
+  1. **Single warm checkout:** Work in the main working tree without acquiring slot worktrees (`scripts/agent-worktree.py`). Sharing the warm `target/` directory keeps incremental `cargo nextest` and `cargo build --bin manifold` runs under 5–15 seconds instead of rebuilding across cold worktree slots.
+  2. **Lead diagnoses, worker edits:** The lead performs the 30-second `rg` + bounded `Read` diagnosis itself to pin down the exact root cause and `file:line` design. Do not spawn an `opus` exploration agent unless diagnosis spans >500 lines across 5+ unfamiliar crates. Once the fix shape is concrete, dispatch a `sonnet` (or free/flash) worker with exact `file:line` edits and 1–3 scoped `cargo nextest run -p <crate> <filter>` commands.
+  3. **Lead reviews the diff directly:** The lead checks `git diff` and the worker's test substance directly (no placeholder tests, no separate adversarial review subagent per slice).
+  4. **Batch landing:** Accumulate related fixes in the working tree, build `target/debug/manifold` for live in-app testing, and pay the `landing_gate.py` + branch/merge cost once for the batch.
+- **Wave mode (parallel / unattended bulk):**
+  - Use the slot ring (`scripts/agent-worktree.py`), one-commit-per-lane branches, and one `opus` adversarial review before landing when running multiple independent lanes in parallel.
+
 ## Standing practice
 
 - **Shut a lane down when it reports.** Once its report is read, the lead stops the agent. Follow-up work goes to a fresh lane whose brief carries the findings with file:line anchors; resume a reported lane only for a small fix to its own commit. A resumed lane re-reads its whole 200k+ context on every step, about three times what a fresh lane costs. An idle agent is a token leak, and the harness can wake it to re-send its report.
@@ -93,7 +103,7 @@ Slow flows come from agents re-deriving what the lead already knows. Every lane 
 
 ## Verification
 
-One strong verify pass per lane before landing: refute the diff against the brief and the gate, check citations, rerun the gate. Verification never delegates to the seat that wrote the diff. Two weak passes don't sum to a strong one. Small lanes, frequent landing: 2–3 commits per phase beats one hours-long wave.
+One strong verify pass per batch before landing: refute the diff against the brief, verify test substance (real state/behavior assertions, never compile-only placeholders), and run the scoped gate once at landing. During interactive iteration, run only single-module nextest filters and batch commits/landings to avoid repeated gate overhead.
 
 ## Lead discipline
 

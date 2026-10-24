@@ -886,6 +886,136 @@ fn flatten_primitive(
     Ok(())
 }
 
+fn flatten_primitive_indexed(
+    primitive: &gltf::Primitive,
+    buffers: &[gltf::buffer::Data],
+    world: &Mat4,
+    normal_mat: &[[f32; 3]; 3],
+    out_verts: &mut Vec<MeshVertex>,
+    out_indices: &mut Vec<u32>,
+) -> Result<(), String> {
+    if primitive.mode() != gltf::mesh::Mode::Triangles {
+        return Err(format!(
+            "primitive uses non-Triangles mode {:?} — unsupported by node.gltf_mesh_source",
+            primitive.mode()
+        ));
+    }
+
+    let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+    let uv1s: Option<Vec<[f32; 2]>> = reader.read_tex_coords(1).map(|it| it.into_f32().collect());
+
+    let positions: Vec<[f32; 3]> = reader
+        .read_positions()
+        .ok_or_else(|| "primitive missing required POSITION accessor".to_string())?
+        .collect();
+    let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
+    let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+    let colors: Option<Vec<[f32; 4]>> = reader.read_colors(0).map(|it| it.into_rgba_f32().collect());
+    let tangents: Option<Vec<[f32; 4]>> = reader.read_tangents().map(|it| it.collect());
+
+    let world_linear = mat3_upper_row_major(world);
+    let world_det = world_linear[0][0]
+        * (world_linear[1][1] * world_linear[2][2]
+            - world_linear[1][2] * world_linear[2][1])
+        - world_linear[0][1]
+            * (world_linear[1][0] * world_linear[2][2]
+                - world_linear[1][2] * world_linear[2][0])
+        + world_linear[0][2]
+            * (world_linear[1][0] * world_linear[2][1]
+                - world_linear[1][1] * world_linear[2][0]);
+    let tangent_sign = if world_det < 0.0 { -1.0 } else { 1.0 };
+
+    let world_positions: Vec<[f32; 3]> = positions
+        .iter()
+        .map(|p| mat4_transform_point(world, *p))
+        .collect();
+    let world_normals: Option<Vec<[f32; 3]>> = normals
+        .as_ref()
+        .map(|ns| ns.iter().map(|n| normalize3(mat3_mul_vec3(*normal_mat, *n))).collect());
+    let world_tangents: Option<Vec<[f32; 4]>> = tangents.as_ref().map(|ts| {
+        ts.iter()
+            .map(|t| {
+                let d = normalize3(mat3_mul_vec3(world_linear, [t[0], t[1], t[2]]));
+                [d[0], d[1], d[2], t[3] * tangent_sign]
+            })
+            .collect()
+    });
+
+    let indices: Vec<u32> = match reader.read_indices() {
+        Some(idx) => idx.into_u32().collect(),
+        None => (0..world_positions.len() as u32).collect(),
+    };
+
+    for tri in indices.chunks_exact(3) {
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        if i0 >= world_positions.len() || i1 >= world_positions.len() || i2 >= world_positions.len() {
+            return Err(format!(
+                "triangle index ({i0}, {i1}, {i2}) out of range for {} positions",
+                world_positions.len()
+            ));
+        }
+    }
+
+    if let Some(world_normals) = world_normals.as_ref()
+        && world_positions.len() < (indices.len() / 3 * 3)
+        && (out_verts.len() as u64 + world_positions.len() as u64) <= u64::from(u32::MAX)
+    {
+        let base = out_verts.len() as u32;
+        for i in 0..world_positions.len() {
+            let normal = world_normals[i];
+            let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+            let uv1 = uv1s.as_ref().map_or([0.0, 0.0], |u| u[i]);
+            let color = colors.as_ref().map_or([1.0, 1.0, 1.0, 1.0], |c| c[i]);
+            let tangent = world_tangents.as_ref().map_or([0.0; 4], |ts| ts[i]);
+            out_verts.push(MeshVertex {
+                position: world_positions[i],
+                _pad0: 0.0,
+                normal,
+                _pad1: 0.0,
+                uv,
+                _pad2: uv1,
+                tangent,
+                color,
+            });
+        }
+        for tri in indices.chunks_exact(3) {
+            out_indices.push(base + tri[0]);
+            out_indices.push(base + tri[1]);
+            out_indices.push(base + tri[2]);
+        }
+    } else {
+        for tri in indices.chunks_exact(3) {
+            let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+            let p0 = world_positions[i0];
+            let p1 = world_positions[i1];
+            let p2 = world_positions[i2];
+            let face_normal = normalize3(cross3(sub3(p1, p0), sub3(p2, p0)));
+            let base = out_verts.len() as u32;
+            for &i in &[i0, i1, i2] {
+                let normal = world_normals.as_ref().map_or(face_normal, |ns| ns[i]);
+                let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                let uv1 = uv1s.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                let color = colors.as_ref().map_or([1.0, 1.0, 1.0, 1.0], |c| c[i]);
+                let tangent = world_tangents.as_ref().map_or([0.0; 4], |ts| ts[i]);
+                out_verts.push(MeshVertex {
+                    position: world_positions[i],
+                    _pad0: 0.0,
+                    normal,
+                    _pad1: 0.0,
+                    uv,
+                    _pad2: uv1,
+                    tangent,
+                    color,
+                });
+            }
+            out_indices.push(base);
+            out_indices.push(base + 1);
+            out_indices.push(base + 2);
+        }
+    }
+    Ok(())
+}
+
 /// Recursively flatten a glTF node's mesh primitives (world-transformed)
 /// into `out`, then recurse into children with the composed world matrix.
 /// When `material_filter` is `Some(idx)`, only primitives whose material
@@ -961,6 +1091,67 @@ fn flatten_node_mesh(
     Ok(())
 }
 
+/// Recursively flatten a glTF node's mesh primitives (world-transformed)
+/// into indexed verts+indices, then recurse into children.
+fn walk_gltf_node_indexed(
+    node: &gltf::Node,
+    parent_world: Mat4,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    material_filter: MaterialFilter,
+    out_verts: &mut Vec<MeshVertex>,
+    out_indices: &mut Vec<u32>,
+) -> Result<(), String> {
+    let local = node.transform().matrix();
+    let world = mat4_mul(&parent_world, &local);
+    flatten_node_mesh_indexed(node, &world, document, buffers, material_filter, out_verts, out_indices)?;
+    for child in node.children() {
+        walk_gltf_node_indexed(&child, world, document, buffers, material_filter, out_verts, out_indices)?;
+    }
+    Ok(())
+}
+
+/// One node's own mesh primitives (every instance of it), world-transformed
+/// by `world`, into indexed verts+indices; its children are not visited.
+fn flatten_node_mesh_indexed(
+    node: &gltf::Node,
+    world: &Mat4,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    material_filter: MaterialFilter,
+    out_verts: &mut Vec<MeshVertex>,
+    out_indices: &mut Vec<u32>,
+) -> Result<(), String> {
+    let Some(mesh) = node.mesh() else {
+        return Ok(());
+    };
+    let instances = node_instance_transforms(node, document, buffers)?;
+    let instance_worlds: Vec<Mat4> = match &instances {
+        Some(list) => list.iter().map(|it| mat4_mul(world, it)).collect(),
+        None => vec![*world],
+    };
+    for instance_world in &instance_worlds {
+        let normal_mat = mat3_transpose(mat3_inverse(mat3_upper_row_major(instance_world)));
+        for primitive in mesh.primitives() {
+            match material_filter {
+                MaterialFilter::All => {}
+                MaterialFilter::Material(want) => {
+                    if primitive.material().index() != Some(want as usize) {
+                        continue;
+                    }
+                }
+                MaterialFilter::DefaultOnly => {
+                    if primitive.material().index().is_some() {
+                        continue;
+                    }
+                }
+            }
+            flatten_primitive_indexed(&primitive, buffers, instance_world, &normal_mat, out_verts, out_indices)?;
+        }
+    }
+    Ok(())
+}
+
 /// Where each copy of a node's mesh sits in the file's world: `world` once,
 /// or `world` times each `EXT_mesh_gpu_instancing` instance. As in the mesh
 /// loader ([`flatten_node_mesh`]), an empty instance list places nothing,
@@ -1000,6 +1191,7 @@ pub(crate) struct FilePart {
     pub material: Option<u32>,
     /// Their vertex count once triangles are expanded and instances counted.
     pub vertex_count: u32,
+    pub unique_vertex_count: u32,
     /// The centre of their bounding box in the file's world space.
     pub center: [f32; 3],
     /// Half that box's size on each axis: with `center`, the part's rest-pose
@@ -1039,8 +1231,14 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
             joints.as_ref().map(|joints| joints.iter().map(|joint| mat4_mul(&into_node, joint)).collect());
         let mut parts: Vec<(FilePart, Bounds, Bounds)> = Vec::new();
         for p in mesh.primitives() {
-            let n = p.indices().map(|a| a.count()).or_else(|| p.get(&gltf::Semantic::Positions).map(|a| a.count()));
-            let vertices = (n.unwrap_or(0) / 3 * 3) as u64 * instances as u64;
+            let pos_count = p.get(&gltf::Semantic::Positions).map_or(0, |a| a.count());
+            let n = p.indices().map(|a| a.count()).unwrap_or(pos_count);
+            let vertices = (n / 3 * 3) as u64 * instances as u64;
+            let unique_vertices = if p.get(&gltf::Semantic::Normals).is_some() && pos_count > 0 {
+                (pos_count as u64).min(n as u64 / 3 * 3) * instances as u64
+            } else {
+                vertices
+            };
             let material = p.material().index().map(|index| index as u32);
             let at = match parts.iter().position(|(part, _, _)| part.material == material) {
                 Some(at) => at,
@@ -1048,6 +1246,7 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
                     let empty = FilePart {
                         material,
                         vertex_count: 0,
+                        unique_vertex_count: 0,
                         center: [0.0; 3],
                         half_extent: [0.0; 3],
                         own_center: [0.0; 3],
@@ -1059,6 +1258,7 @@ pub(crate) fn file_node_tree(document: &gltf::Document, buffers: &[gltf::buffer:
             };
             let (part, bounds, own_bounds) = &mut parts[at];
             part.vertex_count = (u64::from(part.vertex_count) + vertices).min(u64::from(u32::MAX)) as u32;
+            part.unique_vertex_count = (u64::from(part.unique_vertex_count) + unique_vertices).min(u64::from(u32::MAX)) as u32;
             grow_primitive(&p, joints.as_deref(), &placements, buffers, bounds);
             grow_primitive(&p, own_joints.as_deref(), &own_placements, buffers, own_bounds);
         }
@@ -1362,6 +1562,94 @@ pub(crate) fn load_gltf_mesh_from_buffers(
         }
     }
     Ok(out)
+}
+
+pub(crate) fn load_gltf_mesh_indexed_from_buffers(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    selector: GltfMeshSelector,
+) -> Result<(Vec<MeshVertex>, Vec<u32>), String> {
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+    match selector {
+        GltfMeshSelector::Node { path, material, own_space } => {
+            let (node, world) = find_file_node(document, &path)
+                .ok_or_else(|| format!("the file has no node at \"{path}\""))?;
+            let world = if own_space { MAT4_IDENTITY } else { world };
+            let filter = match material {
+                DEFAULT_MATERIAL_MESH_PARAM => MaterialFilter::DefaultOnly,
+                index if index >= 0 => MaterialFilter::Material(index as u32),
+                _ => MaterialFilter::All,
+            };
+            flatten_node_mesh_indexed(&node, &world, document, buffers, filter, &mut verts, &mut indices)?;
+        }
+        GltfMeshSelector::WholeScene => {
+            for node in resolve_import_nodes(document) {
+                walk_gltf_node_indexed(
+                    &node,
+                    MAT4_IDENTITY,
+                    document,
+                    buffers,
+                    MaterialFilter::All,
+                    &mut verts,
+                    &mut indices,
+                )?;
+            }
+        }
+        GltfMeshSelector::Material { material_index } => {
+            for node in resolve_import_nodes(document) {
+                walk_gltf_node_indexed(
+                    &node,
+                    MAT4_IDENTITY,
+                    document,
+                    buffers,
+                    MaterialFilter::Material(material_index),
+                    &mut verts,
+                    &mut indices,
+                )?;
+            }
+        }
+        GltfMeshSelector::DefaultMaterial => {
+            for node in resolve_import_nodes(document) {
+                walk_gltf_node_indexed(
+                    &node,
+                    MAT4_IDENTITY,
+                    document,
+                    buffers,
+                    MaterialFilter::DefaultOnly,
+                    &mut verts,
+                    &mut indices,
+                )?;
+            }
+        }
+        GltfMeshSelector::Mesh { mesh_index } => {
+            let meshes: Vec<gltf::Mesh> = document.meshes().collect();
+            let mesh = meshes.get(mesh_index as usize).ok_or_else(|| {
+                format!("mesh_index {mesh_index} out of range (document has {} meshes)", meshes.len())
+            })?;
+            for primitive in mesh.primitives() {
+                flatten_primitive_indexed(&primitive, buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut verts, &mut indices)?;
+            }
+        }
+        GltfMeshSelector::Primitive {
+            mesh_index,
+            primitive_index,
+        } => {
+            let meshes: Vec<gltf::Mesh> = document.meshes().collect();
+            let mesh = meshes.get(mesh_index as usize).ok_or_else(|| {
+                format!("mesh_index {mesh_index} out of range (document has {} meshes)", meshes.len())
+            })?;
+            let primitives: Vec<gltf::Primitive> = mesh.primitives().collect();
+            let primitive = primitives.get(primitive_index as usize).ok_or_else(|| {
+                format!(
+                    "primitive_index {primitive_index} out of range (mesh {mesh_index} has {} primitives)",
+                    primitives.len()
+                )
+            })?;
+            flatten_primitive_indexed(primitive, buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut verts, &mut indices)?;
+        }
+    }
+    Ok((verts, indices))
 }
 
 /// One source resolver for both import dimensions and runtime pixels. WebP
@@ -5196,6 +5484,65 @@ mod tests {
             let (node, _) = find_file_node(&document, path).expect("the path finds a node");
             assert_eq!(node.index(), index, "{path}");
         }
+    }
+
+    #[test]
+    fn indexed_load_deduplicates_shared_vertices_and_matches_flat() {
+        // 4 positions, 2 triangles sharing an edge -> 6 flat vertices,
+        // 4 unique indexed vertices.
+        let positions = [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+        let normals = [[0.0f32, 0.0, 1.0]; 4];
+        let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+        let mut bin = Vec::new();
+        fn append(bin: &mut Vec<u8>, bytes: &[u8]) -> (usize, usize) {
+            while !bin.len().is_multiple_of(4) { bin.push(0); }
+            let off = bin.len();
+            bin.extend_from_slice(bytes);
+            (off, bytes.len())
+        }
+        let pos_bytes: Vec<u8> = positions.iter().flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes())).collect();
+        let (po, pl) = append(&mut bin, &pos_bytes);
+        let nor_bytes: Vec<u8> = normals.iter().flat_map(|n| n.iter().flat_map(|v| v.to_le_bytes())).collect();
+        let (no, nl) = append(&mut bin, &nor_bytes);
+        let idx_bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+        let (io, il) = append(&mut bin, &idx_bytes);
+        let doc = serde_json::json!({
+            "asset": {"version":"2.0"}, "scene":0,
+            "scenes":[{"nodes":[0]}], "nodes":[{"mesh":0}],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1},"indices":2}]}],
+            "accessors":[
+                {"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[0.0,0.0,0.0],"max":[1.0,1.0,0.0]},
+                {"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"},
+                {"bufferView":2,"componentType":5123,"count":6,"type":"SCALAR"}
+            ],
+            "bufferViews":[
+                {"buffer":0,"byteOffset":po,"byteLength":pl},
+                {"buffer":0,"byteOffset":no,"byteLength":nl},
+                {"buffer":0,"byteOffset":io,"byteLength":il}
+            ],
+            "buffers":[{"byteLength":bin.len()}]
+        });
+        let mut json_bytes = serde_json::to_vec(&doc).unwrap();
+        while !json_bytes.len().is_multiple_of(4) { json_bytes.push(b' '); }
+        while !bin.len().is_multiple_of(4) { bin.push(0); }
+        let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
+        let mut glb = Vec::with_capacity(total);
+        glb.extend_from_slice(b"glTF"); glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes()); glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_bytes);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes()); glb.extend_from_slice(b"BIN\x00");
+        glb.extend_from_slice(&bin);
+        let tmp = std::env::temp_dir().join(format!("manifold-idx-{}.glb", manifold_core::short_id()));
+        std::fs::write(&tmp, &glb).unwrap();
+        let (document, buffers) = parse_document_and_buffers(&tmp).unwrap();
+        let flat = load_gltf_mesh_from_buffers(&document, &buffers, GltfMeshSelector::WholeScene).unwrap();
+        let (verts, idx) = load_gltf_mesh_indexed_from_buffers(&document, &buffers, GltfMeshSelector::WholeScene).unwrap();
+        assert!(verts.len() < idx.len(), "verts {} idx {}", verts.len(), idx.len());
+        assert_eq!(idx.len() % 3, 0);
+        let reconstructed: Vec<MeshVertex> = idx.iter().map(|&i| verts[i as usize]).collect();
+        assert_eq!(bytemuck::cast_slice::<MeshVertex, u8>(&reconstructed), bytemuck::cast_slice::<MeshVertex, u8>(&flat));
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 

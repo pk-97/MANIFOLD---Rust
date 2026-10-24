@@ -94,6 +94,32 @@ impl ModelFile {
     }
 }
 
+/// The file's world-space rest-pose mesh box, from the bounds the parse
+/// recorded on the facts (`FilePart`'s `center`/`half_extent`, the same
+/// boxes `file_bounds` measures): `(center, half_extent)` over every part.
+/// `None` when no part measured a finite box — no geometry to frame. No
+/// file is opened: the facts carry everything.
+pub fn world_bounds(facts: &ModelFacts) -> Option<([f32; 3], [f32; 3])> {
+    let facts = facts.get::<ModelFile>()?;
+    let mut bounds: Option<([f32; 3], [f32; 3])> = None;
+    for node in facts.nodes.values() {
+        for part in &node.parts {
+            if !part.center.iter().chain(part.half_extent.iter()).all(|v| v.is_finite()) {
+                continue;
+            }
+            let (lo, hi) = ([0, 1, 2].map(|axis| part.center[axis] - part.half_extent[axis]), [0, 1, 2].map(|axis| part.center[axis] + part.half_extent[axis]));
+            bounds = Some(match bounds {
+                None => (lo, hi),
+                Some((grown_lo, grown_hi)) => {
+                    ([0, 1, 2].map(|axis| grown_lo[axis].min(lo[axis])), [0, 1, 2].map(|axis| grown_hi[axis].max(hi[axis])))
+                }
+            });
+        }
+    }
+    // As the parts carry their boxes: a centre and a half extent.
+    bounds.map(|(lo, hi)| ([0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5), [0, 1, 2].map(|axis| (hi[axis] - lo[axis]) * 0.5)))
+}
+
 /// The facts of the model at `path` the document carries, if they have
 /// arrived.
 pub(crate) fn model_file<'d>(doc: &'d SceneDoc, path: &str) -> Option<&'d ModelFile> {

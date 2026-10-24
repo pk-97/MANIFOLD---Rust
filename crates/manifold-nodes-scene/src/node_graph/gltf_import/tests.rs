@@ -81,7 +81,10 @@ fn a_model_becomes_parts_keyed_by_file_node_path() {
         panic!("a two-part model is a group");
     };
     assert_eq!(group.source.as_deref(), Some(file.as_str()));
-    let paths: Vec<&str> = item
+    let placement = &item.children[0];
+    let ItemFields::Group(_) = &placement.fields else { panic!("placement is a group"); };
+    assert_eq!(placement.name, "File Placement");
+    let paths: Vec<&str> = placement
         .children
         .iter()
         .filter(|child| !matches!(child.fields, ItemFields::Material(_)))
@@ -126,6 +129,47 @@ fn a_compile_reads_a_models_facts_from_the_document() {
     assert_eq!(sized(&doc), 2, "both parts read the facts");
 }
 
+/// The world bounds come from the parse's own recorded boxes: a nested part
+/// under a translated, scaled parent is measured where the file draws it,
+/// and parts apart from it grow the box, so one placement offset centres
+/// the whole model.
+#[test]
+fn the_world_bounds_cover_nested_parts_at_their_file_place() {
+    let path = write_triangle_glb(
+        "world_bounds",
+        serde_json::json!([
+            { "name": "parent", "translation": [2.0, 0.0, 0.0], "scale": [3.0, 3.0, 3.0], "children": [1, 2] },
+            { "name": "child", "mesh": 0, "translation": [0.0, 1.0, 0.0] },
+            { "name": "far", "mesh": 0, "translation": [-10.0, 0.0, 4.0] }
+        ]),
+    );
+    let read = super::read_model(&path).unwrap();
+    let (center, half_extent) = super::world_bounds(&read.facts).expect("the file has meshes");
+    // The child's triangle scales by 3 under the parent and lifts by the
+    // child's own +1 in Y: x in [2, 5], y in [3, 6]. The far one sits at
+    // (-28, 0, 12): x in [-28, -25], y in [0, 3]; both triangles are flat
+    // in z, so the union spans x [-28, 5], y [0, 6], z [0, 12].
+    assert_eq!(center, [-11.5, 3.0, 6.0]);
+    assert_eq!(half_extent, [16.5, 3.0, 6.0]);
+    std::fs::remove_file(path).unwrap();
+}
+
+/// A file whose parts measured no finite box gets no placement offset rather
+/// than an invented one: a mesh-less file's facts record no nodes at all. (The
+/// import itself refuses a mesh-less file; the facts read for one only
+/// through the facts path.)
+#[test]
+fn a_file_without_measured_parts_has_no_world_bounds() {
+    let path = write_triangle_glb(
+        "boundsless",
+        serde_json::json!([{ "name": "lone", "children": [] }]),
+    );
+    let (document, buffers) = crate::node_graph::gltf_load::parse_document_and_buffers(&path).unwrap();
+    let (facts, _) = super::model_file::facts_of(&path, &document, &buffers);
+    assert!(super::world_bounds(&manifold_core::scene_doc::ModelFacts::new(facts)).is_none(), "no recorded box, no bounds");
+    std::fs::remove_file(path).unwrap();
+}
+
 /// Each part keeps its file node's transform, as Blender's glTF import does:
 /// a rotated, scaled child under a translated parent nests under that
 /// parent, each card starts at the file's values, the mesh stays in its
@@ -151,7 +195,8 @@ fn an_imported_part_keeps_its_file_transform_and_pivot() {
     // The parent node is a group at its own place, holding its own mesh and
     // the child.
     let items = model.into_items(&path.to_string_lossy(), id.clone());
-    let parent = items[0].children.iter().find(|item| item.name == "parent").expect("the parent node is a group");
+    let placement = &items[0].children[0];
+    let parent = placement.children.iter().find(|item| item.name == "parent").expect("the parent node is a group");
     assert!(matches!(parent.fields, ItemFields::Group(_)));
     let names: Vec<&str> = parent.children.iter().map(|item| item.name.as_str()).collect();
     assert_eq!(names, ["parent", "child"]);

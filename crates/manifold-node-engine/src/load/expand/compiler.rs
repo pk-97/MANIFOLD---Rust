@@ -276,6 +276,43 @@ fn prepare_scene_modifiers_impl(
         leaf_maps.insert(instance.id.to_string(), leaves);
         target_maps.insert(instance.id.to_string(), targets);
     }
+    // Math View placed before any deforming modifier shows the chain's
+    // deformed output instead of zero displacement.
+    let qualifying_ids: Vec<NodeId> = builder
+        .math_captures
+        .iter()
+        .filter(|(view_id, captures)| {
+            captures.iter().all(|(_, cap)| cap.current == cap.reference)
+                && owner.scene_modifiers.iter().any(|m| m.id == *view_id)
+        })
+        .map(|(view_id, _)| view_id.clone())
+        .collect();
+    for view_id in qualifying_ids {
+        let instance = owner.scene_modifiers.iter().find(|m| m.id == view_id).unwrap();
+        // precompute keys
+        let targets: Vec<NodeId> = builder
+            .math_captures
+            .iter()
+            .find(|(id, _)| *id == view_id)
+            .map(|(_, c)| c.iter().map(|(t, _)| t.clone()).collect())
+            .unwrap();
+        let keys: Vec<(NodeId, Option<EndpointKey>)> = targets
+            .iter()
+            .map(|target| {
+                let key = builder.attachment_key(instance, Some(target), SceneEndpoint::Vertices).ok();
+                (target.clone(), key)
+            })
+            .collect();
+        if let Some(captures) = builder.math_captures.iter_mut().find(|(id, _)| *id == view_id).map(|(_, c)| c) {
+            for (target, cap) in captures.iter_mut() {
+                if let Some(key) = keys.iter().find(|(t, _)| t == target).and_then(|(_, k)| k.clone())
+                    && let Some(Some(final_mesh)) = builder.current.get(&key)
+                {
+                    cap.current = final_mesh.clone();
+                }
+            }
+        }
+    }
     for key in &builder.written {
         let target = *index
             .by_ref
@@ -599,7 +636,16 @@ impl Builder<'_> {
             let instances = self
                 .attachment_key(instance, Some(target), SceneEndpoint::Instances)
                 .ok()
-                .and_then(|key| self.current.get(&key).and_then(Clone::clone));
+                .and_then(|key| {
+                    let current = self.current.get(&key).and_then(Clone::clone);
+                    let reference = self.reference.get(&key).and_then(Clone::clone);
+                    // Do not duplicate Math View diagrams across Scene Loop corridor cells;
+                    // keep host-wired object/swarm copies (`reference`) or non-SceneLoop instance modifiers.
+                    match current {
+                        Some((node, ref port)) if self.derived.nodes.iter().any(|n| n.id == node && n.type_id == "node.scene_array") => reference,
+                        other => other,
+                    }
+                });
             captures.push((
                 target.clone(),
                 MathViewCapture {

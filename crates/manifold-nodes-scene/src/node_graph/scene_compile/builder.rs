@@ -89,6 +89,7 @@ pub(crate) struct Builder<'d> {
     /// The Objects a smoothly bending Modifier that is on reaches: their built-in
     /// shapes get mesh detail.
     pub(crate) smoothed: BTreeSet<ItemId>,
+    pub(crate) mesh_modified: BTreeSet<ItemId>,
 }
 
 /// A mesh's rest pose (SCENE_DOCUMENT_DESIGN.md ruling 20): every shape
@@ -161,6 +162,7 @@ impl<'d> Builder<'d> {
             frames: BTreeMap::new(),
             drawn: Vec::new(),
             smoothed: super::modifiers::smoothed_items(doc),
+            mesh_modified: super::modifiers::mesh_modified_items(doc),
         };
         b.add(SCENE, "input", "system.generator_input");
         b.add(SCENE, "render", "node.render_scene");

@@ -266,10 +266,10 @@ pub enum ShapeOutline {
     Ray { from: [f32; 3], dir: [f32; 3], length: f32, reach: Option<f32> },
     /// A radial force: the ball of its radius, and the balls where its
     /// strength falls to each of [`SHELLS`] (none where it never does).
-    Field { center: [f32; 3], radius: f32, shells: [Option<f32>; 2] },
+    Field { center: [f32; 3], radius: f32, shells: [Option<f32>; 2], sign: f32 },
     /// A vortex: a cylinder of its radius round its unit axis, as tall as
     /// it is wide, and the axis through it.
-    Vortex { center: [f32; 3], axis: [f32; 3], radius: f32 },
+    Vortex { center: [f32; 3], axis: [f32; 3], radius: f32, sign: f32 },
 }
 
 /// A circle of [`OUTLINE_SEGMENTS`] round `center` in the plane of unit `u`
@@ -328,7 +328,7 @@ impl ShapeOutline {
                     circle(from, u, v, r, &mut edge);
                 }
             }
-            ShapeOutline::Vortex { center, axis, radius } => {
+            ShapeOutline::Vortex { center, axis, radius, .. } => {
                 let u = normalized(perpendicular(axis)).unwrap_or(IDENTITY_AXES[0]);
                 let v = cross3(axis, u);
                 let [top, bottom] = [radius, -radius].map(|h| offset(center, axis, h));
@@ -351,6 +351,44 @@ impl ShapeOutline {
                     ball(center, r, &mut |a, b| edge(a, b, alpha));
                 }
             }
+        }
+    }
+
+    /// Small directional arrows showing push/pull (radial) and spin (vortex).
+    /// Drawn, never picked: `for_each_edge` stays the pick set.
+    pub fn for_each_arrow(&self, mut edge: impl FnMut([f32; 3], [f32; 3])) {
+        match *self {
+            ShapeOutline::Field { center, radius, sign, .. } if radius > MIN_EXTENT => {
+                for dir in [[1.0_f32, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]] {
+                    let p_in = offset(center, dir, 0.35 * radius);
+                    let p_out = offset(center, dir, 0.85 * radius);
+                    let perp = perpendicular(dir);
+                    if sign >= 0.0 {
+                        edge(p_in, p_out);
+                        let barb = offset(p_out, dir, -0.12 * radius);
+                        edge(p_out, offset(barb, perp, 0.08 * radius));
+                        edge(p_out, offset(barb, perp.map(|c| -c), 0.08 * radius));
+                    } else {
+                        edge(p_out, p_in);
+                        let barb = offset(p_in, dir, 0.12 * radius);
+                        edge(p_in, offset(barb, perp, 0.08 * radius));
+                        edge(p_in, offset(barb, perp.map(|c| -c), 0.08 * radius));
+                    }
+                }
+            }
+            ShapeOutline::Vortex { center, axis, radius, sign } if radius > MIN_EXTENT => {
+                let u = normalized(perpendicular(axis)).unwrap_or(IDENTITY_AXES[0]);
+                let v = cross3(axis, u);
+                let bases = [(u, v), (v, u.map(|c| -c)), (u.map(|c| -c), v.map(|c| -c)), (v.map(|c| -c), u)];
+                for (radial, tangent) in bases {
+                    let tip = offset(center, radial, radius);
+                    let t = tangent.map(|c| c * sign);
+                    let back = offset(tip, t.map(|c| -c), 0.18 * radius);
+                    edge(tip, offset(back, radial, 0.10 * radius));
+                    edge(tip, offset(back, radial.map(|c| -c), 0.10 * radius));
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -472,14 +510,27 @@ impl GizmoTarget {
     }
 
     /// The lines of this shape's outline in `color`, appended to `out`.
+    #[cfg(test)]
     fn outline_lines(&self, color: [u8; 4], out: &mut Vec<WorldLine>) {
+        self.outline_lines_with_shells(color, true, out);
+    }
+
+    /// Like [`Self::outline_lines`], but `show_shells` controls whether the
+    /// falloff shells are drawn (unselected forces skip them).
+    pub fn outline_lines_with_shells(&self, color: [u8; 4], show_shells: bool, out: &mut Vec<WorldLine>) {
         // A box's edges meet at its corners; a curve's pieces join end to end.
         let caps = matches!(self.outline, ShapeOutline::Box(_));
         self.outline.for_each_edge(|a, b| out.push(WorldLine { a, b, color, caps }));
-        self.outline.for_each_shell(|a, b, alpha| {
-            let [r, g, b8, a8] = color;
-            out.push(WorldLine { a, b, color: [r, g, b8, (f32::from(a8) * alpha).round() as u8], caps: false });
-        });
+        if show_shells {
+            self.outline.for_each_shell(|a, b, alpha| {
+                let [r, g, b8, a8] = color;
+                // Tint falloff shells toward warm amber when selected so Radius (magenta)
+                // and Falloff (amber) are immediately distinguishable.
+                let (r, g, b8) = if a8 == 255 { (255, g.saturating_add(95), b8 / 3) } else { (r, g, b8) };
+                out.push(WorldLine { a, b, color: [r, g, b8, (f32::from(a8) * alpha).round() as u8], caps: false });
+            });
+        }
+        self.outline.for_each_arrow(|a, b| out.push(WorldLine { a, b, color, caps: false }));
     }
 
     /// The color this shape's outline draws in, by what it is: the families
@@ -590,16 +641,17 @@ fn outline(shape: &SceneShapeVm, kind: GizmoTargetKind, origin: [f32; 3], to_wor
         (_, SceneShape::Sphere { radius, .. } | SceneShape::PointRadius { radius, .. }) => {
             value(radius).map(|radius| ShapeOutline::Ball { center: origin, radius: radius.abs() })
         }
-        (_, SceneShape::Field { radius, falloff, curve, axis, .. }) => value(radius).map(|radius| {
+        (_, SceneShape::Field { radius, falloff, curve, axis, strength, .. }) => value(radius).map(|radius| {
             let radius = radius.abs();
+            let sign = if strength.as_deref().and_then(&value).unwrap_or(1.0) < 0.0 { -1.0 } else { 1.0 };
             match axis.as_ref().map(|axis| values(axis).and_then(normalized)) {
-                Some(Some(axis)) => ShapeOutline::Vortex { center: origin, axis, radius },
+                Some(Some(axis)) => ShapeOutline::Vortex { center: origin, axis, radius, sign },
                 // A vortex with no axis swirls nowhere: its reach only.
                 Some(None) => ShapeOutline::Ball { center: origin, radius },
                 None => {
                     let (power, curve) = (value(falloff).unwrap_or(1.0), value(curve).unwrap_or(0.0));
                     let shells = SHELLS.map(|(strength, _)| shell_distance(strength, radius, power, curve));
-                    ShapeOutline::Field { center: origin, radius, shells }
+                    ShapeOutline::Field { center: origin, radius, shells, sign }
                 }
             }
         }),
@@ -816,7 +868,7 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
             continue;
         }
         let bright = selection.is_selected(&target.id);
-        target.outline_lines(shown(target.outline_color(), bright), out);
+        target.outline_lines_with_shells(shown(target.outline_color(), bright), bright, out);
     }
     // The cell grid shows only for a selected domain, from what its solver
     // accepted (D7a); handles and cards read the declaration instead.

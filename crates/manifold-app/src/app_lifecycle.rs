@@ -902,9 +902,10 @@ impl Application {
 
         let group = manifold_core::scene_doc::ItemId::new(manifold_core::math::short_id());
         if let Some((layer_id, parent)) = into {
+            let center = manifold_nodes_scene::node_graph::gltf_import::world_bounds(&facts).map(|(c, _)| c);
             self.attach_model_facts(Some(layer_id.clone()), file_str.clone(), facts);
             let commands =
-                manifold_editing::commands::scene_doc::import_model_commands(&layer_id, parent, usize::MAX, group.clone(), &file_str, &model);
+                manifold_editing::commands::scene_doc::import_model_commands(&layer_id, parent.clone(), usize::MAX, group.clone(), &file_str, &model, center);
             let command = Box::new(manifold_editing::command::CompositeCommand::new(commands, "Import 3D Model".to_string()));
             ContentCommand::send(
                 &content_tx,
@@ -917,15 +918,14 @@ impl Application {
         // Insert above the layer under the cursor, or at the top when dropped
         // outside the tracks area.
         let insert_index = insert_index.min(local.timeline.layers.len());
+        let center = manifold_nodes_scene::node_graph::gltf_import::world_bounds(&facts).map(|(c, _)| c);
         let mut doc = model.scene_doc(&file_str, group.clone());
         doc.models.insert(file_str.clone(), facts);
-        // The model keeps the file's size and place: every item starts at
-        // the file's values, as a drop into a scene does.
         let values = model
-            .starting_values(&group)
+            .starting_values(&group, center)
             .into_iter()
             .map(|(item, property, value)| (manifold_core::scene_doc::param_id(&item, property), value))
-            .collect();
+            .collect::<Vec<_>>();
         let display_name = model.name.clone();
 
         // Execute the layer command locally first so the generated LayerId is
@@ -964,7 +964,20 @@ impl Application {
             manifold_core::Beats::from_f32(drop_beat.max(0.0)),
             manifold_core::Beats::from_f32(DEFAULT_MODEL_DURATION_BEATS),
         );
-        local.execute(Box::new(manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id)));
+        local.execute(Box::new(manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone())));
+
+        // The import root is selected at once, as every Add selects (section
+        // 7.7 (Imports)); the layer landed here, so there is no receipt.
+        if let Some(doc) = self.local_project.scene_of(&layer_id) {
+            crate::edit_selection::select_import_root(
+                &mut self.ws.ui_root,
+                doc,
+                &mut self.selection,
+                &mut self.active_layer_id,
+                &layer_id,
+                &group,
+            );
+        }
     }
 
     /// Open. Delegates to ProjectIOService.open_project.

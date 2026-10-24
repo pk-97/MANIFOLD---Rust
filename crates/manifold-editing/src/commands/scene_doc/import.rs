@@ -1,14 +1,13 @@
 //! Imports (SCENE_DOCUMENT_DESIGN.md section 7.7 (Imports)): a dropped model
-//! is one Add of its whole subtree (or, for one mesh, of its Object and that
-//! Object's Material) at the file's own size and place, plus the writes that
-//! start each part, group, light and camera at the file's transform; a Model
-//! File swap is a Set of the import's file plus the changes that reconcile
-//! it with the new file.
+//! is one Add of its clean outer Group and persistent placement subtree, at
+//! the file's scale, centred by the placement translation, with authored
+//! transforms beneath it; a Model File swap preserves that placement and
+//! reconciles the new file's contents beneath it.
 //! Both are command lists for one `ExecuteBatch`, so each is one undo step.
 
 use manifold_core::scene_doc::{
     ImportedModel, ImportedNode, Item, ItemFields, ItemId, ItemKind, MeshPrimitives, SceneDoc, Shape, TextureSource,
-    camera_item, import_child_id, is_import_child, light_item, material_item, node_item, param_id,
+    camera_item, import_child_id, import_placement_id, is_import_child, light_item, material_item, node_item, param_id,
 };
 use manifold_core::{GraphTarget, LayerId};
 
@@ -16,8 +15,8 @@ use super::commands::{AddSceneItemCommand, RemoveSceneItemCommand, ReparentScene
 use crate::command::Command;
 use crate::commands::effects::ChangeGraphParamCommand;
 
-/// Add the model as `id` under `parent` at `index`, at the file's own size
-/// and place, every item starting at the file's values.
+/// Add the model as `id` under `parent` at `index`, centred by its optional
+/// bounds centre, with every file node starting at its authored values.
 pub fn import_model_commands(
     layer: &LayerId,
     parent: Option<ItemId>,
@@ -25,6 +24,7 @@ pub fn import_model_commands(
     id: ItemId,
     file: &str,
     model: &ImportedModel,
+    center: Option<[f32; 3]>,
 ) -> Vec<Box<dyn Command>> {
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
     for (offset, item) in model.into_items(file, id.clone()).into_iter().enumerate() {
@@ -32,7 +32,7 @@ pub fn import_model_commands(
         commands.push(Box::new(AddSceneItemCommand::with_subtree(layer.clone(), parent.clone(), at, item)));
     }
     let target = GraphTarget::Generator(layer.clone());
-    starting_writes(&target, model.starting_values(&id), &mut commands);
+    starting_writes(&target, model.starting_values(&id, center), &mut commands);
     commands
 }
 
@@ -156,8 +156,12 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
     let mut commands: Vec<Box<dyn Command>> =
         vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), group.clone(), ItemFields::Group(source)))];
 
+    // New imports carry a persistent placement Group; legacy imports do not.
+    let placement = import_placement_id(group);
+    let content_parent = if doc.find(&placement).is_some() { placement.clone() } else { group.clone() };
+
     let mut wants = Vec::new();
-    wanted(group, model.group_children(), group, &mut wants);
+    wanted(group, model.group_children(), &content_parent, &mut wants);
     let mut kept: Vec<ItemId> = wants.iter().map(|want| want.id.clone()).collect();
     let mut starts = Vec::new();
 
@@ -205,7 +209,7 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
     }
 
     let add = |item: Item, commands: &mut Vec<Box<dyn Command>>| {
-        commands.push(Box::new(AddSceneItemCommand::with_subtree(layer.clone(), Some(group.clone()), usize::MAX, item)));
+        commands.push(Box::new(AddSceneItemCommand::with_subtree(layer.clone(), Some(content_parent.clone()), usize::MAX, item)));
     };
     for material in &model.materials {
         let id = import_child_id(group, &material.key);
@@ -244,7 +248,7 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
     // What of the old file is gone, children before their groups.
     let mut gone: Vec<&Item> = Vec::new();
     doc.walk(|item, ancestors| {
-        if ancestors.iter().any(|a| &a.id == group) && is_import_child(group, &item.id) && !kept.contains(&item.id) {
+        if ancestors.iter().any(|a| &a.id == group) && is_import_child(group, &item.id) && item.id != placement && !kept.contains(&item.id) {
             gone.push(item);
         }
     });

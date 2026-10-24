@@ -88,6 +88,41 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
 
 /// The Objects a smoothly bending card that is on reaches, directly, through a
 /// Group target, or as the whole scene.
+pub(crate) fn mesh_modified_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
+    let cards: Vec<&ModifierTargets> = doc
+        .items
+        .iter()
+        .filter_map(|item| match &item.fields {
+            ItemFields::Modifier(card) if card.on
+                && !acts_on_copies(card.modifier)
+                && !matches!(card.modifier, ModifierType::SceneLoop | ModifierType::SceneMirror) =>
+            {
+                Some(&card.targets)
+            }
+            _ => None,
+        })
+        .collect();
+    let mut reached = BTreeSet::new();
+    if cards.is_empty() {
+        return reached;
+    }
+    doc.walk(|item, ancestors| {
+        if item.kind() != ItemKind::Object {
+            return;
+        }
+        let hit = cards.iter().any(|targets| match targets {
+            ModifierTargets::Scene => true,
+            ModifierTargets::Items(ids) => {
+                ids.contains(&item.id) || ancestors.iter().any(|above| ids.contains(&above.id))
+            }
+        });
+        if hit {
+            reached.insert(item.id.clone());
+        }
+    });
+    reached
+}
+
 pub(crate) fn smoothed_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
     let cards: Vec<&ModifierTargets> = doc
         .items
@@ -348,12 +383,19 @@ fn plan(
     let mut hi = [f64::NEG_INFINITY; 3];
     for (drawn, at) in members.iter().zip(&placed) {
         // An imported part's box where the file puts it is its box in its
-        // import Group's frame, the scene's while that Group starts at rest:
-        // its own Transform and the groups between start where the file
-        // puts them, which the compiler does not see.
-        let (part_lo, part_hi) = match drawn.rest.placed {
+        // import Group's placement frame, so add `at` (which includes the
+        // persistent File Placement `-center` offset) to `box_in_import`.
+        let (part_lo, part_hi): ([f64; 3], [f64; 3]) = match drawn.rest.placed {
             Some(box_in_import) if frame.root.is_none() || frame.root.as_ref() == import_group(b.doc, &drawn.item, lineage) => {
-                (box_in_import.0.map(f64::from), box_in_import.1.map(f64::from))
+                let placement_shift = import_group(b.doc, &drawn.item, lineage)
+                    .and_then(|imp| b.id(manifold_core::scene_doc::import_placement_id(imp).as_str(), "transform"))
+                    .map_or([0.0; 3], |node| {
+                        ["pos_x", "pos_y", "pos_z"].map(|param| b.started(node, param).map_or(0.0, f64::from))
+                    });
+                (
+                    std::array::from_fn(|axis| placement_shift[axis] + f64::from(box_in_import.0[axis])),
+                    std::array::from_fn(|axis| placement_shift[axis] + f64::from(box_in_import.1[axis])),
+                )
             }
             _ => (
                 std::array::from_fn(|axis| at[axis] + f64::from(drawn.rest.lo[axis])),
