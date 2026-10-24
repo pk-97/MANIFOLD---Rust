@@ -21,7 +21,7 @@ When Peter asks a question ("can I see…?", "how does X work?"), answer it with
 
 ## Workflow & Tooling
 
-- **Work directly in the main checkout (no worktrees by default):** Always work in the main working tree so incremental `cargo nextest` and `cargo build --bin manifold` runs stay fast and share the single warm `target/` directory. Never create or acquire a git worktree unless Peter explicitly asks for one — even parallel subagents work in the main checkout on disjoint file sets.
+- **Work directly in the main checkout (no worktrees by default):** Always work in the main working tree so incremental `cargo nextest` and `cargo build --bin manifold` runs stay fast and share the single warm `target/` directory. Never acquire a git worktree unless Peter asks for one or there is a high risk of collision with large parallel sessions — even parallel subagents within a session work in the main checkout on disjoint file sets.
 - **Lead vs workers:** Handle small and medium changes directly. Delegate mechanical multi-file edits, broad refactors, or parallel independent tasks to cheaper workers (`sonnet` in Claude Code; free/flash models in OpenCode) with exact `file:line` instructions and disjoint file sets. Roster: `docs/AGENT_ROUTING.md`.
 - **Scoped verification:** Run `cargo nextest run -p <touched_crate> <filter>` during iteration. Before landing a batch to `main`, run `cargo clippy -p <touched_crate> --tests -- -D warnings` and regenerate stale indexes (`scripts/dev.py node-catalog`, `scripts/dev.py docs-index`) if ports/params or docs changed.
 - **Shell & Git discipline:**

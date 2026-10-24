@@ -280,7 +280,8 @@ mod tests {
         }
 
         fn owned_identity(&self, roots: &[&str]) -> String {
-            emit_owned_source_identity(&self.crate_root, roots, "TEST_OWNED_SOURCE_IDENTITY").unwrap()
+            emit_owned_source_identity(&self.crate_root, roots, "TEST_OWNED_SOURCE_IDENTITY")
+                .unwrap()
         }
     }
 
@@ -392,7 +393,11 @@ mod tests {
     fn owned_identity_tracks_selected_sources_and_build_inputs() {
         let fixture = Fixture::new("owned-inputs");
         let mut baseline = fixture.owned_identity(&["src/physics.rs"]);
-        fs::write(fixture.crate_root.join("src/material.rs"), "unselected change\n").unwrap();
+        fs::write(
+            fixture.crate_root.join("src/material.rs"),
+            "unselected change\n",
+        )
+        .unwrap();
         assert_eq!(baseline, fixture.owned_identity(&["src/physics.rs"]));
         for path in [
             fixture.crate_root.join("src/physics.rs"),
